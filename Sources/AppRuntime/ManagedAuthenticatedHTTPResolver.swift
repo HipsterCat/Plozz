@@ -13,6 +13,8 @@ public final class ManagedAuthenticatedHTTPResolver: AuthenticatedHTTPResourceRe
         public let baseURL: URL
         public let token: String
         public let resourceResolver: (any ProviderHTTPResourceResolving)?
+        public let originProvider: (any AuthenticatedHTTPOriginProviding)?
+        public let connectionScopeKey: String?
 
         public init(
             provider: ProviderKind,
@@ -20,7 +22,9 @@ public final class ManagedAuthenticatedHTTPResolver: AuthenticatedHTTPResourceRe
             credentialRevision: CredentialRevision,
             baseURL: URL,
             token: String,
-            resourceResolver: (any ProviderHTTPResourceResolving)? = nil
+            resourceResolver: (any ProviderHTTPResourceResolving)? = nil,
+            originProvider: (any AuthenticatedHTTPOriginProviding)? = nil,
+            connectionScopeKey: String? = nil
         ) {
             self.provider = provider
             self.accountID = accountID
@@ -28,6 +32,8 @@ public final class ManagedAuthenticatedHTTPResolver: AuthenticatedHTTPResourceRe
             self.baseURL = baseURL
             self.token = token
             self.resourceResolver = resourceResolver
+            self.originProvider = originProvider
+            self.connectionScopeKey = connectionScopeKey
         }
     }
 
@@ -52,9 +58,18 @@ public final class ManagedAuthenticatedHTTPResolver: AuthenticatedHTTPResourceRe
         let context = try contextProvider(locator)
         guard context.provider == locator.provider,
               context.accountID == locator.accountID,
-              context.credentialRevision == locator.credentialRevision,
+              context.credentialRevision == locator.credentialRevision else {
+            throw MediaTransportError.authentication(reason: "authenticated HTTP identity mismatch")
+        }
+        let baseURL = try await context.originProvider?.resolveAuthenticatedHTTPOrigin() ?? context.baseURL
+        try Task.checkCancellation()
+        let latestContext = try contextProvider(locator)
+        guard latestContext.provider == context.provider,
+              latestContext.accountID == context.accountID,
+              latestContext.credentialRevision == context.credentialRevision,
+              latestContext.connectionScopeKey == context.connectionScopeKey,
               var components = URLComponents(
-                  url: context.baseURL,
+                  url: baseURL,
                   resolvingAgainstBaseURL: false
               ) else {
             throw MediaTransportError.authentication(
@@ -77,15 +92,17 @@ public final class ManagedAuthenticatedHTTPResolver: AuthenticatedHTTPResourceRe
             URLQueryItem(name: $0.name, value: $0.value)
         }
         switch locator.provider {
-        case .silo:
+        case .silo, .iptv:
             guard let resolver = context.resourceResolver else {
-                throw MediaTransportError.authentication(reason: "inactive Silo playback grant")
+                throw MediaTransportError.authentication(reason: "inactive provider playback grant")
             }
             let url = try await resolver.resolveHTTPResource(locator)
+            try Task.checkCancellation()
             let latest = try contextProvider(locator)
             guard latest.provider == context.provider, latest.accountID == context.accountID,
-                  latest.credentialRevision == context.credentialRevision else {
-                throw MediaTransportError.authentication(reason: "Silo playback identity changed")
+                  latest.credentialRevision == context.credentialRevision,
+                  latest.connectionScopeKey == context.connectionScopeKey else {
+                throw MediaTransportError.authentication(reason: "provider playback identity changed")
             }
             return url
         case .jellyfin, .emby:

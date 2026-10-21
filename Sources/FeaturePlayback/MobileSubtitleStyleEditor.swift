@@ -158,6 +158,7 @@ public struct MobileSubtitleStyleEditor: View {
                 }
             }
         }
+        .toggleStyle(SettingsSwitchToggleStyle())
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
         .modifier(SystemCaptionStyleConfirmationDialog(
@@ -167,7 +168,7 @@ public struct MobileSubtitleStyleEditor: View {
     }
 }
 
-private struct MobileSubtitleFileFormattingView: View {
+struct MobileSubtitleFileFormattingView: View {
     let viewModel: SubtitleStyleEditingContext
 
     var body: some View {
@@ -180,6 +181,7 @@ private struct MobileSubtitleFileFormattingView: View {
                 Text("Some subtitle files specify colors, bold or italic text, or where a line should appear. Turn these off to use your chosen style instead.")
             }
         }
+        .toggleStyle(SettingsSwitchToggleStyle())
         .navigationTitle("Subtitle file formatting")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -247,7 +249,7 @@ private struct MobileSubtitleFontView: View {
     }
 }
 
-private struct MobileSubtitleShadowOutlineView: View {
+struct MobileSubtitleShadowOutlineView: View {
     let viewModel: SubtitleStyleEditingContext
     private let shadowStyles: [SubtitleEdgeStyle] = [
         .none, .dropShadow, .raised, .depressed, .uniform
@@ -299,12 +301,13 @@ private struct MobileSubtitleShadowOutlineView: View {
                 )
             }
         }
+        .toggleStyle(SettingsSwitchToggleStyle())
         .navigationTitle("Shadow & Outline")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
 
-private struct MobileSubtitleBackgroundView: View {
+struct MobileSubtitleBackgroundView: View {
     let viewModel: SubtitleStyleEditingContext
     private let backgroundColors: [(name: String, color: SubtitleColor)] = [
         ("Black", .black),
@@ -397,12 +400,13 @@ private struct MobileSubtitleBackgroundView: View {
                 )
             }
         }
+        .toggleStyle(SettingsSwitchToggleStyle())
         .navigationTitle("Background")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
 
-private struct MobileSubtitleDualView: View {
+struct MobileSubtitleDualView: View {
     let viewModel: SubtitleStyleEditingContext
 
     var body: some View {
@@ -498,6 +502,7 @@ private struct MobileSubtitleDualView: View {
                 }
             }
         }
+        .toggleStyle(SettingsSwitchToggleStyle())
         .navigationTitle("Dual Subtitles")
         .navigationBarTitleDisplayMode(.inline)
     }

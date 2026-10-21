@@ -114,6 +114,7 @@ private final class SpyAcquisitionHost: RemoteSubtitleAcquisitionHost {
     var hotLoaded: [(track: MediaTrack, language: String?, forced: Bool)] = []
     var selected: [(id: Int, userInitiated: Bool)] = []
     var primaryOff = true
+    var viewerChangedSubtitle = false
     var hotLoadReturnID = 900_001
 
     func setSubtitleDownloadState(_ state: SubtitleDownloadState) { downloadStates.append(state) }
@@ -122,7 +123,7 @@ private final class SpyAcquisitionHost: RemoteSubtitleAcquisitionHost {
         return hotLoadReturnID
     }
     func selectDownloadedSubtitle(id: Int, userInitiated: Bool) { selected.append((id, userInitiated)) }
-    var isPrimarySubtitleOff: Bool { primaryOff }
+    var canAutoSelectDownloadedSubtitle: Bool { primaryOff && !viewerChangedSubtitle }
 }
 
 @MainActor
@@ -426,6 +427,36 @@ final class RemoteSubtitleAcquisitionTests: XCTestCase {
         XCTAssertTrue(host.hotLoaded.isEmpty)
         let downloaded = await provider.downloadedIDs
         XCTAssertTrue(downloaded.isEmpty)
+    }
+
+    func testOnlySDHDoesNotDownloadRegularSearchResult() async {
+        let provider = FakeSubtitleProvider(
+            searchResults: [RemoteSubtitle(id: "plain", name: "English", language: "en")])
+        let host = SpyAcquisitionHost()
+        let acquisition = makeAcquisition(provider: provider, host: host)
+        acquisition.autoDownload(language: "en", mode: .all, preference: .init(hearingImpaired: .onlySDH))
+        await waitUntil { await provider.searchCallCount == 1 }
+        await settle()
+        let downloads = await provider.downloadedIDs
+        XCTAssertTrue(downloads.isEmpty)
+        XCTAssertTrue(host.hotLoaded.isEmpty)
+    }
+
+    func testSDHDownloadPreservesMetadataWithoutOverridingManualOff() async {
+        let provider = FakeSubtitleProvider(
+            searchResults: [.init(id: "sdh", name: "English SDH", language: "en", isHearingImpaired: true)],
+            receiptTrack: textSidecar(id: 7, language: "eng"),
+            holdDownload: true
+        )
+        let host = SpyAcquisitionHost()
+        let acquisition = makeAcquisition(provider: provider, host: host)
+        acquisition.autoDownload(language: "en", mode: .all, preference: .init(hearingImpaired: .onlySDH))
+        await waitUntil { await provider.isDownloadHeld }
+        host.viewerChangedSubtitle = true
+        await provider.releaseDownload()
+        await waitUntil { !host.hotLoaded.isEmpty }
+        XCTAssertEqual(host.hotLoaded.first?.track.isHearingImpaired, true)
+        XCTAssertTrue(host.selected.isEmpty)
     }
 }
 #endif

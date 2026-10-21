@@ -7,24 +7,30 @@ import FoundationNetworking
 /// assertions run at dispatch time so a test can assert exactly which
 /// headers a request carried (e.g. `Accept-Encoding: identity`, `Range`,
 /// `If-Match`, absence of `Authorization`) without a real server.
-struct StubResponse {
+struct StubResponse: Sendable {
     let statusCode: Int
     let headers: [String: String]
     let body: Data
     /// Invoked with the exact `URLRequest` `StubURLProtocol` is about to
     /// answer. Use for header/method/redirect-chain assertions.
     let onRequest: (@Sendable (URLRequest) -> Void)?
+    let matchesRequest: (@Sendable (URLRequest) -> Bool)?
+    let delay: Duration
 
     init(
         statusCode: Int,
         headers: [String: String] = [:],
         body: Data = Data(),
+        matchesRequest: (@Sendable (URLRequest) -> Bool)? = nil,
+        delay: Duration = .zero,
         onRequest: (@Sendable (URLRequest) -> Void)? = nil
     ) {
         self.statusCode = statusCode
         self.headers = headers
         self.body = body
         self.onRequest = onRequest
+        self.matchesRequest = matchesRequest
+        self.delay = delay
     }
 }
 
@@ -60,6 +66,9 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var queues: [URL: [StubbedOutcome]] = [:]
     nonisolated(unsafe) private static var requestLog: [URL: [URLRequest]] = [:]
+    private let taskLock = NSLock()
+    private var responseTask: Task<Void, Never>?
+    private var isStopped = false
 
     static func queue(_ response: StubResponse, for url: URL) {
         lock.lock(); queues[url, default: []].append(.response(response)); lock.unlock()
@@ -96,7 +105,13 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         Self.lock.lock()
         Self.requestLog[url, default: []].append(request)
         var queue = Self.queues[url] ?? []
-        let outcome = queue.isEmpty ? nil : queue.removeFirst()
+        let index = queue.firstIndex {
+            switch $0 {
+            case .response(let response): return response.matchesRequest?(request) ?? true
+            case .redirect: return true
+            }
+        }
+        let outcome = index.map { queue.remove(at: $0) }
         Self.queues[url] = queue
         Self.lock.unlock()
 
@@ -110,10 +125,21 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         switch outcome {
         case .response(let stub):
             stub.onRequest?(request)
-            let response = HTTPURLResponse(url: url, statusCode: stub.statusCode, httpVersion: "HTTP/1.1", headerFields: stub.headers)!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: stub.body)
-            client?.urlProtocolDidFinishLoading(self)
+            if stub.delay == .zero {
+                send(stub, url: url)
+            } else {
+                let task = Task { @Sendable [weak self] in
+                    do { try await Task.sleep(for: stub.delay) }
+                    catch { return } // A cancelled fixture must not deliver its delayed response.
+                    guard !Task.isCancelled else { return }
+                    self?.send(stub, url: url)
+                }
+                let cancelled = taskLock.withLock {
+                    responseTask = task
+                    return isStopped
+                }
+                if cancelled { task.cancel() }
+            }
         case .redirect(let redirect):
             redirect.onRequest?(request)
             let response = HTTPURLResponse(
@@ -130,7 +156,23 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         }
     }
 
-    override func stopLoading() {}
+    private func send(_ stub: StubResponse, url: URL) {
+        guard !taskLock.withLock({ isStopped }) else { return }
+        let response = HTTPURLResponse(
+            url: url, statusCode: stub.statusCode, httpVersion: "HTTP/1.1", headerFields: stub.headers
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: stub.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {
+        let task = taskLock.withLock {
+            isStopped = true
+            return responseTask
+        }
+        task?.cancel()
+    }
 }
 
 final class LockedValue<Value>: @unchecked Sendable {

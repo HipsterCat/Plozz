@@ -5,6 +5,13 @@ import Observation
 public protocol HomeLibraryVisibilityStoring: Sendable {
     func load() -> HomeLibraryVisibility
     func save(_ visibility: HomeLibraryVisibility)
+    func loadServerDefaults() -> CachedHomeRowDefaults?
+    func saveServerDefaults(_ snapshot: CachedHomeRowDefaults)
+}
+
+public extension HomeLibraryVisibilityStoring {
+    func loadServerDefaults() -> CachedHomeRowDefaults? { nil }
+    func saveServerDefaults(_ snapshot: CachedHomeRowDefaults) {}
 }
 
 public final class HomeLibraryVisibilityStore: HomeLibraryVisibilityStoring, @unchecked Sendable {
@@ -29,8 +36,21 @@ public final class HomeLibraryVisibilityStore: HomeLibraryVisibilityStoring, @un
     }
 
     public func save(_ visibility: HomeLibraryVisibility) {
-        if let data = try? JSONEncoder().encode(visibility) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        if let data = try? encoder.encode(visibility) {
             defaults.set(data, forKey: key)
+        }
+    }
+
+    public func loadServerDefaults() -> CachedHomeRowDefaults? {
+        guard let data = defaults.data(forKey: key + ".serverDefaults") else { return nil }
+        return try? JSONDecoder().decode(CachedHomeRowDefaults.self, from: data)
+    }
+
+    public func saveServerDefaults(_ snapshot: CachedHomeRowDefaults) {
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: key + ".serverDefaults")
         }
     }
 }
@@ -42,12 +62,202 @@ public final class HomeLibraryVisibilityStore: HomeLibraryVisibilityStoring, @un
 @Observable
 public final class HomeLibraryVisibilityModel {
     public private(set) var visibility: HomeLibraryVisibility
+    public private(set) var serverMatchFailures: [String: AppError] = [:]
+    public private(set) var rowDefaultsRevision = UUID()
 
     private let store: HomeLibraryVisibilityStoring
+    @ObservationIgnored private var cachedServerDefaults: CachedHomeRowDefaults?
+    @ObservationIgnored private var lastServerCheck: Date?
+    @ObservationIgnored private var lastServerCheckScope: [String] = []
+    @ObservationIgnored private var serverRequestScope: [String] = []
+    @ObservationIgnored private var serverRequestID = UUID()
+    @ObservationIgnored private var serverRequest: Task<[String: Result<ServerHomeLayout?, AppError>], Never>?
 
     public init(store: HomeLibraryVisibilityStoring = HomeLibraryVisibilityStore()) {
         self.store = store
         self.visibility = store.load()
+        self.cachedServerDefaults = store.loadServerDefaults()
+    }
+
+    /// Called only by a real Home refresh or the open arranger, never a timer.
+    public func prepareServerDefaults(accounts: [ResolvedAccount], now: Date = Date()) async {
+        guard visibility.rowCustomization?.defaults == .matchServer else { return }
+        let sources = accounts.sorted { $0.account.id < $1.account.id }
+        let scope = ["server-home-v2"] + sources.flatMap {
+            [$0.account.id, $0.account.server.provider.rawValue,
+             $0.account.server.identityKey, $0.provider.session.userID,
+             $0.plexHomeUserID.map { "home:\($0)" } ?? "owner"]
+        }
+        // Effective revisions fence live work, but are not persisted: Plex Home
+        // overrides get new revisions after a relaunch for the same viewer.
+        let requestScope = scope + sources.map { $0.credentialRevision.rawValue.uuidString }
+        if scope == cachedServerDefaults?.scope,
+           requestScope == lastServerCheckScope,
+           let lastServerCheck, now.timeIntervalSince(lastServerCheck) < 120 {
+            serverRequest?.cancel()
+            serverRequest = nil
+            serverRequestID = UUID()
+            serverMatchFailures = [:]
+            visibility.rowCustomization?.resolvedDefaults = cachedServerDefaults?.defaults
+            return
+        }
+        var seen = Set<[String]>()
+        let representatives = sources.filter {
+            seen.insert([
+                $0.account.server.provider.rawValue, $0.account.server.identityKey,
+                $0.provider.session.userID, $0.plexHomeUserID.map { "home:\($0)" } ?? "owner"
+            ]).inserted
+        }
+        guard !representatives.isEmpty else {
+            serverRequestID = UUID()
+            acceptServerDefaults(
+                .init(mode: .providerFallback), scope: scope, requestScope: requestScope, now: now
+            )
+            return
+        }
+        visibility.rowCustomization?.resolvedDefaults =
+            cachedServerDefaults?.scope == scope ? cachedServerDefaults?.defaults : nil
+        let request: Task<[String: Result<ServerHomeLayout?, AppError>], Never>
+        if serverRequestScope == requestScope, let pending = serverRequest {
+            request = pending
+        } else {
+            serverRequest?.cancel()
+            serverRequestID = UUID()
+            if serverRequestScope != requestScope { serverMatchFailures = [:] }
+            serverRequestScope = requestScope
+            request = Task { await Self.loadServerLayouts(representatives) }
+            serverRequest = request
+        }
+        let requestID = serverRequestID
+        let results = await request.value
+        guard !Task.isCancelled, serverRequestID == requestID,
+              visibility.rowCustomization?.defaults == .matchServer else { return }
+        serverRequest = nil
+        let previous = cachedServerDefaults?.scope == scope ? cachedServerDefaults?.defaults : nil
+        var resolved = HomeResolvedRowDefaults(mode: representatives.count > 1 ? .combined : .server)
+        var failures: [String: AppError] = [:]
+        for source in representatives {
+            switch results[source.account.id] ?? .failure(.cancelled) {
+            case let .success(layout?):
+                resolved.serverRows += layout.sections.map {
+                    HomeServerRowDefinition(
+                        accountID: source.account.id, serverName: source.account.server.name,
+                        providerKind: source.account.server.provider, section: $0
+                    )
+                }
+                resolved.omitsMusic = resolved.omitsMusic || layout.omitsMusic
+                resolved.omitsReading = resolved.omitsReading || layout.omitsReading
+                if representatives.count == 1 { resolved.source = layout.source }
+            case .success(nil):
+                resolved.fallbackAccountIDs.insert(source.account.id)
+            case let .failure(error):
+                guard error != .cancelled else { return }
+                failures[source.account.id] = error
+                let retained = previous?.serverRows.filter { $0.accountID == source.account.id } ?? []
+                resolved.serverRows += retained
+                if previous == nil || previous?.fallbackAccountIDs.contains(source.account.id) == true {
+                    resolved.fallbackAccountIDs.insert(source.account.id)
+                }
+                resolved.omitsMusic = resolved.omitsMusic || previous?.omitsMusic == true
+                resolved.omitsReading = resolved.omitsReading || previous?.omitsReading == true
+            }
+        }
+        if representatives.count == 1, !failures.isEmpty {
+            serverMatchFailures = failures
+            return
+        }
+        if resolved.mode == .combined {
+            let shared = HomeRowChoice.shared.map(\.id)
+            let native = resolved.serverRows.map(\.id).filter { !shared.contains($0) }
+            resolved.order = shared.filter { $0 != .libraries && $0 != .liveTV }
+                + native + [.libraries, .liveTV]
+        } else if !resolved.fallbackAccountIDs.isEmpty {
+            resolved.mode = .providerFallback
+        } else {
+            resolved.order = resolved.serverRows.map(\.id)
+        }
+        var ordered = Set<HomeRowID>()
+        resolved.order = resolved.order.filter { ordered.insert($0).inserted }
+        acceptServerDefaults(resolved, scope: scope, requestScope: requestScope, now: now)
+        serverMatchFailures = failures
+        if !failures.isEmpty { lastServerCheck = nil }
+    }
+
+    private nonisolated static func loadServerLayouts(
+        _ sources: [ResolvedAccount]
+    ) async -> [String: Result<ServerHomeLayout?, AppError>] {
+        await withTaskGroup(of: (String, Result<ServerHomeLayout?, AppError>).self) { group in
+            var next = 0
+            func enqueue() {
+                guard next < sources.count, !Task.isCancelled else { return }
+                let source = sources[next]
+                next += 1
+                group.addTask {
+                    do {
+                        try Task.checkCancellation()
+                        return (source.account.id, .success(try await source.provider.serverHomeLayout()))
+                    } catch is CancellationError {
+                        return (source.account.id, .failure(.cancelled))
+                    } catch {
+                        return (source.account.id, .failure((error as? AppError) ?? .invalidResponse))
+                    }
+                }
+            }
+            for _ in 0..<min(3, sources.count) { enqueue() }
+            var results: [String: Result<ServerHomeLayout?, AppError>] = [:]
+            while let (id, result) = await group.next() {
+                results[id] = result
+                enqueue()
+            }
+            return results
+        }
+    }
+
+    private func acceptServerDefaults(
+        _ defaults: HomeResolvedRowDefaults, scope: [String], requestScope: [String], now: Date
+    ) {
+        serverRequest?.cancel()
+        serverRequest = nil
+        serverMatchFailures = [:]
+        lastServerCheck = now
+        lastServerCheckScope = requestScope
+        let snapshot = CachedHomeRowDefaults(scope: scope, defaults: defaults)
+        if cachedServerDefaults != snapshot { store.saveServerDefaults(snapshot) }
+        cachedServerDefaults = snapshot
+        visibility.rowCustomization?.resolvedDefaults = defaults
+    }
+
+    public func applyRows(
+        _ sections: OrderedVisibilityList.Sections<HomeRowID>, choices: [HomeRowChoice]
+    ) {
+        visibility.applyRows(sections, choices: choices)
+        store.save(visibility)
+    }
+
+    public func setHomeSectionVisible(
+        _ visible: Bool, id: HomeRowID, catalog: HomeSectionCatalog
+    ) throws {
+        let updated = try catalog.settingVisible(visible, id: id, in: visibility)
+        guard updated != visibility else { return }
+        visibility = updated
+        store.save(visibility)
+    }
+
+    public func reorderHomeSections(_ order: [HomeRowID], catalog: HomeSectionCatalog) throws {
+        let updated = try catalog.reordering(order, in: visibility)
+        guard updated != visibility else { return }
+        visibility = updated
+        store.save(visibility)
+    }
+
+    public func useRowDefaults(_ defaults: HomeRowCustomization.Defaults) {
+        serverRequest?.cancel()
+        serverRequest = nil
+        serverRequestID = UUID()
+        visibility.rowCustomization = HomeRowCustomization(defaults: defaults)
+        rowDefaultsRevision = UUID()
+        serverMatchFailures = [:]
+        store.save(visibility)
     }
 
     // MARK: - Merge
@@ -84,10 +294,40 @@ public final class HomeLibraryVisibilityModel {
         visibility.continueWatchingShowsSeriesArtwork
     }
 
+    public var continueWatchingUsesSeriesArtwork: Bool {
+        visibility.continueWatchingUsesSeriesArtwork
+    }
+
+    public var continueWatchingLayout: ContinueWatchingCardLayout {
+        visibility.continueWatchingLayout
+    }
+
+    public var continueWatchingPlaybackDetails: ContinueWatchingPlaybackDetails {
+        visibility.continueWatchingPlaybackDetails
+    }
+
+    public func setContinueWatchingPlaybackDetails(_ details: ContinueWatchingPlaybackDetails) {
+        guard visibility.continueWatchingPlaybackDetails != details else { return }
+        visibility.continueWatchingPlaybackDetails = details
+        store.save(visibility)
+    }
+
+    public func setContinueWatchingLayout(_ layout: ContinueWatchingCardLayout) {
+        guard visibility.continueWatchingLayout != layout else { return }
+        visibility.continueWatchingLayout = layout
+        store.save(visibility)
+    }
+
     /// Sets the Continue Watching artwork treatment and persists.
     public func setContinueWatchingShowsSeriesArtwork(_ showsSeriesArtwork: Bool) {
         guard visibility.continueWatchingShowsSeriesArtwork != showsSeriesArtwork else { return }
         visibility.continueWatchingShowsSeriesArtwork = showsSeriesArtwork
+        store.save(visibility)
+    }
+
+    public func setMergeNextUpIntoContinueWatching(_ merge: Bool) {
+        guard visibility.mergeNextUpIntoContinueWatching != merge else { return }
+        visibility.mergeNextUpIntoContinueWatching = merge
         store.save(visibility)
     }
 
@@ -126,6 +366,14 @@ public final class HomeLibraryVisibilityModel {
     /// separate Home-only opt-out was retired).
     public func isVisibleOnHome(_ key: String) -> Bool {
         visibility.isVisibleOnHome(key)
+    }
+
+    public func isVisibleOnHome(_ key: String, library: MediaLibrary) -> Bool {
+        visibility.isVisibleOnHome(key, library: library)
+    }
+
+    public func isVisibleOnHome(_ library: AggregatedLibrary) -> Bool {
+        visibility.isVisibleOnHome(library)
     }
 
     /// Compatibility alias for ``isVisibleOnHome(_:)``.

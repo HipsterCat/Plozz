@@ -295,11 +295,11 @@ public final class LiveTVMultiviewCoordinator {
         recordWatched(current.channel.id)
     }
 
-    public func playbackFailed(_ id: UUID, preparedID: UUID) {
+    public func playbackFailed(_ id: UUID, preparedID: UUID, report: LiveChannelFailureReport? = nil) {
         guard let pane = panes.first(where: { $0.id == id }),
               pane.preparation.current?.id == preparedID else { return }
         pane.hasPresentedFrame = false
-        pane.preparation.failCurrent(id: preparedID)
+        pane.preparation.failCurrent(id: preparedID, report: report)
     }
 
     public func report(_ update: LiveTVPlaybackUpdate, paneID: UUID, preparedID: UUID) {

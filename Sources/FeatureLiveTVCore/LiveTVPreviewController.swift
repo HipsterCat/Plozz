@@ -78,11 +78,17 @@ public final class LiveTVPreviewController {
         schedulePreview()
     }
 
+    public func canCommitPreview(_ request: LiveTVPreviewRequest) -> Bool {
+        pendingRequest == request && canPreviewFocusedChannel
+            && model.visibleChannels.contains(where: { $0.id == request.channelID })
+    }
+
     @discardableResult
     public func commitPreview(_ request: LiveTVPreviewRequest) -> Bool {
         guard pendingRequest == request, canPreviewFocusedChannel else { return false }
+        let canCommit = canCommitPreview(request)
         pendingRequest = nil
-        guard model.visibleChannels.contains(where: { $0.id == request.channelID }) else { return false }
+        guard canCommit else { return false }
         model.tune(request.channelID)
         return !model.tuneFailed
     }

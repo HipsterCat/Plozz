@@ -111,7 +111,7 @@ final class HeroStageMetricsTests: XCTestCase {
         let geometry = HeroStageMetrics.geometry(width: 440, height: 727)
         XCTAssertGreaterThan(geometry.reflectionHeight, 0)
         XCTAssertEqual(
-            geometry.pictureHeight + geometry.reflectionHeight,
+            HeroStageMetrics.topReflectionHeight + geometry.pictureHeight + geometry.reflectionHeight,
             727,
             accuracy: 0.001
         )
@@ -122,6 +122,24 @@ final class HeroStageMetricsTests: XCTestCase {
             440 / HeroStageMetrics.portraitPictureAspectRatio,
             accuracy: 0.001
         )
+    }
+
+    func testTopReflectionReservesExactly24PointsWithoutGrowingTheStage() {
+        XCTAssertEqual(HeroStageMetrics.topReflectionHeight, 24)
+        for (width, height) in [(CGFloat(375), CGFloat(520)), (402, 664), (440, 727), (393, 444)] {
+            let geometry = HeroStageMetrics.geometry(width: width, height: height)
+            XCTAssertEqual(24 + geometry.pictureHeight + geometry.reflectionHeight, height, accuracy: 0.001)
+            XCTAssertLessThanOrEqual(geometry.pictureHeight, height - 24)
+            XCTAssertGreaterThanOrEqual(geometry.reflectionHeight, 0)
+        }
+    }
+
+    func testTopReflectionDoesNotOverrunAnUnmeasuredOrTinyStage() {
+        for height in [CGFloat.zero, 12, 24] {
+            let geometry = HeroStageMetrics.geometry(width: 393, height: height)
+            XCTAssertEqual(geometry.pictureHeight, 0)
+            XCTAssertEqual(geometry.reflectionHeight, 0)
+        }
     }
 
     /// A stage stretched for accessibility text would otherwise end up a third
@@ -138,7 +156,7 @@ final class HeroStageMetricsTests: XCTestCase {
         )
     }
 
-    /// A stage no taller than the picture is just an ordinary hero.
+    /// A stage no taller than the picture needs no bottom reflection.
     func testNoMirrorWhenThePictureAlreadyFillsTheStage() {
         let geometry = HeroStageMetrics.geometry(width: 440, height: 400)
         XCTAssertEqual(geometry.reflectionHeight, 0)
@@ -210,9 +228,8 @@ final class HeroStageMetricsTests: XCTestCase {
     /// floor must not drag the melt up into the photograph.
     func testKeepsThePictureWholeDownToTheMirrorLineWhenThereIsRoom() {
         let height: CGFloat = 727
-        let mirrorLine = HeroStageMetrics
-            .geometry(width: 440, height: height)
-            .reflectionStart
+        let mirrorLine = (HeroStageMetrics.topReflectionHeight
+            + HeroStageMetrics.geometry(width: 440, height: height).pictureHeight) / height
         XCTAssertLessThan(mirrorLine, 1)
 
         let start = meltStart(width: 440, height: height)
@@ -261,7 +278,10 @@ final class HeroStageMetricsTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual((1 - start) * height, HeroStageMetrics.minimumMeltSpan)
                 }
                 let geometry = HeroStageMetrics.geometry(width: width, height: height)
-                XCTAssertEqual(geometry.pictureHeight + geometry.reflectionHeight, height, accuracy: 0.01)
+                XCTAssertEqual(
+                    HeroStageMetrics.topReflectionHeight + geometry.pictureHeight + geometry.reflectionHeight,
+                    height, accuracy: 0.01
+                )
                 XCTAssertLessThanOrEqual(geometry.reflectionHeight / height, HeroStageMetrics.maximumReflectionShare + 0.001)
             }
         }

@@ -1,9 +1,302 @@
 #if canImport(SwiftUI)
 import XCTest
+import SwiftUI
 import CoreModels
 @testable import PlozzCoreUI
 
 final class PlozzMetricsTests: XCTestCase {
+    func testSettingsControlLabelsUseTheNavigationBodyFont() {
+        XCTAssertEqual(SettingsRowMetrics.titleFont, Font.body)
+        #if os(tvOS)
+        XCTAssertEqual(SettingsRowMetrics.optionFont, SettingsRowMetrics.titleFont)
+        XCTAssertEqual(SettingsRowMetrics.helperFont, SettingsRowMetrics.descriptionFont)
+        XCTAssertEqual(SettingsRowMetrics.descriptionFont, Font.caption)
+        #else
+        XCTAssertEqual(SettingsRowMetrics.descriptionFont, Font.footnote)
+        #endif
+        XCTAssertGreaterThan(SettingsRowMetrics.segmentedTrackInset, 0)
+        XCTAssertLessThan(SettingsRowMetrics.segmentedTrackInset, SettingsRowMetrics.verticalPadding(.primary))
+    }
+
+    func testContainedSettingsFocusCornersAreConcentricWithTheirGroup() {
+        XCTAssertGreaterThan(SettingsRowMetrics.formGroupInset, 0)
+        #if os(tvOS)
+        let groupRadius = SettingsFormMetrics.groupCornerRadius
+        XCTAssertEqual(SettingsFormMetrics.groupInset, 16)
+        XCTAssertEqual(SettingsRowMetrics.formGroupInset, SettingsFormMetrics.groupInset)
+        XCTAssertEqual(SettingsRowMetrics.formRowCornerRadius, 12)
+        XCTAssertEqual(SettingsFormMetrics.headingInset, 28)
+        #else
+        let groupRadius = PlozzTheme.Metrics.Radius.card
+        #endif
+        XCTAssertEqual(
+            SettingsRowMetrics.formRowCornerRadius + SettingsRowMetrics.formGroupInset,
+            groupRadius
+        )
+        XCTAssertGreaterThan(SettingsRowMetrics.formSectionSpacing, SettingsRowMetrics.formRowSpacing)
+    }
+
+    func testStandaloneSettingsLinksKeepTheirRoundedContainerShape() {
+        XCTAssertEqual(SettingsRowMetrics.navigationCornerRadius, SettingsFormMetrics.groupCornerRadius)
+        XCTAssertEqual(SettingsRowMetrics.navigationCornerRadius, 28)
+        XCTAssertEqual(SettingsFormMetrics.navigationRowSpacing, 8)
+        XCTAssertEqual(SettingsFormMetrics.dividerFocusClearance, 8)
+        XCTAssertEqual(SettingsFormMetrics.illustratedGroupSpacing, 16)
+        XCTAssertEqual(SettingsRowMetrics.iconTitleInset, 58)
+    }
+
+    func testPortraitRowsKeepTheSameVisibleFractionWithEitherNavigation() {
+        for density in UIDensity.allCases {
+            let metrics = PlozzMetrics(density: density)
+            let count = PlozzTheme.Metrics.portraitRowVisibleCards / CGFloat(density.scale)
+            for cardStyle in CardStyle.allCases {
+                for viewportWidth: CGFloat in [1536, 1776, 1840] {
+                    for leadingInset: CGFloat in [0, 32] {
+                        let slot = metrics.portraitRowSlotWidth(
+                            viewportWidth: viewportWidth, leadingInset: leadingInset, cardStyle: cardStyle
+                        )
+                        let margin = cardStyle == .borderless ? metrics.borderlessCardSideMargin : 0
+                        let lastCardStart = leadingInset + floor(count) * (slot + metrics.cardSpacing)
+                        XCTAssertEqual(
+                            (viewportWidth - lastCardStart) / (slot - 2 * margin),
+                            count - floor(count), accuracy: 0.0001
+                        )
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(PlozzTheme.Metrics.portraitRowVisibleCards, 6.25)
+        XCTAssertEqual(PlozzMetrics.standard.libraryPosterColumns.count, 6)
+        XCTAssertEqual(PlozzMetrics.standard.posterWidth, 280)
+    }
+
+    func testPortraitRowSizingPreservesDensityAndUnmeasuredFallback() {
+        let widths = UIDensity.allCases.map {
+            PlozzMetrics(density: $0).portraitRowSlotWidth(
+                viewportWidth: 1920, leadingInset: 80, cardStyle: .borderless
+            )
+        }
+        XCTAssertEqual(widths, widths.sorted())
+        XCTAssertEqual(Set(widths).count, UIDensity.allCases.count)
+        let metrics = PlozzMetrics.standard
+        XCTAssertEqual(
+            metrics.portraitRowSlotWidth(viewportWidth: 0, leadingInset: 80, cardStyle: .borderless),
+            metrics.posterWidth
+        )
+    }
+
+    func testArtworkSizePreservesCardDimensionsAcrossDensityAndDynamicType() {
+        for density in UIDensity.allCases {
+            for type in [DynamicTypeSize.large, .accessibility3] {
+                for metrics in [PlozzMetrics(density: density, dynamicTypeSize: type),
+                                .touch(density: density, dynamicTypeSize: type)] {
+                    XCTAssertEqual(metrics.artworkSize(for: .poster),
+                                   CGSize(width: metrics.posterWidth, height: metrics.posterHeight))
+                    XCTAssertEqual(metrics.artworkSize(for: .landscape),
+                                   CGSize(width: metrics.landscapeWidth, height: metrics.landscapeHeight))
+                    for details in ContinueWatchingPlaybackDetails.allCases {
+                        XCTAssertEqual(metrics.artworkSize(for: .poster, showsSeriesArtwork: true, playbackDetails: details),
+                                       CGSize(width: metrics.posterWidth, height: metrics.posterWidth / details.cardAspectRatio))
+                        XCTAssertEqual(metrics.artworkSize(for: .landscape, showsSeriesArtwork: true, playbackDetails: details),
+                                       CGSize(width: metrics.continueWatchingWidth,
+                                              height: (metrics.continueWatchingWidth / ContinueWatchingCardShape.aspectRatio).rounded()))
+                    }
+                }
+            }
+        }
+    }
+
+    func testAllCardProgressBarsMatchDetailedAcrossDensityAndDynamicType() {
+        for density in UIDensity.allCases {
+            for type in DynamicTypeSize.allCases {
+                for metrics in [PlozzMetrics(density: density, dynamicTypeSize: type),
+                                .touch(density: density, dynamicTypeSize: type)] {
+                    XCTAssertEqual(metrics.progressBarHeight, metrics.resumeChipBarHeight)
+                    XCTAssertGreaterThanOrEqual(metrics.progressBarHeight, 3)
+                }
+            }
+        }
+        #if os(tvOS)
+        XCTAssertEqual(PlozzMetrics.standard.progressBarHeight, 8)
+        #else
+        XCTAssertEqual(PlozzMetrics.touch(density: .standard).progressBarHeight, 6)
+        #endif
+    }
+
+    func testTouchCardsUseProportionateBadgesAndCaptionSpacing() {
+        let touch = PlozzMetrics.touch(density: .standard)
+        let tv = PlozzMetrics.standard
+        XCTAssertEqual(touch.watchedBadgeSize, 21)
+        XCTAssertEqual(touch.folderNavigationBadgeSize, 36)
+        XCTAssertEqual(tv.watchedBadgeSize, PlozzTheme.Metrics.watchedBadgeSize)
+        XCTAssertEqual(tv.posterArtworkCornerRadius, PlozzTheme.Metrics.posterArtCornerRadius)
+        for density in UIDensity.allCases {
+            let metrics = PlozzMetrics.touch(density: density)
+            XCTAssertGreaterThanOrEqual(metrics.watchedBadgeSize, 20)
+            XCTAssertEqual(metrics.posterCaptionTopSpacing, 4)
+            for focus in CardFocusStyle.allCases {
+                XCTAssertEqual(metrics.focusCaptionPush(for: focus), 0)
+            }
+            let small = metrics.scalingPosters(by: 0.6)
+            XCTAssertEqual(small.posterCardCornerRadius, small.posterArtworkCornerRadius + small.cardInset)
+        }
+    }
+
+    func testTouchPosterAndContinueWatchingCornersMatchAtEveryDensityAndWidth() {
+        for density in UIDensity.allCases {
+            let base = PlozzMetrics.touch(density: density)
+            for factor in [CGFloat(0.5), 0.8, 1, 1.4, 2] {
+                let metrics = base.scalingPosters(by: factor)
+                XCTAssertEqual(metrics.posterArtworkCornerRadius, 12)
+                XCTAssertEqual(metrics.landscapeArtworkCornerRadius, 12)
+                XCTAssertEqual(metrics.borderlessPosterCornerRadius, 12)
+                XCTAssertEqual(metrics.borderlessLandscapeCornerRadius, 12)
+                XCTAssertEqual(metrics.posterCardCornerRadius, 12 + metrics.cardInset)
+                XCTAssertEqual(metrics.landscapeCardCornerRadius, 12 + metrics.cardInset)
+            }
+        }
+    }
+
+    func testTelevisionArtworkAndBorderlessCornersRemainUnchanged() {
+        for density in UIDensity.allCases {
+            let metrics = PlozzMetrics(density: density)
+            XCTAssertEqual(metrics.posterArtworkCornerRadius, 16)
+            XCTAssertEqual(metrics.landscapeArtworkCornerRadius, 18)
+            XCTAssertEqual(metrics.borderlessPosterCornerRadius, 16 + metrics.cardInset)
+            XCTAssertEqual(metrics.borderlessLandscapeCornerRadius, 18 + metrics.cardInset)
+        }
+    }
+
+    func testCaptionHorizontalClearanceDoesNotChangeBottomSpacingOrTelevision() {
+        for density in UIDensity.allCases {
+            for factor in [CGFloat(0.5), 1, 2] {
+                let touch = PlozzMetrics.touch(density: density).scalingPosters(by: factor)
+                let tv = PlozzMetrics(density: density).scalingPosters(by: factor)
+                XCTAssertEqual(touch.posterCaptionHorizontalInset, 4)
+                XCTAssertEqual(touch.landscapeCaptionHorizontalInset, 4)
+                XCTAssertEqual(touch.posterCaptionInset, (12 + touch.cardInset) * 0.8 - touch.cardInset)
+                XCTAssertEqual(touch.landscapeCaptionInset, touch.posterCaptionInset)
+                XCTAssertLessThan(touch.posterCaptionHorizontalInset, touch.posterCaptionInset)
+                XCTAssertEqual(tv.posterCaptionHorizontalInset, tv.posterCaptionInset)
+                XCTAssertEqual(tv.landscapeCaptionHorizontalInset, tv.landscapeCaptionInset)
+                XCTAssertEqual(tv.posterCaptionInset, (16 + tv.cardInset) * 0.8 - tv.cardInset)
+                XCTAssertEqual(tv.landscapeCaptionInset, (18 + tv.cardInset) * 0.8 - tv.cardInset)
+            }
+        }
+    }
+
+    func testCaptionEnvironmentResolvesDefaultOverridesAndDestinationScopes() {
+        var environment = EnvironmentValues()
+        environment.plozzCardCaptionSettings = CardCaptionSettings(
+            showsLabels: false, overrides: [.browse: true, .home: false, .extras: true, .episodes: false]
+        )
+        for view in CardCaptionView.allCases {
+            environment.plozzCardCaptionView = view
+            XCTAssertEqual(environment.plozzCardCaptionsHidden, view != .browse && view != .extras)
+        }
+
+        environment.plozzCardCaptionsHidden = true
+        environment.plozzCardCaptionView = .browse
+        XCTAssertFalse(environment.plozzCardCaptionsHidden, "A destination must not inherit its source's forced visibility.")
+        environment.plozzCardCaptionsHidden = true
+        environment.plozzCardCaptionView = .episodes
+        XCTAssertTrue(environment.plozzCardCaptionsHidden, "Episode captions honor the profile's explicit choice.")
+    }
+
+    func testCaptionHostingCopyPreservesContextWithoutForcingResolvedDefaults() {
+        var source = EnvironmentValues()
+        source.plozzCardCaptionView = .home
+        var target = EnvironmentValues()
+        target.plozzCardCaptionsHidden = true
+        target.copyCardCaptionPresentation(from: source)
+        XCTAssertFalse(target.plozzCardCaptionsHidden)
+        XCTAssertTrue(target.plozzCardCaptionsHiddenWithArtworkTitle)
+        source.plozzCardCaptionSettings.preference = .show
+        target.copyCardCaptionPresentation(from: source)
+        XCTAssertFalse(target.plozzCardCaptionsHiddenWithArtworkTitle)
+        source.plozzCardCaptionSettings.preference = .recommended
+        source.plozzCardCaptionIsShowcase = true
+        target.copyCardCaptionPresentation(from: source)
+        XCTAssertTrue(target.plozzCardCaptionsHidden)
+        source.plozzCardCaptionSettings.setOverride(.show, for: .home)
+        target.copyCardCaptionPresentation(from: source)
+        XCTAssertFalse(target.plozzCardCaptionsHiddenWithArtworkTitle)
+        source.plozzCardCaptionsHidden = true
+        target.copyCardCaptionPresentation(from: source)
+        XCTAssertTrue(target.plozzCardCaptionsHidden)
+        XCTAssertTrue(target.plozzCardCaptionsHiddenWithArtworkTitle)
+    }
+
+    func testContinueWatchingCaptionEnvironmentInheritsParentAndSurvivesNativeHostingCopy() {
+        var source = EnvironmentValues()
+        source.plozzCardCaptionSettings.setOverride(.show, for: .home)
+        source.plozzCardCaptionSettings.setOverride(.hide, for: .recommended)
+        for parent in [CardCaptionView.home, .recommended] {
+            source.plozzCardCaptionView = parent
+            source.plozzCardCaptionSettings.setOverride(.automatic, for: .continueWatching)
+            XCTAssertEqual(source.plozzContinueWatchingCaptionsHiddenWithArtworkTitle, parent == .recommended)
+            XCTAssertEqual(source.plozzContinueWatchingCaptionsHidden, parent == .recommended)
+            source.plozzCardCaptionSettings.setOverride(.show, for: .continueWatching)
+            var hosted = EnvironmentValues()
+            hosted.copyCardCaptionPresentation(from: source)
+            XCTAssertFalse(hosted.plozzContinueWatchingCaptionsHiddenWithArtworkTitle)
+            XCTAssertFalse(hosted.plozzContinueWatchingCaptionsHidden)
+            XCTAssertEqual(hosted.plozzCardCaptionsHiddenWithArtworkTitle, parent == .recommended)
+            source.plozzCardCaptionSettings.setOverride(.hide, for: .continueWatching)
+            hosted.copyCardCaptionPresentation(from: source)
+            XCTAssertTrue(hosted.plozzContinueWatchingCaptionsHiddenWithArtworkTitle)
+            XCTAssertTrue(hosted.plozzContinueWatchingCaptionsHidden)
+            XCTAssertEqual(hosted.plozzCardCaptionsHiddenWithArtworkTitle, parent == .recommended)
+        }
+        source.plozzCardCaptionSettings = .default
+        source.plozzCardCaptionView = .home
+        XCTAssertFalse(source.plozzContinueWatchingCaptionsHidden)
+        XCTAssertTrue(source.plozzContinueWatchingCaptionsHiddenWithArtworkTitle)
+    }
+
+    func testPortraitPlaybackDetailsSurviveHostingWithoutChangingLabels() {
+        var source = EnvironmentValues()
+        XCTAssertEqual(source.plozzContinueWatchingPlaybackDetails, .detailed)
+        source.plozzCardCaptionSettings.setOverride(.show, for: .continueWatching)
+        var hosted = EnvironmentValues()
+        for details in ContinueWatchingPlaybackDetails.allCases {
+            source.plozzContinueWatchingPlaybackDetails = details
+            hosted.copyHostedPresentation(from: source)
+            XCTAssertEqual(hosted.plozzContinueWatchingPlaybackDetails, details)
+            XCTAssertFalse(hosted.plozzContinueWatchingCaptionsHiddenWithArtworkTitle)
+        }
+    }
+
+    func testShowcaseOnlyChangesInheritedLabelsAndDoesNotLeakIntoDestinations() {
+        var environment = EnvironmentValues()
+        environment.plozzCardCaptionView = .home
+        XCTAssertFalse(environment.plozzCardCaptionsHidden)
+        environment.plozzCardCaptionIsShowcase = true
+        XCTAssertTrue(environment.plozzCardCaptionsHidden)
+        environment.plozzCardCaptionSettings.setOverride(.show, for: .home)
+        XCTAssertFalse(environment.plozzCardCaptionsHidden)
+        environment.plozzCardCaptionSettings.resetOverrides()
+        environment.plozzCardCaptionView = .browse
+        XCTAssertFalse(environment.plozzCardCaptionIsShowcase)
+        XCTAssertFalse(environment.plozzCardCaptionsHidden)
+    }
+
+    func testPosterTypographyKeepsTelevisionFontsAndMobileAccessibilityFloors() {
+        for density in UIDensity.allCases {
+            let standard = PlozzMetrics.touch(density: density)
+            let accessible = PlozzMetrics.touch(density: density, dynamicTypeSize: .accessibility3)
+            #if os(iOS)
+            XCTAssertGreaterThanOrEqual(standard.posterTitleFontSize, 13)
+            XCTAssertGreaterThanOrEqual(standard.posterSubtitleFontSize, 12)
+            XCTAssertGreaterThan(accessible.posterTitleFontSize, standard.posterTitleFontSize)
+            XCTAssertGreaterThan(accessible.posterSubtitleFontSize, standard.posterSubtitleFontSize)
+            #else
+            XCTAssertEqual(standard.posterTitleFontSize, standard.cardTitleFontSize)
+            XCTAssertEqual(accessible.posterSubtitleFontSize, accessible.cardSubtitleFontSize)
+            #endif
+        }
+    }
+
     func testStandardMatchesPlozzThemeConstants() {
         let m = PlozzMetrics(density: .standard)
         XCTAssertEqual(m.scale, 1.0)
@@ -61,11 +354,20 @@ final class PlozzMetricsTests: XCTestCase {
         }
     }
 
-    func testNativeCaptionHasNoExtraRestingGapWithoutChangingFocusTravel() {
-        XCTAssertEqual(PlozzMetrics.standard.nativePosterCaptionSpacing, 0)
+    func testNativeCaptionsShareLibraryRestingAndFocusedClearance() {
         for density in UIDensity.allCases {
             let metrics = PlozzMetrics(density: density)
-            XCTAssertEqual(metrics.nativePosterCaptionSpacing, 0)
+            XCTAssertEqual(metrics.nativePosterCaptionSpacing, metrics.landscapeCaptionTopSpacing)
+            XCTAssertGreaterThanOrEqual(
+                metrics.nativePosterCaptionSpacing, PlozzTheme.Metrics.cardCaptionSpacing
+            )
+            XCTAssertEqual(
+                metrics.nativePosterCaptionFocusTravel,
+                max(
+                    (PlozzTheme.Metrics.focusCaptionPush * metrics.scale).rounded(),
+                    PlozzTheme.Metrics.nativeFocusCaptionMinimumPush
+                )
+            )
             XCTAssertEqual(
                 metrics.focusCaptionPush(for: .system),
                 (PlozzTheme.Metrics.focusCaptionPush * metrics.scale).rounded()

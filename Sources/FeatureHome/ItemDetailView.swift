@@ -82,6 +82,7 @@ public struct ItemDetailView: View {
     @FocusState private var playFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.seasonRequestContextID) private var seasonRequestContextID
     @FocusState private var emptyBackFocused: Bool
 
@@ -256,6 +257,10 @@ public struct ItemDetailView: View {
                 container(detail)
             }
         }
+        .environment(\.plozzArtworkArea, .details)
+        .artworkGradientBackground(
+            scope: ObjectIdentifier(viewModel), isVisible: isPageVisible && !hasChildOnTop
+        )
         // Detail is a full-screen sub-page: hide the top tab bar.
         .toolbar(.hidden, for: .tabBar)
         .cinematicDetailPage(isEnabled:
@@ -274,6 +279,14 @@ public struct ItemDetailView: View {
         // it for seeded opens stranded series pages with no seasons/episodes/Play
         // button. load() guards against flashing `.loading` over a seeded hero.
         .task { await viewModel.load() }
+        .alert("Couldn't load versions", isPresented: Binding(
+            get: { viewModel.playbackInventoryRetryError != nil },
+            set: { if !$0 { viewModel.playbackInventoryRetryError = nil } }
+        )) {
+            Button("OK", role: .cancel) { viewModel.playbackInventoryRetryError = nil }
+        } message: {
+            if let error = viewModel.playbackInventoryRetryError { Text(error) }
+        }
         .onDisappear {
             isPageVisible = false
             viewModel.suspendEnrichment()
@@ -380,7 +393,7 @@ public struct ItemDetailView: View {
         // Overrides rather than replaces, so a caller that supplies no router
         // leaves any inherited one intact.
         .transformEnvironment(\.mediaItemNavigator) { navigator in
-            if let onNavigate { navigator = onNavigate }
+            if let onNavigate { navigator = MediaItemNavigator(onNavigate) }
         }
         // A push does not disappear the page beneath it, so a page can only learn
         // it has been covered from the *child's* lifecycle — see DetailStackDepth.
@@ -673,6 +686,10 @@ public struct ItemDetailView: View {
                             childrenLoaded: detail.childrenLoaded,
                             seasonLoadState: nil
                         ),
+                        onRetryPlaybackInventory: viewModel.hasNoPlaybackStreams(for: detail.item) ? {
+                            Task { await viewModel.retryPlaybackInventory(for: detail.item) }
+                        } : nil,
+                        isRetryingPlaybackInventory: viewModel.isRetryingPlaybackInventory(for: detail.item),
                         playProgress: canPlay ? detail.item.resumeProgressFraction : nil,
                         playRemainingText: canPlay ? detail.item.resumeRemainingText : nil,
                         playSeasonEpisodeText: canPlay ? HeroForegroundModelBuilder.seasonEpisodeButtonText(for: detail.item) : nil,
@@ -692,7 +709,7 @@ public struct ItemDetailView: View {
                             #if os(tvOS)
                             guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
                             #endif
-                            withAnimation(.easeInOut(duration: 0.4)) {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.4)) {
                                 proxy.scrollTo(Self.topAnchorID, anchor: .top)
                             }
                         },
@@ -737,6 +754,8 @@ public struct ItemDetailView: View {
                             leadingInset: PlozzTheme.Metrics.heroLeadingPadding,
                             onSelect: onSelectChild
                         )
+                        .environment(\.plozzCardCaptionView, .episodes)
+                        .environment(\.plozzArtworkArea, .episodes)
                     }
                     DetailExtrasView(
                         item: detail.item,
@@ -790,7 +809,7 @@ public struct ItemDetailView: View {
                 guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
                 #endif
                 if focused {
-                    withAnimation(.easeInOut(duration: 0.4)) {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.4)) {
                         proxy.scrollTo(Self.topAnchorID, anchor: .top)
                     }
                 }
@@ -1009,6 +1028,7 @@ public struct ItemDetailView: View {
     /// time, keyed per title (per series for an episode).
     private func selectVersion(_ id: String, for item: MediaItem) {
         versionOverride = id
+        guard versionPreferences.shouldRememberVersion(for: item) else { return }
         let key = versionPreferenceKey(for: item)
         guard let version = effectiveVersions(
             for: item,

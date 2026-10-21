@@ -6,6 +6,7 @@ import Observation
 final class StreamingPlaybackState {
     var options: StreamingPlaybackOptions?
     var error: StreamingQualityError?
+    var failureReport: PlaybackDiagnosticReport?
     var preparation: StreamingPreparationPhase = .requesting
     var fallbackCodec: StreamingCodecPreference?
     var sourceWasHDR = false

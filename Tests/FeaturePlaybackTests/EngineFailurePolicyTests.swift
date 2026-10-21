@@ -54,6 +54,20 @@ final class EngineFailurePolicyTests: XCTestCase {
         XCTAssertEqual(state, EngineFallbackState())
     }
 
+    func testKnownNonCodecFailureDoesNotSwapEnginesOrConvert() {
+        for kind in [PlaybackEngineKind.native, .plozzigen] {
+            var state = EngineFallbackState()
+            let action = EngineFailurePolicy.decide(
+                tokenMatches: true, hasRequest: true, isNetworkFile: false,
+                isTranscoding: false, hasExternalAudio: false, currentEngineKind: kind,
+                alternateEngineKind: kind == .native ? .plozzigen : .native, resume: 125,
+                allowsCompatibilityFallback: false, state: &state
+            )
+            XCTAssertEqual(action, .exhausted)
+            XCTAssertEqual(state, EngineFallbackState())
+        }
+    }
+
     // MARK: Network-file fresh-retry (Plozzigen only, once)
 
     func testNetworkFileOnPlozzigenRetriesFreshOnce() {

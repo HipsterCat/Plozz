@@ -2,6 +2,7 @@
 import SwiftUI
 import PlozzCoreUI
 import CoreModels
+import MetadataKit
 
 /// The Info panel's now-playing card: a 16:9 thumbnail, the episode headline +
 /// overview, a metadata/badge row, and the right-hand action column (Restart ·
@@ -26,7 +27,52 @@ struct InfoPanelView: View {
     static var contentPadding: CGFloat { PlayerCardMetrics.platformDefault.contentPadding }
     static var cardHeight: CGFloat { PlayerCardMetrics.platformDefault.cardHeight }
 
+    /// Info can crop a still or poster when no backdrop loads; detail pages keep
+    /// their stricter backdrop-only selection.
+    static func artworkReferences(
+        for item: MediaItem, policy: ArtworkPresentationPolicy
+    ) -> [ArtworkReference] {
+        let policy = policy.forArea(.playback)
+        var seen = Set<ArtworkReference>()
+        return artworkPlacements(for: item).flatMap { policy.references(for: item, placement: $0) }
+            .filter { seen.insert($0).inserted }
+    }
+
+    static func artworkPlacements(for item: MediaItem) -> [ArtworkPlacement] {
+        item.kind == .episode
+            ? [.detailBackdrop, .episodeThumbnail, .poster]
+            : [.detailBackdrop, .poster]
+    }
+
+    static func artworkLookup(for item: MediaItem, router: ArtworkRouter = .shared) async -> URL? {
+        let placements = artworkPlacements(for: item)
+        return await ArtworkSession.artworkResolveLimiter.run {
+            guard !Task.isCancelled else { return nil }
+            return await router.artworkURL(for: item, placements: placements)
+        }
+    }
+
     @Environment(\.playerCardMetrics) private var metrics
+    @Environment(\.playerControlForeground) private var foreground
+    @Environment(\.playerUsesNativeGlass) private var nativeGlass
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var badgePalette: ThemePalette {
+        #if os(iOS)
+        nativeGlass ? .dark : palette
+        #else
+        palette
+        #endif
+    }
+
+    private var badgeColorScheme: ColorScheme {
+        #if os(iOS)
+        nativeGlass ? .dark : colorScheme
+        #else
+        colorScheme
+        #endif
+    }
 
     let model: PlayerControlsModel
     let actions: PlayerOptionsActions
@@ -93,7 +139,7 @@ struct InfoPanelView: View {
         // leave a well of empty glass under it.
         .modifier(PlayerCardHeight(metrics: metrics))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(PanelGlassBackground(cornerRadius: metrics.panelCornerRadius))
+        .modifier(PanelGlassBackground(cornerRadius: metrics.panelCornerRadius, mediaGlass: true))
     }
 
     /// The phone card: no thumbnail, and the three columns folded into rows.
@@ -185,13 +231,13 @@ struct InfoPanelView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(model.infoCard.headline.isEmpty ? "Now Playing" : model.infoCard.headline)
                 .font(metrics.titleFont)
-                .foregroundStyle(.white)
+                .foregroundStyle(foreground)
                 .fixedSize(horizontal: false, vertical: true)
 
             if !model.infoCard.overview.isEmpty {
                 Text(model.infoCard.overview)
                     .font(metrics.bodyFont)
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(foreground.opacity(0.82))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -205,7 +251,7 @@ struct InfoPanelView: View {
             if !line.isEmpty {
                 Text(line)
                     .font(metrics.captionFont)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(foreground.opacity(0.6))
                     .lineLimit(1)
                     // Holds its size, like the badges beside it — see the note at
                     // the call site.
@@ -213,6 +259,8 @@ struct InfoPanelView: View {
             }
             if includingBadges, !model.infoCard.badges.isEmpty {
                 MediaBadgeRow(badges: model.infoCard.badges)
+                    .environment(\.themePalette, badgePalette)
+                    .environment(\.colorScheme, badgeColorScheme)
             }
             Spacer(minLength: 0)
         }
@@ -231,14 +279,16 @@ struct InfoPanelView: View {
                 metaRow(includingBadges: false, includingRelease: false)
                 if model.infoCard.badges.isEmpty {
                     Text("Reading stream details…")
-                        .font(metrics.captionFont).foregroundStyle(.white.opacity(0.6))
+                        .font(metrics.captionFont).foregroundStyle(foreground.opacity(0.6))
                 } else {
                     WrappingHStackLayout(spacing: 10 * metrics.badgeScale, lineSpacing: 6) {
                         Text("Transcoded")
                             .font(metrics.captionFont)
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(foreground.opacity(0.6))
                         ForEach(model.infoCard.badges) { badge in
                             MediaBadgeChip(badge: badge)
+                                .environment(\.themePalette, badgePalette)
+                                .environment(\.colorScheme, badgeColorScheme)
                         }
                     }
                 }
@@ -259,7 +309,7 @@ struct InfoPanelView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.infoCard.headline.isEmpty ? "Now Playing" : model.infoCard.headline)
                     .font(metrics.titleFont)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(foreground)
                     .lineLimit(2)
                     .truncationMode(.tail)
                 if !model.infoCard.overview.isEmpty {
@@ -288,7 +338,7 @@ struct InfoPanelView: View {
                     // leave room, and truncating to one when it isn't.
                     Text(model.infoCard.overview)
                         .font(metrics.bodyFont)
-                        .foregroundStyle(.white.opacity(0.82))
+                        .foregroundStyle(foreground.opacity(0.82))
                         // Four lines now that the card is 40pt taller. Still a
                         // cap rather than a reservation — see the note above.
                         .lineLimit(metrics.overviewLineLimit)
@@ -374,24 +424,10 @@ struct InfoPanelView: View {
     }
 
     private func infoThumbnail(cornerRadius: CGFloat, height: CGFloat) -> some View {
-        Color.clear
-            .frame(width: height * 16.0 / 9.0, height: height)
-            .overlay {
-                FallbackAsyncImage(urls: model.infoCard.artworkURLs, variant: .landscapeCard) {
-                    // Fixed white, NOT palette.fill: this sits over the player's
-                    // variable video/artwork backdrop (always dark-scrimmed), so a
-                    // theme-tracking fill would be wrong here — it's a scrim-relative
-                    // placeholder, not a themed-page surface.
-                    Rectangle().fill(Color.white.opacity(0.08))
-                        .overlay(
-                            Image(systemName: "photo")
-                                .font(.system(size: 34, weight: .regular))
-                                .foregroundStyle(.white.opacity(0.28))
-                        )
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .plozzMediaEdge(cornerRadius: cornerRadius)
+        PlayerInfoArtwork(
+            urls: model.infoCard.artworkURLs, item: model.infoCard.artworkItem,
+            policy: model.artworkPolicy, cornerRadius: cornerRadius, height: height
+        )
     }
 
     /// An icon-only Info-card action. At rest it shows just its glyph; while
@@ -426,13 +462,61 @@ struct InfoPanelView: View {
             // and text colours — applied OUTSIDE this scope — change instantly.
             .animation(.easeOut(duration: 0.2), value: isFocused)
         }
+        #if os(iOS)
+        .playerTouchPanelAction()
+        .accessibilityAddTraits(prominent ? .isSelected : [])
+        #else
         .buttonStyle(InfoActionButtonStyle(
             focused: isFocused,
             prominent: prominent,
             hPadding: metrics.actionHPadding,
             vPadding: metrics.actionVPadding
         ))
+        #endif
+        .accessibilityLabel(Text(title))
         .focused($focus, equals: slot)
+    }
+}
+
+private struct PlayerInfoArtwork: View {
+    @Environment(\.playerControlForeground) private var foreground
+    let urls: [URL]
+    let item: MediaItem?
+    let policy: ArtworkPresentationPolicy
+    let cornerRadius: CGFloat
+    let height: CGFloat
+    @State private var policyRevision = 0
+
+    var body: some View {
+        let _ = policyRevision
+        let policy = self.policy.forArea(.playback)
+        let references = item.map { InfoPanelView.artworkReferences(for: $0, policy: policy) }
+            ?? urls.map(ArtworkReference.remote)
+        let fallback: (@Sendable () async -> URL?)? = item.map { item in
+            { await InfoPanelView.artworkLookup(for: item) }
+        }
+        Color.clear
+            .frame(width: height * 16.0 / 9.0, height: height)
+            .overlay {
+                FallbackAsyncImage(
+                    references: references,
+                    variant: .landscapeCard, artworkPolicy: policy,
+                    asyncFallbackURL: fallback, pinIdentity: item?.stablePresentationID
+                ) {
+                    Rectangle().fill(foreground.opacity(0.08))
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 34, weight: .regular))
+                                .foregroundStyle(foreground.opacity(0.28))
+                        )
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .plozzMediaEdge(cornerRadius: cornerRadius)
+            .onReceive(NotificationCenter.default.publisher(for: .metadataProviderSettingsDidChange)
+                .receive(on: DispatchQueue.main)) { _ in
+                policyRevision &+= 1
+            }
     }
 }
 #endif

@@ -27,11 +27,78 @@ that picker without repeating approval; retrying a failed profile lookup reuses
 the approved login while it remains valid. Expired codes have an explicit renewal
 action. Leaving the flow cancels pending work and clears in-memory PINs/tokens.
 TV approval follows the shared Plex-style QR/manual-code layout with one expiry
-ring and a visible match phrase. Profile selection uses the same avatar-row
+ring and the same sign-in code shown by current Silo versions. Profile selection uses the same avatar-row
 component and scroll card as Plex server-user selection, including focus-aware
 PIN indicators. These are Silo server profiles, not new Plozz household profiles.
 On mobile, browser approval stays primary and manual/QR alternatives share one
 disclosure instead of repeating the same instructions.
+
+If Silo advertises a configured public alias, Plozz keeps approval on the selected
+server's documented `/activate` page, including its reverse-proxy base path.
+It builds the link from the public user code, never forwards a foreign query or
+follows an authentication redirect. Inconsistent/unrecognized approval links are
+rejected with an address-specific message. Pending polls honor Silo's extended
+expiry; canceled/consumed requests offer a fresh code. A failed start can be
+retried in place, while a failed profile lookup retains successful approval.
+
+Connection failures during polling retain the same code and approval link.
+Scheduled polling backs off after a transport failure, never below the server's
+interval, with at most three consecutive failed polls and no work past the
+current deadline or cancellation. A successful pending response resets the
+failure count. Authentication, malformed responses, rate limits and terminal
+statuses are not retried. Device-start and other credential exchanges are never
+automatically replayed.
+
+The server consumes approval while minting its login session. If an approved
+response is lost after that commit, a subsequent `consumed` response still
+requires a fresh code; the client cannot recover tokens it never received.
+Recovered transport interruptions are logged locally; only the terminal failure
+enters the existing consent-gated setup diagnostic path.
+
+Setup errors identify validation, code creation, polling, profile loading, PIN
+verification, or session completion. With crash-reporting consent, at most ten
+distinct failures per reporter lifetime are sent using fixed stage/reason/response
+categories and an HTTP status only. No server address, response body, profile
+identity, PIN, pairing code, token, or error description is included. Opt-out
+invalidates retained attempts, including across later opt-in.
+
+## Alternate connection addresses
+
+Settings can approve another address through native device pairing, matching the
+authenticated installation/account/profile before saving the alias. Only the
+temporary verification login is revoked; the original rotating credential and
+account identity stay intact. This does not depend on newer Silo pinned-LAN
+discovery, and does not infer trust from a self-asserted public server ID.
+
+API requests choose among explicitly approved routes with credential-free v2
+reachability probes. A refresh whose route selection fails before transmission
+retains its original token; an ambiguous transmitted refresh is never replayed.
+Relative resource URLs use the selected API base. Server-issued signed media
+URLs remain byte-for-byte on their issued origin, with the bearer added only for
+approved server/session URLs. Foreign media nodes do not receive that bearer.
+If Silo issues a public absolute media URL, selecting a local API address does
+not silently rewrite it or move an already-playing stream.
+Address-only edits preserve the existing provider's login-revision-bound playback
+and subtitle grants while updating its API routes. They do not invalidate other
+accounts' providers; a new credential revision still receives a new session store.
+
+## Server Home
+
+Match Server imports Silo's profile-scoped native Home row IDs, headings, order
+and contents, including custom rows. The lightweight `/home/layout` endpoint
+falls back to `/home/sections` only when unavailable; actual authentication,
+network and malformed-response failures remain failures. A row refresh shares
+one fresh sections response instead of caching content across watch changes.
+Single-row requests use `/home/sections/{id}/items` with the same older-server
+fallback. Servers lacking both Home endpoints retain ordinary provider defaults.
+
+Only video cards are displayed. Disabled Plozz libraries require exact membership
+in an enabled library; title matches alone never establish membership. Continue
+Watching and Next Up resolve the server-selected playable episode and retain
+resume state and verified parent artwork. Shared Home composition still owns
+multi-server merging and explicit Plozz profile customizations.
+These Home and device-login contracts were checked at upstream revision
+`6144c45cd65ae0f49f9f3397bbc20f7e4d60a20e`.
 
 ## Contracts
 
@@ -70,6 +137,11 @@ disclosure instead of repeating the same instructions.
   Progress is read through the paged, library-scoped progress endpoint; Home's
   native next-up selections are corroborated before inclusion in a restricted
   library view. Versions use the original Silo file ID.
+  Parent series cards already present in the Home response fill missing episode
+  logos and `Series*` identities, including episodes also returned by progress.
+  The exact series relationship is checked; resume state and playable episode
+  IDs are not replaced. This reuses existing responses rather than adding a
+  parent lookup per card. Series-detail resume uses the same inheritance.
 - Playback requests a fixed file when the server advertises that optional
   extension. Older protocol-3 servers remain supported, but a returned plan
   naming a different file is always rejected and released. Signed stream and
@@ -81,12 +153,71 @@ disclosure instead of repeating the same instructions.
   bytes are preserved and foreign origins never receive the account bearer.
   Original-file delivery advertises Plozzigen's software codecs (including VP9),
   separately from hardware decode and native remote-HLS capabilities.
+  Its delivery-scoped claims let the local player manage HDR presentation and
+  select source audio tracks without requesting server conversion. They do not
+  claim native HDR10+ output or apply to server-packaged streams. HLS delivery
+  includes Silo's `hls` stream-container token, not only segment containers.
   The provider accepts original HTTP or HLS
   plans with a source-aligned seekable timeline; incompatible plans are released,
-  not played with an incorrect clock. Progress samples are sequenced and stop
+  not played with an incorrect clock. Refusals explain the rejected timeline,
+  missing seek support, source mismatch, or unsupported delivery/authentication,
+  including ordinary TV playback without explicit quality options. Raw server
+  text and signed addresses are never user-facing explanations.
+  Next-episode playback resolves on demand, not during the previous episode:
+  protocol-3 sessions without playback activity can expire independently of
+  their signed URL's expiry. Progress samples are sequenced and stop
   requests carry an idempotent stop identifier.
 - Watched state and the native Silo watchlist write back to Silo. Batched resume
   synchronization checks each result, not only HTTP success.
+
+### Watch indicators
+
+The shared mapper retains `user_state.played` and maps detail/season
+`user_data.unplayed_count` into episode-count badges. That count already includes
+in-progress episodes. Container progress uses watched / (watched + unplayed);
+missing counts stay unknown rather than becoming zero. Leaf progress uses the
+supplied position and duration, including a saved rewatch position. Existing
+Continue Watching and Home responses update position and percentage together.
+No extra requests, per-card detail hydration, or catalog scans are added.
+
+At upstream revision `dd3f7a604ade38bb537d9c6cc63d149ff3f484b5`, native catalog
+and Home cards expose completion through `user_state`, but do not expose the
+detail/season `user_data` rollup. Browse `sort_metrics.progress_ratio` is
+sort-dependent; Home Continue Watching cards can carry position/duration.
+The native browse query has no watch-rollup expansion option. Consequently,
+cards without those values cannot show an accurate remaining-episode count.
+Supporting `user_data` on Silo's existing card responses would let this mapper
+consume the same rollup without additional client requests.
+
+## Collections
+
+Library collections and personal collections have separate native contracts.
+`collections(in:page:)` retains `/library/{id}/collections` and
+`source=library_collection`. `personalCollections(page:)` reads `/collections`,
+including the acting viewer's own collections and collections shared with them,
+even when they are not published in a library's Collections tab. It slices the
+native unpaginated list without discarding the server's viewer order.
+
+Personal IDs use a distinct provider-local namespace. Item lookup, children and
+paged members route consistently to that namespace, with members fetched through
+`/catalog?source=user_collection&collection_id=...`; no arbitrary library or sort
+is imposed. Server profile authorization applies to every request. Missing
+artwork is valid; unsupported endpoints and revoked credentials remain errors.
+Personal catalog cards do not declare library ownership, so the provider leaves
+it unknown rather than mislabeling the whole collection as one library.
+These contracts were checked against native v2 revision
+`bbef279723ddc17cd3798b22decf58e5791765c7`.
+
+## Detail ratings
+
+Native v2 detail ratings use the server-selected `ratings` list, preserving its
+order, plain-text source marks and preformatted values (including plugin
+sources). TMDB may use its approved mark. An explicit empty list stays empty:
+external rating lookups, cached ratings and duplicate-title merges must not
+restore a source the administrator excluded. Raw `rating_*` values remain
+sorting facts, not a substitute display list. Older responses without `ratings`
+retain ordinary external enrichment. Invalid scores and duplicate entries are
+logged and omitted without losing the rest of the title.
 
 ## Streaming quality
 
@@ -109,6 +240,10 @@ resume position.
 The quality contract was verified against Silo server revision
 `8e5ae2f469d36109e28cab3959693236cb503833`; unsupported growing/non-source-aligned
 timelines remain an explicit refusal rather than an incorrect resume clock.
+Original-player claims and HLS container matching were checked against
+`c78d233918ec7297d519fb2702f5473f5109eb9d`. An unspecified negotiation refusal
+does not imply transcoding was requested; diagnostics retain the requested
+quality, encoding requirement, and server refusal code.
 
 ## Subtitle search and download
 

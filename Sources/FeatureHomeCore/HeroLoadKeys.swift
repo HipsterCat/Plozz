@@ -87,12 +87,15 @@ public struct HeroCurationLoadKey: Equatable, Sendable {
         continueWatching = settings.isEnabled(.continueWatching) ? content.continueWatching : []
         watchlist = settings.isEnabled(.watchlist) ? content.watchlist : []
         recentlyAdded = settings.isEnabled(.recentlyAdded) ? content.latest : []
-        libraries = settings.isEnabled(.randomFromLibrary) ? content.libraries : []
+        libraries = settings.isEnabled(.randomFromLibrary) || settings.isEnabled(.collection)
+            ? content.libraries : []
         configuration = HeroConfigurationKey(settings: settings)
         self.visibility = visibility
         self.freshnessRevision = freshnessRevision
-        self.identityIndexRevision = settings.isActive && settings.isEnabled(.featured)
-            && !settings.discoverySources.isEmpty ? identityIndexRevision : 0
+        let verifiesDiscovery = settings.isEnabled(.featured) && !settings.discoverySources.isEmpty
+        let enrichesCollectionHistory = settings.isEnabled(.collection) && settings.hideWatched
+        self.identityIndexRevision = settings.isActive && (verifiesDiscovery || enrichesCollectionHistory)
+            ? identityIndexRevision : 0
         self.watchlistMembershipRevision = settings.isActive && settings.isEnabled(.watchlist)
             ? watchlistMembershipRevision : 0
         self.scopeID = scopeID

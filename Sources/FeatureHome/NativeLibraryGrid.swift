@@ -10,9 +10,145 @@ import UIKit
 @MainActor
 final class NativeLibraryScrollTarget {
     weak var controller: NativeLibraryGridController?
+    weak var focusOwner: NativeLibraryFocusHostController?
+    weak var header: NativeLibraryHeaderController?
+    private(set) var headerOffset: CGFloat = 0
 
     func scroll(to index: Int, focusesItem: Bool = false) {
         controller?.scroll(to: index, focusesItem: focusesItem)
+    }
+
+    func moveHeader(with offset: CGFloat) {
+        headerOffset = max(0, offset)
+        header?.scrollOffset = headerOffset
+    }
+}
+
+// The controls stay mounted through query replacements, but move with the native scroll viewport.
+struct NativeLibraryScrollingHeader<Content: View>: UIViewControllerRepresentable {
+    let scrollTarget: NativeLibraryScrollTarget
+    let content: Content
+
+    func makeUIViewController(context: Context) -> NativeLibraryHeaderController {
+        let controller = NativeLibraryHeaderController()
+        scrollTarget.header = controller
+        updateUIViewController(controller, context: context)
+        return controller
+    }
+
+    func updateUIViewController(_ controller: NativeLibraryHeaderController, context: Context) {
+        let source = context.environment
+        // Another hosting tree's private accessibility state can keep restored controls hidden.
+        controller.host.rootView = AnyView(content.transformEnvironment(\.self) { target in
+            target.colorScheme = source.colorScheme
+            target.locale = source.locale
+            target.layoutDirection = source.layoutDirection
+            target.dynamicTypeSize = source.dynamicTypeSize
+            target.displayScale = source.displayScale
+            target.isEnabled = source.isEnabled
+            target.redactionReasons = source.redactionReasons
+            target.themePalette = source.themePalette
+            target.plozzMetrics = source.plozzMetrics
+            target.plozzReduceTransparency = source.plozzReduceTransparency
+        })
+        controller.scrollOffset = scrollTarget.headerOffset
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize, uiViewController: NativeLibraryHeaderController, context: Context
+    ) -> CGSize? {
+        uiViewController.host.sizeThatFits(in: CGSize(
+            width: proposal.width ?? HomeHeroLayout.screenWidth,
+            height: proposal.height ?? .greatestFiniteMagnitude
+        ))
+    }
+}
+
+final class NativeLibraryHeaderController: UIViewController {
+    let host = UIHostingController(rootView: AnyView(EmptyView()))
+    var scrollOffset: CGFloat = 0 {
+        didSet { if isViewLoaded { positionHeader() } }
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        host.safeAreaRegions = []
+        host.view.backgroundColor = .clear
+        addChild(host)
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        host.view.bounds = view.bounds
+        positionHeader()
+    }
+
+    private func positionHeader() {
+        host.view.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY - scrollOffset)
+    }
+}
+
+struct NativeLibraryFocusHost<Content: View>: UIViewControllerRepresentable {
+    let scrollTarget: NativeLibraryScrollTarget
+    let content: Content
+    // Forwarding the whole environment does not subscribe to focus-gate changes.
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeUIViewController(context: Context) -> NativeLibraryFocusHostController {
+        let controller = NativeLibraryFocusHostController()
+        updateUIViewController(controller, context: context)
+        return controller
+    }
+
+    func updateUIViewController(_ controller: NativeLibraryFocusHostController, context: Context) {
+        scrollTarget.focusOwner = controller
+        let source = context.environment
+        controller.host.rootView = AnyView(content.transformEnvironment(\.self) { target in
+            target.copyHostedPresentation(from: source)
+            target.isEnabled = isEnabled
+            target.themeMusicController = source.themeMusicController
+            target.themeMusicSettings = source.themeMusicSettings
+            target.themeMusicAuthenticatedHTTPResolver = source.themeMusicAuthenticatedHTTPResolver
+            target.seasonRequestContextID = source.seasonRequestContextID
+            target[ShareScanStatusModel.self] = source[ShareScanStatusModel.self]
+            target[HeroTrailerController.self] = source[HeroTrailerController.self]
+            target[HeroBackgroundSettingsModel.self] = source[HeroBackgroundSettingsModel.self]
+        })
+    }
+
+    static func dismantleUIViewController(_ controller: NativeLibraryFocusHostController, coordinator: ()) {
+        controller.host.rootView = AnyView(EmptyView())
+    }
+}
+
+final class NativeLibraryFocusHostController: UIViewController {
+    let host = UIHostingController(rootView: AnyView(EmptyView()))
+    private weak var requestedFocusEnvironment: (any UIFocusEnvironment)?
+
+    override var preferredFocusEnvironments: [any UIFocusEnvironment] {
+        requestedFocusEnvironment.map { [$0] } ?? super.preferredFocusEnvironments
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        host.view.backgroundColor = .clear
+        addChild(host)
+        view.addSubview(host.view)
+        host.view.frame = view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.didMove(toParent: self)
+    }
+
+    func requestFocus(to environment: any UIFocusEnvironment, using system: UIFocusSystem) {
+        // Header and grid are siblings; their common owner must request the handoff.
+        requestedFocusEnvironment = environment
+        defer { requestedFocusEnvironment = nil }
+        system.requestFocusUpdate(to: self)
+        system.updateFocusIfNeeded()
     }
 }
 
@@ -28,6 +164,7 @@ struct NativeLibraryGrid<Header: View>: UIViewControllerRepresentable {
     let header: Header
     let onSelect: (MediaItem, Int) -> Void
     let onLoaded: (Int) -> Void
+    let onScroll: (CGFloat) -> Void
 
     func makeUIViewController(context: Context) -> NativeLibraryGridController {
         let controller = NativeLibraryGridController()
@@ -37,12 +174,14 @@ struct NativeLibraryGrid<Header: View>: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: NativeLibraryGridController, context: Context) {
+        controller.focusOwner = scrollTarget.focusOwner
+        controller.scrollTarget = scrollTarget
         controller.update(
             model: viewModel, total: total, generation: generation, spoilerSettings: spoilerSettings,
             environment: context.environment, leadingInset: leadingInset, trailingInset: trailingInset,
             header: AnyView(header.environment(\.self, context.environment)),
             hidesScrollIndicator: hidesScrollIndicator,
-            onSelect: onSelect, onLoaded: onLoaded
+            onSelect: onSelect, onLoaded: onLoaded, onScroll: onScroll
         )
     }
 
@@ -52,10 +191,11 @@ struct NativeLibraryGrid<Header: View>: UIViewControllerRepresentable {
 }
 
 final class NativeLibraryGridController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate {
+    weak var focusOwner: NativeLibraryFocusHostController?
+    weak var scrollTarget: NativeLibraryScrollTarget?
     private let layout = UICollectionViewFlowLayout()
     private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
     private let headerHost = UIHostingController(rootView: AnyView(EmptyView()))
-    private let indicatorHider = ScrollIndicatorHiderController()
     private var model: LibraryBrowseViewModel?
     private var generation = -1
     private var total = 0
@@ -65,6 +205,7 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
     private var trailingInset: CGFloat = 0
     private var onSelect: ((MediaItem, Int) -> Void)?
     private var onLoaded: ((Int) -> Void)?
+    private var onScroll: ((CGFloat) -> Void)?
     private var bindings: [ObjectIdentifier: CellBinding] = [:]
     private var pendingNavigation: MediaItem?
     private var lastFocusedIndex: IndexPath?
@@ -72,6 +213,8 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
     private var measuredHeaderHeight: CGFloat = 0
     private var hidesScrollIndicator = false
     private var viewportReport: Task<Void, Never>?
+    private var traversalRecorder: LibraryTraversalRecorder? =
+        ProcessInfo.processInfo.environment["PLOZZ_LIBRARY_TRAVERSAL_RECORDING"] == "1" ? .init() : nil
 
     override var preferredFocusEnvironments: [any UIFocusEnvironment] {
         requestedFocusIndex == nil ? super.preferredFocusEnvironments : [collection]
@@ -99,22 +242,27 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
             withReuseIdentifier: "header")
         layout.sectionHeadersPinToVisibleBounds = false
         view.addSubview(collection)
+        if traversalRecorder != nil { enableTraversalRecording() }
         addChild(headerHost)
+        headerHost.safeAreaRegions = []
         headerHost.view.backgroundColor = .clear
         headerHost.didMove(toParent: self)
-        addChild(indicatorHider)
-        collection.addSubview(indicatorHider.view)
-        indicatorHider.didMove(toParent: self)
     }
 
     func update(
         model: LibraryBrowseViewModel, total: Int, generation: Int, spoilerSettings: SpoilerSettings,
         environment: EnvironmentValues, leadingInset: CGFloat, trailingInset: CGFloat,
         header: AnyView, hidesScrollIndicator: Bool,
-        onSelect: @escaping (MediaItem, Int) -> Void, onLoaded: @escaping (Int) -> Void
+        onSelect: @escaping (MediaItem, Int) -> Void, onLoaded: @escaping (Int) -> Void,
+        onScroll: @escaping (CGFloat) -> Void = { _ in }
     ) {
         let reset = self.model !== model || self.generation != generation
         let previousCount = self.total
+        let previousColumns = self.environment.plozzMetrics.libraryPosterColumns.count
+        if traversalRecorder != nil,
+           reset || previousCount != total || previousColumns != environment.plozzMetrics.libraryPosterColumns.count {
+            traversalRecorder = LibraryTraversalRecorder()
+        }
         if !reset, previousCount != total {
             collection.layoutIfNeeded()
         }
@@ -128,19 +276,21 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
         self.trailingInset = trailingInset
         self.onSelect = onSelect
         self.onLoaded = onLoaded
+        self.onScroll = onScroll
         self.hidesScrollIndicator = hidesScrollIndicator
         headerHost.rootView = AnyView(
             header.fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) {
                     $0.size.height
                 } action: { [weak self] height in
-                    guard let self, height > 0, abs(self.measuredHeaderHeight - height) > 0.5 else { return }
+                    guard let self, height.isFinite, height >= 0,
+                          abs(self.measuredHeaderHeight - height) > 0.5 else { return }
                     self.measuredHeaderHeight = height
                     self.view.setNeedsLayout()
                 }
         )
         loadViewIfNeeded()
-        indicatorHider.hidden = hidesScrollIndicator
+        updateScrollIndicators()
         collection.semanticContentAttribute =
             environment.layoutDirection == .rightToLeft
             ? .forceRightToLeft : .forceLeftToRight
@@ -148,7 +298,7 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
             lastFocusedIndex = nil
             requestedFocusIndex = nil
             collection.reloadData()
-            collection.setContentOffset(.zero, animated: false)
+            collection.setContentOffset(CGPoint(x: 0, y: -collection.contentInset.top), animated: false)
         } else {
             if previousCount != total {
                 if let lastFocusedIndex, lastFocusedIndex.item >= total {
@@ -174,7 +324,8 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        collection.frame = view.bounds
+        layoutViewport()
+        scrollTarget?.moveHeader(with: collection.contentOffset.y + collection.adjustedContentInset.top)
         guard view.bounds.width > 0 else { return }
         let metrics = environment.plozzMetrics
         let columns = max(1, metrics.libraryPosterColumns.count)
@@ -201,11 +352,38 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
             layout.headerReferenceSize = headerSize
             layout.invalidateLayout()
         }
-        headerHost.view.frame = CGRect(origin: .zero, size: headerSize)
         scheduleViewportReport()
     }
 
+    private func layoutViewport() {
+        var frame = view.bounds
+        if let focusOwner, view.window != nil, focusOwner.view.window === view.window {
+            let visible = view.convert(focusOwner.view.bounds, from: focusOwner.view)
+            let top = min(frame.minY, visible.minY)
+            let bottom = max(frame.maxY, visible.maxY)
+            frame = CGRect(x: frame.minX, y: top, width: frame.width, height: bottom - top)
+        }
+        let insets = UIEdgeInsets(
+            top: view.bounds.minY - frame.minY, left: 0,
+            bottom: frame.maxY - view.bounds.maxY, right: 0)
+        guard collection.frame != frame || collection.contentInset != insets else { return }
+        let offset = collection.contentOffset.y + collection.contentInset.top
+        // UIKit culls artwork at the viewport edge even with clipping disabled.
+        // Use the full presentation bounds; insets retain the header's initial space.
+        collection.frame = frame
+        collection.contentInset = insets
+        collection.contentOffset = CGPoint(x: collection.contentOffset.x, y: offset - insets.top)
+    }
+
+    private func updateScrollIndicators() {
+        collection.showsVerticalScrollIndicator = !hidesScrollIndicator
+        collection.indexDisplayMode = hidesScrollIndicator ? .alwaysHidden : .automatic
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+        scrollTarget?.moveHeader(with: offset)
+        onScroll?(offset)
         scheduleViewportReport()
     }
 
@@ -253,9 +431,17 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
         _ collectionView: UICollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath
     ) -> UICollectionReusableView {
         let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "header", for: indexPath)
-        if headerHost.view.superview !== header { header.addSubview(headerHost.view) }
-        headerHost.view.frame = header.bounds
-        headerHost.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        if headerHost.view.superview !== header {
+            let content = headerHost.view!
+            content.translatesAutoresizingMaskIntoConstraints = false
+            header.addSubview(content)
+            NSLayoutConstraint.activate([
+                content.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+                content.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+                content.topAnchor.constraint(equalTo: header.topAnchor),
+                content.bottomAnchor.constraint(equalTo: header.bottomAnchor)
+            ])
+        }
         return header
     }
 
@@ -269,8 +455,12 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
                 let system = UIFocusSystem.focusSystem(for: self.collection)
             else { return false }
             self.requestedFocusIndex = path
-            system.requestFocusUpdate(to: self)
-            system.updateFocusIfNeeded()
+            if let owner = self.focusOwner {
+                owner.requestFocus(to: self.collection, using: system)
+            } else {
+                system.requestFocusUpdate(to: self)
+                system.updateFocusIfNeeded()
+            }
             self.requestedFocusIndex = nil
             return cell.isFocused
         }
@@ -322,7 +512,6 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
         if isViewLoaded {
             for cell in collection.visibleCells { (cell as? NativeTVLibraryCell)?.cancelArtwork() }
         }
-        indicatorHider.teardown()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -332,7 +521,7 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        indicatorHider.hidden = hidesScrollIndicator
+        updateScrollIndicators()
         for cell in collection.visibleCells {
             guard let indexPath = collection.indexPath(for: cell) else { continue }
             collectionView(collection, willDisplay: cell, forItemAt: indexPath)
@@ -354,7 +543,30 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
         _ collectionView: UICollectionView, didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
         with coordinator: UIFocusAnimationCoordinator
     ) {
+        let next = context.nextFocusedIndexPath?.item
+        traversalRecorder?.record(
+            from: context.previouslyFocusedIndexPath?.item, to: next,
+            loaded: next.flatMap { model?.item(at: $0) } != nil,
+            uptime: ProcessInfo.processInfo.systemUptime
+        )
         if let path = context.nextFocusedIndexPath { lastFocusedIndex = path }
+    }
+
+    var traversalSnapshot: LibraryTraversalSnapshot? {
+        traversalRecorder?.snapshot(
+            generation: generation, columns: max(1, environment.plozzMetrics.libraryPosterColumns.count),
+            total: total
+        )
+    }
+
+    func enableTraversalRecording() {
+        if traversalRecorder == nil { traversalRecorder = LibraryTraversalRecorder() }
+        loadViewIfNeeded()
+        guard !view.subviews.contains(where: { $0 is NativeLibraryTraversalProbe }) else { return }
+        let probe = NativeLibraryTraversalProbe()
+        probe.frame = CGRect(x: 1, y: 1, width: 1, height: 1)
+        probe.snapshot = { [weak self] in self?.traversalSnapshot }
+        view.addSubview(probe)
     }
 
     func collectionView(_ collectionView: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool {

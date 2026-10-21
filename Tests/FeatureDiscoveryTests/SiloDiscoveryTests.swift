@@ -85,7 +85,10 @@ final class SiloDiscoveryTests: XCTestCase {
         do {
             _ = try await validator.validate(rawURL: "http://unrelated.test")
             XCTFail("A generic v2 endpoint is not a Silo server")
-        } catch { XCTAssertEqual(error as? AppError, .notFound) }
+        } catch {
+            XCTAssertEqual((error as? SiloSetupFailure)?.underlying, .notFound)
+            XCTAssertEqual((error as? SiloSetupFailure)?.diagnostic.stage, .capability)
+        }
         do {
             _ = try await validator.validate(rawURL: "http://user:secret@host:8090")
             XCTFail("Server addresses must not embed credentials")

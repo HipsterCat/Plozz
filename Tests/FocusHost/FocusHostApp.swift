@@ -2,19 +2,52 @@ import SwiftUI
 import UIKit
 import PlozzCoreUI
 import CoreModels
+import FeaturePlayback
 
 @main
 struct FocusHostApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--share-folder-fixture") {
+            if ProcessInfo.processInfo.arguments.contains("--reorder-input-fixture") {
+                ReorderInputFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--playback-failure-fixture") {
+                PlaybackFailureFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--setup-picker-fixture") {
+                SetupPickerFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--setup-summary-fixture") {
+                SetupSummaryFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--player-presentation-back-fixture") {
+                PlayerPresentationBackFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--server-address-fixture") {
+                ServerAddressNavigationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--read-ahead-settings-fixture") {
+                PlaybackReadAheadFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--iptv-organization-fixture") {
+                IPTVOrganizationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--sync-erasure-fixture") {
+                SyncErasureRemoteFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--preview-introduction-fixture") {
+                LiveTVPreviewIntroductionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--view-customization-fixture") {
+                ViewCustomizationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--iptv-setup-fixture") {
+                IPTVSetupFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--skip-marker-preview") {
+                SkipMarkerPreviewFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--player-cast-focus-fixture") {
+                PlayerCastFocusFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--share-folder-fixture") {
                 ShareFolderBrowserFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--episode-breadcrumb-fixture") {
+                EpisodeBreadcrumbFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--episode-row-fixture") {
                 EpisodeRowRemoteFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--subtitle-style-input-fixture") {
                 SubtitleStyleInputFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--home-layout-onboarding-fixture") {
                 HomeLayoutOnboardingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--library-showcase-fixture") {
+                LibraryShowcaseFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--library-held-scroll-fixture") {
                 LibraryHeldScrollFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--family-guidance-fixture") {
@@ -23,6 +56,8 @@ struct FocusHostApp: App {
                 NativeSidebarHandoffFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--navigation-handoff-fixture") {
                 NavigationDestinationHandoffFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--pinned-back-fixture") {
+                PinnedNavigationBackFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--poster-caption-fixture") {
                 PosterCaptionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--cast-focus-fixture") {
@@ -35,6 +70,8 @@ struct FocusHostApp: App {
                 NavigationRailFixture { Color.clear }
             } else if ProcessInfo.processInfo.arguments.contains("--production-home-fixture") {
                 ProductionHomeFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--native-artwork-focus-comparison") {
+                NativeArtworkFocusComparisonScreen()
             } else if ProcessInfo.processInfo.arguments.contains("--native-media-cell-comparison") {
                 NativeMediaCellComparisonScreen()
             } else if ProcessInfo.processInfo.arguments.contains("--native-poster-comparison") {
@@ -46,6 +83,52 @@ struct FocusHostApp: App {
             } else {
                 Color.black
             }
+        }
+    }
+}
+
+private struct ReorderInputFixture: View {
+    @State private var sections = OrderedVisibilityList.Sections(enabled: Array(0..<24), disabled: [24, 25])
+    @State private var isLifting = false
+    @State private var positions: [Int] = []
+    private var allowsHiding: Bool { ProcessInfo.processInfo.arguments.contains("--with-hidden-rows") }
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Button("Done") {}.disabled(isLifting)
+            ScrollView {
+                LiftableReorderList(
+                    sections: .init(enabled: sections.enabled, disabled: allowsHiding ? sections.disabled : []),
+                    disabledSectionTitle: "Hidden", disabledPlaceholder: "No hidden rows",
+                    isLifting: $isLifting, allowsHiding: allowsHiding,
+                    row: { .init(title: Text(verbatim: "Row \($0)")) },
+                    onChange: {
+                        sections = $0
+                        if let index = $0.combined.firstIndex(of: 0) { positions.append(index) }
+                    }
+                )
+                .padding(36)
+            }
+            Text(verbatim: "Position \(sections.combined.firstIndex(of: 0) ?? -1); hidden \(sections.disabled.contains(0))")
+                .accessibilityIdentifier("reorder-fixture-position")
+                .accessibilityValue(Text(verbatim: positions.map(String.init).joined(separator: ",")))
+        }
+        .frame(width: 960)
+        .padding(.vertical, 60)
+        .environment(\.themePalette, .dark)
+        .environment(\.colorScheme, .dark)
+    }
+}
+
+private struct SkipMarkerPreviewFixture: View {
+    @State private var showsPreview = true
+
+    var body: some View {
+        if showsPreview {
+            PlayerSkipMarkerPreview { showsPreview = false }
+        } else {
+            Text(verbatim: "Preview closed")
+                .accessibilityIdentifier("marker-preview-closed")
         }
     }
 }

@@ -17,6 +17,8 @@ import PlozzCoreUI
 struct SettingsCheckableRow: View {
     let title: Text
     var subtitle: Text? = nil
+    var titleLineLimit: Int? = 1
+    var subtitleLineLimit: Int? = 2
     var icon: String? = nil
     let isChecked: Bool
     /// When false the row is dimmed and pulled out of the focus order (can't be
@@ -31,6 +33,7 @@ struct SettingsCheckableRow: View {
     /// hugging the card's border. Default true (flush-left, for split panes).
     var flushLeading: Bool = true
     let action: () -> Void
+    @Environment(\.settingsFormRowsFlushLeading) private var groupFlushLeading
 
     // ``SettingsRowLabel`` insets content horizontally; cancel the leading inset
     // (unless `flushLeading` is off) so titles line up flush-left with the pane
@@ -41,7 +44,11 @@ struct SettingsCheckableRow: View {
     private var iconSize: CGFloat { prominence == .primary ? 24 : 20 }
     private var iconFrame: CGFloat { prominence == .primary ? 34 : 30 }
     private var titleFont: Font {
+        #if os(tvOS)
+        SettingsRowMetrics.titleFont
+        #else
         prominence == .primary ? .headline.weight(.semibold) : .callout.weight(.medium)
+        #endif
     }
     private var minRowHeight: CGFloat { SettingsRowMetrics.minHeight(prominence) }
     private var verticalPadding: CGFloat { SettingsRowMetrics.verticalPadding(prominence) }
@@ -58,12 +65,12 @@ struct SettingsCheckableRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     title
                         .font(titleFont)
-                        .lineLimit(1)
+                        .lineLimit(titleLineLimit)
                     if let subtitle {
                         subtitle
-                            .font(.footnote)
+                            .font(SettingsRowMetrics.descriptionFont)
                             .settingsRowSecondary()
-                            .lineLimit(2)
+                            .lineLimit(subtitleLineLimit)
                     }
                 }
                 Spacer(minLength: rowSpacing)
@@ -77,7 +84,7 @@ struct SettingsCheckableRow: View {
         }
         .buttonStyle(SettingsFocusButtonStyle())
         .disabled(!isEnabled)
-        .padding(.leading, flushLeading ? -labelInset : 0)
+        .padding(.leading, flushLeading && groupFlushLeading ? -labelInset : 0)
         .accessibilityAddTraits(isChecked ? .isSelected : [])
     }
 }

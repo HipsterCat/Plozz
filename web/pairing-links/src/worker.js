@@ -1,6 +1,6 @@
 // Plozz pairing links Worker.
 //
-// Serves exactly two paths on plozz.app (see wrangler.toml routes):
+// Serves pairing, tracker authentication, and community shortcuts (see wrangler.toml routes):
 //   1. /.well-known/apple-app-site-association
 //        The Apple App Site Association (AASA) file that lets iOS treat
 //        https://plozz.app/pair as a Universal Link into the Plozz app.
@@ -12,15 +12,20 @@
 //        Safari loads this page, which explains how to get Plozz and finish setup.
 //
 // Everything else on plozz.app is still served by the existing `plozz-website`
-// Cloudflare Pages project — this Worker only claims these two paths.
+// Cloudflare Worker — this Worker claims only the listed routes.
 
 const APP_ID = "N8Z5T4AK3X.com.thatcube.Plozz";
 
 // Public install URL for Plozz. TestFlight public link (works before an App
 // Store release). The /pair page adapts its copy if this is ever emptied.
 const APP_STORE_URL = "https://testflight.apple.com/join/EKfReNMu";
+const SHORTLINKS = [
+  { path: "/discord", target: "https://discord.gg/34tvRebP5Q" },
+  { path: "/github", target: "https://github.com/brandomoore/Plozz" },
+];
 
 const AASA = {
+  webcredentials: { apps: [APP_ID] },
   applinks: {
     apps: [],
     details: [
@@ -38,6 +43,18 @@ export default {
   async fetch(request) {
     const url = new URL(request.url);
 
+    const shortcut = SHORTLINKS.find(({ path }) => url.pathname === path || url.pathname === `${path}/`);
+    if (shortcut) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: shortcut.target,
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+        },
+      });
+    }
+
     if (url.pathname === "/.well-known/apple-app-site-association") {
       return new Response(JSON.stringify(AASA), {
         headers: {
@@ -54,6 +71,32 @@ export default {
           "cache-control": "no-store",
         },
       });
+    }
+
+    const tracker = {
+      "/auth/trakt/callback": "Trakt",
+      "/auth/wetrakr/callback": "WeTrakr",
+    }[url.pathname];
+    if (tracker) {
+      // ASWebAuthenticationSession intercepts this navigation on a verified app.
+      // Never echo, persist or exchange the authorization code on the server.
+      return new Response(
+        `Return to Plozz to finish connecting ${tracker}. If Plozz did not receive the sign-in, cancel and start Connect ${tracker} again in the app.`,
+        {
+          headers: {
+            "content-type": "text/plain; charset=utf-8",
+            "cache-control": "no-store",
+            "referrer-policy": "no-referrer",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+          },
+        },
+      );
+    }
+
+    // The wildcards also catch similarly prefixed pages; keep those on the website.
+    if (SHORTLINKS.some(({ path }) => url.pathname.startsWith(path))) {
+      return fetch(request);
     }
 
     // Should not happen given the routes, but fall through gracefully.

@@ -84,7 +84,7 @@ private struct LiveTVProfileSourceApprovalControl: View {
                 Text(error).foregroundStyle(.red)
             }
         }
-        .sheet(isPresented: $showsPIN, onDismiss: { model.cancelApproval() }) {
+        .plozzSheet(isPresented: $showsPIN, onDismiss: { model.cancelApproval() }) {
             PINEntryScaffold(
                 title: KidsProfileCopy.parentalPINEnter,
                 name: Text(KidsProfileCopy.parentalPIN),

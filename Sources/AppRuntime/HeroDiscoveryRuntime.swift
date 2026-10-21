@@ -21,18 +21,21 @@ public struct HeroDiscoveryRuntime: Sendable {
     private let accountsByID: [String: ResolvedAccount]
     private let identitySources: @Sendable (MediaItem) -> [MediaSourceRef]
     private let discovery: HeroDiscoveryContentProviding
+    private let allowsDiscovery: @Sendable () async -> Bool
     private static let maximumConcurrentLookups = 4
 
     public init(
         accounts: [ResolvedAccount],
         identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef],
-        discovery: HeroDiscoveryContentProviding? = nil
+        discovery: HeroDiscoveryContentProviding? = nil,
+        allowsDiscovery: @escaping @Sendable () async -> Bool = { true }
     ) {
         accountsByID = Dictionary(
             accounts.map { ($0.account.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         self.identitySources = identitySources
+        self.allowsDiscovery = allowsDiscovery
         self.discovery = discovery ?? { request, sources in
             await Self.discoverPublicCandidates(request, sources: sources)
         }
@@ -45,9 +48,10 @@ public struct HeroDiscoveryRuntime: Sendable {
         visibility: HomeLibraryVisibility = .default
     ) async -> [MediaItem] {
         let enabled = HeroDiscoverySource.normalized(sources)
-        guard !Task.isCancelled, request.limit > 0, !enabled.isEmpty else { return [] }
+        guard !Task.isCancelled, request.limit > 0, !enabled.isEmpty,
+              await allowsDiscovery() else { return [] }
         let fetched = await discovery(request, enabled)
-        guard !Task.isCancelled else { return [] }
+        guard !Task.isCancelled, await allowsDiscovery() else { return [] }
         let external = Array(fetched.lazy
             .filter { $0.kind == .movie || $0.kind == .series }
             .prefix(request.limit)
@@ -75,7 +79,7 @@ public struct HeroDiscoveryRuntime: Sendable {
             }
         }
         let resolved = await resolve(jobs)
-        guard !Task.isCancelled else { return [] }
+        guard !Task.isCancelled, await allowsDiscovery() else { return [] }
 
         var rejectedIdentity = false
         var result: [MediaItem] = []
@@ -123,6 +127,7 @@ public struct HeroDiscoveryRuntime: Sendable {
             let state = MediaItemMerger.unifiedWatchState(from: merged.sources)
             merged.resumePosition = state.resumePosition
             merged.playedPercentage = state.playedPercentage
+            merged.unwatchedEpisodeCount = state.unwatchedEpisodeCount
             merged.isPlayed = state.isPlayed
             merged.lastPlayedAt = state.lastPlayedAt
             merged.hasBeenPlayed = owned.contains { $0.hasBeenPlayed || $0.isPlayed }
@@ -131,7 +136,8 @@ public struct HeroDiscoveryRuntime: Sendable {
         if rejectedIdentity {
             PlozzLog.app.error("Hero discovery: unverified or conflicting library identity was ignored.")
         }
-        return Task.isCancelled ? [] : result
+        guard !Task.isCancelled, await allowsDiscovery() else { return [] }
+        return result
     }
 
     private func resolve(_ jobs: [LookupKey]) async -> [LookupKey: MediaItem] {

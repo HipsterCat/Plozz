@@ -3,6 +3,25 @@ import XCTest
 @testable import EnginePlozzigen
 
 final class PlozzigenLiveOutputTests: XCTestCase {
+    func testRawTransportStreamsDoNotUseTheHLSOnlyNativeBypass() throws {
+        for suffix in ["ts", "m2ts", "mts", "TS"] {
+            let url = try XCTUnwrap(URL(string: "http://127.0.0.1/opaque.\(suffix)"))
+            let options = PlozzigenVideoEngine.liveLoadOptions(httpHeaders: [:], url: url)
+            XCTAssertTrue(options.isLive)
+            XCTAssertEqual(options.objectAudioRendering, .off)
+            XCTAssertFalse(options.nativeRemoteHLS, suffix)
+            XCTAssertEqual(options.liveJoinProfile, .fastZap, suffix)
+        }
+        let playlist = try XCTUnwrap(URL(string: "http://127.0.0.1/opaque.m3u8"))
+        XCTAssertTrue(PlozzigenVideoEngine.liveLoadOptions(httpHeaders: [:], url: playlist).nativeRemoteHLS)
+        let opaque = try XCTUnwrap(URL(string: "http://127.0.0.1/extensionless"))
+        XCTAssertFalse(PlozzigenVideoEngine.liveLoadOptions(httpHeaders: [:], url: opaque).nativeRemoteHLS)
+        let detected = PlozzigenVideoEngine.liveLoadOptions(httpHeaders: [:], url: opaque, sourceFormat: .hls)
+        XCTAssertTrue(detected.nativeRemoteHLS)
+        XCTAssertEqual(detected.objectAudioRendering, .off)
+        XCTAssertEqual(detected.liveJoinProfile, .standard)
+    }
+
     func testOutputPoliciesLeavePanelModeInferenceToAether() {
         for var options in [
             LoadOptions(matchContentEnabled: true),

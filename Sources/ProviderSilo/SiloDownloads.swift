@@ -75,7 +75,9 @@ extension SiloProvider {
         for (index, subtitle) in manifest.subtitles.enumerated() {
             guard ["srt", "vtt", "ass", "ssa", "subrip", "webvtt"].contains(subtitle.format.lowercased()) else { continue }
             guard let url = resourceURL(subtitle.fetch_url),
-                  let path = MediaProviderURLIdentity.relativeResourcePath(of: url, under: session.server.baseURL),
+                  let base = MediaProviderURLIdentity.matchingBaseURL(
+                    for: url, among: client.addressResolver.addresses),
+                  let path = MediaProviderURLIdentity.relativeResourcePath(of: url, under: base),
                   path.hasPrefix("/api/v2/downloads/\(try SiloAPI.pathComponent(reference.id))/subtitles/"),
                   url.query == nil, url.fragment == nil else { throw AppError.invalidResponse }
             let (bytes, _) = try await client.send(String(path.dropFirst("/api/v2".count)), deviceID: session.deviceID)
@@ -190,7 +192,7 @@ extension SiloProvider {
         try await reportDownload(reference, status: "downloading", at: Date())
         let fileRoute = capability.proxy_delivery == true ? "file-proxy" : "file"
         let path = "/api/v2/downloads/\(try SiloAPI.pathComponent(reference.id))/\(fileRoute)"
-        guard var components = URLComponents(url: session.server.baseURL, resolvingAgainstBaseURL: false) else {
+        guard var components = URLComponents(url: client.baseURL, resolvingAgainstBaseURL: false) else {
             throw AppError.invalidResponse
         }
         let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

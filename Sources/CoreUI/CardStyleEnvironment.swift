@@ -11,12 +11,43 @@ private struct PlozzCardStyleKey: EnvironmentKey {
     static let defaultValue: CardStyle = .default
 }
 
+private struct PlozzGradientCardSurfaceKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var plozzGradientCardSurface: Bool {
+        get { self[PlozzGradientCardSurfaceKey.self] }
+        set { self[PlozzGradientCardSurfaceKey.self] = newValue }
+    }
+
+    var plozzRestingCardSurface: SurfaceStyle {
+        plozzGradientCardSurface ? themePalette.gradientSurface : themePalette.raised
+    }
+}
+
 public extension EnvironmentValues {
     /// The live, per-profile media card presentation (framed glass card vs
     /// borderless artwork-only). Set once at the app root; read by `PosterCardView`.
     var plozzCardStyle: CardStyle {
         get { self[PlozzCardStyleKey.self] }
         set { self[PlozzCardStyleKey.self] = newValue }
+    }
+}
+
+private struct AdaptiveCardSurface: ViewModifier {
+    @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
+    @Environment(\.plozzReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content.environment(\.plozzGradientCardSurface, gradientEnabled && !reduceTransparency)
+    }
+}
+
+public extension View {
+    /// Shares detail cards' gradient wash, with opaque surfaces when transparency is disabled.
+    func plozzAdaptiveCardSurface() -> some View {
+        modifier(AdaptiveCardSurface())
     }
 }
 #endif

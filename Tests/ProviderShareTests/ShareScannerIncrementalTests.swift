@@ -2,6 +2,7 @@ import XCTest
 import CoreModels
 import MediaTransportCore
 @testable import ProviderShare
+@testable import TestSupportPerformance
 
 /// Guards the two rules that decide whether a directory is re-listed.
 ///
@@ -95,6 +96,48 @@ final class ShareScannerIncrementalTests: XCTestCase {
         func record(_ path: String) { paths.append(path) }
     }
 
+    @MainActor
+    func testPerformanceUnchangedLibrary() async throws {
+        try PerformanceProbe.requireEnabled()
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        let count = 1_000
+        var tree: [String: [RemoteFileEntry]] = ["": [try directory("Movies")]]
+        tree["Movies"] = try (0..<count).map { try directory("Movies/Film \($0) (2000)") }
+        for index in 0..<count {
+            let path = "Movies/Film \(index) (2000)"
+            tree[path] = [try video("\(path)/Film \(index) (2000).mkv")]
+        }
+        let initial = await scanner(store, tree: tree).scan()
+        XCTAssertEqual(initial, .completedClean)
+        try fixture.execute("""
+        CREATE TABLE performance_inventory_writes(value INTEGER NOT NULL);
+        INSERT INTO performance_inventory_writes VALUES(0);
+        CREATE TRIGGER performance_inventory_update AFTER UPDATE ON playable_inventory BEGIN
+          UPDATE performance_inventory_writes SET value=value+1;
+        END;
+        """)
+        try await PerformanceProbe.measure(self, scenario: "library-unchanged") {
+            try fixture.execute("UPDATE performance_inventory_writes SET value=0;")
+            let recorder = ListingRecorder()
+            let result = await self.scanner(store, tree: tree, recorder: recorder).scan(deep: false)
+            let paths = await recorder.paths
+            XCTAssertEqual(result, .completedClean)
+            XCTAssertEqual(paths, ["", "Movies"])
+            let assets = try fixture.integer("SELECT COUNT(*) FROM assets;")
+            let writes = try fixture.integer("SELECT value FROM performance_inventory_writes;")
+            XCTAssertEqual(assets, count)
+            XCTAssertLessThanOrEqual(writes, count, "Inventory stamping must not multiply by the whole library.")
+            return ["directoryListings": paths.count, "assets": assets, "inventoryUpdates": writes]
+        }
+        tree["Movies"]?[0] = try directory("Movies/Film 0 (2000)", timestamp: 200)
+        tree["Movies/Film 0 (2000)"]?.append(try video("Movies/Film 0 (2000)/New (2001).mkv"))
+        let changed = await scanner(store, tree: tree).scan(deep: false)
+        XCTAssertEqual(changed, .completedClean)
+        XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM assets;"), count + 1)
+    }
+
     private func directory(_ path: String, timestamp: TimeInterval = 100) throws -> RemoteFileEntry {
         try RemoteFileEntry(
             relativePath: path, kind: .directory,
@@ -154,6 +197,8 @@ final class ShareScannerIncrementalTests: XCTestCase {
                        "each discovered playable path should be persisted once, not once per asset plus inventory")
         try fixture.execute("UPDATE inventory_writes SET value=0;")
         let recorder = ListingRecorder()
+        PerformanceDiagnostics.shared.start()
+        defer { PerformanceDiagnostics.shared.stop() }
         let outcome = await scanner(store, tree: tree, recorder: recorder).scan(deep: false)
         let paths = await recorder.paths
         XCTAssertEqual(outcome, .completedClean)
@@ -161,6 +206,14 @@ final class ShareScannerIncrementalTests: XCTestCase {
         XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM assets;"), count)
         XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM playable_inventory;"), count)
         XCTAssertEqual(try fixture.integer("SELECT value FROM inventory_writes;"), count)
+        let snapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+        let diagnostic = try XCTUnwrap((snapshot.recent + snapshot.slow).first { $0.operation == .shareScan })
+        XCTAssertEqual(diagnostic.operation, .shareScan)
+        XCTAssertEqual(diagnostic.provider, .mediaShare)
+        XCTAssertEqual(diagnostic.outcome, .succeeded)
+        XCTAssertEqual(diagnostic.metrics.requests, 2)
+        XCTAssertEqual(diagnostic.metrics.items, 0, "Retained files are not new listing results.")
+        XCTAssertTrue(PerformanceDiagnostics.shared.snapshot()?.active.isEmpty == true)
     }
 
     func testDeepScanFindsMediaChangesEvenWhenDirectoryTimestampDoesNotMove() async throws {
@@ -183,6 +236,50 @@ final class ShareScannerIncrementalTests: XCTestCase {
         XCTAssertEqual(paths, ["", "Movies"])
         XCTAssertEqual(try fixture.text("SELECT rel_path FROM assets;"), "Movies/New (2001).mkv")
         XCTAssertEqual(try fixture.text("SELECT rel_path FROM playable_inventory;"), "Movies/New (2001).mkv")
+    }
+
+    func testISOUpgradeRewalksUnchangedLeavesOnceForScheduledAndManualScans() async throws {
+        for scheduled in [true, false] {
+            let fixture = ShareCatalogSQLiteFixture()
+            defer { fixture.cleanup() }
+            let store = fixture.makeStore()
+            var tree: [String: [RemoteFileEntry]] = [
+                "": [try directory("Movies")],
+                "Movies": [try directory("Movies/Discs")],
+                "Movies/Discs": [try video("Movies/Discs/Existing (2000).mkv")]
+            ]
+            let initial = await scanner(store, tree: tree).scan()
+            XCTAssertEqual(initial, .completedClean)
+            // The old classifier never recorded these files, despite unchanged directory mtimes.
+            await store.setMeta("parser_version", "15")
+            await store.setMeta("enrich_version", "keep-enrichment")
+            tree["Movies/Discs", default: []] += [
+                try video("Movies/Discs/Disc (2001).ISO", size: 31_316_770_816),
+                try video("Movies/Discs/Disc (2001).iso.zip")
+            ]
+            let recorder = ListingRecorder()
+            let upgraded = scanner(store, tree: tree, recorder: recorder)
+            let outcome = scheduled
+                ? await upgraded.scanIfStale(minInterval: 86_400)
+                : await upgraded.scan(deep: false)
+            let paths = await recorder.paths
+            XCTAssertEqual(outcome, .completedClean)
+            XCTAssertEqual(paths, ["", "Movies", "Movies/Discs"])
+            XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM assets;"), 2)
+            XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM playable_inventory;"), 2)
+            XCTAssertEqual(
+                try fixture.integer("SELECT size FROM assets WHERE rel_path='Movies/Discs/Disc (2001).ISO';"),
+                31_316_770_816
+            )
+            let version = await store.meta("parser_version")
+            let enrichment = await store.meta("enrich_version")
+            XCTAssertEqual(version, String(ShareMediaParser.classifierVersion))
+            XCTAssertEqual(enrichment, "keep-enrichment")
+            let repeated = await upgraded.scanIfStale(minInterval: 86_400)
+            let repeatedPaths = await recorder.paths
+            XCTAssertEqual(repeated, .freshNoOp)
+            XCTAssertEqual(repeatedPaths, paths)
+        }
     }
 
     func testNormalScanFindsNestedAdditionsRenamesAndDeletions() async throws {
@@ -229,11 +326,17 @@ final class ShareScannerIncrementalTests: XCTestCase {
         tree["B"] = [try directory("B/Pending", timestamp: 200)]
         let gate = MetadataAsyncTestGate()
         let interrupted = scanner(store, tree: tree, gate: gate)
+        PerformanceDiagnostics.shared.start()
+        defer { PerformanceDiagnostics.shared.stop() }
         let task = Task { await interrupted.scan(deep: false) }
         await gate.waitUntilEntered()
         task.cancel()
         gate.open()
         _ = await task.value
+        let snapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+        let diagnostic = try XCTUnwrap((snapshot.recent + snapshot.slow).first { $0.operation == .shareScan })
+        XCTAssertEqual(diagnostic.outcome, .cancelled)
+        XCTAssertTrue(PerformanceDiagnostics.shared.snapshot()?.active.isEmpty == true)
 
         let outcome = await scanner(store, tree: tree).scan(deep: false)
         XCTAssertEqual(outcome, .completedClean)

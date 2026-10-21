@@ -21,7 +21,7 @@ extension JellyfinProvider: LibraryChannelCatalogProviding, LibraryChannelPlayba
             if let source = dto.MediaSources?.first, let sourceID = source.Id {
                 item.selectedVersionID = sourceID
                 item.versions = [MediaVersion(
-                    id: sourceID, sizeBytes: source.Size,
+                    id: sourceID, sizeBytes: Self.fileSizeBytes(for: source),
                     duration: source.RunTimeTicks.map { Double($0) / 10_000_000 },
                     sourceMetadata: MediaSourceMetadata(sourceRevision: source.ETag)
                 )]
@@ -58,7 +58,7 @@ extension JellyfinProvider: LibraryChannelCatalogProviding, LibraryChannelPlayba
               let duration = mapped.runtime, duration.isFinite, (1...604_800).contains(duration),
               Int64(duration.rounded(.down)) == item.durationSeconds,
               source.RunTimeTicks.map({ $0 / 10_000_000 == item.durationSeconds }) ?? true,
-              item.sourceSizeBytes.map({ $0 == source.Size }) ?? true,
+              item.sourceSizeBytes.map({ $0 == Self.fileSizeBytes(for: source) }) ?? true,
               item.sourceRevision.map({ $0 == source.ETag }) ?? true else {
             throw LibraryChannelError.mediaChanged
         }

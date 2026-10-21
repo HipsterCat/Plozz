@@ -62,7 +62,7 @@ final class JellyfinBrowsePerformanceTests: XCTestCase {
             let nextUp = try XCTUnwrap(stub.queryItems(forPathSuffix: "/Shows/NextUp"))
             XCTAssertEqual(nextUp.first { $0.name == "SeriesId" }?.value, "series-250")
             XCTAssertEqual(nextUp.first { $0.name == "UserId" }?.value, "user")
-            XCTAssertEqual(nextUp.first { $0.name == "EnableResumable" }?.value, "false")
+            XCTAssertEqual(nextUp.first { $0.name == "EnableResumable" }?.value, "true")
             XCTAssertEqual(nextUp.first { $0.name == "EnableRewatching" }?.value, "false")
             print("Issue56 optimized \(kind): series resume = 2 scoped requests, 1 episode in response")
         }
@@ -216,6 +216,52 @@ final class JellyfinBrowsePerformanceTests: XCTestCase {
             stub.stub(pathSuffix: "/Shows/NextUp", json: #"{"Items":[],"TotalRecordCount":0}"#)
             let episode = try await provider(stub, kind: kind).resumeEpisode(inSeries: "show")
             XCTAssertNil(episode)
+            XCTAssertEqual(stub.sentPaths.count, 2)
+        }
+    }
+
+    func testScopedResumeIncludesResumableNextUpWhenScopedResumeIsEmpty() async throws {
+        for kind in [ProviderKind.emby, .jellyfin] {
+            let stub = StubHTTPClient()
+            stub.stub(pathSuffix: "/Items/Resume", json: #"{"Items":[],"TotalRecordCount":0}"#)
+            stub.stub(
+                pathSuffix: "/Shows/NextUp",
+                requiring: [
+                    URLQueryItem(name: "SeriesId", value: "show"),
+                    URLQueryItem(name: "EnableResumable", value: "true")
+                ],
+                json: """
+                {"Items":[{"Id":"resuming","Type":"Episode","SeriesId":"show",
+                  "UserData":{"PlaybackPositionTicks":1200000000,
+                              "LastPlayedDate":"2026-09-09T00:00:00Z"}}],
+                 "TotalRecordCount":1}
+                """
+            )
+            stub.stub(pathSuffix: "/Shows/NextUp", json: #"{"Items":[],"TotalRecordCount":0}"#)
+            let episode = try await provider(stub, kind: kind).resumeEpisode(inSeries: "show")
+            XCTAssertEqual(episode?.id, "resuming")
+            XCTAssertEqual(episode?.resumePosition, 120)
+            XCTAssertEqual(stub.sentPaths.count, 2)
+            XCTAssertTrue(stub.sentQueryItems.allSatisfy {
+                $0.first { $0.name == "ParentId" }?.value == "show"
+            })
+        }
+    }
+
+    func testScopedResumePrefersResumePositionWhenNextUpRepeatsTheEpisode() async throws {
+        for kind in [ProviderKind.emby, .jellyfin] {
+            let stub = StubHTTPClient()
+            for (path, seconds) in [("/Items/Resume", 120), ("/Shows/NextUp", 60)] {
+                stub.stub(pathSuffix: path, json: """
+                {"Items":[{"Id":"resuming","Type":"Episode","SeriesId":"show",
+                  "UserData":{"PlaybackPositionTicks":\(seconds * 10_000_000),
+                              "LastPlayedDate":"2026-09-09T00:00:00Z"}}],
+                 "TotalRecordCount":1}
+                """)
+            }
+            let episode = try await provider(stub, kind: kind).resumeEpisode(inSeries: "show")
+            XCTAssertEqual(episode?.id, "resuming")
+            XCTAssertEqual(episode?.resumePosition, 120)
             XCTAssertEqual(stub.sentPaths.count, 2)
         }
     }

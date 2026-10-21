@@ -29,6 +29,10 @@ struct LiveTVPlayerGuideOverlay: View {
     @State private var timeAnchor = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 / 1_800) * 1_800)
     @State private var timelineOffset: CGFloat = 0
     @State private var restoring: Bool
+    #if os(iOS)
+    @Environment(\.playerUsesNativeGlass) private var nativeGlass
+    @Environment(\.themePalette) private var palette
+    #endif
 
     init(
         model: LiveTVPrototypeModel, imports: LiveTVPrototypeImportModel, playingChannelID: String,
@@ -61,8 +65,13 @@ struct LiveTVPlayerGuideOverlay: View {
             openControls: {}, openSources: {}, openGuideTime: {},
             openToolbar: { embedding.back() },
             isLoading: false, loadFailed: false, reload: {},
-            libraryCatalog: libraryCatalog, loadLibraryGuide: loadLibraryGuide
+            libraryCatalog: libraryCatalog, loadLibraryGuide: loadLibraryGuide,
+            isEmbeddedInPlayer: true
         )
+        #if os(iOS)
+        // Scope media contrast to grid content; the player owns the single glass underlay.
+        .environment(\.themePalette, nativeGlass ? .dark : palette)
+        #endif
         .onAppear {
             rowID = model.guideRow(for: playingChannelID)
             selectedID = playingChannelID

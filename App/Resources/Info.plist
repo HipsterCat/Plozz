@@ -30,6 +30,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>plozz</string>
+				<string>$(PRODUCT_BUNDLE_IDENTIFIER).external-player</string>
 			</array>
 		</dict>
 	</array>
@@ -50,6 +51,12 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>nativeplayer</string>
+		<string>infuse</string>
+		<string>vlc-x-callback</string>
+	</array>
 	<key>LastFmAPIKey</key>
 	<string>$(LASTFM_API_KEY)</string>
 	<key>LastFmSharedSecret</key>
@@ -75,6 +82,8 @@
 	</array>
 	<key>OMDBAPIKey</key>
 	<string>$(OMDB_API_KEY)</string>
+	<key>PlozzDevelopmentFeature</key>
+	<string>$(PLOZZ_DEV_FEATURE)</string>
 	<key>PlozzReleaseChannel</key>
 	<string>$(PLOZZ_RELEASE_CHANNEL)</string>
 	<key>PlozzReleaseID</key>
@@ -93,8 +102,6 @@
 	<string>$(TVDB_API_KEY)</string>
 	<key>TraktClientID</key>
 	<string>$(TRAKT_CLIENT_ID)</string>
-	<key>TraktClientSecret</key>
-	<string>$(TRAKT_CLIENT_SECRET)</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Bungee-Regular.ttf</string>
@@ -126,5 +133,7 @@
 		<string>audio</string>
 		<string>remote-notification</string>
 	</array>
+	<key>WetrakrClientID</key>
+	<string>$(WETRAKR_CLIENT_ID)</string>
 </dict>
 </plist>

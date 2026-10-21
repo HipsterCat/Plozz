@@ -51,6 +51,14 @@ public actor LiveTVIndexedCache {
     private var pendingPortableGuideChannelIDs: Set<String> = []
     private let catalogEncoder = JSONEncoder()
     private let catalogDecoder = JSONDecoder()
+    private var portableRevision = UUID()
+    private var portableRevisionState: PortableRevisionState?
+
+    private struct PortableRevisionState: Equatable {
+        let databaseChanges: [Double]
+        let manifests: [String?]
+        let importedFiles: [LiveTVSyncFileRevision?]
+    }
     #if DEBUG
     private var guideImportProgressForTesting: (@Sendable (Int) throws -> Void)?
 
@@ -102,39 +110,40 @@ public actor LiveTVIndexedCache {
         guard try fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
             throw LiveTVSourceImportError.invalidPlaylist
         }
-        let data = try readBoundedFile(fileURL, maximumBytes: LiveTVPlaylistParser.maximumBytes)
-        return try storeImportedPlaylist(data: data, id: id, baseURL: baseURL)
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        return try LiveTVImportedPlaylistArchive.write(
+            to: importedPlaylistURL(id), key: importedFileKey(),
+            context: durableScope + ":" + id.uuidString.lowercased(), baseURL: baseURL
+        ) { try handle.read(upToCount: LiveTVImportedPlaylistArchive.chunkBytes) }
     }
 
     public func storeImportedPlaylist(
         data: Data, id: UUID, baseURL: URL? = nil
     ) throws -> LiveTVPlaylistImport {
-        guard baseURL.map(LiveTVPlaylistSource.isSupportedURL) ?? true else {
-            throw LiveTVSourceImportError.invalidPlaylist
+        var offset = 0
+        return try LiveTVImportedPlaylistArchive.write(
+            to: importedPlaylistURL(id), key: importedFileKey(),
+            context: durableScope + ":" + id.uuidString.lowercased(), baseURL: baseURL
+        ) {
+            guard offset < data.count else { return nil }
+            let end = min(data.count, offset + LiveTVImportedPlaylistArchive.chunkBytes)
+            defer { offset = end }
+            return data.subdata(in: offset..<end)
         }
-        let playlist = try LiveTVPlaylistParser(baseURL: baseURL).parse(data)
-        guard !playlist.channels.isEmpty else { throw LiveTVSourceImportError.invalidPlaylist }
-        let payload = try catalogEncoder.encode(ImportedPlaylistDocument(data: data, baseURL: baseURL))
-        let aad = Data((durableScope + ":" + id.uuidString.lowercased()).utf8)
-        let sealed = try AES.GCM.seal(payload, using: importedFileKey(), authenticating: aad)
-        guard let bytes = sealed.combined else { throw LiveTVCacheError.invalidRecord }
-        try Task.checkCancellation()
-        let destination = try importedPlaylistURL(id)
-        try bytes.write(to: destination, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-        return playlist
     }
 
     public func importedPlaylist(id: UUID) throws -> LiveTVPlaylistImport {
-        let bytes = try readBoundedFile(
-            importedPlaylistURL(id), maximumBytes: LiveTVPlaylistParser.maximumBytes * 2 + 65_536
-        )
-        let aad = Data((durableScope + ":" + id.uuidString.lowercased()).utf8)
-        let plaintext = try AES.GCM.open(
-            AES.GCM.SealedBox(combined: bytes), using: importedFileKey(), authenticating: aad
-        )
-        let document = try catalogDecoder.decode(ImportedPlaylistDocument.self, from: plaintext)
-        return try LiveTVPlaylistParser(baseURL: document.baseURL).parse(document.data)
+        var parser: LiveTVPlaylistParser.Stream?
+        try LiveTVImportedPlaylistArchive.read(
+            from: importedPlaylistURL(id), key: importedFileKey(),
+            context: durableScope + ":" + id.uuidString.lowercased()
+        ) { data, baseURL in
+            if parser == nil { parser = LiveTVPlaylistParser(baseURL: baseURL).makeStream() }
+            try parser?.append(data)
+        }
+        guard var parser else { throw LiveTVSourceImportError.invalidPlaylist }
+        return try parser.finish()
     }
 
     public func removeImportedPlaylist(id: UUID) throws {
@@ -142,27 +151,63 @@ public actor LiveTVIndexedCache {
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
     }
 
-    private struct ImportedPlaylistDocument: Codable {
-        let data: Data
-        let baseURL: URL?
+    public func exportImportedPlaylist(id: UUID) throws -> LiveTVImportedPlaylistTransfer {
+        var chunks: [Data] = []
+        var baseURL: URL?
+        try LiveTVImportedPlaylistArchive.read(
+            from: importedPlaylistURL(id), key: importedFileKey(),
+            context: durableScope + ":" + id.uuidString.lowercased()
+        ) { data, base in
+            baseURL = base
+            for offset in stride(from: 0, to: data.count, by: LiveTVImportedPlaylistArchive.chunkBytes) {
+                chunks.append(data.subdata(in: offset..<min(data.count, offset + LiveTVImportedPlaylistArchive.chunkBytes)))
+            }
+        }
+        return try LiveTVImportedPlaylistTransfer(chunks: chunks, baseURL: baseURL)
     }
 
-    private func importedPlaylistURL(_ id: UUID) throws -> URL {
+    public func hasImportedPlaylist(id: UUID) throws -> Bool {
+        FileManager.default.fileExists(atPath: try importedPlaylistURL(id).path)
+    }
+
+    public func restoreSyncedImportedPlaylist(_ transfer: LiveTVImportedPlaylistTransfer, id: UUID) throws {
+        let destination = try importedPlaylistURL(id)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            let existing = try exportImportedPlaylist(id: id)
+            guard existing.digest == transfer.digest, existing.baseURL == transfer.baseURL else {
+                throw LiveTVCacheError.invalidRecord
+            }
+            return
+        }
+        var index = 0
+        _ = try LiveTVImportedPlaylistArchive.write(
+            to: destination, key: importedFileKey(),
+            context: durableScope + ":" + id.uuidString.lowercased(), baseURL: transfer.baseURL
+        ) {
+            guard index < transfer.chunks.count else { return nil }
+            defer { index += 1 }
+            return transfer.chunks[index]
+        }
+    }
+
+    private func importedPlaylistURL(_ id: UUID, createDirectory: Bool = true) throws -> URL {
         let base: URL
         if let importedFilesURL {
             base = importedFilesURL
         } else {
             base = try FileManager.default.url(
-                for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+                for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: createDirectory
             ).appendingPathComponent("LiveTVImports", isDirectory: true)
         }
         var directory = base.appendingPathComponent(durableScope, isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
-        )
-        var resourceValues = URLResourceValues()
-        resourceValues.isExcludedFromBackup = true
-        try directory.setResourceValues(resourceValues)
+        if createDirectory {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+            )
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try directory.setResourceValues(resourceValues)
+        }
         return directory.appendingPathComponent(id.uuidString.lowercased() + ".sealed")
     }
 
@@ -173,17 +218,19 @@ public actor LiveTVIndexedCache {
         )
     }
 
-    private func readBoundedFile(_ url: URL, maximumBytes: Int) throws -> Data {
+    private func boundedFileDigest(_ url: URL, maximumBytes: Int) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
-        var data = Data()
-        while let next = try handle.read(upToCount: min(65_536, maximumBytes - data.count + 1)),
+        var digest = SHA256()
+        var count = 0
+        while let next = try handle.read(upToCount: min(65_536, maximumBytes - count + 1)),
               !next.isEmpty {
             try Task.checkCancellation()
-            data.append(next)
-            guard data.count <= maximumBytes else { throw LiveTVSourceImportError.responseTooLarge }
+            count += next.count
+            guard count <= maximumBytes else { throw LiveTVSourceImportError.responseTooLarge }
+            digest.update(data: next)
         }
-        return data
+        return LiveTVIdentityDigest.hex(digest.finalize())
     }
 
     func identityReviews(
@@ -400,21 +447,19 @@ public actor LiveTVIndexedCache {
             try Task.checkCancellation()
             guard let playlist = try playlist(source: source) else { continue }
             var guides = LiveTVConfiguredSources.guides(for: source)
-            if source.discoversPlaylistGuides {
-                let records: [DiscoveredGuideRecord] = try readPartitioned("discovered." + source.id)
-                let identity = LiveTVChannelIdentity(key: try identityKey())
-                var seen = Set<URL>()
-                for url in playlist.declaredGuideURLs where seen.insert(url).inserted {
-                    guard guides.count < 32,
-                          !source.guideURLs.contains(where: { LiveTVPlaylistSource.guideURLsShareIdentity($0, url) }),
-                          LiveTVSourceOriginPolicy.permits(url, from: playlist.originURL ?? source.playlistURL) else { continue }
-                    let exact = identity.fingerprint(url.absoluteString)
-                    let stable = try discoveredGuideStableFingerprint(url: url, identity: identity)
-                    for record in records where record.fingerprint == exact || record.stableFingerprint == stable {
-                        guides.append(.init(
-                            id: record.id, name: source.name, url: url, provider: LiveTVGuideSource.provider(for: url)
-                        ))
-                    }
+            let records: [DiscoveredGuideRecord] = try readPartitioned("discovered." + source.id)
+            let identity = LiveTVChannelIdentity(key: try identityKey())
+            var seen = Set<URL>()
+            for url in playlist.declaredGuideURLs where seen.insert(url).inserted {
+                guard guides.count < 32,
+                      !source.guideURLs.contains(where: { LiveTVPlaylistSource.guideURLsShareIdentity($0, url) }),
+                      LiveTVPlaylistSource.isSupportedURL(url) else { continue }
+                let exact = identity.fingerprint(url.absoluteString)
+                let stable = try discoveredGuideStableFingerprint(url: url, identity: identity)
+                for record in records where record.fingerprint == exact || record.stableFingerprint == stable {
+                    guides.append(.init(
+                        id: record.id, name: source.name, url: url, provider: LiveTVGuideSource.provider(for: url)
+                    ))
                 }
             }
             let db = try database()
@@ -659,9 +704,7 @@ public actor LiveTVIndexedCache {
         let tokens = LiveTVProgramSearchMatcher(query).tokens
         guard !tokens.isEmpty else { return [] }
         guard range.duration > 0, range.duration <= 32 * 86_400, sourceIDs.count <= 3_200,
-              range.start.timeIntervalSince1970.isFinite, range.end.timeIntervalSince1970.isFinite,
-              (allowedChannelIDs?.count ?? 0) <= LiveTVPlaylistParser.maximumEntries,
-              (selectedSourceByChannel?.count ?? 0) <= LiveTVPlaylistParser.maximumEntries else {
+              range.start.timeIntervalSince1970.isFinite, range.end.timeIntervalSince1970.isFinite else {
             throw LiveTVCacheError.invalidRange
         }
         let match = tokens.map { "\"\($0.prefix(128))\"*" }.joined(separator: " AND ")
@@ -731,6 +774,32 @@ public actor LiveTVIndexedCache {
         let records: [MappingRecord] = try readPartitioned("mappings")
         guard Set(records.map(\.channelID)).count == records.count else { throw LiveTVCacheError.invalidRecord }
         return Dictionary(uniqueKeysWithValues: records.map { ($0.channelID, $0.mapping) })
+    }
+
+    /// Check publication generations, not the downloaded channels or guide payloads.
+    public func portableSyncRevision(configuration: LiveTVSourcesConfiguration) throws -> UUID {
+        let db = try database()
+        try db.checkFileIdentity()
+        guard let changes = try db.rows(
+            "SELECT total_changes(),data_version FROM pragma_data_version"
+        ).first else { throw LiveTVCacheError.unavailable }
+        let sources = configuration.playlists.sorted { $0.id < $1.id }
+        let names = [
+            secureName("key"), "liveTV.catalog." + scope + ".key", secureName("mappings"),
+            secureName("portable-identities")
+        ] + sources.flatMap { [secureName("identity." + $0.id), secureName("discovered." + $0.id)] }
+        let state = try PortableRevisionState(
+            databaseChanges: [changes.real(0), changes.real(1)],
+            manifests: names.map { try secureStore.readString(for: $0) },
+            importedFiles: sources.compactMap(\.importedPlaylistID).map {
+                try LiveTVSyncFileRevision.read(importedPlaylistURL($0, createDirectory: false))
+            }
+        )
+        if portableRevisionState != state {
+            portableRevisionState = state
+            portableRevision = UUID()
+        }
+        return portableRevision
     }
 
     public func setMapping(_ mapping: LiveTVGuideMappingOverride?, channelID: String) throws {
@@ -812,10 +881,10 @@ public actor LiveTVIndexedCache {
             guard let id = url.host.flatMap(UUID.init(uuidString:)) else { throw LiveTVCacheError.invalidRecord }
             let file = try importedPlaylistURL(id)
             if FileManager.default.fileExists(atPath: file.path) {
-                let encrypted = try readBoundedFile(
+                let digest = try boundedFileDigest(
                     file, maximumBytes: LiveTVPlaylistParser.maximumBytes * 2 + 65_536
                 )
-                material.append(LiveTVIdentityDigest.hex(SHA256.hash(data: encrypted)))
+                material.append(digest)
             } else {
                 material.append("missing-imported-file")
             }
@@ -963,10 +1032,13 @@ private struct LiveTVCacheRow {
 private final class LiveTVCacheConnection {
     private var handle: OpaquePointer?
     private var statements: [String: OpaquePointer] = [:]
+    private let url: URL
+    private var openedFile: LiveTVSyncFileRevision?
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     var changes: Int32 { sqlite3_changes(handle) }
 
     init(url: URL) throws {
+        self.url = url
         guard url.isFileURL, !url.path.isEmpty else { throw LiveTVCacheError.unavailable }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
@@ -994,6 +1066,7 @@ private final class LiveTVCacheConnection {
                 try execute("CREATE VIRTUAL TABLE IF NOT EXISTS program_search USING fts5(source UNINDEXED,id UNINDEXED,title,tokenize='unicode61')")
                 try execute("PRAGMA user_version=1")
             }
+            openedFile = try LiveTVSyncFileRevision.read(url)
         } catch {
             for statement in statements.values { sqlite3_finalize(statement) }
             statements.removeAll()
@@ -1006,6 +1079,11 @@ private final class LiveTVCacheConnection {
     deinit {
         for statement in statements.values { sqlite3_finalize(statement) }
         if let handle { sqlite3_close(handle) }
+    }
+
+    func checkFileIdentity() throws {
+        guard let openedFile, let current = try LiveTVSyncFileRevision.read(url),
+              current.isSameFile(as: openedFile) else { throw LiveTVCacheError.unavailable }
     }
 
     func transaction(_ body: () throws -> Void) throws {

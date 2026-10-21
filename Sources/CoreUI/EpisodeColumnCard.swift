@@ -43,6 +43,8 @@ public struct EpisodeColumnCard: View, Equatable {
     @Environment(\.plozzWatchStatusIndicator) private var watchStatusIndicator
     @Environment(\.plozzCardFocusStyle) private var focusStyle
     @Environment(\.themePalette) private var palette
+    @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
 
     private let metrics = PlozzMetrics.standard
 
@@ -64,38 +66,9 @@ public struct EpisodeColumnCard: View, Equatable {
         let _ = plozzTraceBodyChanges { Self._printChanges() }
         VStack(alignment: .leading, spacing: 0) {
             episodeArtwork
-
-            VStack(alignment: .leading, spacing: 0) {
-                presentation.titleLine
-                    .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
-                    .foregroundStyle(presentation.isUpcoming ? .secondary : .primary)
-                    .lineLimit(1)
-                    .padding(.top, metrics.landscapeCaptionTopSpacing + metrics.focusCaptionPush)
-
-                SpoilerSafeOverviewText(
-                    overview: presentation.overviewTreatment == .blurred
-                        ? item.overview
-                        : presentation.visibleOverview,
-                    hidesSpoilers: presentation.overviewTreatment == .blurred
-                        || presentation.overviewTreatment == .placeholder,
-                    mode: spoilerSettings.mode,
-                    lineCount: 3,
-                    fontSize: 20,
-                    maxWidth: Self.artworkSize.width
-                )
-                .opacity(synopsisVisible ? 1 : 0)
-                .animation(
-                    reduceMotion ? nil : .easeOut(duration: 0.12),
-                    value: synopsisVisible
-                )
-                .offset(y: reduceMotion || synopsisAtRest ? 0 : -metrics.focusCaptionPush)
-                .animation(
-                    reduceMotion ? nil : .smooth(duration: 0.28),
-                    value: synopsisAtRest
-                )
-                .padding(.top, 10)
+            if !captionsHidden {
+                episodeCaption
             }
-            .offset(y: reduceMotion || focusStyle.usesSystemEffect || isFocused ? 0 : -metrics.focusCaptionPush)
         }
         .frame(width: Self.artworkSize.width, alignment: .leading)
         .padding(.trailing, Self.trailingSpacing)
@@ -110,7 +83,7 @@ public struct EpisodeColumnCard: View, Equatable {
         .task(id: synopsisTaskID) {
             synopsisVisible = false
             synopsisAtRest = false
-            guard isFocused else { return }
+            guard isFocused, !captionsHidden else { return }
             if reduceMotion {
                 synopsisVisible = true
                 synopsisAtRest = true
@@ -127,13 +100,54 @@ public struct EpisodeColumnCard: View, Equatable {
         .accessibilityLabel(presentation.accessibilityLabel)
     }
 
+    private var episodeCaption: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            presentation.titleLine
+                .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
+                .foregroundStyle(presentation.isUpcoming ? .secondary : .primary)
+                .lineLimit(1)
+                .padding(.top, metrics.landscapeCaptionTopSpacing + metrics.focusCaptionPush)
+
+            SpoilerSafeOverviewText(
+                overview: presentation.overviewTreatment == .blurred
+                    ? item.overview
+                    : presentation.visibleOverview,
+                hidesSpoilers: presentation.overviewTreatment == .blurred
+                    || presentation.overviewTreatment == .placeholder,
+                mode: spoilerSettings.mode,
+                lineCount: 3,
+                fontSize: 20,
+                maxWidth: Self.artworkSize.width
+            )
+            .opacity(synopsisVisible ? 1 : 0)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.12),
+                value: synopsisVisible
+            )
+            .offset(y: reduceMotion || synopsisAtRest ? 0 : -metrics.focusCaptionPush)
+            .animation(
+                reduceMotion ? nil : .smooth(duration: 0.28),
+                value: synopsisAtRest
+            )
+            .padding(.top, 10)
+        }
+        .offset(y: reduceMotion || isFocused ? 0 : -metrics.focusCaptionPush)
+        .animation(
+            reduceMotion ? nil : PlozzTheme.Metrics.cardFocusAnimation(
+                isFocused: isFocused, focusStyle: focusStyle, reduceMotion: reduceMotion
+            ),
+            value: isFocused
+        )
+    }
+
     private var synopsisTaskID: SynopsisTaskID {
-        SynopsisTaskID(isFocused: isFocused, reduceMotion: reduceMotion)
+        SynopsisTaskID(isFocused: isFocused, reduceMotion: reduceMotion, captionsHidden: captionsHidden)
     }
 
     private struct SynopsisTaskID: Hashable {
         let isFocused: Bool
         let reduceMotion: Bool
+        let captionsHidden: Bool
     }
 
     @ViewBuilder
@@ -150,10 +164,8 @@ public struct EpisodeColumnCard: View, Equatable {
     }
 
     private var customEpisodeArtwork: some View {
-        artwork
+        realArtwork
             .frame(width: Self.artworkSize.width, height: Self.artworkSize.height)
-            .saturation(presentation.isUpcoming ? 0 : 1)
-            .opacity(presentation.isUpcoming ? 0.05 : 1)
             .background { if presentation.isUpcoming { palette.cardSurface } }
             .overlay { episodeOverlays }
             .plozzCardArtworkClip(RoundedRectangle(cornerRadius: metrics.landscapeCardCornerRadius, style: .continuous))
@@ -169,25 +181,41 @@ public struct EpisodeColumnCard: View, Equatable {
     }
 
     private var episodeOverlays: some View {
+        episodeOverlayContent
+            .overlay(alignment: .topTrailing) { statusIndicator }
+    }
+
+    private var episodeOverlayContent: some View {
         ZStack {
             if presentation.isUpcoming, let air = item.upcomingReleaseText {
-                Label(air, systemImage: "clock")
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
+                VStack(spacing: 8) {
+                    if captionsHidden {
+                        presentation.titleLine
+                            .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(3)
+                            .foregroundStyle(.white)
+                    }
+                    Label(air, systemImage: "clock")
+                        .font(.system(size: 21, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .padding(.horizontal, 12)
             }
             if presentation.artworkTreatment != .blurred {
                 ResumeChipOverlay(item: item).plozzChromeFocused(isFocused)
             }
         }
-        .overlay(alignment: .topTrailing) { statusIndicator }
     }
 
     #if os(tvOS)
     private var nativeEpisodeArtwork: some View {
-        let source = EpisodeArtworkSource(item: item, spoilerSettings: spoilerSettings)
+        let source = EpisodeArtworkSource(
+            item: item, spoilerSettings: spoilerSettings, policy: artworkPolicy.forArea(.episodes)
+        )
         let treatment: NativePosterImageTreatment = presentation.isUpcoming
             ? .upcoming(palette.cardSurface)
             : (presentation.artworkTreatment == .blurred ? .blurred : .original)
@@ -195,13 +223,19 @@ public struct EpisodeColumnCard: View, Equatable {
             image: nativeArtwork.image, treatment: treatment,
             aspectRatio: Self.artworkSize.width / Self.artworkSize.height,
             fallbackWidth: Self.artworkSize.width, title: nil, subtitle: nil,
-            overlay: episodeOverlays, focus: $isFocused, action: action
+            overlay: ZStack {
+                if captionsHidden && nativeArtwork.image == nil { neutralPlaceholder }
+                episodeOverlayContent
+            },
+            indicators: nativeStatusIndicator,
+            focus: $isFocused, action: action
         )
         .focused($isFocused.focusState)
         .frame(width: Self.artworkSize.width, height: Self.artworkSize.height)
         .background {
             FallbackAsyncImage(
                 references: source.references, variant: .landscapeCard,
+                artworkPolicy: source.policy,
                 asyncFallbackURL: source.fallbackURL, pinIdentity: source.pinIdentity,
                 content: { _ in Color.clear }, placeholder: { Color.clear }
             )
@@ -212,68 +246,46 @@ public struct EpisodeColumnCard: View, Equatable {
     }
     #endif
 
-    @ViewBuilder
-    private var artwork: some View {
-        switch presentation.artworkTreatment {
-        case .visible:
-            realArtwork
-        case .blurred:
-            realArtwork.blur(radius: 28)
-        case .placeholder:
-            realArtwork
-        }
-    }
-
     private var realArtwork: some View {
-        let source = EpisodeArtworkSource(item: item, spoilerSettings: spoilerSettings)
+        let source = EpisodeArtworkSource(
+            item: item, spoilerSettings: spoilerSettings, policy: artworkPolicy.forArea(.episodes)
+        )
         return FallbackAsyncImage(
             references: source.references,
             variant: .landscapeCard,
+            artworkPolicy: source.policy,
             asyncFallbackURL: source.fallbackURL,
-            pinIdentity: source.pinIdentity
-        ) {
-            neutralPlaceholder
-        }
+            pinIdentity: source.pinIdentity,
+            content: { image in
+                ArtworkFillImage(image)
+                    .blur(radius: presentation.artworkTreatment == .blurred ? 28 : 0)
+                    .saturation(presentation.isUpcoming ? 0 : 1)
+                    .opacity(presentation.isUpcoming ? 0.05 : 1)
+            },
+            placeholder: { neutralPlaceholder }
+        )
+        .showingPlaceholderWhileLoading(captionsHidden)
     }
 
     private var neutralPlaceholder: some View {
-        MediaArtworkPlaceholder(symbol: .init(for: item), cornerRadius: metrics.landscapeCardCornerRadius)
+        MediaArtworkPlaceholder(
+            symbol: .init(for: item), cornerRadius: metrics.landscapeCardCornerRadius,
+            title: captionsHidden && !(presentation.isUpcoming && item.upcomingReleaseText != nil)
+                ? presentation.titleLine : nil
+        )
+        .opacity(presentation.isUpcoming && !captionsHidden ? 0.05 : 1)
     }
 
-    @ViewBuilder
     private var statusIndicator: some View {
-        // An unaired episode has no watch state to report, so neither the watched
-        // tick nor the unwatched dot applies.
-        if presentation.artworkTreatment == .visible, !presentation.isUpcoming {
-            switch watchStatusIndicator {
-            case .watched:
-                if presentation.isWatched {
-                    let size = metrics.watchedBadgeSize
-                    Image(systemName: "checkmark")
-                        .font(.system(size: size * 0.53, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: size, height: size)
-                        .background(Circle().fill(ThemePalette.brandBlue))
-                        .overlay {
-                            Circle()
-                                .inset(by: -0.5)
-                                .stroke(
-                                    palette.isLight ? .black.opacity(0.15) : .white.opacity(0.4),
-                                    lineWidth: max(1.5, size * 0.04)
-                                )
-                        }
-                        .padding(12)
-                        .shadow(color: .black.opacity(0.4), radius: size * 0.08, y: size * 0.026)
-                }
-            case .unwatched:
-                if !presentation.isWatched, presentation.progress == nil {
-                    TopTrailingCornerFlag()
-                        .fill(ThemePalette.brandBlue)
-                        .shadow(color: .black.opacity(0.28), radius: 8)
-                        .frame(width: metrics.unwatchedFlagSize, height: metrics.unwatchedFlagSize)
-                }
-            }
-        }
+        nativeStatusIndicator
+    }
+
+    private var nativeStatusIndicator: NativePosterIndicators {
+        .episode(
+            isWatched: presentation.isWatched, hasProgress: presentation.progress != nil,
+            isVisible: presentation.artworkTreatment == .visible && !presentation.isUpcoming,
+            style: watchStatusIndicator, badgeSize: metrics.watchedBadgeSize, flagSize: metrics.unwatchedFlagSize
+        )
     }
 }
 

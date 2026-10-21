@@ -104,6 +104,7 @@ private struct PlozziOSServerSettingsDetailView: View {
     let appModel: PlozziOSAppModel
     let serverKey: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
     @State private var confirmRemoveServer = false
     @State private var confirmRemoveEverywhere = false
     @State private var selectedAccountID: String?
@@ -140,6 +141,23 @@ private struct PlozziOSServerSettingsDetailView: View {
                     }
                 } footer: {
                     Text("Removing a sign-in affects every profile on this \(deviceName).")
+                }
+
+                if group.providerKind == .iptv, let providerSetupRouter {
+                    SettingsSectionGroup {
+                        ForEach(group.accounts) { account in
+                            Button("Edit connection", systemImage: "pencil") {
+                                providerSetupRouter.connectIPTV(account: account)
+                            }
+                        }
+                    }
+                }
+
+                if [.jellyfin, .emby, .plex, .silo].contains(group.providerKind),
+                   providerSetupRouter != nil {
+                    SettingsSectionGroup("Connection addresses") {
+                        ServerAddressSettingsLink(accounts: group.accounts)
+                    }
                 }
 
                 if group.accounts.count > 1 {
@@ -264,7 +282,7 @@ struct PlozziOSMyLibrariesSettingsView: View {
         .onChange(of: appModel.profiles.activeProfileID) { _, _ in
             pendingWatching.removeAll()
         }
-        .task(id: appModel.accounts.map(\.credentialRevision)) {
+        .task(id: appModel.accounts.map(\.connectionScopeKey)) {
             await loadLibraries()
         }
         // Asks who you are on a Plex server you just switched on — the same
@@ -278,7 +296,7 @@ struct PlozziOSMyLibrariesSettingsView: View {
         // asking from the root would silently never appear.
         //
         // Suppressed during setup, which asks the same question inline.
-        .sheet(item: identityPromptBinding) { account in
+        .plozzSheet(item: identityPromptBinding) { account in
             PlozziOSServerIdentityPromptView(
                 appModel: appModel,
                 account: account,
@@ -380,7 +398,7 @@ struct PlozziOSMyLibrariesSettingsView: View {
 
     /// One library, as a checkmark child of its server's master switch.
     private func libraryCheckRow(_ library: ProfileLibraryChoice) -> some View {
-        let isOn = appModel.settings.homeVisibility.isEnabled(library.key)
+        let isOn = appModel.settings.homeVisibility.isVisibleOnHome(library.key, library: library.library)
         return Button {
             appModel.settings.homeVisibility.setEnabled(!isOn, for: library.key)
         } label: {

@@ -94,6 +94,9 @@ public enum HeroStageMetrics {
     /// 610pt — the one thing a fixed height guarantees is an inconsistent crop.
     public static let portraitPictureAspectRatio: CGFloat = 5.0 / 7.0
 
+    /// Reflected headroom under the status-bar chrome, inside the existing stage.
+    public static let topReflectionHeight: CGFloat = 24
+
     /// The most of the hero the mirror is allowed to be.
     ///
     /// Only bites when the hero is stretched well past its natural proportion —
@@ -104,15 +107,16 @@ public enum HeroStageMetrics {
     /// reflection and starts reading as a second, upside-down picture.
     public static let maximumReflectionShare: CGFloat = 0.24
 
-    /// The picture / mirror split for a hero stage of this size.
+    /// The picture / bottom-mirror split below the reflected top band.
     public static func geometry(
         width: CGFloat,
         height: CGFloat
     ) -> ExtendedArtworkGeometry {
-        ExtendedArtworkGeometry(
-            slot: CGSize(width: width, height: height),
+        let contentHeight = max(0, height - topReflectionHeight)
+        return ExtendedArtworkGeometry(
+            slot: CGSize(width: width, height: contentHeight),
             artworkAspectRatio: portraitPictureAspectRatio,
-            sideCrop: sideCrop(width: width, height: height)
+            sideCrop: sideCrop(width: width, height: contentHeight)
         )
     }
 
@@ -181,7 +185,8 @@ public enum HeroStageMetrics {
         floor: CGFloat
     ) -> CGFloat {
         guard width > 0, height > 0 else { return floor }
-        let mirrorLine = geometry(width: width, height: height).reflectionStart
+        let pictureHeight = geometry(width: width, height: height).pictureHeight
+        let mirrorLine = min(1, (topReflectionHeight + pictureHeight) / height)
         // Never leave the dissolve less room than it needs, and never let the
         // guarantee itself eat more than half the hero.
         let latest = 1 - min(minimumMeltSpan / height, 0.5)

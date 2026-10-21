@@ -160,14 +160,16 @@ public enum MetadataProviderListLogic {
     }
 }
 
-/// The "Metadata" Settings page: provider enable/disable + ordering (over the
+/// The "Metadata Providers" Settings page: provider enable/disable + ordering (over the
 /// Info.plist baseline), TMDB credentials, and a focused diagnostics destination.
 /// A household-wide concern (like Servers/Seerr), so it lives under "This Apple TV".
 public struct MetadataSettingsDetailView: View {
     let deps: MetadataSettingsDependencies
+    let onOpenArtwork: () -> Void
 
-    public init(deps: MetadataSettingsDependencies) {
+    public init(deps: MetadataSettingsDependencies, onOpenArtwork: @escaping () -> Void) {
         self.deps = deps
+        self.onOpenArtwork = onOpenArtwork
     }
 
     /// Whether a provider row is currently lifted for reordering. Owned by the
@@ -180,8 +182,10 @@ public struct MetadataSettingsDetailView: View {
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                SettingsPageHeader("Metadata")
+                SettingsPageHeader("Metadata Providers")
                 providersSection
+                artworkLink
+                    .disabled(isReordering)
                 tmdbKeySection
                     .disabled(isReordering)
                 diagnosticsLink
@@ -224,13 +228,6 @@ public struct MetadataSettingsDetailView: View {
         )
     }
 
-    private var preferLocalArtworkBinding: Binding<Bool> {
-        Binding(
-            get: { !providers.settings.preferOnlineArtwork },
-            set: { providers.settings.preferOnlineArtwork = !$0 }
-        )
-    }
-
     private func setOrderMode(_ mode: MetadataProviderOrderMode) {
         providers.settings = MetadataProviderListLogic.settings(
             providers.settings,
@@ -263,7 +260,7 @@ public struct MetadataSettingsDetailView: View {
     /// provider across the "Disabled" divider is what turns it off.
     private var providersSection: some View {
         SettingsPanel(
-            title: "Metadata Providers",
+            title: "Providers",
             contentPadding: .settingsPanelRowContent
         ) {
             VStack(alignment: .leading, spacing: 16) {
@@ -272,10 +269,9 @@ public struct MetadataSettingsDetailView: View {
                     selection: orderModeBinding,
                     title: orderModeTitle
                 )
+                .settingsWorkspaceEntry()
 
-                Toggle("Prefer artwork from your library", isOn: preferLocalArtworkBinding)
-                    .toggleStyle(SettingsSwitchToggleStyle())
-                Text("Use artwork from your media server or files before online providers.")
+                Text("Shared by all profiles.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -414,11 +410,27 @@ public struct MetadataSettingsDetailView: View {
         }
     }
 
+    private var artworkLink: some View {
+        SettingsPanel(contentPadding: .settingsPanelRowContent) {
+            Button(action: onOpenArtwork) {
+                SettingsRowLabel(icon: "photo", title: "Artwork") {
+                    EmptyView()
+                } trailing: {
+                    Image(systemName: "chevron.forward")
+                        .font(.caption.weight(.semibold))
+                        .settingsRowSecondary()
+                }
+            }
+            .buttonStyle(SettingsFocusButtonStyle())
+            .accessibilityIdentifier("metadata-artwork-preferences")
+        }
+    }
+
     // MARK: - Diagnostics
 
     private var diagnosticsLink: some View {
         SettingsPanel(contentPadding: .settingsPanelRowContent) {
-            NavigationLink(value: SettingsRoute.metadataDiagnostics) {
+            SettingsRouteLink(value: SettingsRoute.metadataDiagnostics) {
                 SettingsRowLabel(
                     icon: "chart.bar.xaxis",
                     title: "Diagnostics"
@@ -656,19 +668,14 @@ private struct MetadataDiagnosticsCachePanel: View {
             title: "Cache",
             contentPadding: .settingsPanelRowContent
         ) {
-            VStack(spacing: 16) {
+            SettingsControlRows(nonTVSpacing: 16) {
+                #if os(tvOS)
+                budgetControls
+                #else
                 HStack(alignment: .top, spacing: 28) {
-                    budgetControl(
-                        title: "Artwork",
-                        options: Self.artworkBudgetOptions,
-                        selection: artworkBudgetBinding
-                    )
-                    budgetControl(
-                        title: "Lookups",
-                        options: Self.metadataBudgetOptions,
-                        selection: metadataBudgetBinding
-                    )
+                    budgetControls
                 }
+                #endif
 
                 Button(role: .destructive) {
                     confirmClear = true
@@ -696,17 +703,30 @@ private struct MetadataDiagnosticsCachePanel: View {
         }
     }
 
+    @ViewBuilder private var budgetControls: some View {
+        budgetControl(
+            title: "Artwork", options: Self.artworkBudgetOptions, selection: artworkBudgetBinding
+        )
+        budgetControl(
+            title: "Lookups", options: Self.metadataBudgetOptions, selection: metadataBudgetBinding
+        )
+    }
+
     private func budgetControl(
         title: LocalizedStringResource,
         options: [Int],
         selection: Binding<Int>
     ) -> some View {
+        #if os(tvOS)
+        SettingsStepper(options: options, selection: selection, label: title) { "\($0) MB" }
+        #else
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline.weight(.semibold))
             SettingsStepper(options: options, selection: selection) { "\($0) MB" }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        #endif
     }
 
     private var artworkBudgetBinding: Binding<Int> {

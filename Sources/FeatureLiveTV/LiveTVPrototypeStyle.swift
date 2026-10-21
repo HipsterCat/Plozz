@@ -37,13 +37,7 @@ enum PrototypeLayout {
     static let minimumGuideOpacity = 0.05
     static let guideInset = PlozzTheme.Metrics.Radius.inset
     static let stationArtworkInset = guideInset + 8
-    static var guideTrailingInset: CGFloat {
-        #if os(tvOS)
-        0
-        #else
-        guideInset
-        #endif
-    }
+    static let guideTrailingInset = guideInset
     static var guideRadius: CGFloat { rowRadius + guideInset }
     static let controlRadius = PlozzTheme.Metrics.Radius.control
     static let controlInset = PlozzTheme.Spacing.xSmall
@@ -123,6 +117,12 @@ enum PrototypeLayout {
     static func rowHeight(for width: CGFloat, scaledHeight: CGFloat) -> CGFloat {
         usesCompactRows(width) ? scaledHeight * compactRowHeight / rowHeight : scaledHeight
     }
+
+    #if os(tvOS)
+    static func guideSectionLabelHeight(fontSize: CGFloat) -> CGFloat {
+        max(sectionLabelHeight, ceil(UIFont.systemFont(ofSize: fontSize, weight: .medium).lineHeight))
+    }
+    #endif
 
     static func timelineWidth(for width: CGFloat) -> CGFloat {
         max(1, width - stationWidth(for: width) - columnGap)
@@ -366,12 +366,15 @@ struct PrototypeGuideSurface: View {
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.themePalette) private var palette
+    @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
 
     var body: some View {
         Group {
             if reduceTransparency || contrast == .increased {
                 Color.clear.plozzSurface(.raised, cornerRadius: 0)
                     .clipShape(PrototypeLayout.guideShape)
+            } else if gradientEnabled {
+                Color.clear
             } else {
                 PrototypeLayout.guideShape
                     .fill(LinearGradient(
@@ -412,18 +415,21 @@ struct PrototypeControlSurface: View {
 }
 
 enum PrototypeSheet: Identifiable {
-    case filters, sources, guideTime, addPlaylist, serverSetup, multiviewFavorites
+    case filters, sources, guideTime, addPlaylist, serverSetup, multiviewFavorites, organization
     case program(LiveTVPrototypeProgram)
+    case diagnostics(PlaybackDiagnosticReport)
 
     var id: String {
         switch self {
         case .filters: "filters"
+        case .organization: "organization"
         case .sources: "sources"
         case .addPlaylist: "add-playlist"
         case .serverSetup: "server-setup"
         case .guideTime: "guide-time"
         case .multiviewFavorites: "multiview-favorites"
         case .program(let program): program.id
+        case .diagnostics: "diagnostics"
         }
     }
 }

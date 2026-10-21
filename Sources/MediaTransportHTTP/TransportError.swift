@@ -22,6 +22,7 @@ public enum TransportError: Error, Equatable, Sendable {
     case pathEscapesRoot
     case rangeNotSupported(reason: String)
     case seekableRequiresStrongETag
+    case seekableRequiresValidator
     case rangeValidationFailed(reason: String)
     case sourceChanged(reason: String)
     case cancelled
@@ -48,6 +49,7 @@ extension TransportError: CustomStringConvertible {
         case .pathEscapesRoot: return "pathEscapesRoot"
         case .rangeNotSupported: return "rangeNotSupported"
         case .seekableRequiresStrongETag: return "seekableRequiresStrongETag"
+        case .seekableRequiresValidator: return "seekableRequiresValidator"
         case .rangeValidationFailed: return "rangeValidationFailed"
         case .sourceChanged: return "sourceChanged"
         case .cancelled: return "cancelled"

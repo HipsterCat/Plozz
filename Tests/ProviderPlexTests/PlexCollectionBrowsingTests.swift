@@ -95,9 +95,9 @@ final class PlexCollectionBrowsingTests: XCTestCase {
         http.stub(pathSuffix: "/library/sections/2/collections", json: """
         {"MediaContainer":{"size":2,"totalSize":70,"offset":60,
           "librarySectionID":2,"viewGroup":"collection","Metadata":[
-          {"ratingKey":"12","key":"/library/metadata/12/children",
+          {"ratingKey":"12","key":"/library/collections/12/children",
            "type":"collection","subtype":"movie","title":"Static","smart":0,"childCount":3},
-          {"ratingKey":"13","key":"/library/metadata/13/children",
+          {"ratingKey":"13","key":"/library/collections/13/children",
            "type":"collection","subtype":"movie","title":"Smart","smart":1,"childCount":5}
         ]}}
         """)
@@ -141,10 +141,10 @@ final class PlexCollectionBrowsingTests: XCTestCase {
     func testStaticAndSmartCollectionsUseMemberEndpointWithoutTypeOrSortFilter() async throws {
         for id in ["static", "smart"] {
             let http = StubHTTPClient()
-            http.stub(pathSuffix: "/library/metadata/\(id)/children", json: """
+            http.stub(pathSuffix: "/library/collections/\(id)/children", json: """
             {"MediaContainer":{"size":2,"totalSize":64,"Metadata":[
               {"ratingKey":"z","type":"movie","title":"Z","librarySectionID":2},
-              {"ratingKey":"a","type":"show","title":"A","librarySectionID":2}
+              {"ratingKey":"a","type":"show","title":"A","librarySectionID":2,"leafCount":12,"viewedLeafCount":0}
             ]}}
             """)
             let result = try await provider(http).collectionMembers(
@@ -158,6 +158,196 @@ final class PlexCollectionBrowsingTests: XCTestCase {
             XCTAssertFalse(query.contains { ["type", "sort"].contains($0.name) })
             XCTAssertTrue(query.contains(URLQueryItem(name: "X-Plex-Container-Start", value: "60")))
             XCTAssertTrue(query.contains(URLQueryItem(name: "X-Plex-Container-Size", value: "2")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "includeGuids", value: "1")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "includeOptionalElements", value: "Stream")))
+            XCTAssertFalse(query.contains { ["includeElements", "excludeElements"].contains($0.name) })
+        }
+    }
+
+    func testSmartCollectionDoesNotAcceptEmptyMetadataChildrenAlias() async throws {
+        let http = StubHTTPClient()
+        // A real smart collection returns HTTP 200 with zero counts through
+        // the metadata alias, even though its collection endpoint has members.
+        http.stub(pathSuffix: "/library/metadata/13/children", json: """
+        {"MediaContainer":{"size":0,"totalSize":0,"offset":0,
+          "identifier":"com.plexapp.plugins.library","viewGroup":"movie"}}
+        """)
+        http.stub(pathSuffix: "/library/collections/13/children", json: """
+        {"MediaContainer":{"size":2,"totalSize":588,"offset":0,"Metadata":[
+          {"ratingKey":"z","type":"movie","title":"Z","librarySectionID":2},
+          {"ratingKey":"a","type":"movie","title":"A","librarySectionID":2}
+        ]}}
+        """)
+        let page = try await provider(http).collectionMembers(
+            of: "13", page: PageRequest(limit: 2)
+        )
+        XCTAssertEqual(page.items.map(\.id), ["z", "a"])
+        XCTAssertEqual(page.totalCount, 588)
+        XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(http.sentPaths, ["/library/collections/13/children"])
+    }
+
+    func testCollectionHydratesMissingWatchCountsWithoutReplacingMemberMetadata() async throws {
+        let http = StubHTTPClient()
+        http.stub(pathSuffix: "/library/collections/set/children", json: """
+        {"MediaContainer":{"size":5,"totalSize":5,"Metadata":[
+          {"ratingKey":"seen","type":"show","title":"Seen","librarySectionID":2,"thumb":"/seen.jpg"},
+          {"ratingKey":"partial","type":"show","title":"Partial"},
+          {"ratingKey":"empty","type":"show","title":"Empty"},
+          {"ratingKey":"new","type":"show","title":"New","leafCount":12,"viewedLeafCount":0},
+          {"ratingKey":"movie","type":"movie","title":"Movie","viewCount":1}
+        ]}}
+        """)
+        http.stub(pathSuffix: "/library/metadata/empty,partial,seen", json: """
+        {"MediaContainer":{"Metadata":[
+          {"ratingKey":"seen","type":"show","title":"Different metadata title","leafCount":12,"viewedLeafCount":12},
+          {"ratingKey":"partial","type":"show","leafCount":12,"viewedLeafCount":5},
+          {"ratingKey":"empty","type":"show","leafCount":0,"viewedLeafCount":0}
+        ]}}
+        """)
+        let page = try await provider(http).collectionMembers(of: "set", page: PageRequest())
+        XCTAssertEqual(page.items.map(\.id), ["seen", "partial", "empty", "new", "movie"])
+        XCTAssertEqual(page.items.map(\.unwatchedEpisodeCount), [0, 7, 0, 12, nil])
+        XCTAssertEqual(page.items.map(\.isPlayed), [true, false, false, false, true])
+        XCTAssertEqual(page.items[0].title, "Seen")
+        XCTAssertEqual(page.items[0].libraryID, "2")
+        XCTAssertNotNil(page.items[0].posterURL)
+        XCTAssertTrue(page.items[0].hasBeenPlayed)
+        XCTAssertEqual(page.items[0].librarySortValues?.watched, true)
+        XCTAssertEqual(try XCTUnwrap(page.items[1].playedPercentage), 5.0 / 12, accuracy: 0.001)
+        XCTAssertEqual(http.sentPaths.count, 2, "Complete series and movies must not need metadata requests.")
+    }
+
+    func testCollectionWatchHydrationUsesBoundedBatches() async throws {
+        let http = StubHTTPClient()
+        let ids = (0..<51).map { String(format: "show-%02d", $0) }
+        func payload(_ records: [[String: Any]]) throws -> String {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "MediaContainer": ["size": records.count, "totalSize": 51, "Metadata": records]
+            ])
+            return try XCTUnwrap(String(data: data, encoding: .utf8))
+        }
+        http.stub(pathSuffix: "/library/collections/set/children", json: try payload(ids.map {
+            ["ratingKey": $0, "type": "show", "title": $0]
+        }))
+        for batch in [Array(ids.prefix(50)), Array(ids.suffix(1))] {
+            http.stub(pathSuffix: "/library/metadata/\(batch.joined(separator: ","))", json: try payload(batch.map {
+                ["ratingKey": $0, "type": "show", "leafCount": 12, "viewedLeafCount": 12]
+            }))
+        }
+        let page = try await provider(http).collectionMembers(of: "set", page: PageRequest(limit: 60))
+        XCTAssertEqual(page.items.map(\.id), ids)
+        XCTAssertTrue(page.items.allSatisfy { $0.isPlayed && $0.unwatchedEpisodeCount == 0 })
+        XCTAssertEqual(http.sentPaths.count, 3)
+    }
+
+    func testMissingWatchHydrationFailsInsteadOfPublishingAnUnwatchedSeries() async throws {
+        let http = StubHTTPClient()
+        http.stub(pathSuffix: "/library/collections/set/children", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"show","type":"show"}]}}
+        """)
+        http.stub(pathSuffix: "/library/metadata/show", json: #"{"MediaContainer":{"Metadata":[]}}"#)
+        do {
+            _ = try await provider(http).collectionMembers(of: "set", page: PageRequest())
+            XCTFail("Incomplete hydration must surface a collection error, not a false unwatched state.")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+    }
+
+    func testCollectionCombinesComplementaryEpisodeAggregates() async throws {
+        let http = StubHTTPClient()
+        http.stub(pathSuffix: "/library/collections/set/children", json: """
+        {"MediaContainer":{"size":2,"totalSize":2,"Metadata":[
+          {"ratingKey":"seen","type":"show","viewedLeafCount":12},
+          {"ratingKey":"partial","type":"season","leafCount":12}
+        ]}}
+        """)
+        http.stub(pathSuffix: "/library/metadata/partial,seen", json: """
+        {"MediaContainer":{"Metadata":[
+          {"ratingKey":"seen","type":"show","leafCount":12},
+          {"ratingKey":"partial","type":"season","viewedLeafCount":5}
+        ]}}
+        """)
+        let page = try await provider(http).collectionMembers(of: "set", page: PageRequest())
+        XCTAssertEqual(page.items.map(\.unwatchedEpisodeCount), [0, 7])
+        XCTAssertEqual(page.items.map(\.isPlayed), [true, false])
+        XCTAssertTrue(page.items.allSatisfy(\.hasBeenPlayed))
+        XCTAssertEqual(page.items[0].librarySortValues?.watched, true)
+        XCTAssertEqual(try XCTUnwrap(page.items[1].playedPercentage), 5.0 / 12, accuracy: 0.001)
+    }
+
+    func testUnresolvedOrInvalidEpisodeAggregatesRejectHydratedPage() async throws {
+        for aggregates in [
+            "", #","leafCount":12"#, #","viewedLeafCount":12"#,
+            #","leafCount":-1,"viewedLeafCount":0"#,
+            #","leafCount":12,"viewedLeafCount":-1"#,
+            #","leafCount":12,"viewedLeafCount":13"#
+        ] {
+            let http = StubHTTPClient()
+            http.stub(pathSuffix: "/library/collections/set/children", json: """
+            {"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"show","type":"show"}]}}
+            """)
+            http.stub(pathSuffix: "/library/metadata/show", json: """
+            {"MediaContainer":{"Metadata":[{"ratingKey":"show","type":"show"\(aggregates)}]}}
+            """)
+            do {
+                _ = try await provider(http).collectionMembers(of: "set", page: PageRequest())
+                XCTFail("Unresolved or invalid aggregates must not publish guessed watch state: \(aggregates)")
+            } catch {
+                XCTAssertEqual(error as? AppError, .invalidResponse)
+            }
+        }
+    }
+
+    func testSmartCollectionMembersSurviveServerElementWhitelisting() async throws {
+        let page = try await provider(CollectionWhitelistHTTPClient()).collectionMembers(
+            of: "13", page: PageRequest()
+        )
+        XCTAssertEqual(page.items.map(\.id), ["member"])
+        XCTAssertEqual(page.items.map(\.kind), [.movie])
+        XCTAssertEqual(page.totalCount, 1)
+    }
+
+    func testMembershipRejectsNonemptyEnvelopeWithMissingMembers() async {
+        for start in [0, 60] {
+            for json in [
+                #"{"MediaContainer":{"size":2}}"#,
+                #"{"MediaContainer":{"size":2,"Metadata":[]}}"#,
+                #"{"MediaContainer":{"size":0,"totalSize":64}}"#,
+                #"{"MediaContainer":{"size":0,"Directory":[{"key":"unexpected","title":"Unexpected"}]}}"#
+            ] {
+                let http = StubHTTPClient()
+                http.stub(pathSuffix: "/library/collections/13/children", json: json)
+                do {
+                    _ = try await provider(http).collectionMembers(
+                        of: "13", page: PageRequest(startIndex: start, limit: 2)
+                    )
+                    XCTFail("Omitted members must produce a retryable error, not an empty collection")
+                } catch {
+                    XCTAssertEqual(error as? AppError, .invalidResponse)
+                }
+            }
+        }
+    }
+
+    func testMembershipAcceptsEmptyCollectionsAndExhaustedPages() async throws {
+        for start in [0, 60] {
+            for json in [
+                #"{"MediaContainer":{"size":0}}"#,
+                #"{"MediaContainer":{"size":0,"Metadata":[]}}"#,
+                "{\"MediaContainer\":{\"size\":0,\"totalSize\":\(start)}}"
+            ] {
+                let http = StubHTTPClient()
+                http.stub(pathSuffix: "/library/collections/13/children", json: json)
+                let page = try await provider(http).collectionMembers(
+                    of: "13", page: PageRequest(startIndex: start)
+                )
+                XCTAssertTrue(page.items.isEmpty)
+                XCTAssertEqual(page.startIndex, start)
+                XCTAssertEqual(page.totalCount, start)
+                XCTAssertFalse(page.hasMore)
+            }
         }
     }
 
@@ -173,7 +363,7 @@ final class PlexCollectionBrowsingTests: XCTestCase {
 
     func testDirectCollectionPagingDoesNotConfuseMemberIDWithSectionID() async throws {
         let http = StubHTTPClient()
-        http.stub(pathSuffix: "/library/metadata/12/children", json: """
+        http.stub(pathSuffix: "/library/collections/12/children", json: """
         {"MediaContainer":{"size":1,"totalSize":1,"Metadata":[
           {"ratingKey":"movie","type":"movie","title":"Member"}
         ]}}
@@ -187,7 +377,7 @@ final class PlexCollectionBrowsingTests: XCTestCase {
 
     func testMissingTotalDoesNotTruncateAFullMemberPage() async throws {
         let http = StubHTTPClient()
-        http.stub(pathSuffix: "/library/metadata/12/children", json: """
+        http.stub(pathSuffix: "/library/collections/12/children", json: """
         {"MediaContainer":{"size":1,"Metadata":[{"ratingKey":"a","type":"movie","title":"A"}]}}
         """)
         let page = try await provider(http).collectionMembers(
@@ -264,7 +454,8 @@ final class PlexCollectionBrowsingTests: XCTestCase {
     private struct CollectionWhitelistHTTPClient: HTTPClient {
         func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
             guard endpoint.path == "/library/sections/2/all"
-                    || endpoint.path == "/library/sections/2/collections" else {
+                    || endpoint.path == "/library/sections/2/collections"
+                    || endpoint.path == "/library/collections/13/children" else {
                 throw AppError.notFound
             }
             let json: String
@@ -272,10 +463,15 @@ final class PlexCollectionBrowsingTests: XCTestCase {
                 json = """
                 {"MediaContainer":{"identifier":"com.plexapp.plugins.library","size":1,"librarySectionID":2}}
                 """
+            } else if endpoint.path.hasSuffix("/children") {
+                json = """
+                {"MediaContainer":{"size":1,"totalSize":1,
+                  "Metadata":[{"ratingKey":"member","type":"movie","title":"Member","librarySectionID":2}]}}
+                """
             } else {
                 json = """
                 {"MediaContainer":{"identifier":"com.plexapp.plugins.library","size":1,"librarySectionID":2,
-                  "Metadata":[{"ratingKey":"12","key":"/library/metadata/12/children","type":"collection",
+                  "Metadata":[{"ratingKey":"12","key":"/library/collections/12/children","type":"collection",
                                "subtype":"movie","title":"Collection","smart":0,"childCount":3}]}}
                 """
             }

@@ -68,7 +68,6 @@ struct PlozziOSFirstRunView: View {
         .background { AppBackground(palette: palette) }
         .environment(\.themePalette, palette)
         .environment(\.colorScheme, palette.isLight ? .light : .dark)
-        .preferredColorScheme(palette.isLight ? .light : .dark)
         .toolbarBackground(.hidden, for: .navigationBar)
         .interactiveDismissDisabled()
     }
@@ -179,7 +178,7 @@ private struct PlozziOSFirstProfileView: View {
                 .frame(maxWidth: .infinity, minHeight: proxy.size.height)
             }
         }
-        .sheet(isPresented: $editing) {
+        .plozzSheet(isPresented: $editing) {
             NavigationStack {
                 PlozziOSProfileEditorHost(
                     appModel: appModel,

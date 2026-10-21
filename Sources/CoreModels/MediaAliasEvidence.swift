@@ -329,6 +329,7 @@ public struct MediaAliasEvidence: Codable, Hashable, Sendable {
         // weak title/year — the one case the ledger most needs to get right.
         var namespaces = MediaItemIdentity.strongExternalNamespaces.map(\.namespace)
         namespaces.append(.plexGuid)
+        namespaces.append(.wetrakr)
         var strong = namespaces.compactMap { namespace -> MediaAliasStrongEvidence? in
             guard let value = item.providerID(namespace) else { return nil }
             return MediaAliasStrongEvidence(

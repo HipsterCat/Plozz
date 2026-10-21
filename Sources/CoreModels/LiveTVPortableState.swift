@@ -23,7 +23,8 @@ public struct LiveTVPortableSyncPreferenceStore: Sendable {
         )
     }
 
-    /// Device-local consent. Never add this key to ProfileSettingsTransfer.
+    /// Device-local activation/replay fence, never a portable preference.
+    /// Production composition keeps activation aligned with the main sync switch.
     public var isEnabled: Bool {
         get {
             let epoch = Self.storageEpoch(defaults: defaults)
@@ -75,7 +76,9 @@ public enum LiveTVPortableStateError: Error, Equatable, Sendable {
 }
 
 public struct LiveTVPortableRecordKey: Hashable, Sendable {
-    public enum Kind: String, Codable, Sendable { case channel, source, library, snapshot, serverEnrollment }
+    public enum Kind: String, Codable, Sendable {
+        case channel, source, library, snapshot, serverEnrollment, category, region
+    }
     public let profileID: String
     public let kind: Kind
     public let entityID: String
@@ -125,12 +128,15 @@ public struct LiveTVPortableChannel: Codable, Equatable, Sendable {
     public var metadata: LiveTVChannelMetadataOverride?
     public var guideMapping: LiveTVPortableGuideMapping?
     public var identityHint: LiveTVPortableChannelIdentityHint?
+    public var isAlwaysShown: Bool?
+    public var isExcludedFromCategoryFavorites: Bool?
 
     public init(
         isFavorite: Bool = false, hiddenName: String? = nil, favoriteName: String? = nil,
         favoritePosition: Int? = nil, metadata: LiveTVChannelMetadataOverride? = nil,
         guideMapping: LiveTVPortableGuideMapping? = nil,
-        identityHint: LiveTVPortableChannelIdentityHint? = nil
+        identityHint: LiveTVPortableChannelIdentityHint? = nil,
+        isAlwaysShown: Bool? = nil, isExcludedFromCategoryFavorites: Bool? = nil
     ) {
         self.isFavorite = isFavorite
         self.hiddenName = hiddenName
@@ -139,6 +145,8 @@ public struct LiveTVPortableChannel: Codable, Equatable, Sendable {
         self.metadata = metadata
         self.guideMapping = guideMapping
         self.identityHint = identityHint
+        self.isAlwaysShown = isAlwaysShown
+        self.isExcludedFromCategoryFavorites = isExcludedFromCategoryFavorites
     }
 }
 
@@ -258,11 +266,14 @@ public struct LiveTVPortableRecord: Codable, Equatable, Sendable {
     public let library: LibraryChannelDefinition?
     public let snapshot: LiveTVPortableSnapshotPart?
     public let serverEnrollmentSuppressed: Bool?
+    public let category: LiveTVCategoryRule?
+    public let region: LiveTVRegionalFilter?
 
     public init(
         isDeleted: Bool = false, channel: LiveTVPortableChannel? = nil,
         source: LiveTVPortableSource? = nil, library: LibraryChannelDefinition? = nil,
-        snapshot: LiveTVPortableSnapshotPart? = nil, serverEnrollmentSuppressed: Bool? = nil
+        snapshot: LiveTVPortableSnapshotPart? = nil, serverEnrollmentSuppressed: Bool? = nil,
+        category: LiveTVCategoryRule? = nil, region: LiveTVRegionalFilter? = nil
     ) {
         version = 1
         self.isDeleted = isDeleted
@@ -271,18 +282,26 @@ public struct LiveTVPortableRecord: Codable, Equatable, Sendable {
         self.library = library
         self.snapshot = snapshot
         self.serverEnrollmentSuppressed = serverEnrollmentSuppressed
+        self.category = category
+        self.region = region
     }
 
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(self)
-        guard data.count <= Self.maximumBytes else { throw LiveTVPortableStateError.tooLarge }
+        guard data.count <= Self.maximumBytes else {
+            LiveTVSyncLimitDiagnostic.record(.recordBytes, observed: data.count, maximum: Self.maximumBytes)
+            throw LiveTVPortableStateError.tooLarge
+        }
         return data
     }
 
     public static func decode(_ data: Data, key: LiveTVPortableRecordKey) throws -> Self {
-        guard data.count <= maximumBytes else { throw LiveTVPortableStateError.tooLarge }
+        guard data.count <= maximumBytes else {
+            LiveTVSyncLimitDiagnostic.record(.recordBytes, observed: data.count, maximum: maximumBytes)
+            throw LiveTVPortableStateError.tooLarge
+        }
         let record = try JSONDecoder().decode(Self.self, from: data)
         try record.validate(key: key)
         return record
@@ -297,10 +316,25 @@ public struct LiveTVPortableRecord: Codable, Equatable, Sendable {
         if key.kind == .serverEnrollment, !Self.safeIdentifier(key.entityID) {
             throw LiveTVPortableStateError.invalidRecord
         }
-        let count = [channel != nil, source != nil, library != nil, snapshot != nil, serverEnrollmentSuppressed != nil].filter { $0 }.count
+        if key.kind == .region, key.entityID != "iptv" { throw LiveTVPortableStateError.invalidRecord }
+        let count = [
+            channel != nil, source != nil, library != nil, snapshot != nil,
+            serverEnrollmentSuppressed != nil, category != nil, region != nil
+        ].filter { $0 }.count
         guard count == (isDeleted ? 0 : 1) else { throw LiveTVPortableStateError.invalidRecord }
         guard !isDeleted else { return }
         switch key.kind {
+        case .category:
+            guard let category, category.id == key.entityID,
+                  !category.name.isEmpty, category.name.utf8.count <= 512,
+                  category.sourceID.map({ Self.safeIdentifier($0) }) ?? true else {
+                throw LiveTVPortableStateError.invalidRecord
+            }
+        case .region:
+            guard let region, region.countries.count <= 512, region.languages.count <= 1_024,
+                  region.countries.union(region.languages).allSatisfy({
+                      !$0.isEmpty && $0.utf8.count <= 512
+                  }) else { throw LiveTVPortableStateError.invalidRecord }
         case .serverEnrollment:
             guard serverEnrollmentSuppressed != nil, Self.safeIdentifier(key.entityID) else {
                 throw LiveTVPortableStateError.invalidRecord
@@ -392,8 +426,11 @@ public enum LiveTVPortableSnapshots {
         var bytes = 0
         let encoder = JSONEncoder()
         for item in snapshot.items {
-            let size = try encoder.encode(item).count
-            guard size <= 128 * 1_024 else { throw LiveTVPortableStateError.tooLarge }
+            let size = try autoreleasepool { try encoder.encode(item).count }
+            guard size <= 128 * 1_024 else {
+                LiveTVSyncLimitDiagnostic.record(.snapshotItemBytes, observed: size, maximum: 128 * 1_024)
+                throw LiveTVPortableStateError.tooLarge
+            }
             if !current.isEmpty && (current.count == 256 || bytes + size > 128 * 1_024) {
                 groups.append(current)
                 current = []
@@ -403,7 +440,10 @@ public enum LiveTVPortableSnapshots {
             bytes += size
         }
         if !current.isEmpty { groups.append(current) }
-        guard groups.count <= 1_024 else { throw LiveTVPortableStateError.tooLarge }
+        guard groups.count <= 1_024 else {
+            LiveTVSyncLimitDiagnostic.record(.snapshotParts, observed: groups.count, maximum: 1_024)
+            throw LiveTVPortableStateError.tooLarge
+        }
         return groups.enumerated().map { index, items in
             LiveTVPortableSnapshotPart(
                 snapshotID: snapshot.id, part: index, partCount: groups.count, contentDigest: digest,
@@ -437,7 +477,23 @@ public enum LiveTVPortableSnapshots {
     private static func contentDigest(_ snapshot: LibraryChannelSnapshot) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        return SHA256.hash(data: try encoder.encode(snapshot))
-            .map { String(format: "%02x", $0) }.joined()
+        var digest = SHA256()
+        func append(_ text: String) { digest.update(data: Data(text.utf8)) }
+        append("{\"createdAt\":")
+        digest.update(data: try encoder.encode(snapshot.createdAt))
+        append(",\"id\":")
+        digest.update(data: try encoder.encode(snapshot.id))
+        append(",\"ineligibleDurationCount\":")
+        digest.update(data: try encoder.encode(snapshot.ineligibleDurationCount))
+        append(",\"items\":[")
+        for (index, item) in snapshot.items.enumerated() {
+            try Task.checkCancellation()
+            if index > 0 { append(",") }
+            try autoreleasepool { digest.update(data: try encoder.encode(item)) }
+        }
+        append("],\"version\":")
+        digest.update(data: try encoder.encode(snapshot.version))
+        append("}")
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

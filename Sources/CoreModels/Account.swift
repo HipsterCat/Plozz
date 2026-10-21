@@ -86,6 +86,14 @@ public struct Account: Codable, Hashable, Identifiable, Sendable {
             accessToken: token
         )
     }
+
+    /// Rebuild retained providers when approved routes change, without replacing
+    /// the account or credential identity used by watch state and playback.
+    public var connectionScopeKey: String {
+        let values = [id, credentialRevision.rawValue.uuidString, server.baseURL.absoluteString]
+            + (server.alternateConnectionURLs ?? []).map(\.absoluteString).sorted()
+        return values.map { "\($0.utf8.count):\($0)" }.joined()
+    }
 }
 
 extension Account: CustomStringConvertible {
@@ -96,13 +104,9 @@ extension Account: CustomStringConvertible {
 }
 
 public extension Account {
-    /// A STABLE, deterministic account id derived from the (provider + backend server
-    /// id + user) identity — so the SAME server+user always maps to the SAME account
-    /// id, on every device and on every sign-in. This is why media shares never
-    /// duplicated (they've always used a deterministic id); applying the same rule to
-    /// token providers (Plex/Jellyfin/Emby) is the holistic fix for cross-device
-    /// duplicate accounts: re-adding updates in place, sync joins on a matching id, and
-    /// a pairing transfer can't create a second copy.
+    /// Deterministic identity for a new server/user login. Authentication first
+    /// reuses an existing account with this identity, including older random IDs,
+    /// so reconnecting preserves profile bindings and per-account library choices.
     ///
     /// Media shares keep their existing deterministic id (`session.server.id`, which
     /// already encodes host/path/user) so their persisted Keychain credentials aren't

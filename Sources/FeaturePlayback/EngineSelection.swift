@@ -20,7 +20,9 @@ enum EngineSelection {
         forceTranscode: Bool,
         plozzigenAvailable: Bool,
         capabilities: MediaCapabilities,
-        subtitleRule: SubtitlePolicy.Rule
+        subtitleRule: SubtitlePolicy.Rule,
+        hearingImpairedPreference: HearingImpairedPreference? = nil,
+        audioRouteIsAirPlay: Bool = false
     ) -> PlaybackEngineKind {
         if request.streamingOptions != nil, request.isTranscoding { return .native }
         if let streamURL = request.streamURL, streamURL.isFileURL {
@@ -82,8 +84,21 @@ enum EngineSelection {
         if kind == .native, !request.isTranscoding, plozzigenAvailable,
            request.subtitleTracks.defaultSubtitleNeedsHybridEngine(
                mode: subtitleRule.mode,
-               preferredLanguage: subtitleRule.preferredLanguage) {
+               preferredLanguage: subtitleRule.preferredLanguage,
+               hearingImpairedPreference: hearingImpairedPreference) {
             PlozzLog.playback.info("Default subtitle is image-based; routing to Plozzigen so it can be rendered on-device")
+            kind = .plozzigen
+        }
+
+        // AirPlay audio (a HomePod or stereo pair as the TV's speakers): AVPlayer
+        // reading a progressive file sends the speakers a stream that has to be
+        // renegotiated on every seek, and it falls silent there and mid-title
+        // with no event (docs/airplay-audio-recovery.md; measured on device with
+        // MP4 over native). Plozzigen hands AVPlayer one continuous local HLS
+        // stream instead, the shape that holds up. Server transcodes are HLS
+        // already and stay native.
+        if kind == .native, !request.isTranscoding, plozzigenAvailable, audioRouteIsAirPlay {
+            PlozzLog.playback.info("Audio route is AirPlay; routing direct play to Plozzigen")
             kind = .plozzigen
         }
 

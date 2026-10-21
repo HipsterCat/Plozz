@@ -59,6 +59,36 @@ final class HomeViewModelLoadIfNeededTests: XCTestCase {
         XCTAssertEqual(provider.librariesCallCount, 2)
     }
 
+    func testPreparedServerLayoutDoesNotRepeatLoadButAnExternalLayoutChangeDoes() async {
+        var visibility = HomeLibraryVisibility.default
+        let provider = FakeMediaProvider(allItems: [])
+        let server = MediaServer(id: "srv", name: "Home", baseURL: URL(string: "http://host")!, provider: .jellyfin)
+        let account = Account(id: "a", server: server, userID: "u", userName: "Me", deviceID: "d")
+        var preparations = 0
+        let vm = HomeViewModel(
+            accounts: [ResolvedAccount(account: account, provider: provider)],
+            layoutStore: InMemoryHomeLayoutStore(),
+            currentVisibility: { visibility },
+            prepareVisibility: {
+                preparations += 1
+                if visibility.rowCustomization?.resolvedDefaults == nil {
+                    visibility.rowCustomization?.resolvedDefaults = .init(mode: .providerFallback)
+                }
+            }
+        )
+        await vm.loadIfNeeded(for: visibility)
+        await vm.loadIfNeeded(for: visibility)
+        XCTAssertEqual(preparations, 1)
+        XCTAssertEqual(provider.librariesCallCount, 1)
+
+        let intent = visibility.intent
+        visibility.rowCustomization?.resolvedDefaults = .init(mode: .combined)
+        XCTAssertEqual(visibility.intent, intent)
+        await vm.loadIfNeeded(for: visibility)
+        XCTAssertEqual(preparations, 2)
+        XCTAssertEqual(provider.librariesCallCount, 2)
+    }
+
     func testMergeFlipTriggersReload() async {
         var merge = true
         let provider = FakeMediaProvider(allItems: [])

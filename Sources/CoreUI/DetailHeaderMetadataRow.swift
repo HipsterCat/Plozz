@@ -14,16 +14,39 @@ public extension EnvironmentValues {
 
 public struct HeaderReviewScoreCountPicker: View {
     @Binding private var settings: DetailPageSettings
+    @Environment(\.locale) private var locale
 
     public init(settings: Binding<DetailPageSettings>) {
         _settings = settings
     }
 
     public var body: some View {
-        Picker("Review scores shown", selection: $settings.maxHeaderRatings) {
-            ForEach(Array(DetailPageSettings.headerRatingCountRange), id: \.self) { count in
-                Text(count, format: .number).tag(count)
+        VStack(alignment: .leading, spacing: 12) {
+            #if os(tvOS)
+            SettingsStepper(
+                options: Array(DetailPageSettings.headerRatingCountRange),
+                selection: $settings.maxHeaderRatings,
+                compact: true,
+                label: "Maximum ratings shown",
+                verbatimTitle: { $0.formatted(.number.locale(locale)) }
+            )
+            .accessibilityIdentifier("maximum-ratings-shown")
+            #else
+            Picker("Maximum ratings shown", selection: $settings.maxHeaderRatings) {
+                ForEach(Array(DetailPageSettings.headerRatingCountRange), id: \.self) { count in
+                    Text(count, format: .number).tag(count)
+                }
             }
+            .accessibilityIdentifier("maximum-ratings-shown")
+            #endif
+            Text("Shows fewer when fewer ratings are available.")
+                #if os(tvOS)
+                .font(SettingsRowMetrics.helperFont)
+                #else
+                .font(.footnote)
+                #endif
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -66,7 +89,7 @@ public struct DetailHeaderMetadataRow: View {
             .buttonStyle(.plain)
             .plozzForeground(.primary)
             .frame(maxWidth: .infinity, alignment: .center)
-            .sheet(isPresented: $showsDetails) {
+            .plozzSheet(isPresented: $showsDetails) {
                 NavigationStack {
                     List {
                         if !ratings.isEmpty || familyGuidanceAge != nil {
@@ -80,7 +103,7 @@ public struct DetailHeaderMetadataRow: View {
                                 }
                                 ForEach(ratings) { rating in
                                     HStack {
-                                        Text(verbatim: rating.source.displayName)
+                                        Text(verbatim: rating.displayName)
                                         Spacer()
                                         RatingBadge(rating: rating)
                                     }
@@ -97,6 +120,9 @@ public struct DetailHeaderMetadataRow: View {
                     }
                     .lineLimit(nil)
                     .navigationTitle(Text(detailsTitle))
+                    #if os(iOS)
+                    .toolbarTitleDisplayMode(.inline)
+                    #endif
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { showsDetails = false }
@@ -124,16 +150,12 @@ public struct DetailHeaderMetadataRow: View {
     private func metadataLine(
         ratingCount: Int, badgeCount: Int, showsDisclosure: Bool = true
     ) -> some View {
-        HStack(spacing: 12) {
+        WrappingHStackLayout(spacing: 12, lineSpacing: 8) {
             if let familyGuidanceAge {
                 FamilyGuidanceAgeBadge(age: familyGuidanceAge)
             }
             ForEach(Array(ratings.prefix(ratingCount))) { RatingBadge(rating: $0) }
-            if badgeCount > 0 {
-                HStack(spacing: 10) {
-                    ForEach(Array(badges.prefix(badgeCount))) { MetadataMediaBadgeChip(badge: $0) }
-                }
-            }
+            ForEach(Array(badges.prefix(badgeCount))) { MetadataMediaBadgeChip(badge: $0) }
             if showsDisclosure {
                 disclosureChevron.accessibilityHidden(
                     familyGuidanceAge != nil || ratingCount > 0 || badgeCount > 0

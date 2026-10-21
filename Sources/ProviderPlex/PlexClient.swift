@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import CoreModels
 import CoreNetworking
 
@@ -132,7 +133,12 @@ public struct PlexClient: Sendable {
     /// Resolves (and self-heals) the working server base URL. Browsing requests
     /// go through it so a saved-but-now-unreachable connection transparently
     /// fails over to a reachable one.
-    private let resolver: PlexConnectionResolver
+    private final class Routing: Sendable {
+        let resolver: Mutex<PlexConnectionResolver>
+        init(_ resolver: PlexConnectionResolver) { self.resolver = Mutex(resolver) }
+    }
+    private let routing: Routing
+    private var resolver: PlexConnectionResolver { routing.resolver.withLock { $0 } }
     private let deviceProfile: PlexDeviceProfile
     private let token: String
     /// Token for **plex.tv Discover** calls (watchlist, Discover metadata,
@@ -147,7 +153,7 @@ public struct PlexClient: Sendable {
     ///
     /// `nil` means "same as `token`", correct for an ordinary sign-in where the
     /// account token is what was stored.
-    private let discoverToken: String?
+    private var discoverToken: String?
 
     /// The credential to send to plex.tv Discover.
     private var plexTVToken: String { discoverToken ?? token }
@@ -179,6 +185,21 @@ public struct PlexClient: Sendable {
     /// Resolved lazily on the first request; this is the synchronous best guess
     /// used by URL builders after a request has settled it.
     public var baseURL: URL { resolver.current }
+
+    func resolvedBaseURL() async -> URL {
+        while true {
+            let snapshot = resolver
+            let url = await snapshot.resolved()
+            if resolver === snapshot { return url }
+        }
+    }
+
+    func updateConnectionResolver(_ makeReplacement: ([URL]) -> PlexConnectionResolver) {
+        routing.resolver.withLock { current in
+            let discovered = current.retire()
+            current = makeReplacement(discovered)
+        }
+    }
 
     var knownBaseURLs: [URL] { resolver.knownBaseURLs }
 
@@ -221,16 +242,9 @@ public struct PlexClient: Sendable {
     /// per-server token, while the watchlist uses that person's own
     /// account-level token so it reads and writes THEIR list.
     public func withDiscoverToken(_ discoverToken: String?) -> PlexClient {
-        PlexClient(
-            resolver: resolver,
-            deviceProfile: deviceProfile,
-            token: token,
-            discoverToken: discoverToken,
-            http: http,
-            interactiveHTTP: interactiveHTTP,
-            capabilities: capabilities,
-            hybridEngineEnabled: hybridEngineEnabled
-        )
+        var copy = self
+        copy.discoverToken = discoverToken
+        return copy
     }
 
     /// Self-healing initializer: `resolver` probes its candidate connections and
@@ -245,7 +259,7 @@ public struct PlexClient: Sendable {
         capabilities: MediaCapabilities = .detected(),
         hybridEngineEnabled: Bool = false
     ) {
-        self.resolver = resolver
+        self.routing = Routing(resolver)
         self.deviceProfile = deviceProfile
         self.token = token
         self.discoverToken = discoverToken
@@ -271,14 +285,18 @@ public struct PlexClient: Sendable {
         using client: HTTPClient? = nil,
         preservingStatus: Bool = false
     ) async throws -> (Data, HTTPURLResponse) {
+        var endpoint = endpoint
+        endpoint.redirectPolicy = .sameOrigin
         let client = client ?? http
-        let base = await resolver.resolved()
+        let base = await resolvedBaseURL()
+        try Task.checkCancellation()
         do {
             if preservingStatus { return try await client.sendRaw(endpoint, baseURL: base) }
             return try await client.send(endpoint, baseURL: base)
         } catch AppError.serverUnreachable {
             resolver.reportFailure(base)
-            let retry = await resolver.resolved()
+            let retry = await resolvedBaseURL()
+            try Task.checkCancellation()
             guard retry != base else { throw AppError.serverUnreachable }
             if preservingStatus { return try await client.sendRaw(endpoint, baseURL: retry) }
             return try await client.send(endpoint, baseURL: retry)
@@ -341,7 +359,7 @@ public struct PlexClient: Sendable {
                 method: method, path: path, queryItems: query, headers: liveHeaders,
                 redirectPolicy: .sameOrigin
             ),
-            baseURL: await resolver.resolved()
+            baseURL: await resolvedBaseURL()
         )
         switch response.statusCode {
         case 200..<300: return data
@@ -361,10 +379,11 @@ public struct PlexClient: Sendable {
 
     /// Sends and decodes JSON, with the same self-healing retry as `send`.
     private func decode<T: Decodable>(_ type: T.Type, _ endpoint: Endpoint, using client: HTTPClient? = nil) async throws -> T {
-        let (data, _) = try await send(endpoint, using: client)
+        let (data, response) = try await send(endpoint, using: client)
         do {
             return try JSONDecoder.plozz.decode(T.self, from: data)
         } catch {
+            HTTPResponseDiagnostics.recordDecodeFailure(error, data: data, response: response)
             PlozzLog.networking.error("Decoding \(String(describing: T.self)) failed")
             throw AppError.decoding
         }
@@ -412,18 +431,20 @@ public struct PlexClient: Sendable {
 
     /// `GET /library/onDeck` — Continue Watching.
     func onDeck(limit: Int) async throws -> [PlexMetadata] {
-        if limit == Int.max {
-            return try await exhaustiveResumeFeed(
+        try await HTTPResponseDiagnostics.$route.withValue(.onDeck) {
+            if limit == Int.max {
+                return try await exhaustiveResumeFeed(
+                    path: "/library/onDeck",
+                    acceptsNestedHubs: false,
+                    streamEnriched: true
+                )
+            }
+            return try await decodeStreamEnriched(
+                PlexMediaContainerResponse.self,
                 path: "/library/onDeck",
-                acceptsNestedHubs: false,
-                streamEnriched: true
-            )
+                query: containerQuery(start: 0, size: limit)
+            ).MediaContainer.Metadata ?? []
         }
-        return try await decodeStreamEnriched(
-            PlexMediaContainerResponse.self,
-            path: "/library/onDeck",
-            query: containerQuery(start: 0, size: limit)
-        ).MediaContainer.Metadata ?? []
     }
 
     /// Fetches exact metadata records in bounded batches chosen by the caller.
@@ -499,7 +520,10 @@ public struct PlexClient: Sendable {
     func metadata(ratingKey: String) async throws -> PlexMetadata {
         let endpoint = Endpoint(
             path: "/library/metadata/\(ratingKey)",
-            queryItems: [URLQueryItem(name: "includeGuids", value: "1")],
+            queryItems: [
+                URLQueryItem(name: "includeGuids", value: "1"),
+                URLQueryItem(name: "includePreferences", value: "1")
+            ],
             headers: headers
         )
         let container = try await decode(PlexMediaContainerResponse.self, endpoint, using: interactiveHTTP).MediaContainer
@@ -585,14 +609,18 @@ public struct PlexClient: Sendable {
         ).MediaContainer.Metadata ?? []
     }
 
-    /// Both static and smart collections resolve through their children endpoint.
+    /// Use the collection namespace: metadata children can report smart collections as empty.
     /// Omitting `sort` preserves the server's configured collection order.
     func collectionMembers(ratingKey: String, start: Int, size: Int) async throws -> PlexMediaContainer {
-        try await decodeStreamEnriched(
-            PlexMediaContainerResponse.self,
-            path: "/library/metadata/\(ratingKey)/children",
-            query: containerQuery(start: start, size: size)
-        ).MediaContainer
+        let endpoint = Endpoint(
+            path: "/library/collections/\(ratingKey)/children",
+            // Request extra streams without whitelisting away the members of
+            // smart collections on servers that honor response customization.
+            queryItems: containerQuery(start: start, size: size)
+                + [URLQueryItem(name: "includeOptionalElements", value: "Stream")],
+            headers: headers
+        )
+        return try await decode(PlexMediaContainerResponse.self, endpoint).MediaContainer
     }
 
     /// `GET /library/metadata/{ratingKey}/extras` — trailers and other extras
@@ -625,7 +653,7 @@ public struct PlexClient: Sendable {
         let endpoint = Endpoint(
             path: "/library/sections/\(sectionID)/collections",
             queryItems: containerQuery(start: start, size: size)
-                + [URLQueryItem(name: "sort", value: Self.sortQuery(for: sort))],
+                + [URLQueryItem(name: "sort", value: try Self.sortQuery(for: sort))],
             headers: headers
         )
         return try await decode(PlexMediaContainerResponse.self, endpoint).MediaContainer
@@ -638,18 +666,45 @@ public struct PlexClient: Sendable {
         type: Int?,
         start: Int,
         size: Int,
-        sort: CoreModels.SortDescriptor
+        sort: CoreModels.SortDescriptor,
+        filters: LibraryFilters = .all,
+        genreID: String? = nil
     ) async throws -> PlexMediaContainer {
         var query = containerQuery(start: start, size: size)
         if let type {
             query.append(URLQueryItem(name: "type", value: String(type)))
         }
-        query.append(URLQueryItem(name: "sort", value: Self.sortQuery(for: sort)))
+        query.append(URLQueryItem(name: "sort", value: try Self.sortQuery(for: sort)))
+        query += try Self.libraryFilterQuery(filters, genreID: genreID)
         return try await decodeStreamEnriched(
             PlexMediaContainerResponse.self,
             path: "/library/sections/\(sectionID)/all",
             query: query
         ).MediaContainer
+    }
+
+    static func libraryFilterQuery(_ filters: LibraryFilters, genreID: String?) throws -> [URLQueryItem] {
+        var query: [URLQueryItem] = []
+        switch filters.filter {
+        case .all: break
+        case .hdr: query.append(.init(name: "hdr", value: "1"))
+        case .unwatched: query.append(.init(name: "unwatched", value: "1"))
+        case .inProgress: query.append(.init(name: "inProgress", value: "1"))
+        case .unmatched: query.append(.init(name: "unmatched", value: "1"))
+        case .duplicates: query.append(.init(name: "duplicate", value: "1"))
+        case .dolbyVision, .hdr10Plus, .atmos: throw AppError.invalidResponse
+        }
+        if let genreID { query.append(.init(name: "genre", value: genreID)) }
+        if let year = filters.year { query.append(.init(name: "year", value: String(year))) }
+        return query
+    }
+
+    func libraryFacet(sectionID: String, type: Int?, field: String) async throws -> [PlexDirectory] {
+        let query = type.map { [URLQueryItem(name: "type", value: String($0))] } ?? []
+        return try await decode(
+            PlexMediaContainerResponse.self,
+            Endpoint(path: "/library/sections/\(sectionID)/\(field)", queryItems: query, headers: headers)
+        ).MediaContainer.Directory ?? []
     }
 
     /// `GET /hubs/sections/{id}` — the library's promoted "hubs" (Recently Added,
@@ -664,10 +719,38 @@ public struct PlexClient: Sendable {
             URLQueryItem(name: "count", value: String(max(1, count))),
             URLQueryItem(name: "includeGuids", value: "1")
         ]
-        return try await decodeStreamEnriched(
+        return try await HTTPResponseDiagnostics.$route.withValue(.libraryHubs) {
+            try await decodeStreamEnriched(
+                PlexMediaContainerResponse.self,
+                path: "/hubs/sections/\(sectionID)",
+                query: query
+            ).MediaContainer.Hub ?? []
+        }
+    }
+
+    func promotedHubs(sectionID: String, count: Int) async throws -> [PlexHub] {
+        try await decodeStreamEnriched(
             PlexMediaContainerResponse.self,
-            path: "/hubs/sections/\(sectionID)",
-            query: query
+            path: "/hubs/promoted",
+            query: [
+                URLQueryItem(name: "contentDirectoryID", value: sectionID),
+                URLQueryItem(name: "pinnedContentDirectoryID", value: sectionID),
+                URLQueryItem(name: "count", value: String(max(1, count))),
+                URLQueryItem(name: "includeGuids", value: "1")
+            ]
+        ).MediaContainer.Hub ?? []
+    }
+
+    /// Server promotions, not an import of any client's pinned sidebar.
+    func serverHomeHubs(sectionID: String, count: Int) async throws -> [PlexHub] {
+        try await decodeStreamEnriched(
+            PlexMediaContainerResponse.self,
+            path: "/hubs/promoted",
+            query: [
+                URLQueryItem(name: "contentDirectoryID", value: sectionID),
+                URLQueryItem(name: "count", value: String(max(1, min(count, 100)))),
+                URLQueryItem(name: "includeGuids", value: "1")
+            ]
         ).MediaContainer.Hub ?? []
     }
 
@@ -684,6 +767,12 @@ public struct PlexClient: Sendable {
     /// Older servers may not route the `items` variant; the provider falls back to
     /// the plain hub and then the legacy feed only when an endpoint fails.
     func continueWatchingHub(limit: Int, itemsVariant: Bool = true) async throws -> [PlexMetadata] {
+        try await HTTPResponseDiagnostics.$route.withValue(itemsVariant ? .continueWatchingItems : .continueWatchingHub) {
+            try await continueWatchingHubPage(limit: limit, itemsVariant: itemsVariant)
+        }
+    }
+
+    private func continueWatchingHubPage(limit: Int, itemsVariant: Bool) async throws -> [PlexMetadata] {
         let path = itemsVariant ? "/hubs/continueWatching/items" : "/hubs/continueWatching"
         if limit == Int.max {
             return try await exhaustiveResumeFeed(
@@ -759,11 +848,20 @@ public struct PlexClient: Sendable {
                     from: container,
                     acceptsNestedHubs: acceptsNestedHubs
                 )
+                func invalidPage(_ reason: LibraryPagingDiagnostic.Reason) -> AppError {
+                    let stage: LibraryPagingDiagnostic.Stage = path == "/hubs/continueWatching/items"
+                        ? .continueWatchingItems : acceptsNestedHubs ? .continueWatchingHub : .onDeck
+                    HTTPResponseDiagnostics.recordPagingFailure(.init(
+                        stage: stage, reason: reason, start: start,
+                        rows: page.items.count, total: page.totalSize
+                    ))
+                    return .invalidResponse
+                }
                 if let total = page.totalSize {
-                    guard total >= 0 else { throw AppError.invalidResponse }
+                    guard total >= 0 else { throw invalidPage(.negativeTotal) }
                     if let expectedTotal {
                         guard total == expectedTotal else {
-                            throw AppError.invalidResponse
+                            throw invalidPage(.changedTotal)
                         }
                     } else {
                         expectedTotal = total
@@ -771,26 +869,26 @@ public struct PlexClient: Sendable {
                 }
                 if let size = page.size {
                     guard size >= 0, size == page.items.count else {
-                        throw AppError.invalidResponse
+                        throw invalidPage(.sizeMismatch)
                     }
                 }
                 if let offset = page.offset {
-                    guard offset == start else { throw AppError.invalidResponse }
+                    guard offset == start else { throw invalidPage(.offsetMismatch) }
                 }
 
                 guard !page.items.isEmpty else {
                     let totalIsIncomplete = expectedTotal.map { start < $0 } ?? false
                     if page.more == true || totalIsIncomplete {
-                        throw AppError.invalidResponse
+                        throw invalidPage(.emptyBeforeTotal)
                     }
                     return collected
                 }
 
                 for item in page.items {
                     let identifiers = resumeFeedIdentifiers(item)
-                    guard !identifiers.isEmpty,
-                          seenIdentifiers.isDisjoint(with: identifiers) else {
-                        throw AppError.invalidResponse
+                    guard !identifiers.isEmpty else { throw invalidPage(.emptyID) }
+                    guard seenIdentifiers.isDisjoint(with: identifiers) else {
+                        throw invalidPage(.repeatedItem)
                     }
                     seenIdentifiers.formUnion(identifiers)
                 }
@@ -798,26 +896,26 @@ public struct PlexClient: Sendable {
 
                 let (nextStart, overflow) = start.addingReportingOverflow(page.items.count)
                 guard !overflow, nextStart > start else {
-                    throw AppError.invalidResponse
+                    throw invalidPage(.nonAdvancing)
                 }
-                start = nextStart
 
                 if let expectedTotal {
-                    guard start <= expectedTotal else {
-                        throw AppError.invalidResponse
+                    guard nextStart <= expectedTotal else {
+                        throw invalidPage(.itemsPastEnd)
                     }
-                    if start == expectedTotal {
+                    if nextStart == expectedTotal {
                         guard page.more != true else {
-                            throw AppError.invalidResponse
+                            throw invalidPage(.contradictoryMore)
                         }
                         return collected
                     }
                     if page.more == false {
-                        throw AppError.invalidResponse
+                        throw invalidPage(.contradictoryMore)
                     }
                 } else if page.more == false {
                     return collected
                 }
+                start = nextStart
             }
         } catch let cancellation as CancellationError {
             throw cancellation
@@ -862,13 +960,19 @@ public struct PlexClient: Sendable {
     }
 
     private func resumeFeedIdentifiers(_ item: PlexMetadata) -> Set<String> {
-        Set(
-            [item.ratingKey, item.guid, item.key]
-                .compactMap { value in
-                    guard let value, !value.isEmpty else { return nil }
-                    return value
-                }
-        )
+        var identifiers = Set<String>()
+        if let ratingKey = item.ratingKey, !ratingKey.isEmpty {
+            identifiers.insert("ratingKey:\(ratingKey)")
+        }
+        if let key = item.key, !key.isEmpty {
+            identifiers.insert("key:\(key)")
+        }
+        // Copies and editions can share a global GUID but remain distinct
+        // server items. Use it only when no server-local identity is available.
+        if identifiers.isEmpty, let guid = item.guid, !guid.isEmpty {
+            identifiers.insert("guid:\(guid)")
+        }
+        return identifiers
     }
 
     /// `GET /library/sections/{id}/firstCharacter` — the section's title
@@ -878,8 +982,9 @@ public struct PlexClient: Sendable {
     /// each letter's grid offset for the name-sorted browse, which drives the
     /// A–Z fast-scroll rail. `type` scopes the counts to the browsed content
     /// type so they match `sectionItems` in a mixed section.
-    func firstCharacter(sectionID: String, type: Int?) async throws -> [PlexDirectory] {
-        var query: [URLQueryItem] = []
+    func firstCharacter(sectionID: String, type: Int?, filters: LibraryFilters = .all,
+                        genreID: String? = nil) async throws -> [PlexDirectory] {
+        var query = try Self.libraryFilterQuery(filters, genreID: genreID)
         if let type {
             query.append(URLQueryItem(name: "type", value: String(type)))
         }
@@ -922,7 +1027,7 @@ public struct PlexClient: Sendable {
             URLQueryItem(name: "type", value: String(type)),
             URLQueryItem(name: "X-Plex-Container-Start", value: String(start)),
             URLQueryItem(name: "X-Plex-Container-Size", value: String(size)),
-            URLQueryItem(name: "sort", value: Self.sortQuery(for: sort))
+            URLQueryItem(name: "sort", value: try Self.sortQuery(for: sort))
         ]
         let endpoint = Endpoint(path: "/library/sections/\(sectionID)/all", queryItems: query, headers: headers)
         return try await decode(PlexMediaContainerResponse.self, endpoint).MediaContainer
@@ -1050,7 +1155,9 @@ public struct PlexClient: Sendable {
     // MARK: Playback
 
     /// `GET /:/timeline` — report progress so Plex keeps resume points in sync.
-    func reportTimeline(ratingKey: String, state: String, timeMs: Int, durationMs: Int?) async throws {
+    func reportTimeline(
+        ratingKey: String, playSessionID: String?, state: String, timeMs: Int, durationMs: Int?
+    ) async throws {
         var query = [
             URLQueryItem(name: "ratingKey", value: ratingKey),
             URLQueryItem(name: "key", value: "/library/metadata/\(ratingKey)"),
@@ -1061,7 +1168,11 @@ public struct PlexClient: Sendable {
         if let durationMs {
             query.append(URLQueryItem(name: "duration", value: String(durationMs)))
         }
-        let endpoint = Endpoint(path: "/:/timeline", queryItems: query, headers: headers)
+        var requestHeaders = headers
+        if let playSessionID, !playSessionID.isEmpty {
+            requestHeaders["X-Plex-Session-Identifier"] = playSessionID
+        }
+        let endpoint = Endpoint(path: "/:/timeline", queryItems: query, headers: requestHeaders)
         _ = try await send(endpoint)
     }
 
@@ -1617,14 +1728,14 @@ public struct PlexClient: Sendable {
 
     /// Builds an absolute, token-bearing stream URL for a part `key` (which is
     /// already a server-relative `/library/parts/…/file.…` path). Used for
-    /// direct play of a container/codec tvOS can demux natively.
+    /// native direct play, on-device remuxing, and scrub-frame reads.
     func streamURL(forPartKey key: String) -> URL? {
         absoluteURL(serverPath: key, extraQuery: [URLQueryItem(name: "X-Plex-Token", value: token)])
     }
 
     /// Builds the absolute raw-file URL for a part `key`, explicitly asking Plex
-    /// for the original file bytes (`download=1`). Used by the local-remux seam,
-    /// which needs stable range-readable access to the untouched MKV.
+    /// for a download (`download=1`). Only offline downloads use this variant;
+    /// playback reads the same original part without marking it as a download.
     func downloadURL(forPartKey key: String) -> URL? {
         absoluteURL(
             serverPath: key,
@@ -1666,7 +1777,12 @@ public struct PlexClient: Sendable {
                let direct = streamURL(forPartKey: key) { return (direct, false) }
             return transcodeURL(
                 ratingKey: ratingKey, sessionID: sessionID, mediaIndex: mediaIndex,
-                partIndex: partIndex, streaming: streaming
+                partIndex: partIndex, streaming: streaming,
+                allowsStreamCopy: fits && !forceTranscode && !streaming.forceTranscoding
+                    && canDirectStreamVideo(media: media, part: part),
+                allowsAudioStreamCopy: Self.canDirectStreamAudio(
+                    codec: streaming.audioTrack?.codec ?? media.audioCodec ?? ""
+                )
             ).map { ($0, true) }
         }
         // Forcing a transcode (player fallback after a failed direct play): skip
@@ -1711,7 +1827,9 @@ public struct PlexClient: Sendable {
         sessionID: String,
         mediaIndex: Int = 0,
         partIndex: Int = 0,
-        streaming: StreamingPlaybackOptions? = nil
+        streaming: StreamingPlaybackOptions? = nil,
+        allowsStreamCopy: Bool = false,
+        allowsAudioStreamCopy: Bool = false
     ) -> URL? {
         guard streaming?.quality.validationError == nil else { return nil }
         var query: [URLQueryItem] = [
@@ -1739,14 +1857,21 @@ public struct PlexClient: Sendable {
         // The profile has its own query grammar inside the outer URL query.
         let codecList = codecs.joined(separator: "%2C")
         var profile = "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&videoCodec=\(codecList)&audioCodec=aac&subtitleCodec=webvtt&replace=true)"
+        profile += "+add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt&replace=true)"
         query.append(.init(name: "X-Plex-Client-Profile-Name", value: "Generic"))
         if let streaming {
             func set(_ name: String, _ value: String) {
                 query.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
                 query.append(.init(name: name, value: value))
             }
-            set("directStream", "0")
-            set("directStreamAudio", "0")
+            let copiesVideo = allowsStreamCopy
+                && (streaming.subtitlesOff || streaming.subtitleTrack?.isBitmapSubtitle != true)
+            // A bounded video encode reserves only the configured audio budget.
+            // Burning subtitles must not add an uncapped copied audio stream.
+            let copiesAudio = allowsStreamCopy && allowsAudioStreamCopy
+                && (streaming.quality == .original || copiesVideo)
+            set("directStream", copiesVideo ? "1" : "0")
+            set("directStreamAudio", copiesAudio ? "1" : "0")
             set("hasMDE", "1")
             set("context", "streaming")
             set("transcodeSessionId", sessionID)
@@ -1756,7 +1881,10 @@ public struct PlexClient: Sendable {
                 set("maxVideoBitrate", String(bitrate / 1_000))
                 set("videoResolution", "\(width)x\(height)")
                 set("audioBitrate", String(streaming.quality.audioBitrate / 1_000))
-                set("audioChannels", "2")
+                if !copiesAudio {
+                    set("audioChannelCount", "2")
+                    profile += "+add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.bitrate&value=\(streaming.quality.audioBitrate / 1_000)&replace=true)"
+                }
                 profile += "+add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=\(width)&replace=true)"
                 profile += "+add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=\(height)&replace=true)"
                 profile += "+add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.bitrate&value=\(bitrate / 1_000)&replace=true)"
@@ -1774,7 +1902,9 @@ public struct PlexClient: Sendable {
         return absoluteURL(serverPath: "/video/:/transcode/universal/start.m3u8", extraQuery: query)
     }
 
-    func validateStreamingTranscode(url: URL, options: StreamingPlaybackOptions) async throws -> DirectPlayVideoCodec {
+    func validateStreamingTranscode(
+        url: URL, options: StreamingPlaybackOptions
+    ) async throws -> (codec: DirectPlayVideoCodec, delivery: PlaybackDiagnostics.PlaybackMode) {
         try options.quality.validate()
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw StreamingQualityError.malformedResponse
@@ -1800,17 +1930,38 @@ public struct PlexClient: Sendable {
             PlozzLog.playback.error("Unable to decode the Plex streaming decision.")
             throw StreamingQualityError.malformedResponse
         }
-        return try decision.validate(
-            options: options, supportsHEVC: capabilities.allowedDirectPlayVideoCodecs.contains(.hevc)
+        let codec = try decision.validate(
+            options: options, supportsHEVC: capabilities.allowedDirectPlayVideoCodecs.contains(.hevc),
+            allowsStreamCopy: components.queryItems?.first { $0.name == "directStream" }?.value == "1",
+            allowsAudioStreamCopy: components.queryItems?.first { $0.name == "directStreamAudio" }?.value == "1"
         )
+        return (codec, decision.deliveryMode)
+    }
+
+    func pingStreamingTranscode(sessionID: String) async throws {
+        try Task.checkCancellation()
+        var pingHeaders = headers
+        pingHeaders["X-Plex-Session-Identifier"] = sessionID
+        pingHeaders["Cache-Control"] = "no-store"
+        _ = try await send(Endpoint(
+            path: "/video/:/transcode/universal/ping",
+            queryItems: [.init(name: "session", value: sessionID)],
+            headers: pingHeaders,
+            redirectPolicy: .sameOrigin
+        ))
+        try Task.checkCancellation()
     }
 
     func stopStreamingTranscode(sessionID: String) async throws {
-        _ = try await send(Endpoint(
-            path: "/video/:/transcode/universal/stop",
-            queryItems: [.init(name: "session", value: sessionID)],
-            headers: headers
-        ))
+        // The caller commonly owns the canceled negotiation. Finish its bounded
+        // cleanup independently, but await it before allowing a replacement.
+        try await Task.detached { [self] in
+            _ = try await send(Endpoint(
+                path: "/video/:/transcode/universal/stop",
+                queryItems: [.init(name: "session", value: sessionID)],
+                headers: headers
+            ))
+        }.value
     }
 
     /// Builds an absolute, token-bearing image URL for a server-relative art
@@ -1847,8 +1998,8 @@ public struct PlexClient: Sendable {
         components.percentEncodedQueryItems = [
             URLQueryItem(name: "width", value: String(width)),
             URLQueryItem(name: "height", value: String(height)),
-            URLQueryItem(name: "minSize", value: "1"),
-            URLQueryItem(name: "upscale", value: "1"),
+            URLQueryItem(name: "minSize", value: "0"),
+            URLQueryItem(name: "upscale", value: "0"),
             URLQueryItem(name: "url", value: encodedInner),
             URLQueryItem(name: "X-Plex-Token", value: token)
         ]
@@ -1879,6 +2030,20 @@ public struct PlexClient: Sendable {
     /// direct-playable. FLAC is lossless but AVFoundation has decoded it natively
     /// since tvOS 11, so it also belongs here.
     private static let alwaysDecodableAudioCodecs: Set<String> = ["aac", "mp3", "alac", "flac"]
+
+    static func canDirectStreamAudio(codec: String) -> Bool {
+        let codec = codec.lowercased()
+        return alwaysDecodableAudioCodecs.contains(codec) || ["ac3", "eac3", "ec3"].contains(codec)
+    }
+
+    private func canDirectStreamVideo(media: PlexMedia, part: PlexPart) -> Bool {
+        let stream = part.Stream?.first { $0.streamType == 1 }
+        guard let codec = Self.directPlayVideoCodec(forPlexCodec: (media.videoCodec ?? stream?.codec ?? "").lowercased()),
+              codec == .h264 || codec == .hevc,
+              capabilities.allowedDirectPlayVideoCodecs.contains(codec),
+              !Self.isInterlaced(stream) else { return false }
+        return canDirectPlayVideoRange(part: part)
+    }
 
     /// True only when we can prove the original file plays natively in AVPlayer
     /// on **this** device + display/audio route. Unknown/missing container or
@@ -2076,7 +2241,7 @@ public struct PlexClient: Sendable {
 
     /// Maps provider-agnostic browse sorting to Plex's `sort` query language
     /// (`field:asc|desc`, with `random` as a standalone key).
-    private static func sortQuery(for sort: CoreModels.SortDescriptor) -> String {
+    private static func sortQuery(for sort: CoreModels.SortDescriptor) throws -> String {
         let field: String
         switch sort.field {
         case .name:
@@ -2086,11 +2251,18 @@ public struct PlexClient: Sendable {
         case .releaseDate:
             field = "originallyAvailableAt"
         case .communityRating:
-            field = "rating"
+            field = "audienceRating"
         case .runtime:
             field = "duration"
         case .random:
             return "random"
+        case .year: field = "year"
+        case .criticRating: field = "rating"
+        case .userRating: field = "userRating"
+        case .contentRating: field = "contentRating"
+        case .plays: field = "viewCount"
+        case .lastPlayed: field = "lastViewedAt"
+        case .progress: throw AppError.invalidResponse
         }
         let direction = (sort.direction == .ascending) ? "asc" : "desc"
         return "\(field):\(direction)"

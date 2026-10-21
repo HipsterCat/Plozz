@@ -3,7 +3,7 @@ import SwiftUI
 import CoreModels
 import PlozzCoreUI
 
-/// Settings → This Apple TV → Servers → <Server> detail.
+/// Settings → Everyone → Servers → <Server> detail.
 ///
 /// This screen is **global / household scope** — it manages the server's
 /// sign-ins only:
@@ -12,12 +12,13 @@ import PlozzCoreUI
 ///
 /// Anything *personal* — which Plex user a profile plays as, whether a profile
 /// uses this server, and which libraries show on a profile's Home — lives on
-/// `<Profile>` › Your Libraries instead, so a personal tweak never reads as
+/// the active profile's Libraries section instead, so a personal tweak never reads as
 /// household administration.
 struct ServerDetailView: View {
     let context: SettingsContext
     let serverKey: String
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
 
     /// Account the user has asked to sign out, captured at button-tap so the
     /// confirmation alert can show its name + recompute "is this the last
@@ -56,6 +57,13 @@ struct ServerDetailView: View {
                     // tvOS otherwise can't connect (a diagonal move it won't make).
                     accountsPanel(group)
                         .tvOSFocusSection()
+                    if [.jellyfin, .emby, .plex, .silo].contains(group.providerKind),
+                       providerSetupRouter != nil {
+                        SettingsPanel(title: "Connection addresses") {
+                            ServerAddressSettingsLink(accounts: group.accounts)
+                        }
+                        .tvOSFocusSection()
+                    }
                     if group.providerKind == .mediaShare {
                         shareLibraryPanel(group)
                             .tvOSFocusSection()
@@ -68,12 +76,13 @@ struct ServerDetailView: View {
                     // Safety net if the group vanishes while viewing (e.g. a remote
                     // "Remove Everywhere" landed): offer a working way back.
                     VStack(alignment: .leading, spacing: 16) {
+                        SettingsPageHeader("Servers")
                         Text("This server is no longer signed in.")
                             .font(.headline)
                             .plozzForeground(.secondary)
-                        Button { dismiss() } label: {
-                            Label("Go back", systemImage: "chevron.backward")
-                        }
+                        #if !os(tvOS)
+                        SettingsBackButton { dismiss() }
+                        #endif
                     }
                 }
             }
@@ -180,18 +189,20 @@ struct ServerDetailView: View {
     private func accountsFooter(for provider: ProviderKind, transport: MediaShareTransportKind?) -> LocalizedStringResource {
         switch provider {
         case .plex:
-            return "Plex shares one sign-in across the household. Each profile picks its own Plex user and libraries under Profile › Your Libraries."
+            return "Plex shares one sign-in across the household. Each profile picks its own Plex user and libraries under Libraries."
         case .jellyfin:
-            return "Jellyfin signs in per profile, each with its own credentials. Choose what shows on your Home under Profile › Your Libraries."
+            return "Jellyfin signs in per profile, each with its own credentials. Choose what shows on your Home under Libraries."
         case .emby:
-            return "Emby signs in per profile, each with its own credentials. Choose what shows on your Home under Profile › Your Libraries."
+            return "Emby signs in per profile, each with its own credentials. Choose what shows on your Home under Libraries."
         case .silo:
             return "Each Silo connection uses the household profile selected during pairing. Its library access and watch history stay on Silo."
+        case .iptv:
+            return "Your provider supplies channels, movies, and series. Watch history stays separate for each Plozz profile on this device."
         case .mediaShare:
             if transport == .nfs {
-                return "This NFS export connects without a sign-in — anyone on this Apple TV can browse it. Choose what shows on your Home under Profile › Your Libraries."
+                return "This NFS export connects without a sign-in — anyone on this Apple TV can browse it. Choose what shows on your Home under Libraries."
             }
-            return "A media share connects with the credentials you entered (or as a guest). Choose what shows on your Home under Profile › Your Libraries."
+            return "A media share connects with the credentials you entered (or as a guest). Choose what shows on your Home under Libraries."
         }
     }
 
@@ -199,15 +210,12 @@ struct ServerDetailView: View {
 
     private func header(_ group: ServerAccountGroup) -> some View {
         HStack(spacing: 16) {
-            ProviderIcon(provider: group.providerKind, size: 44, mediaShareTransport: group.transportKind)
+            SettingsPageHeader(Text(verbatim: group.serverName), subtitle: headerSubtitle(for: group))
+            ProviderIcon(
+                provider: group.providerKind, size: 44, mediaShareTransport: group.transportKind,
+                siteURL: group.accounts.first?.server.baseURL
+            )
                 .frame(width: 44)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: group.serverName).font(.largeTitle.bold())
-                headerSubtitle(for: group)
-                    .font(.subheadline)
-                    .plozzForeground(.secondary)
-            }
-            Spacer()
         }
     }
 
@@ -280,6 +288,11 @@ struct ServerDetailView: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
+            if account.server.provider == .iptv, let providerSetupRouter {
+                Button("Edit connection", systemImage: "pencil") {
+                    providerSetupRouter.connectIPTV(account: account)
+                }
+            }
             if account.id == context.activeAccountID {
                 Label("Primary", systemImage: "star.fill")
                     .labelStyle(.iconOnly)

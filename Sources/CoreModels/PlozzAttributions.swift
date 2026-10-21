@@ -72,8 +72,8 @@ public enum PlozzAttributions {
         PlozzAttribution(
             title: "AetherEngine",
             detail:
-                "Plozzigen playback is powered by AetherEngine by Vincent Herbst. "
-                + "Source: https://github.com/superuser404notfound/AetherEngine/tree/7.22.2",
+                "Playback is powered by AetherEngine by Vincent Herbst. "
+                + "Source: https://github.com/brandomoore/AetherEngine/tree/86af70ddfe7bcde27e06356dc7aa81e8997d43c4",
             licenses: [.init("LGPL-3.0", family: .lgpl)]
         ),
         PlozzAttribution(
@@ -90,10 +90,26 @@ public enum PlozzAttributions {
             licenses: [.init("MIT", family: .mit)]
         ),
         PlozzAttribution(
+            title: "LibTrueHD",
+            detail:
+                "AetherEngine includes the TrueHD/Atmos decoder by Quick104 and "
+                + "Vincent Herbst, using truehdd and oamd by Rainbaby and contributors. "
+                + "Source: https://github.com/superuser404notfound/LibTrueHD/tree/3.0.0. "
+                + "Complete notices and license texts are bundled in LibTrueHDNotices.txt, "
+                + "LibTrueHDLicense.txt and LibTrueHDApacheLicense.txt.",
+            licenses: [
+                .init("MIT", family: .mit),
+                .init("Apache-2.0", family: .apache),
+            ]
+        ),
+        PlozzAttribution(
             title: "libass & Text Rendering",
             detail:
-                "Subtitle rendering uses libass, FreeType, HarfBuzz, Fribidi, and "
-                + "Unibreak.",
+                "Authored ASS/SSA rendering uses libass 0.17.5 (ISC), "
+                + "with FreeType, HarfBuzz, FriBidi and libunibreak. "
+                + "Source: https://github.com/libass/libass/tree/0.17.5. "
+                + "Font-library builds: https://github.com/mpvkit/libass-build/tree/0.17.5. "
+                + "Complete notices are bundled in LibassNotices.txt.",
             licenses: [
                 .init("ISC", family: .isc),
                 .init("LGPL-2.1", family: .lgpl),
@@ -134,14 +150,14 @@ public enum PlozzAttributions {
             title: "TMDB",
             detail:
                 "This product uses the TMDB API but is not endorsed or certified by "
-                + "TMDB. Artwork, metadata, and Featured discovery data are provided "
+                + "TMDB. Artwork, metadata, and Discovery data are provided "
                 + "by TMDB (https://www.themoviedb.org).",
             licenses: [.init("API", family: .api)]
         ),
         PlozzAttribution(
             title: "TheTVDB",
             detail:
-                "Metadata, artwork, and Featured discovery data are provided by TheTVDB. "
+                "Metadata, artwork, and Discovery data are provided by TheTVDB. "
                 + "Please consider adding missing information or subscribing at "
                 + "https://thetvdb.com. Plozz uses the "
                 + "TheTVDB API but is not endorsed or certified by TheTVDB.",
@@ -152,14 +168,14 @@ public enum PlozzAttributions {
             detail:
                 "Additional ratings are sourced from the OMDb API (omdbapi.com) and "
                 + "AniList (https://anilist.co). AniList also provides anime metadata "
-                + "and Featured discovery data. Neither endorses or is affiliated "
+                + "and Discovery data. Neither endorses or is affiliated "
                 + "with Plozz.",
             licenses: [.init("API", family: .api)]
         ),
         PlozzAttribution(
             title: "TVmaze",
             detail:
-                "TV schedules, show metadata, and Featured discovery data are provided "
+                "TV schedules, show metadata, and Discovery data are provided "
                 + "by TVmaze (https://www.tvmaze.com). TVmaze API data is licensed under "
                 + "Creative Commons Attribution-ShareAlike 4.0 International "
                 + "(CC BY-SA 4.0): https://creativecommons.org/licenses/by-sa/4.0/. "
@@ -187,7 +203,9 @@ public enum PlozzAttributions {
                 "The default subtitle typeface is Atkinson Hyperlegible, © 2020 "
                 + "Braille Institute of America, Inc., chosen for its legibility from "
                 + "a distance. UI accent type uses Bungee by David Jonathan Ross. "
-                + "Both are used under the SIL Open Font License 1.1.",
+                + "Media badges use Outfit by The Outfit Project Authors "
+                + "(https://github.com/Outfitio/Outfit-Fonts). "
+                + "These fonts are used under the SIL Open Font License 1.1.",
             licenses: [.init("OFL-1.1", family: .ofl)]
         ),
         PlozzAttribution(

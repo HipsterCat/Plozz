@@ -29,6 +29,7 @@ import RatingsService
 import TraktService
 import SeerService
 import SimklService
+import WetrakrService
 import LastFmService
 import AniListService
 import MALService
@@ -47,6 +48,20 @@ import UIKit
 public final class AppState {
     public private(set) var state: SessionState = .launching
     private let appAdmission: AppAdmissionModel
+    @ObservationIgnored private var accountSetupOriginProfileID: String?
+
+    var presentsAccountSetupOverApp: Bool {
+        switch state {
+        case .onboarding(_, canReturnToApp: true), .failed(_, canReturnToApp: true):
+            return accountSetupOriginProfileID == profilesModel.activeProfileID
+                && profileFlow.pendingSetupProfile == nil
+        default: return false
+        }
+    }
+
+    var rootPresentationState: SessionState {
+        presentsAccountSetupOverApp ? .ready : state
+    }
 
     public static var isStandalonePlaybackAvailable: Bool {
         true
@@ -64,7 +79,6 @@ public final class AppState {
 
     var isActiveProfileAuthorized: Bool {
         guard canEnterApp, case .ready = state else { return false }
-        let profile = profilesModel.activeProfile
         return !profileFlow.isChoosingProfile
             && profileFlow.pendingLockedProfile == nil
             && profileFlow.pendingParentalSwitch == nil
@@ -75,7 +89,7 @@ public final class AppState {
             && !profileFlow.hasResumableSetup
             && plexHomeUsers.pendingPlexPINRequest == nil
             && !profileFlow.activeProfileAwaitsUnlock
-            && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
+            && !accountsProviders.activeProfileAwaitsIdentity
     }
     public var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
     public var pendingStandaloneLiveTVEntry: Bool { appAdmission.pendingLiveTVEntry }
@@ -96,6 +110,8 @@ public final class AppState {
     /// cancelling Quick Connect returns to *that* provider's server picker
     /// rather than the provider chooser. `nil` starts the flow at the chooser.
     public private(set) var pendingOnboardingProvider: ProviderKind?
+    @ObservationIgnored public private(set) var pendingIPTVPlaylist: LiveTVPlaylistSource?
+    @ObservationIgnored public private(set) var pendingIPTVAccount: Account?
     /// Additional server identity being added from a profile's "Watching as"
     /// page. Carries enough context to select the new account after persistence.
     private var pendingAdditionalUser: (serverKey: String, profileID: String)?
@@ -225,6 +241,7 @@ public final class AppState {
 
     /// Simkl sync: device-code OAuth + history scrobble. Mirrors Trakt's pattern.
     public let simklService: SimklService
+    public let wetrakrService: WetrakrService
 
     /// Seerr (Overseerr / Jellyseerr) discovery: backs the Home hero's featured
     /// seam (`trending`) and the Settings connect flow. Inert until the user
@@ -401,6 +418,9 @@ public final class AppState {
         let boundSimklScrobbler = SimklServiceFactory.make(
             namespace: trackerNamespace
         ).scrobbler
+        let boundWetrakrScrobbler = WetrakrServiceFactory.make(
+            namespace: trackerNamespace
+        ).playbackScrobbler()
         let boundAniListScrobbler = AniListServiceFactory.make(
             namespace: trackerNamespace
         ).scrobbler
@@ -434,18 +454,29 @@ public final class AppState {
                     self?.profilesModel.activeProfileID == profileID
                 }
             },
+            validateServerScope: { [weak self] scope in
+                try await MainActor.run {
+                    guard let self else { throw WatchMutationServerScopeError.unavailable }
+                    try self.accountsProviders.requireWatchMutationServerScope(
+                        scope, isPlexIdentityResolved: self.plexHomeUsers.hasResolvedWatchMutationIdentity
+                    )
+                }
+            },
             resolveProvider: { [weak self] accountID in
                 await MainActor.run {
-                    guard self?.profilesModel.activeProfileID == profileID
+                    guard let self, self.profilesModel.activeProfileID == profileID
                     else { return nil }
-                    return self?.accountsProviders.provider(forAccountID: accountID)
+                    return self.accountsProviders.provider(
+                        forWatchMutationAccountID: accountID,
+                        isPlexIdentityResolved: self.plexHomeUsers.hasResolvedWatchMutationIdentity
+                    )
                 }
             },
             applyTrakt: { intent in
                 try await boundTraktScrobbler.scrobbleResult(
                     item: intent.makeScrobbleItem(),
                     progress: intent.progress,
-                    event: .stop
+                    event: intent.playbackEvent
                 )
             },
             applySimkl: { intent in
@@ -469,6 +500,13 @@ public final class AppState {
                     event: .stop
                 )
             },
+            wetrakrAccountIdentity: { boundWetrakrScrobbler.accountIdentity },
+            applyWetrakr: { intent, capturedAt, key, identity in
+                try await boundWetrakrScrobbler.recordWatch(
+                    item: intent.makeScrobbleItem(), capturedAt: capturedAt,
+                    idempotencyKey: key, expectedAccountIdentity: identity
+                )
+            },
             allAccountIDs: { [weak self] in
                 // The set the identity index actually warms and that Home/Search
                 // fan out over — `homeAccounts` (the active accounts, with the
@@ -477,17 +515,29 @@ public final class AppState {
                 // never empty (expansion perpetually "inconclusive" until the retry
                 // cap) and episode expansion would probe servers outside the active
                 // profile. Scope must match what gets indexed.
-                await MainActor.run { self?.accountsProviders.homeAccounts.map(\.account.id) ?? [] }
+                await MainActor.run {
+                    guard let self, self.profilesModel.activeProfileID == profileID else { return [] }
+                    if let scope = WatchMutationDeliveryAuthorization.current?.serverScope {
+                        do {
+                            try self.accountsProviders.requireWatchMutationServerScope(
+                                scope, isPlexIdentityResolved: self.plexHomeUsers.hasResolvedWatchMutationIdentity
+                            )
+                            return scope.accounts.map(\.accountID)
+                        } catch { return [] }
+                    }
+                    return self.accountsProviders.homeAccounts.map(\.account.id)
+                }
             },
             indexedSeriesSources: { [identitySnapshotStore = identityIndex.identitySnapshotStore] originSeries in
                 identitySnapshotStore.current.sources(for: originSeries).filter { $0.kind == .series }
             },
-            indexedSources: { [identitySnapshotStore = identityIndex.identitySnapshotStore] identities, kind, anchorTitle, anchorYear in
+            indexedSources: { [identitySnapshotStore = identityIndex.identitySnapshotStore] identities, kind, anchorTitle, anchorYear, rejectedSourceIDs in
                 identitySnapshotStore.current.sources(
                     forIdentities: identities,
                     kind: kind,
                     anchorTitle: anchorTitle,
-                    anchorYear: anchorYear
+                    anchorYear: anchorYear,
+                    rejectedSourceIDs: rejectedSourceIDs
                 )
             },
             indexedAccountIDs: { [identitySnapshotStore = identityIndex.identitySnapshotStore] in
@@ -500,9 +550,19 @@ public final class AppState {
             onPersistenceFailure: {
                 PlozzLog.app.error("Durable watch outbox write failed")
             },
-            onServerStateApplied: { mutation in
+            onServerStateApplied: { [weak self] mutation in
                 guard let refresh = MediaItemMutation(confirmedWatchMutation: mutation) else { return }
-                Task { @MainActor in refresh.post() }
+                Task { @MainActor in
+                    guard let self, self.profilesModel.activeProfileID == profileID else { return }
+                    if let scope = mutation.serverScope {
+                        do {
+                            try self.accountsProviders.requireWatchMutationServerScope(
+                                scope, isPlexIdentityResolved: self.plexHomeUsers.hasResolvedWatchMutationIdentity
+                            )
+                        } catch { return }
+                    }
+                    refresh.post()
+                }
             }
         )
     }
@@ -517,7 +577,14 @@ public final class AppState {
     /// The outbox's not-yet-confirmed mutations, so the Home Continue Watching row
     /// can reflect in-app plays the servers haven't recorded yet (r8-cw-outbox-patch).
     public func pendingWatchMutations() async -> [WatchMutation] {
-        await watchReconciler.snapshot().pending
+        let profileID = profilesModel.activeProfileID
+        let pending = await watchReconciler.snapshot().pending
+        guard profilesModel.activeProfileID == profileID else { return [] }
+        return pending.filter {
+            accountsProviders.isCurrentWatchMutationServerScope(
+                $0.serverScope, isPlexIdentityResolved: plexHomeUsers.hasResolvedWatchMutationIdentity
+            )
+        }
     }
 
     /// Recently-applied in-progress resume writes (keyed by `"accountID:itemID"`),
@@ -525,7 +592,14 @@ public final class AppState {
     /// inflation back down to the play's real time — the offline-drained-Plex-resume
     /// re-float fix. Short-lived (see ``WatchStateReconciler`` `resumeRecencyTTL`).
     public func appliedWatchRecency() async -> [String: AppliedResumeRecord] {
-        await watchReconciler.snapshot().appliedRecency
+        let profileID = profilesModel.activeProfileID
+        let recency = await watchReconciler.snapshot().appliedRecency
+        guard profilesModel.activeProfileID == profileID else { return [:] }
+        return recency.filter {
+            accountsProviders.isCurrentWatchMutationServerScope(
+                $0.value.serverScope, isPlexIdentityResolved: plexHomeUsers.hasResolvedWatchMutationIdentity
+            )
+        }
     }
 
     /// Records a watch mutation's intent durably (stale-suppressed + coalesced) and
@@ -533,6 +607,7 @@ public final class AppState {
     /// coordinator and player use so every watch fans out to all servers + Trakt and
     /// survives relaunch.
     public func enqueueWatchMutation(_ mutation: WatchMutation) {
+        let mutation = mutation.bindingServerScope(accountsProviders.watchMutationServerScope)
         let reconciler = watchReconciler
         Task {
             await reconciler.enqueue(mutation)
@@ -540,33 +615,66 @@ public final class AppState {
         }
     }
 
-    /// Durably records a **mid-play convergence checkpoint** without ending the live
-    /// session: it enqueues + drains so progress fans out to the **other** servers
-    /// (the launch server stays deferred by its still-active live session and is
-    /// caught up by the final `finishLiveWatchSession`). Pure local enqueue + drain
-    /// — no optimistic UI flip (the user is in the fullscreen player). Coalesces
-    /// cleanly with later checkpoints and the final stop via the reconciler's
-    /// newest-wins `capturedAt` clock.
-    public func checkpointWatchState(mutation: WatchMutation) {
+    /// Capture before playback starts, never after the player's asynchronous stop.
+    /// The outbox belongs to the launching viewer even if another profile now
+    /// occupies the same server account (for example a different Plex Home user).
+    func makePlaybackWatchBridge() -> WatchOutboxBridge {
         let reconciler = watchReconciler
-        Task {
-            await reconciler.enqueue(mutation)
-            await reconciler.drain()
+        let profileID = profilesModel.activeProfileID
+        let namespace = profilesModel.activeNamespace
+        let serverAuthorization = accountsProviders.liveTVAuthorizationID
+        let serverScope = accountsProviders.watchMutationServerScope
+        let initialSnapshot = identityIndex.identitySnapshotStore.current
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.profilesModel.activeProfileID == profileID
+                && self.accountsProviders.liveTVAuthorizationID == serverAuthorization
+                && self.accountsProviders.watchMutationServerScope == serverScope
         }
-    }
-
-    /// Registers `(accountID, itemID)` as the live in-app playback session so the
-    /// reconciler defers convergence writes against that exact server while it is
-    /// playing — a mid-play drain can never disturb/zero the now-playing session.
-    public func beginLiveWatchSession(accountID: String, itemID: String) {
-        let reconciler = watchReconciler
-        Task { await reconciler.beginLiveSession(accountID: accountID, itemID: itemID) }
+        return WatchOutboxBridge(
+            beginLiveSession: { accountID, itemID in
+                Task {
+                    await reconciler.beginLiveSession(accountID: accountID, itemID: itemID, serverScope: serverScope)
+                }
+            },
+            finishPlayback: { [weak self] accountID, itemID, percent, mutation, item in
+                let mutation = mutation?.bindingServerScope(serverScope)
+                if isCurrent() {
+                    self?.publishOptimisticWatchState(
+                        itemID: itemID, mutation: mutation, watchedPercent: percent, item: item
+                    )
+                }
+                Task {
+                    await reconciler.finishLiveSession(
+                        accountID: accountID, itemID: itemID, mutation: mutation, serverScope: serverScope
+                    )
+                }
+            },
+            checkpoint: { mutation in
+                let mutation = mutation.bindingServerScope(serverScope)
+                Task {
+                    await reconciler.enqueue(mutation)
+                    await reconciler.drain()
+                }
+            },
+            crossServerSync: {
+                PlaybackSettingsStore.currentSyncAcrossServers(namespace: namespace)
+            },
+            identitySources: { [weak self] item in
+                let snapshot = isCurrent()
+                    ? self?.identityIndex.identitySnapshotStore.current ?? initialSnapshot
+                    : initialSnapshot
+                return snapshot.sourceRefs(for: item)
+            }
+        )
     }
 
     /// Queues the final convergence mutation before ending the live session, so
     /// an old progress checkpoint cannot drain over the just-finished episode.
-    /// `accountID` is optional so a barely-started/untargeted stop still flushes deferred work.
+    /// Synchronous shell actions only; ordinary player callbacks use their captured
+    /// `makePlaybackWatchBridge()` instead of resolving the current viewer here.
     public func finishLiveWatchSession(accountID: String?, itemID: String, watchedPercent: Double, mutation: WatchMutation?, item: MediaItem? = nil) {
+        let mutation = mutation?.bindingServerScope(accountsProviders.watchMutationServerScope)
         let reconciler = watchReconciler
         // (a) Index state captured at the moment of stop — the value the fan-out
         // actually saw. If crossServer=0 here, the index never warmed a union for
@@ -670,9 +778,9 @@ public final class AppState {
     @ObservationIgnored
     var cloudPublishTask: Task<Void, Never>?
 
-    /// Guards against overlapping same-Apple-ID credential auto-adopt attempts.
+    /// Suppresses automatic offers while the user owns a device-setup flow.
     @ObservationIgnored
-    var isAutoAdoptingSyncSetup = false
+    var isPresentingSyncSetup = false
 
     /// Rendezvous offers the user declined this session, so they aren't re-prompted.
     @ObservationIgnored
@@ -917,11 +1025,12 @@ public final class AppState {
         ratingsProvider: (any ExternalRatingsProviding)? = nil,
         traktService: TraktService? = nil,
         simklService: SimklService? = nil,
+        wetrakrService: WetrakrService? = nil,
         seerService: SeerService? = nil,
         anilistService: AniListService? = nil,
         malService: MALService? = nil,
         lastfmService: LastFmService? = nil,
-        runtimeFeatureFlags: RuntimeFeatureFlags = .productionDefault,
+        runtimeFeatureFlags: RuntimeFeatureFlags = .buildDefault,
         appAdmissionStore: any AppAdmissionStoring = AppAdmissionStore()
     ) {
         self.appAdmission = AppAdmissionModel(store: appAdmissionStore)
@@ -1025,7 +1134,8 @@ public final class AppState {
             },
             isConfigured: { !syncAccounts.accounts.isEmpty },
             configProvider: {
-                .init(
+                let memberships = try syncProfiles.confirmedAccountMemberships()
+                return .init(
                     accounts: syncAccounts.accounts,
                     profiles: syncProfiles.profiles,
                     profileSettings: syncProfiles.profiles.map { p in
@@ -1038,11 +1148,7 @@ public final class AppState {
                     },
                     // Carry each profile's EXPLICIT server-membership choice (absent
                     // when a profile never chose — preserves the tri-state).
-                    profileMemberships: Dictionary(
-                        uniqueKeysWithValues: syncProfiles.profiles.compactMap { p in
-                            syncProfiles.storedActiveAccountIDs(for: p.id).map { (p.id, $0) }
-                        }
-                    )
+                    profileMemberships: memberships
                 )
             },
             secretsProvider: {
@@ -1088,6 +1194,7 @@ public final class AppState {
         let ns = (profilesModel ?? self.profilesModel).activeNamespace
         self.profileSettings = ProfileSettingsModel(
             namespace: ns,
+            allowsDiscovery: { !resolvedProfilesModel.activeProfile.isKids },
             subtitleBehaviorModel: subtitleBehaviorModel,
             subtitleStyleModel: subtitleStyleModel,
             spoilerModel: spoilerModel,
@@ -1106,9 +1213,11 @@ public final class AppState {
         )
         // Seed Trakt with the active profile's namespace so its scrobbler and the
         // Settings connection model read that profile's own Trakt tokens.
+        TraktSharedRefreshBootstrap.install()
         self.traktService = traktService ?? TraktServiceFactory.make(namespace: ns)
         // Seed other trackers with the same profile namespace.
         self.simklService = simklService ?? SimklServiceFactory.make(namespace: ns)
+        self.wetrakrService = wetrakrService ?? WetrakrServiceFactory.make(namespace: ns)
         // Seerr uses ONE shared household connection (user-independent Keychain);
         // profiles differ only by which Seerr user they request as (per request).
         self.seerService = seerService ?? Self.makeDefaultSeerService()
@@ -1172,7 +1281,9 @@ public final class AppState {
                 credentialRevision: self.plexHomeUsers.effectiveCredentialRevision(for: account),
                 baseURL: baseURL,
                 token: token,
-                resourceResolver: self.accountsProviders.provider(forAccountID: account.id) as? any ProviderHTTPResourceResolving
+                resourceResolver: self.accountsProviders.provider(forAccountID: account.id) as? any ProviderHTTPResourceResolving,
+                originProvider: self.accountsProviders.provider(forAccountID: account.id) as? any AuthenticatedHTTPOriginProviding,
+                connectionScopeKey: account.connectionScopeKey
             )
         }
 
@@ -1194,6 +1305,7 @@ public final class AppState {
             Task { await self?.prepareUniversalWatchlist() }
         }
         accountsProviders.onActiveAccountsChanged = { [weak self] resolved, accounts in
+            self?.plexHomeUsers.activeAccountsDidChange()
             self?.mediaShare.setActiveShareAccounts(resolved, accounts: accounts)
         }
         mediaShareWorkScope.start()
@@ -1289,6 +1401,7 @@ public final class AppState {
         siloCredentials: (any RotatingCredentialStoring)?
     ) -> ProviderRegistry {
         let registry = ProviderRegistry()
+        ManagedProviderRegistry.registerIPTV(into: registry, durableStore: durableLocalStateStore)
         registry.register(.silo) { context in
             guard let siloCredentials else { throw AppError.unauthorized }
             return try SiloProvider(context: context, credentials: siloCredentials)
@@ -1386,6 +1499,12 @@ public final class AppState {
         self.traktService.onConnectionAvailable = { [weak self] in
             Task { await self?.resumeUniversalWatchlistAuthentication() }
         }
+        self.wetrakrService.onConnectionChanged = { [weak self] in
+            Task {
+                guard let self, let destination = self.wetrakrService.watchlistDestination else { return }
+                await self.trackerWatchlistConnectionChanged(destination: destination)
+            }
+        }
         prepareMediaAliasLedger()
         startCloudSyncIfEnabled()
     }
@@ -1450,19 +1569,45 @@ public final class AppState {
     }
 
     /// Handles an incoming deep link. Recognised `plozz://item/<id>` links queue
-    /// the item for playback once the user is signed in.
+    /// playback or details once the user is signed in.
     public func handle(url: URL) {
+        if ExternalPlaybackRuntime.shared.receive(url) { return }
         // `plozz://shots/…` is the capture rig asking for a screen. Checked
         // first because it shares the scheme; outside DEBUG this always
         // declines, so a shipped build falls straight through to Top Shelf.
         if screenshotDirector.handle(url: url) { return }
         if let reference = TopShelf.itemReference(from: url) {
-            pendingPlay.itemID = reference.id
-            // Kept rather than discarded: the link knows which server the title
-            // came from, and throwing that away leaves the router guessing across
-            // every signed-in account for an id that is only unique within one.
-            pendingPlay.accountID = reference.accountID
+            pendingPlay.enqueue(reference)
         }
+    }
+
+    func externalPlaybackContext() -> ExternalPlaybackContext {
+        ExternalPlaybackContext(
+            profileID: profilesModel.activeProfileID,
+            authorizationID: accountsProviders.liveTVAuthorizationID,
+            accounts: accountsProviders.resolvedActiveAccounts,
+            isAuthorized: isActiveProfileAuthorized,
+            resolver: authenticatedHTTPResolver
+        )
+    }
+
+    func finishExternalPlayback(_ result: ExternalPlaybackCompletion) async throws {
+        guard isActiveProfileAuthorized else { throw CancellationError() }
+        guard var mutation = WatchMutationFactory.playbackStop(
+                item: result.item, position: result.position, watchedPercent: result.watchedPercent,
+                primaryAccountID: result.item.sourceAccountID,
+                additionalSources: identityIndex.identitySnapshotStore.current.sourceRefs(for: result.item),
+                crossServerSync: profileSettings.playbackModel.settings.syncWatchAcrossServers,
+                reportTraktProgress: true
+              )?.bindingServerScope(accountsProviders.watchMutationServerScope) else { return }
+        mutation.id = result.id
+        mutation.capturedAt = result.reportedAt
+        let identity = externalPlaybackContext().identity
+        guard try await result.enqueue(mutation, using: watchReconciler),
+              externalPlaybackContext().identity == identity else { return }
+        publishOptimisticWatchState(
+            itemID: result.item.id, mutation: mutation, watchedPercent: result.watchedPercent, item: result.item
+        )
     }
 
     /// Servers this device already has accounts on, grouped for the picker's
@@ -1501,12 +1646,11 @@ public final class AppState {
     /// Jellyfin/Emby. Plex stays on the provider step, seeded to `.plex`, because
     /// its account link flow resolves the server after authentication.
     public func beginAddingUser(on server: MediaServer) {
-        pendingOnboardingProvider = server.provider
         pendingAdditionalUser = (
             serverKey: server.identityKey,
             profileID: profilesModel.activeProfileID
         )
-        apply(.addAccountRequested)
+        addAccount(provider: server.provider)
         if server.provider.usesMediaBrowserAPI || server.provider == .silo {
             apply(.serverSelected(server))
         }
@@ -1518,28 +1662,27 @@ public final class AppState {
     /// setup not yet done) this seeds the always-present default profile from
     /// the sign-in identity and detours through the profile confirm step;
     /// otherwise it enters the app directly.
-    public func didAuthenticate(_ session: UserSession) {
+    @discardableResult
+    public func didAuthenticate(_ session: UserSession, activateIPTVAccount: Bool = false) -> Bool {
         let isFirstRun = accountsProviders.accounts.isEmpty && !profilesModel.firstRunProfileSetupComplete
-        // Every provider now gets a STABLE, deterministic id derived from its
-        // (provider + server + user) identity — so re-adding the same server (e.g. to
-        // fix a password) updates the existing account in place instead of forking a
-        // duplicate, and the SAME server+user resolves to the SAME id on every device
-        // (so sync/pairing can't create cross-device duplicates). Media shares keep
-        // their existing deterministic id via the same helper.
-        let account = Account(id: Account.stableID(for: session), from: session)
-        let previousAccount = accountsProviders.accounts.first { $0.id == account.id }
+        let registration: AccountRegistration
         do {
-            try accountsProviders.accountStore.add(account, token: session.accessToken)
+            registration = try accountsProviders.accountStore.registerAuthenticatedSession(session)
+            if registration.previousAccount == nil || activateIPTVAccount {
+                try accountsProviders.includeIPTVAccountInActiveProfile(registration.account)
+            }
         } catch {
+            PlozzLog.auth.error("Unable to save authenticated account")
             apply(.authenticationFailed(.unknown("")))
-            return
+            return false
         }
         finalizeAddedAccount(
             session: session,
-            account: account,
-            previousAccount: previousAccount,
+            account: registration.account,
+            previousAccount: registration.previousAccount,
             isFirstRun: isFirstRun
         )
+        return true
     }
 
     /// Shared onboarding tail once an account has been persisted: retire the old
@@ -1571,6 +1714,8 @@ public final class AppState {
         clearRemovalTombstone(for: account.id)
         // Flow finished — next add-account starts at the chooser.
         pendingOnboardingProvider = nil
+        pendingIPTVPlaylist = nil
+        pendingIPTVAccount = nil
         if completesAdditionalIdentity {
             // "Add Another User" is an identity change on an existing server,
             // not a new-server onboarding. The existing Libraries screen will
@@ -1621,19 +1766,22 @@ public final class AppState {
 
         let isFirstRun = accountsProviders.accounts.isEmpty && !profilesModel.firstRunProfileSetupComplete
         var addedIDs: [String] = []
-        for session in sessions {
-            let account = Account(id: Account.stableID(for: session), from: session)
-            let previousAccount = accountsProviders.accounts.first { $0.id == account.id }
-            do {
-                try accountsProviders.accountStore.add(account, token: session.accessToken)
-                if let previousAccount,
-                   previousAccount.credentialRevision != account.credentialRevision {
+        do {
+            for session in sessions {
+                let registration = try accountsProviders.accountStore.registerAuthenticatedSession(session)
+                if let previousAccount = registration.previousAccount,
+                   previousAccount.credentialRevision != registration.account.credentialRevision {
                     mediaShare.accountService.retireCredential(for: previousAccount)
                 }
-                addedIDs.append(account.id)
-            } catch {
-                continue // Skip a failed add; keep the rest of the batch.
+                if !addedIDs.contains(registration.account.id) {
+                    addedIDs.append(registration.account.id)
+                }
             }
+        } catch {
+            PlozzLog.auth.error("Unable to save authenticated Plex accounts")
+            accountsProviders.reloadAccounts()
+            apply(.authenticationFailed(.unknown("")))
+            return
         }
         accountsProviders.reloadAccounts()
         addedIDs.forEach(clearRemovalTombstone)   // (re)add clears removal tombstones
@@ -1751,7 +1899,8 @@ public final class AppState {
                 homeUserID: user.id,
                 name: user.name,
                 avatarURL: user.avatarURL?.absoluteString,
-                requiresPIN: user.requiresPIN
+                requiresPIN: user.requiresPIN,
+                pinRequirementVerified: user.pinRequirementVerified
             )
             // Apply the chosen Home user to every newly-added Plex account in the
             // batch (they belong to the same Plex account and share Home users),
@@ -2275,13 +2424,20 @@ public final class AppState {
     }
 
     /// Begins adding another account from inside the signed-in app.
-    public func addAccount() {
+    public func addAccount(
+        provider: ProviderKind? = nil, playlist: LiveTVPlaylistSource? = nil, iptvAccount: Account? = nil
+    ) {
+        if case .ready = state { accountSetupOriginProfileID = profilesModel.activeProfileID }
         // A fresh add-account flow always starts at the provider chooser.
-        pendingOnboardingProvider = nil
+        pendingOnboardingProvider = provider
+        pendingIPTVPlaylist = playlist
+        pendingIPTVAccount = iptvAccount
         apply(.addAccountRequested)
     }
 
     public func cancelAuthentication() {
+        pendingIPTVPlaylist = nil
+        pendingIPTVAccount = nil
         if pendingAdditionalUser != nil {
             // This auth screen was opened from Watching as, not from the server
             // picker. The Libraries navigation stack remains mounted underneath;
@@ -2399,7 +2555,8 @@ public final class AppState {
     /// accounts, profiles (collapsed to a single pristine default), the
     /// first-run flag, and the recent-servers list — so the next server add
     /// reproduces a genuine first run. Surfaced from a DEBUG-only Settings row.
-    public func resetToFirstRunForDebugging() {
+    @discardableResult
+    public func resetToFirstRunForDebugging(afterSyncErasure: Bool = false) -> Bool {
         let removedAccounts = accountsProviders.accounts
         let shareAccountKeys = mediaShare.accountService.mediaShareAccountKeys(in: removedAccounts)
         do {
@@ -2424,10 +2581,16 @@ public final class AppState {
         }
         guard accountsProviders.accounts.isEmpty else {
             apply(.accountsChanged(accountsProviders.accounts))
-            return
+            return false
         }
         plexHomeUsers.resetAllForDebug()
-        profilesModel.resetToPristineDefaultForDebugging()
+        do {
+            if afterSyncErasure { try profilesModel.resetToPristineDefaultAfterSyncErasure() }
+            else { profilesModel.resetToPristineDefaultForDebugging() }
+        } catch {
+            PlozzLog.sync.error("First-run reset could not remove every profile")
+            return false
+        }
         resetLiveTVPortableSync()
         appAdmission.resetForDebugging()
         var recents = lastServerStore
@@ -2438,6 +2601,7 @@ public final class AppState {
         profileFlow.dismissPicker()
         rebuildSettingsModels()
         apply(.accountsChanged(accountsProviders.accounts))
+        return true
     }
 
     public func retry() {
@@ -2485,21 +2649,20 @@ public final class AppState {
     @ObservationIgnored private var trackerScopedIdentityGeneration: Int?
 
     /// See `UniversalWatchlistHost.ensureTrackersScopedToActiveProfile()`.
-    public func ensureTrackersScopedToActiveProfile() async {
-        let ns = profilesModel.activeNamespace
+    public var trackersAreScopedToActiveProfile: Bool {
         // Scoped by the Plex identity as well as the profile. Switching
         // "watching as" changes who the app is reading for without changing the
         // profile, so a namespace-only check reported "already scoped" and
         // returned — leaving Home, Continue Watching and the watchlist showing
         // the PREVIOUS user's world until the viewer switched profiles away and
         // back, which is the only thing that moved the namespace.
-        let generation = plexHomeUsers.plexIdentityGeneration
-        if let scoped = trackerScopedNamespace,
-           scoped == ns,
-           trackerScopedIdentityGeneration == generation {
-            return
-        }
-        trackerScopedIdentityGeneration = generation
+        guard let scoped = trackerScopedNamespace else { return false }
+        return scoped == profilesModel.activeNamespace
+            && trackerScopedIdentityGeneration == plexHomeUsers.plexIdentityGeneration
+    }
+
+    public func ensureTrackersScopedToActiveProfile() async {
+        guard !trackersAreScopedToActiveProfile else { return }
         await updateTraktForActiveProfile()
     }
 
@@ -2507,6 +2670,8 @@ public final class AppState {
         let ns = profilesModel.activeNamespace
         trackerProfileGeneration &+= 1
         let generation = trackerProfileGeneration
+        let identityGeneration = plexHomeUsers.plexIdentityGeneration
+        trackerScopedNamespace = nil
         // Only a real change of WHO IS WATCHING invalidates the library index.
         // This runs on every profile-flow event and on every watchlist prepare,
         // and flushing the index cancels the library scan that was filling it —
@@ -2545,6 +2710,8 @@ public final class AppState {
         guard generation == trackerProfileGeneration else { return }
         await simklService.setActiveProfile(namespace: ns)
         guard generation == trackerProfileGeneration else { return }
+        await wetrakrService.setActiveProfile(namespace: ns)
+        guard generation == trackerProfileGeneration else { return }
         await seerService.setActiveProfile(namespace: ns)
         guard generation == trackerProfileGeneration else { return }
         await anilistService.setActiveProfile(namespace: ns)
@@ -2554,6 +2721,7 @@ public final class AppState {
         await lastfmService.setActiveProfile(namespace: ns)
         guard generation == trackerProfileGeneration else { return }
         trackerScopedNamespace = .some(ns)
+        trackerScopedIdentityGeneration = identityGeneration
         // Refill what the reset emptied, now that the trackers are actually
         // scoped to this viewer. Last, not inline with the reset: an index warmed
         // before the re-scope finished would be built for whoever was watching a
@@ -2582,6 +2750,10 @@ public final class AppState {
     private func apply(_ event: SessionEvent) {
         machine.apply(event, allowsStandalonePlayback: allowsStandalonePlayback)
         state = machine.state
+        switch state {
+        case .onboarding(_, canReturnToApp: true), .failed(_, canReturnToApp: true): break
+        default: accountSetupOriginProfileID = nil
+        }
     }
 
     public func retryUnconfirmedCredentials() {

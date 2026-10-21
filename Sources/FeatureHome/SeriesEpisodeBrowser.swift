@@ -87,7 +87,9 @@ enum SeriesHeroRevealTransition {
     /// desyncs that part from the rest.
     // A spring's logical completion leaves a visible tail on this 588pt travel.
     // Slow earlier for a gentle landing, while still ending at the declared time.
-    static var ambient: Animation { .timingCurve(0.4, 0, 0.2, 1, duration: 0.9) }
+    static let duration: TimeInterval = 0.9
+    static let pageScrollDuration: TimeInterval = 0.6
+    static var ambient: Animation { .timingCurve(0.4, 0, 0.2, 1, duration: duration) }
 
     /// The one deliberate exception: the receded logo leaves faster than it
     /// arrives, so it is out of the way before the hero lands rather than
@@ -372,8 +374,10 @@ struct SeriesRecedeReveal<Content: View>: View {
 /// While the browser moves into place, native focus must not reveal its moving
 /// cards by scrolling the page as well. Only the outer scroll view is gated;
 /// horizontal episode navigation and the page's explicit scrollTo remain live.
+/// Attach to the browser itself so returns from lower rows restore its stage.
 struct SeriesBrowserRevealScrollGuard: UIViewRepresentable {
     let isActive: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeUIView(context: Context) -> GuardView {
         let view = GuardView()
@@ -383,20 +387,30 @@ struct SeriesBrowserRevealScrollGuard: UIViewRepresentable {
 
     func updateUIView(_ view: GuardView, context: Context) {
         view.isActive = isActive
+        view.reduceMotion = reduceMotion
         view.apply()
     }
 
     static func dismantleUIView(_ view: GuardView, coordinator: ()) {
-        view.restore()
+        view.stop()
     }
 
     final class GuardView: UIView {
         var isActive = false
+        var reduceMotion = false
         private weak var scrollView: UIScrollView?
         private var wasScrollEnabled: Bool?
+        private var focusLeftBrowser = false
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
+            NotificationCenter.default.removeObserver(self)
+            if window != nil {
+                NotificationCenter.default.addObserver(
+                    self, selector: #selector(focusDidUpdate(_:)),
+                    name: UIFocusSystem.didUpdateNotification, object: nil
+                )
+            }
             apply()
         }
 
@@ -406,22 +420,68 @@ struct SeriesBrowserRevealScrollGuard: UIViewRepresentable {
         }
 
         func apply() {
-            guard window != nil, isActive else {
+            guard window != nil, isActive, !focusLeftBrowser else {
                 restore()
                 return
             }
+            if let scroll = enclosingScrollView {
+                if scrollView !== scroll {
+                    restore()
+                    scrollView = scroll
+                    wasScrollEnabled = scroll.isScrollEnabled
+                }
+                scroll.isScrollEnabled = false
+            }
+        }
+
+        private var enclosingScrollView: UIScrollView? {
             var ancestor = superview
             while let view = ancestor {
-                if let scroll = view as? UIScrollView {
-                    if scrollView !== scroll {
-                        restore()
-                        scrollView = scroll
-                        wasScrollEnabled = scroll.isScrollEnabled
-                    }
-                    scroll.isScrollEnabled = false
-                    return
-                }
+                if let scroll = view as? UIScrollView { return scroll }
                 ancestor = view.superview
+            }
+            return nil
+        }
+
+        @objc private func focusDidUpdate(_ notification: Notification) {
+            guard let context = notification.userInfo?[UIFocusSystem.focusUpdateContextUserInfoKey]
+                    as? UIFocusUpdateContext else { return }
+            let isInside = NativeFocusRegion.contains(context.nextFocusedItem, in: self)
+            if context.nextFocusedItem != nil {
+                focusLeftBrowser = !isInside
+            }
+            // Release synchronously, before UIKit schedules the next row's scroll.
+            // SwiftUI's previous reveal state can survive several rapid moves.
+            apply()
+            guard isInside, !NativeFocusRegion.contains(context.previouslyFocusedItem, in: self),
+                  let coordinator = notification.userInfo?[UIFocusSystem.animationCoordinatorUserInfoKey]
+                    as? UIFocusAnimationCoordinator,
+                  let scroll = enclosingScrollView else { return }
+            // Native cards schedule their reveal after the focus-entry callback.
+            // Set the browser's full stage inside that same UIKit animation.
+            coordinator.addCoordinatedAnimations { [weak self, weak scroll] in
+                guard let self, window != nil, let scroll,
+                      NativeFocusRegion.contains(
+                        UIFocusSystem.focusSystem(for: self)?.focusedItem, in: self
+                      ) else { return }
+                let reveal = {
+                    scroll.setContentOffset(
+                        CGPoint(x: scroll.contentOffset.x, y: -scroll.adjustedContentInset.top),
+                        animated: false
+                    )
+                }
+                if reduceMotion {
+                    UIView.performWithoutAnimation(reveal)
+                } else {
+                    // Focus-effect timing is too short for a full-page return.
+                    UIView.animate(
+                        withDuration: SeriesHeroRevealTransition.pageScrollDuration,
+                        delay: 0,
+                        options: [.beginFromCurrentState, .allowUserInteraction,
+                                  .overrideInheritedDuration, .overrideInheritedCurve, .curveEaseInOut],
+                        animations: reveal
+                    )
+                }
             }
         }
 
@@ -429,6 +489,11 @@ struct SeriesBrowserRevealScrollGuard: UIViewRepresentable {
             if let wasScrollEnabled { scrollView?.isScrollEnabled = wasScrollEnabled }
             scrollView = nil
             wasScrollEnabled = nil
+        }
+
+        func stop() {
+            NotificationCenter.default.removeObserver(self)
+            restore()
         }
     }
 }
@@ -445,7 +510,7 @@ private struct SeriesRecededLogo: View {
         HeroLogoArtwork(
             references: series.artworkReferences(for: .logo),
             asyncFallbackURL: logoFallback,
-            backgroundSample: backgroundSample,
+            displayedArtworkID: "detail:\(series.id)",
             maxWidth: 620,
             maxHeight: SeriesEpisodeBrowserLayout.recededLogoHeight,
             constrainsToBounds: true,
@@ -483,24 +548,5 @@ private struct SeriesRecededLogo: View {
         }
     }
 
-    private var backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? {
-        #if canImport(UIKit)
-        let urls = [series.heroBackdropURL, series.backdropURL].compactMap { $0 }
-        let source = series
-        return {
-            if let sample = await HeroBackgroundSampler.sample(urls: urls) { return sample }
-            if let resolved = await ArtworkRouter.shared.artworkURL(.hero, for: source),
-               let sample = await HeroBackgroundSampler.sample(urls: [resolved]) {
-                return sample
-            }
-            if let poster = source.posterURL {
-                return await HeroBackgroundSampler.sample(urls: [poster])
-            }
-            return nil
-        }
-        #else
-        return nil
-        #endif
-    }
 }
 #endif

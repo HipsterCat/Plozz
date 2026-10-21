@@ -2,6 +2,24 @@ import XCTest
 @testable import CoreModels
 
 final class ProfileModelTests: XCTestCase {
+    func testPlexProtectionVerificationSurvivesRoundTripButLegacyFlagsRemainUnverified() throws {
+        let binding = PlexHomeUserBinding(homeUserID: "parent", name: "Parent", requiresPIN: false)
+        let encoded = try JSONEncoder().encode(binding)
+        XCTAssertEqual(try JSONDecoder().decode(PlexHomeUserBinding.self, from: encoded), binding)
+        let legacy = try JSONDecoder().decode(PlexHomeUserBinding.self, from: Data(
+            #"{"homeUserID":"parent","name":"Parent","requiresPIN":false}"#.utf8
+        ))
+        XCTAssertNil(legacy.pinRequirementVerified)
+        let profile = Profile(
+            name: "Parent", plexHomeUserID: "parent", plexHomeUserName: "Parent",
+            plexHomeUserAccountID: "a", plexHomeUserRequiresPIN: false
+        )
+        XCTAssertNil(profile.homeUserBinding(forPlexAccount: "a")?.pinRequirementVerified)
+        let migrated = profile.settingHomeUserBinding(binding, forPlexAccount: "b")
+        XCTAssertNil(migrated.homeUserBinding(forPlexAccount: "a")?.pinRequirementVerified)
+        XCTAssertEqual(migrated.homeUserBinding(forPlexAccount: "b")?.pinRequirementVerified, true)
+    }
+
     func testDefaultProfileUsesNilNamespaceOnlyWhenDefault() {
         let p = Profile(id: "abc", name: "Mom")
         XCTAssertNil(p.settingsNamespace(isDefault: true))

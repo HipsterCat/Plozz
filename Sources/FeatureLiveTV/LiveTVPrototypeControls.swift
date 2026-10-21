@@ -249,10 +249,10 @@ struct PrototypeSheetPresentation<SheetContent: View>: ViewModifier {
     func body(content: Content) -> some View {
         #if os(tvOS)
         content
-            .fullScreenCover(item: binding(forManagement: true), onDismiss: onDismiss, content: sheetContent)
-            .sheet(item: binding(forManagement: false), onDismiss: onDismiss, content: sheetContent)
+            .plozzFullScreenCover(item: binding(forManagement: true), onDismiss: onDismiss, content: sheetContent)
+            .plozzSheet(item: binding(forManagement: false), onDismiss: onDismiss, content: sheetContent)
         #else
-        content.sheet(item: $selection, onDismiss: onDismiss, content: sheetContent)
+        content.plozzSheet(item: $selection, onDismiss: onDismiss, content: sheetContent)
         #endif
     }
 
@@ -273,7 +273,7 @@ struct PrototypeSheetPresentation<SheetContent: View>: ViewModifier {
 extension PrototypeSheet {
     var usesManagementPage: Bool {
         switch self {
-        case .sources, .addPlaylist, .serverSetup: true
+        case .sources, .addPlaylist, .serverSetup, .organization: true
         default: false
         }
     }
@@ -293,17 +293,38 @@ struct PrototypeSheetContent: View {
     var channelActionTitle: LocalizedStringResource?
     var sourceManagement: ((PrototypeSheet) -> AnyView)? = nil
     var openLibraryItem: ((LibraryChannelItem) -> Void)?
+    var canMutate: () -> Bool = { true }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
 
     var body: some View {
+        #if os(tvOS)
+        if case .multiviewFavorites = destination {
+            LiveTVMultiviewFavoritesView(model: model, open: openMultiview)
+        } else {
+            navigationContent
+        }
+        #else
+        if case .diagnostics(let report) = destination {
+            PlaybackDiagnosticDetailsSheet(report: report)
+        } else {
+            navigationContent
+        }
+        #endif
+    }
+
+    private var navigationContent: some View {
         NavigationStack {
             Group {
                 switch destination {
+                case .organization:
+                    LiveTVChannelOrganizationView(model: model, imports: imports, canMutate: canMutate)
+                case .diagnostics(let report):
+                    PlaybackDiagnosticDetailsView(report: report)
                 case .multiviewFavorites:
                     LiveTVMultiviewFavoritesView(model: model, open: openMultiview)
                 case .filters:
-                    PrototypeFilterForm(model: model)
+                    PrototypeFilterForm(model: model, imports: imports, canMutate: canMutate)
                         .navigationTitle("Categories")
                 case .guideTime:
                     PrototypeGuideTimeForm(guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart)
@@ -327,7 +348,7 @@ struct PrototypeSheetContent: View {
                                 $0.id == imports.selectedSourceByChannel[program.channelID]
                             }?.source.name,
                             isFavorite: model.favoriteIDs.contains(program.channelID),
-                            toggleFavorite: { model.toggleFavorite(program.channelID) },
+                            toggleFavorite: { model.toggleFavoriteWithFeedback(program.channelID) },
                             watchTitle: channelActionTitle ?? "Watch channel",
                             openLibraryItem: channel.source == .plozz ? openLibraryItem : nil
                         ) {
@@ -343,12 +364,23 @@ struct PrototypeSheetContent: View {
                     }
                 }
             }
+            #if os(iOS)
+            .toolbarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
+                #if os(iOS)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close", systemImage: "xmark") { dismiss() }
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("live-tv-close-sheet")
+                }
+                #else
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                #endif
             }
-            .background(palette.backgroundBase)
+            .background { AppBackground(palette: palette) }
         }
     }
 }
@@ -385,10 +417,20 @@ private struct PrototypeGuideTimeForm: View {
 
 private struct PrototypeFilterForm: View {
     @Bindable var model: LiveTVPrototypeModel
+    let imports: LiveTVPrototypeImportModel
+    let canMutate: () -> Bool
 
     var body: some View {
         LiveTVSettingsPage(title: "Categories") {
             SettingsSectionGroup {
+                NavigationLink {
+                    LiveTVChannelOrganizationView(model: model, imports: imports, canMutate: canMutate)
+                } label: {
+                    Label("Manage IPTV channels", systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+            }
+            SettingsSectionGroup("Browse filters") {
                 PrototypeSelectionLink(
                     title: "Category", selection: $model.category,
                     options: [nil] + model.categories.map(Optional.some)
@@ -426,7 +468,7 @@ private struct PrototypeFilterForm: View {
         #if os(tvOS)
         .toggleStyle(SettingsSwitchToggleStyle(flushLeading: false))
         #elseif os(iOS)
-        .toggleStyle(SettingsTouchSwitchToggleStyle())
+        .toggleStyle(SettingsSwitchToggleStyle())
         #endif
     }
 }
@@ -477,6 +519,9 @@ struct PrototypeSelectionList<Option: Hashable, OptionLabel: View>: View {
             }
         }
         .navigationTitle(title)
+        #if os(iOS)
+        .toolbarTitleDisplayMode(.inline)
+        #endif
     }
 }
 
@@ -569,6 +614,9 @@ private struct PrototypeSourcesForm: View {
             }
             #endif
         }
+        #if os(iOS)
+        .toggleStyle(SettingsSwitchToggleStyle())
+        #endif
         .alert("Guide selection could not be applied", isPresented: $selectionFailed) {
             Button("OK", role: .cancel) {}
         } message: {

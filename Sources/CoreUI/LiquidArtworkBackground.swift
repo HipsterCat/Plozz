@@ -16,6 +16,7 @@ import SwiftUI
 /// lyrics keep their contrast regardless of how bright the artwork is. When
 /// `palette` is empty (no artwork yet) it shows a calm neutral dark field.
 public struct LiquidArtworkBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Prominent colors, most significant first. May be empty.
     public var palette: [Color]
     /// When false (Reduce Motion) the gradient is rendered statically.
@@ -103,9 +104,9 @@ public struct LiquidArtworkBackground: View {
     private var gradientLayer: some View {
         let colors = resolvedColors
         if #available(tvOS 18.0, *) {
-            MeshLiquidLayer(colors: colors, animate: animate)
+            MeshLiquidLayer(colors: colors, animate: animate && !reduceMotion)
         } else {
-            BlobLiquidLayer(colors: colors, animate: animate)
+            BlobLiquidLayer(colors: colors, animate: animate && !reduceMotion)
         }
     }
 

@@ -52,16 +52,42 @@ final class DetailHeaderMetadataRowTests: XCTestCase {
         ratings: [ExternalRating], badges: [MediaBadge], age: Double?, showsDisclosure: Bool = true
     ) -> some View {
         HStack(spacing: 12) {
-            if let age { FamilyGuidanceAgeBadge(age: age) }
-            ForEach(ratings) { RatingBadge(rating: $0) }
-            if !badges.isEmpty {
-                HStack(spacing: 10) {
-                    ForEach(badges) { MetadataMediaBadgeChip(badge: $0) }
-                }
+            if age != nil || !ratings.isEmpty || !badges.isEmpty {
+                InlineBadges(ratings: ratings, badges: badges, age: age)
             }
             if showsDisclosure { chevron }
         }
         .fixedSize()
+    }
+
+    private struct InlineBadges: View {
+        let ratings: [ExternalRating]
+        let badges: [MediaBadge]
+        let age: Double?
+        @Environment(\.dynamicTypeSize) private var textSize
+
+        private var scale: CGFloat {
+            let traits = UITraitCollection(preferredContentSizeCategory: textSize.plozzContentSizeCategory)
+            let baseline = UITraitCollection(preferredContentSizeCategory: .large)
+            return UIFont.preferredFont(forTextStyle: .subheadline, compatibleWith: traits).pointSize
+                / UIFont.preferredFont(forTextStyle: .subheadline, compatibleWith: baseline).pointSize
+        }
+
+        var body: some View {
+            HStack(spacing: 14 * scale) {
+                if age != nil || !ratings.isEmpty {
+                    HStack(spacing: 14 * scale) {
+                        if let age { FamilyGuidanceAgeBadge(age: age) }
+                        ForEach(ratings) { RatingBadge(rating: $0) }
+                    }
+                }
+                if !badges.isEmpty {
+                    HStack(spacing: 12 * scale) {
+                        ForEach(badges) { MetadataMediaBadgeChip(badge: $0) }
+                    }
+                }
+            }
+        }
     }
 
     private func referenceButton(_ line: some View) -> some View {
@@ -388,7 +414,9 @@ final class DetailHeaderMetadataRowTests: XCTestCase {
         XCTAssertLessThanOrEqual(size(of: line, width: 4_000).width, 393)
         try assertSameRendering(
             render(DetailHeaderMetadataRow(ratings: jurassicRatings, badges: badges, familyGuidanceAge: 11), width: 393),
-            render(referenceButton(line), width: 393), context: "Jurassic-all-four-at-phone-width"
+            render(expectedRow(
+                ratings: jurassicRatings, badges: badges, age: 11, width: 393, textSize: .large
+            ), width: 393), context: "Jurassic-all-four-at-phone-width"
         )
     }
 

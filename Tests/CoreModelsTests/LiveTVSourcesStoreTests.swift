@@ -3,6 +3,33 @@ import XCTest
 @testable import CoreModels
 
 final class LiveTVSourcesStoreTests: XCTestCase {
+    func testDiagnosticsDistinguishMissingSavedFailureRecoveryAndRemovalWithoutChangingStorage() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("source-store-trace-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let diagnostics = LiveTVSourceDiagnostics(url: root.appendingPathComponent("trace.json"))
+        let secure = LiveTVSecureStoreDouble()
+        let store = LiveTVSourcesStore(secureStore: secure, diagnostics: diagnostics)
+        XCTAssertEqual(try store.load(), .empty)
+        try store.save(.init(playlists: [source()]))
+        let saved = try store.load()
+        secure.failRead = true
+        XCTAssertThrowsError(try store.load())
+        secure.failRead = false
+        XCTAssertEqual(try store.load(), saved)
+        try store.save(.empty)
+        XCTAssertEqual(try store.load(), .empty)
+        let report = diagnostics.report()
+        let data = Data(try XCTUnwrap(report.split(separator: "\n", maxSplits: 1).last).utf8)
+        let entries = try JSONDecoder().decode(LiveTVSourceDiagnostics.Journal.self, from: data).entries
+        XCTAssertEqual(entries.map(\.payload.event), [
+            .sourceMissing, .sourceSave, .sourceRead, .sourceReadFailed, .sourceRead, .sourceSave, .sourceRead
+        ])
+        XCTAssertEqual(entries.first { $0.payload.event == .sourceSave }?.payload.counts[.playlists], 1)
+        XCTAssertEqual(entries.last?.payload.counts[.playlists], 0)
+        XCTAssertEqual(secure.writeCount, 2)
+        XCTAssertFalse(report.contains("sample-only"))
+    }
+
     func testLegacyGuideURLsDecodeIntoStableSourceIDsAndRoundTrip() throws {
         let data = Data("""
         {

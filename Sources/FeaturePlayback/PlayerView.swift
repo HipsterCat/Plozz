@@ -34,6 +34,7 @@ public struct PlayerView: View {
     /// around it (with a timeout so it can never strand on black).
     @State private var hdrTransition = HDRTransitionModel()
     @Environment(\.locale) private var locale
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     /// The app-root window veil (injected by `RootView`). On HDR/DV exit the player
@@ -44,26 +45,20 @@ public struct PlayerView: View {
     private let showDiagnostics: Bool
     private let themePalette: ThemePalette
     private let showsSharedControls: Bool
-    private let onChangeQuality: (() -> Void)?
-    private let onChangeVersion: (() -> Void)?
-    private let onPlaySDRVersion: (() -> Void)?
+    private let onDismiss: (() -> Void)?
 
     public init(
         viewModel: PlayerViewModel,
         showDiagnostics: Bool = false,
         themePalette: ThemePalette = .dark,
         showsSharedControls: Bool = true,
-        onChangeQuality: (() -> Void)? = nil,
-        onChangeVersion: (() -> Void)? = nil,
-        onPlaySDRVersion: (() -> Void)? = nil
+        onDismiss: (() -> Void)? = nil
     ) {
         _viewModel = State(initialValue: viewModel)
         self.showDiagnostics = showDiagnostics
         self.themePalette = themePalette
         self.showsSharedControls = showsSharedControls
-        self.onChangeQuality = onChangeQuality
-        self.onChangeVersion = onChangeVersion
-        self.onPlaySDRVersion = onPlaySDRVersion
+        self.onDismiss = onDismiss
     }
 
 
@@ -132,6 +127,7 @@ public struct PlayerView: View {
             )
         }
         .task {
+            viewModel.updateArtworkPolicy(artworkPolicy)
             viewModel.controls.diagnosticsEnabled = showDiagnostics
             await viewModel.load()
             if needsStreamSampling { startSampling() }
@@ -140,6 +136,9 @@ public struct PlayerView: View {
         // Push the app's language in and keep it current: track menus name
         // languages in it, and an in-app language change has to reach them.
         .onAppear { viewModel.appLocale = locale }
+        .onChange(of: artworkPolicy) { _, policy in
+            viewModel.updateArtworkPolicy(policy)
+        }
         .onChange(of: locale) { _, newLocale in
             viewModel.appLocale = newLocale
             viewModel.refreshTrackMenusForLanguageChange()
@@ -183,7 +182,7 @@ public struct PlayerView: View {
             if case .failed = phase, !viewModel.controls.diagnosticsEnabled { diagnosticsSampler.stop() }
         }
         #if os(iOS)
-        .sheet(isPresented: Binding(
+        .plozzSheet(isPresented: Binding(
             get: { viewModel.controls.diagnosticsEnabled },
             set: { viewModel.controls.diagnosticsEnabled = $0 }
         )) {
@@ -268,7 +267,10 @@ public struct PlayerView: View {
         // Keep diagnostics off during load/failure while Plozzigen is initializing;
         // this avoids extra SwiftUI preference/layout churn on the crash path.
         if viewModel.controls.diagnosticsEnabled, viewModel.phase == .ready {
-            PlaybackDiagnosticsOverlay(diagnostics: diagnosticsSampler.latest)
+            PlaybackDiagnosticsOverlay(
+                diagnostics: diagnosticsSampler.latest,
+                televisionControlsLayout: viewModel.controls.subtitleLayout
+            )
                 .environment(\.themePalette, themePalette)
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
@@ -289,36 +291,25 @@ public struct PlayerView: View {
             // surface. The bring-up spinner is a top-level overlay
             // (`showBringUpSpinner`) so it spans this and the `.ready`-but-
             // awaiting-first-frame window as one continuous indicator.
-            VideoSurfaceContainer(engine: viewModel.videoEngine)
+            VideoSurfaceContainer(
+                engine: viewModel.videoEngine, zoom: viewModel.controls.videoZoom.settings,
+                fitsInsideSafeArea: fitsVideoInsideSafeArea
+            )
                 .id(viewModel.engineToken)
                 .ignoresSafeArea()
 
         case .ready:
             readyPlayerContainer
 
-        case let .failed(error):
-            #if os(iOS)
-            MobilePlaybackFailureView(
-                message: viewModel.streamingQualityError?.userMessage ?? error.userMessage,
-                code: viewModel.streamingQualityError?.diagnosticCode,
-                retryMessage: viewModel.streamingCodecRetryMessage,
-                negotiatedCodec: viewModel.streamingNegotiatedVideoCodec,
-                onChangeQuality: viewModel.streamingQualityAvailable ? onChangeQuality : nil,
-                onChangeVersion: onChangeVersion,
-                onPlaySDRVersion: onPlaySDRVersion,
-                onPlayOriginal: viewModel.streamingHasHDRConversionError
-                    && viewModel.streamingOptions?.requiresConversionPolicy == true ? {
-                        viewModel.changeStreamingOptions(.init(quality: .original))
-                    } : nil,
-                onRetry: viewModel.streamingQualityAvailable ? {
-                    if let options = viewModel.streamingOptions { viewModel.changeStreamingOptions(options) }
-                } : nil,
-                onShowDiagnostics: { viewModel.controls.diagnosticsEnabled = true },
-                onDismiss: { dismiss() }
+        case .failed:
+            StreamingPlaybackFailureView(
+                message: viewModel.playbackFailureReport?.message
+                    ?? viewModel.streamingQualityError?.userMessage
+                    ?? StreamingPlaybackFailure(kind: .unknown).userMessage,
+                report: viewModel.playbackFailureReport,
+                onRetry: { viewModel.retryPlayback() },
+                onDismiss: { dismissPlayer() }
             )
-            #else
-            PlaybackErrorView(message: viewModel.streamingQualityError?.userMessage ?? error.userMessage) { dismiss() }
-            #endif
         }
     }
 
@@ -357,7 +348,9 @@ public struct PlayerView: View {
             scrubPreview: viewModel.scrubPreview,
             authenticatedHTTPResolver:
                 viewModel.authenticatedHTTPResolver,
+            makeGeneratedScrubStills: { viewModel.makeGeneratedScrubStills() },
             showsSharedControls: showsSharedControls,
+            fitsInsideSafeArea: fitsVideoInsideSafeArea,
             themePalette: ThemePaletteBox(
                 makeControls: { model, actions, onExitToSurface in
                     AnyView(PlayerControls(
@@ -394,6 +387,18 @@ public struct PlayerView: View {
         .ignoresSafeArea()
     }
 
+    private var fitsVideoInsideSafeArea: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    private func dismissPlayer() {
+        if let onDismiss { onDismiss() } else { dismiss() }
+    }
+
     /// Dismiss with a display-aware fade that keeps the screen fully black from the
     /// moment exit begins until **after** the display has physically switched back,
     /// so there is no flash on the player-dismiss → Home handoff — even on TVs whose
@@ -417,7 +422,7 @@ public struct PlayerView: View {
     /// behavior: wait for the in-player settle/timeout before dismissing.
     private func dismissSmoothly() {
         guard let exitKind = viewModel.exitVeilKind else {
-            dismiss()
+            dismissPlayer()
             return
         }
         guard !hdrTransition.isExiting else { return }
@@ -435,12 +440,12 @@ public struct PlayerView: View {
             if windowVeil != nil {
                 // 3. The window veil now owns coverage through the physical switch —
                 //    dismiss straight onto it (black under black, no gap).
-                dismiss()
+                dismissPlayer()
             } else {
                 // No window veil (previews/tests): keep the legacy behavior of
                 // gating the dismiss on the in-player settle (or safety timeout).
                 await hdrTransition.waitForExit()
-                dismiss()
+                dismissPlayer()
             }
         }
     }
@@ -527,30 +532,6 @@ private struct DisplaySettleObserver: ViewModifier {
         #else
         content
         #endif
-    }
-}
-
-/// Graceful playback error state with a way back.
-private struct PlaybackErrorView: View {
-    let message: LocalizedStringResource
-    let onDismiss: () -> Void
-
-    var body: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 72))
-                .foregroundStyle(.yellow)
-            Text("Can’t play this right now")
-                .font(.title).bold()
-                .foregroundStyle(.white)
-            Text(message)
-                .font(.title3)
-                .plozzForeground(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 800)
-            Button("Back", action: onDismiss)
-                .buttonStyle(.borderedProminent)
-        }
     }
 }
 

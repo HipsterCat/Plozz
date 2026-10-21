@@ -1,8 +1,114 @@
+import CoreModels
 import XCTest
 @testable import MediaTransportHTTP
 @testable import TestSupportNetworking
 
 final class TransportSessionRegistryTests: XCTestCase {
+    override func tearDown() {
+        StubURLProtocol.reset()
+        super.tearDown()
+    }
+
+    func testThrottledSessionSuppressesFurtherRequestsWithoutSleepingOrRetrying() async throws {
+        let url = try XCTUnwrap(URL(string: "https://nas.example.com/dav/movie.iso"))
+        for headers in [
+            ["Retry-After": "60"],
+            ["Retry-After": HTTPDate.string(from: Date().addingTimeInterval(60))],
+            ["Retry-After": "invalid"],
+            [:]
+        ] {
+            StubURLProtocol.reset()
+            let registry = TransportSessionRegistry(testProtocolClasses: [StubURLProtocol.self])
+            let session = try await registry.session(for: makeKey(), credential: .anonymous, trustPolicy: .system)
+            StubURLProtocol.queue(StubResponse(statusCode: 429, headers: headers), for: url)
+            let result = try await session.data(for: URLRequest(url: url), maxResponseBytes: 1)
+            XCTAssertEqual(result.response.statusCode, 429)
+            for _ in 0..<4 {
+                do {
+                    _ = try await session.data(for: URLRequest(url: url), maxResponseBytes: 1)
+                    XCTFail("The active server cooldown must suppress new tasks")
+                } catch let error as TransportError {
+                    guard case .protocolError(status: 429, detail: _) = error else {
+                        XCTFail("Unexpected cooldown error: \(error)")
+                        continue
+                    }
+                }
+            }
+            XCTAssertEqual(StubURLProtocol.requests(for: url).count, 1)
+            await registry.drainAll()
+        }
+    }
+
+    func testExpiredRetryAfterPermitsAnExplicitNewRequest() async throws {
+        let url = try XCTUnwrap(URL(string: "https://nas.example.com/dav/movie.iso"))
+        for value in ["0", HTTPDate.string(from: Date().addingTimeInterval(-60))] {
+            StubURLProtocol.reset()
+            let registry = TransportSessionRegistry(testProtocolClasses: [StubURLProtocol.self])
+            let session = try await registry.session(for: makeKey(), credential: .anonymous, trustPolicy: .system)
+            StubURLProtocol.queue(StubResponse(statusCode: 429, headers: ["Retry-After": value]), for: url)
+            StubURLProtocol.queue(StubResponse(statusCode: 200, body: Data([7])), for: url)
+            _ = try await session.data(for: URLRequest(url: url), maxResponseBytes: 1)
+            let next = try await session.data(for: URLRequest(url: url), maxResponseBytes: 1)
+            XCTAssertEqual(next.data, Data([7]))
+            XCTAssertEqual(StubURLProtocol.requests(for: url).count, 2)
+            await registry.drainAll()
+        }
+    }
+
+    func testDeliveryCooldownDoesNotBlockDAVOrAnotherAccount() async throws {
+        let registry = TransportSessionRegistry(testProtocolClasses: [StubURLProtocol.self])
+        let key = try makeKey()
+        let mediaURL = try XCTUnwrap(URL(string: "https://cdn.example.com/movie"))
+        let davURL = try XCTUnwrap(URL(string: "https://nas.example.com/dav"))
+        let mediaOrigin = try XCTUnwrap(TransportOrigin(url: mediaURL))
+        let media = try await registry.mediaSession(for: key, origin: mediaOrigin)
+        StubURLProtocol.queue(StubResponse(statusCode: 429, headers: ["Retry-After": "60"]), for: mediaURL)
+        _ = try await media.data(for: URLRequest(url: mediaURL), maxResponseBytes: 1)
+        let other = try await registry.mediaSession(for: makeKey(accountID: "other"), origin: mediaOrigin)
+        let dav = try await registry.session(for: key, credential: .anonymous, trustPolicy: .system)
+        for (session, url) in [(other, mediaURL), (dav, davURL)] {
+            StubURLProtocol.queue(StubResponse(statusCode: 200, body: Data([7])), for: url)
+            let result = try await session.data(for: URLRequest(url: url), maxResponseBytes: 1)
+            XCTAssertEqual(result.data, Data([7]))
+        }
+        await registry.drainAll()
+    }
+
+    func testMediaSessionsSeparateAccountCredentialsAndTrustEvenOnReturnHop() async throws {
+        let registry = TransportSessionRegistry()
+        let key = try makeKey()
+        let origin = try XCTUnwrap(key.origin)
+        let account = try await registry.session(
+            for: key, credential: .bearerToken("account-secret"),
+            trustPolicy: .pinnedLeaf(sha256: Data(repeating: 1, count: 32), revision: key.trustRevision)
+        )
+        let media = try await registry.mediaSession(for: key, origin: origin)
+        XCTAssertFalse(account === media)
+        XCTAssertTrue(media.matches(credential: .anonymous, trustPolicy: .system))
+        XCTAssertNil(media.session.configuration.urlCredentialStorage)
+        XCTAssertNil(media.session.configuration.httpCookieStorage)
+        let same = try await registry.mediaSession(for: key, origin: origin)
+        XCTAssertTrue(same === media)
+        await registry.invalidate(key)
+        let count = await registry.liveSessionCount
+        XCTAssertEqual(count, 0, "retiring the source also retires its delivery sessions")
+    }
+
+    func testMediaSessionsStayScopedToAccountRevisionAndRole() async throws {
+        let registry = TransportSessionRegistry()
+        let origin = TransportOrigin(url: URL(string: "https://cdn.example.com/")!)!
+        let keyA = try makeKey()
+        let keyB = try makeKey(accountID: "other")
+        let first = try await registry.mediaSession(for: keyA, origin: origin)
+        let second = try await registry.mediaSession(for: keyB, origin: origin)
+        XCTAssertFalse(first === second)
+        await registry.invalidateAll { $0.accountID == keyA.accountID }
+        let count = await registry.liveSessionCount
+        XCTAssertEqual(count, 1)
+        let replacement = try await registry.mediaSession(for: keyA, origin: origin)
+        XCTAssertFalse(first === replacement)
+    }
+
     private func makeKey(
         accountID: String = "account-1",
         credentialRevision: UUID = UUID(),

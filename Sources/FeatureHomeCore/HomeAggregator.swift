@@ -40,6 +40,7 @@ public struct HomeAggregator: Sendable {
         public var content: UnmergedContent
         public var loadingRows: Set<HomeRowKind>
         public var failures: [HomeRowKind: AppError]
+        public var continueWatchingDiagnostic: LibraryLoadDiagnostic? = nil
     }
 
     /// Loads and merges Continue Watching, Recently Added, and Libraries across
@@ -94,6 +95,11 @@ public struct HomeAggregator: Sendable {
             self.libraries = libraries
             self.unreachableAccountIDs = unreachableAccountIDs
             self.failures = failures
+        }
+
+        public func canSkipSelection(for accounts: [ResolvedAccount]) -> Bool {
+            libraries.isEmpty && unreachableAccountIDs.isEmpty && failures.isEmpty
+                && !accounts.isEmpty && accounts.allSatisfy { $0.account.server.provider == .iptv }
         }
     }
 
@@ -161,24 +167,27 @@ public struct HomeAggregator: Sendable {
         /// Per-library section blocks for libraries the user opted rows into, in
         /// inventory order. Empty blocks (no enabled/non-empty rows) are dropped.
         public var librarySections: [HomeLibrarySectionGroup]
+        public var serverRows: [HomeServerRow]
 
         public init(
             continueWatching: [MediaItem] = [],
             latest: [MediaItem] = [],
             watchlist: [MediaItem] = [],
             libraries: [AggregatedLibrary] = [],
-            librarySections: [HomeLibrarySectionGroup] = []
+            librarySections: [HomeLibrarySectionGroup] = [],
+            serverRows: [HomeServerRow] = []
         ) {
             self.continueWatching = continueWatching
             self.latest = latest
             self.watchlist = watchlist
             self.libraries = libraries
             self.librarySections = librarySections
+            self.serverRows = serverRows
         }
 
         public var isEmpty: Bool {
             continueWatching.isEmpty && latest.isEmpty && watchlist.isEmpty
-                && libraries.isEmpty && librarySections.isEmpty
+                && libraries.isEmpty && librarySections.isEmpty && serverRows.isEmpty
         }
     }
 
@@ -226,6 +235,7 @@ public struct HomeAggregator: Sendable {
         var libraries: [AggregatedLibrary] = []
         var completed: Set<HomeRowKind> = []
         var failures: [HomeRowKind: AppError] = [:]
+        var continueWatchingDiagnostic: LibraryLoadDiagnostic?
     }
 
     /// Bounded account-level fan-out for Home aggregation so launch-time network
@@ -322,24 +332,31 @@ public struct HomeAggregator: Sendable {
         case libraryRows
     }
 
+    private struct ServerBatchKey: Hashable {
+        let accountIndex: Int
+        let libraryID: String?
+    }
+
     private enum Request: Sendable {
         case libraries(Int)
         case feed(Int, Feed, libraryIDs: [String]?)
         case library(Int, AggregatedLibrary, LibraryHomeRowKind)
+        case server(Int, [HomeServerRowDefinition])
 
         var lane: RequestLane {
             switch self {
             case .libraries: .global(.libraries)
             case .feed(_, let feed, _): .global(feed.row)
-            case .library: .libraryRows
+            case .library, .server: .libraryRows
             }
         }
     }
 
     private enum Response: Sendable {
         case libraries(Int, Result<[MediaLibrary], AppError>)
-        case feed(Int, Feed, Result<[MediaItem], AppError>)
+        case feed(Int, Feed, Result<[MediaItem], AppError>, LibraryLoadDiagnostic?)
         case library(String, LibraryHomeRowKind, Result<[LibrarySection], AppError>)
+        case server([HomeRowID: Result<[MediaItem], AppError>])
     }
 
     private struct LibraryContent {
@@ -417,6 +434,30 @@ public struct HomeAggregator: Sendable {
                 var running: [RequestLane: Int] = [:]
                 var perAccount = accounts.map { _ in AccountContent() }
                 var perLibrary: [String: LibraryContent] = [:]
+                let definitions = (visibility.rowCustomization?.availableServerRows ?? []).filter { definition in
+                    guard case .server = definition.id else { return false }
+                    return visibility.isHomeRowVisible(HomeRowChoice(serverRow: definition))
+                        && definition.section.libraryID.map {
+                            visibility.isEnabled("\(definition.accountID):\($0)")
+                        } != false
+                }
+                var serverRows: [HomeRowID: HomeServerRow] = [:]
+                var serverBatches: [ServerBatchKey: [HomeServerRowDefinition]] = [:]
+                var batchOrder: [ServerBatchKey] = []
+                for definition in definitions {
+                    guard let index = accounts.firstIndex(where: { $0.account.id == definition.accountID }) else {
+                        continue
+                    }
+                    serverRows[definition.id] = .init(definition: definition, isLoading: true)
+                    let key = ServerBatchKey(accountIndex: index, libraryID: definition.section.libraryID)
+                    if serverBatches[key] == nil { batchOrder.append(key) }
+                    serverBatches[key, default: []].append(definition)
+                }
+                for key in batchOrder {
+                    if let batch = serverBatches[key] {
+                        requests.append(.server(key.accountIndex, batch))
+                    }
+                }
                 var publishedRows: Set<HomeRowKind> = []
                 var content = UnmergedContent()
                 var failures: [HomeRowKind: AppError] = [:]
@@ -433,6 +474,7 @@ public struct HomeAggregator: Sendable {
                                 request, accounts: accounts, policy: policy,
                                 continueWatchingLimit: continueWatchingLimit,
                                 latestLimit: latestLimit, perLibraryLimit: perLibraryLimit ?? 20,
+                                visibility: visibility,
                                 seriesIdentities: seriesIdentities,
                                 onContinueWatching: onContinueWatching
                             )
@@ -461,14 +503,14 @@ public struct HomeAggregator: Sendable {
                             }
                             if scopedAccounts.contains(index) {
                                 for feed in [Feed.continueWatching, .latest] {
-                                    requests.append(.feed(index, feed, libraryIDs: visible.map(\.library.id)))
+                                    requests.append(.feed(index, feed, libraryIDs: visible.filter {
+                                        !$0.library.isServerCollectionDirectory
+                                    }.map(\.library.id)))
                                 }
                             }
                             if perLibraryLimit != nil {
                                 for library in visible where perLibrary[library.key] == nil {
-                                    let kinds = LibraryHomeRowKind.allCases.filter {
-                                        visibility.isLibraryRowEnabled(library.key, kind: $0)
-                                    }
+                                    let kinds = visibility.requestedRowKinds(for: library)
                                     guard !kinds.isEmpty else { continue }
                                     perLibrary[library.key] = LibraryContent(
                                         library: library, loadingRows: Set(kinds)
@@ -481,14 +523,23 @@ public struct HomeAggregator: Sendable {
                         case let .failure(error):
                             perAccount[index].failures[.libraries] = error
                             if scopedAccounts.contains(index) {
+                                if error != .cancelled {
+                                    perAccount[index].continueWatchingDiagnostic = .init(
+                                        provider: accounts[index].provider.kind, operation: .homeContinueWatching,
+                                        failures: [.init(section: .browse, error: error)]
+                                    )
+                                }
                                 for kind in [HomeRowKind.continueWatching, .recentlyAdded] {
                                     perAccount[index].completed.insert(kind)
                                     perAccount[index].failures[kind] = error
                                 }
                             }
                         }
-                    case let .feed(index, feed, result):
+                    case let .feed(index, feed, result, diagnostic):
                         perAccount[index].completed.insert(feed.row)
+                        if feed == .continueWatching {
+                            perAccount[index].continueWatchingDiagnostic = diagnostic
+                        }
                         switch result {
                         case let .success(items):
                             switch feed {
@@ -507,11 +558,22 @@ public struct HomeAggregator: Sendable {
                         }
                         PlozzLog.boot(
                             "HomeAgg.libraryRow kind=\(kind.rawValue) ms=\(elapsedMS(from: started, to: clock.now))")
+                    case let .server(results):
+                        for (id, result) in results {
+                            serverRows[id]?.isLoading = false
+                            switch result {
+                            case let .success(items): serverRows[id]?.items = items
+                            case let .failure(error): serverRows[id]?.failure = error
+                            }
+                        }
                     }
                     // Refill before publication so drawing a completed row never stalls
                     // the request queue for the remaining libraries.
                     enqueueAvailable()
 
+                    let merging = PerformanceDiagnostics.shared.begin(
+                        .homeMerge, metrics: .init(accounts: accounts.count)
+                    )
                     let librariesComplete = perAccount.allSatisfy { $0.completed.contains(.libraries) }
                     content.libraries = perAccount.flatMap(\.libraries).filter { !$0.library.isMusic }
                     for row in HomeRowKind.allCases where !publishedRows.contains(row) {
@@ -562,6 +624,11 @@ public struct HomeAggregator: Sendable {
                         guard let group = perLibrary[$0.key]?.group, !group.isEmpty else { return nil }
                         return group
                     }
+                    content.serverRows = definitions.compactMap { serverRows[$0.id] }
+                    merging?.finish(.succeeded, metrics: .init(
+                        items: content.continueWatching.count + content.latest.count + content.watchlist.count,
+                        rows: content.librarySections.reduce(0) { $0 + $1.sections.count } + content.serverRows.count
+                    ))
                     guard !Task.isCancelled else {
                         group.cancelAll()
                         break
@@ -570,7 +637,10 @@ public struct HomeAggregator: Sendable {
                         Progress(
                             content: content,
                             loadingRows: Set(HomeRowKind.allCases).subtracting(publishedRows),
-                            failures: failures
+                            failures: failures,
+                            continueWatchingDiagnostic: publishedRows.contains(.continueWatching)
+                                ? perAccount.first { $0.failures[.continueWatching] != nil }?.continueWatchingDiagnostic
+                                : nil
                         ))
                 }
                 PlozzLog.boot("HomeAgg.fanout accounts=\(accounts.count) ms=\(elapsedMS(from: started, to: clock.now))")
@@ -590,6 +660,7 @@ public struct HomeAggregator: Sendable {
         continueWatchingLimit: Int,
         latestLimit: Int,
         perLibraryLimit: Int,
+        visibility: HomeLibraryVisibility,
         seriesIdentities: [SeriesIdentities],
         onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void
     ) async -> Response {
@@ -602,39 +673,87 @@ public struct HomeAggregator: Sendable {
         case let .feed(index, feed, libraryIDs):
             let resolved = accounts[index]
             let provider = resolved.provider
-            return .feed(index, feed, await fetch(feed.row.rawValue, from: resolved) {
-                let items: [MediaItem]
-                switch feed {
-                case .continueWatching:
-                    items = try await provider.continueWatching(
-                        limit: continueWatchingLimit, inLibraries: libraryIDs
-                    )
-                    try Task.checkCancellation()
-                    let playable = items.filter {
-                        $0.kind == .movie || $0.kind == .episode || $0.kind == .video
+            let operation: @Sendable () async -> Result<[MediaItem], AppError> = {
+                await fetch(feed.row.rawValue, from: resolved) {
+                    let items: [MediaItem]
+                    switch feed {
+                    case .continueWatching:
+                        if visibility.mergesNextUpRows {
+                            items = try await provider.continueWatching(
+                                limit: continueWatchingLimit, inLibraries: libraryIDs
+                            )
+                        } else if let row = visibility.rowCustomization?.availableServerRows.first(where: {
+                            $0.accountID == resolved.account.id && $0.section.kind == .continueWatching
+                        }) {
+                            items = try await provider.serverHomeItems(
+                                section: row.section, limit: continueWatchingLimit,
+                                excludingLibraryIDs: excludedLibraries(visibility, accountID: resolved.account.id)
+                            )
+                        } else {
+                            items = try await provider.homeContinueWatching(
+                                limit: continueWatchingLimit, inLibraries: libraryIDs,
+                                separateNextUp: visibility.separatesNextUp
+                                    || visibility.rowCustomization?.resolvedDefaults?
+                                        .fallbackAccountIDs.contains(resolved.account.id) == true
+                            )
+                        }
+                        try Task.checkCancellation()
+                        let playable = items.filter {
+                            $0.kind == .movie || $0.kind == .episode || $0.kind == .video
+                        }
+                        await onContinueWatching(
+                            resolved.account.id,
+                            policy.curated(playable.map { $0.taggingSource(resolved.account.id) })
+                        )
+                    case .latest:
+                        items = try await provider.latest(limit: latestLimit, inLibraries: libraryIDs)
+                    case .watchlist:
+                        items = try await (provider as? any WatchlistProviding)?.watchlist() ?? []
                     }
-                    await onContinueWatching(
-                        resolved.account.id,
-                        policy.curated(playable.map { $0.taggingSource(resolved.account.id) })
+                    try Task.checkCancellation()
+                    let identities = feed == .watchlist
+                        ? [:]
+                        : await seriesIdentities[index].resolve(items, provider: provider)
+                    return stampSeriesProviderIDs(identities, onto: items).map {
+                        $0.taggingSource(resolved.account.id)
+                    }
+                }
+            }
+            guard feed == .continueWatching else {
+                return .feed(index, feed, await operation(), nil)
+            }
+            let captured = await HTTPResponseDiagnostics.capture {
+                try await HTTPResponseDiagnostics.$route.withValue(.continueWatching) {
+                    try await operation().get()
+                }
+            }
+            let result = captured.result.mapError { ($0 as? AppError) ?? .unknown("") }
+            var diagnostic: LibraryLoadDiagnostic?
+            if case let .failure(error) = result, error != .cancelled {
+                diagnostic = .init(provider: provider.kind, operation: .homeContinueWatching, failures: [
+                    .init(
+                        section: .continueWatching, error: error, responses: captured.responses,
+                        paging: captured.paging, transport: captured.transport, http: captured.http
                     )
-                case .latest:
-                    items = try await provider.latest(limit: latestLimit, inLibraries: libraryIDs)
-                case .watchlist:
-                    items = try await (provider as? any WatchlistProviding)?.watchlist() ?? []
+                ])
+                if let diagnostic {
+                    PlozzLog.app.error("Home Continue Watching failed: \(diagnostic.supportText)")
                 }
-                try Task.checkCancellation()
-                let identities = feed == .watchlist
-                    ? [:]
-                    : await seriesIdentities[index].resolve(items, provider: provider)
-                return stampSeriesProviderIDs(identities, onto: items).map {
-                    $0.taggingSource(resolved.account.id)
-                }
-            })
+            }
+            return .feed(index, feed, result, diagnostic)
         case let .library(index, library, kind):
             let resolved = accounts[index]
             return .library(library.key, kind, await fetch(kind.rawValue, from: resolved) {
                 let sections: [LibrarySection]
                 switch kind {
+                case .nextUp:
+                    let items = try await resolved.provider.homeNextUp(
+                        libraryID: library.library.id, limit: perLibraryLimit
+                    )
+                    sections = items.isEmpty ? [] : [
+                        LibrarySection(id: "nextUp", title: "Next Up", localizedTitle: "Next Up",
+                                       style: .landscape, items: items, isHomeDefault: true)
+                    ]
                 case .recentlyAdded:
                     let page = try await resolved.provider.items(
                         in: library.library.id, kind: library.library.kind,
@@ -645,14 +764,28 @@ public struct HomeAggregator: Sendable {
                     )
                     sections = page.items.isEmpty ? [] : [LibrarySection(
                         id: "recentlyAdded", title: "Recently Added in \(library.library.title)",
+                        localizedTitle: "Recently Added in \(library.library.title)",
                         style: .poster, items: page.items
                     )]
                 case .hubs:
-                    sections = try await resolved.provider.libraryHubs(
-                        libraryID: library.library.id, kind: library.library.kind, limit: perLibraryLimit
-                    )
+                    if let customization = visibility.rowCustomization {
+                        sections = try await resolved.provider.homeHubs(
+                            libraryID: library.library.id, kind: library.library.kind, limit: perLibraryLimit,
+                            includeUnpromoted: customization.defaults == .legacy || customization.shown.contains {
+                                $0.libraryKey == library.key && $0.libraryKind == .hubs
+                            }
+                        )
+                    } else {
+                        sections = try await resolved.provider.libraryHubs(
+                            libraryID: library.library.id, kind: library.library.kind, limit: perLibraryLimit
+                        )
+                    }
                 }
-                return sections.filter { !$0.items.isEmpty }.map { section in
+                return sections.filter {
+                    !$0.items.isEmpty && visibility.isHomeRowVisible(
+                        HomeRowChoice(section: $0, library: library)
+                    )
+                }.map { section in
                     var section = section
                     section.items = section.items.map {
                         $0.taggingSource(library.accountID).taggingLibrary(library.library.id)
@@ -660,26 +793,84 @@ public struct HomeAggregator: Sendable {
                     return section
                 }
             })
+        case let .server(index, definitions):
+            let resolved = accounts[index]
+            let batch = await fetch("server-sections", from: resolved, diagnosticOutcome: { results in
+                var cancelled = false
+                for definition in definitions {
+                    guard let result = results[definition.section.id] else { return .failed }
+                    if case let .failure(error) = result {
+                        guard error == .cancelled else { return .failed }
+                        cancelled = true
+                    }
+                }
+                return cancelled ? .cancelled : .succeeded
+            }) {
+                await resolved.provider.serverHomeItems(
+                    sections: definitions.map(\.section), limit: perLibraryLimit,
+                    excludingLibraryIDs: excludedLibraries(visibility, accountID: resolved.account.id)
+                )
+            }
+            var results: [HomeRowID: Result<[MediaItem], AppError>] = [:]
+            for definition in definitions {
+                let result = batch.flatMap {
+                    $0[definition.section.id] ?? .failure(.unknown("Missing server Home section result"))
+                }
+                if case let .failure(error) = result, error != .cancelled {
+                    PlozzLog.app.error("Home server section failed: provider=\(resolved.provider.kind)")
+                }
+                results[definition.id] = result.map { items in
+                    items.map { item in
+                        let tagged = item.taggingSource(resolved.account.id)
+                        return tagged.taggingLibrary(item.libraryID ?? definition.section.libraryID)
+                    }.filter {
+                        $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled)
+                    }
+                }
+            }
+            return .server(results)
         }
+    }
+
+    private static func excludedLibraries(
+        _ visibility: HomeLibraryVisibility, accountID: String
+    ) -> Set<String> {
+        let prefix = accountID + ":"
+        return Set(visibility.disabledKeys.filter { $0.hasPrefix(prefix) }.map {
+            String($0.dropFirst(prefix.count))
+        })
     }
 
     private static func fetch<Value: Sendable>(
         _ row: String,
         from resolved: ResolvedAccount,
+        diagnosticOutcome: @Sendable (Value) -> PerformanceDiagnostics.Outcome = { _ in .succeeded },
         operation: @Sendable () async throws -> Value
     ) async -> Result<Value, AppError> {
         let clock = ContinuousClock()
         let started = clock.now
+        let diagnostic = PerformanceDiagnostics.shared.begin(.homeFetch, provider: resolved.provider.kind)
         defer {
             PlozzLog.boot("HomeAgg.request row=\(row) provider=\(resolved.provider.kind) ms=\(elapsedMS(from: started, to: clock.now))")
         }
         do {
             try Task.checkCancellation()
-            return .success(try await operation())
+            let value: Value
+            if diagnostic != nil {
+                value = try await PerformanceDiagnostics.$provider.withValue(resolved.provider.kind) {
+                    try await operation()
+                }
+            } else {
+                value = try await operation()
+            }
+            diagnostic?.finish(diagnosticOutcome(value))
+            return .success(value)
         } catch is CancellationError {
+            diagnostic?.finish(.cancelled)
             return .failure(.cancelled)
         } catch {
             let failure = (error as? AppError) ?? .unknown("")
+            diagnostic?.finish(failure == .cancelled ? .cancelled : .failed)
             if failure != .cancelled {
                 PlozzLog.app.error("Home row failed: row=\(row) provider=\(resolved.provider.kind)")
             }

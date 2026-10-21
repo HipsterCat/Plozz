@@ -233,6 +233,18 @@ public struct ThemePalette: Equatable, Sendable {
 // MARK: - Concrete palettes
 
 public extension ThemePalette {
+    static let gradientSurfaceFillOpacity = 0.05
+
+    var gradientSurfaceTint: Color { isLight ? .black : .white }
+
+    var gradientSurface: SurfaceStyle {
+        SurfaceStyle(
+            fill: gradientSurfaceTint.opacity(Self.gradientSurfaceFillOpacity),
+            border: gradientSurfaceTint.opacity(Self.gradientSurfaceFillOpacity),
+            shadow: raised.shadow
+        )
+    }
+
     /// Plozz's accent — deliberately MONOCHROME, resolved per theme (see
     /// ``ThemePalette/accent``).
     ///
@@ -467,25 +479,24 @@ public extension AppTheme {
 
 // MARK: - App background
 
-/// The shared app background: a soft vertical gradient between the palette's two
-/// low-contrast tones, with an optional accent glow bloomed from the top-centre.
-/// Ported 1:1 from my Twozz `AppBackground` (same `LinearGradient` + top-glow
-/// `RadialGradient` with `endRadius: 820`), recoloured to Plozz's brand blue.
-/// Theme-aware — colours come entirely from the palette, so Black renders a
-/// near-black wash and Light renders a soft white wash.
+/// Shared page background, independently configurable from the selected theme.
 public struct AppBackground: View {
     private let palette: ThemePalette
+    @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
+    @Environment(\.plozzDialogBackgroundOwned) private var dialogBackgroundOwned
 
     public init(palette: ThemePalette) {
         self.palette = palette
     }
 
     public var body: some View {
-        // A clean, flat themed fill on every platform (no gradient or glow), so the
-        // page background is consistent and the standardized elevated surfaces read
-        // the same everywhere. (tvOS previously used a gradient + brand-blue glow.)
-        palette.backgroundBase
-            .ignoresSafeArea()
+        if dialogBackgroundOwned {
+            Color.clear
+        } else if gradientEnabled {
+            AmbientGradientBackground(palette: palette)
+        } else {
+            palette.backgroundBase.ignoresSafeArea()
+        }
     }
 }
 

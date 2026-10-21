@@ -11,7 +11,7 @@ import PlozzCoreUI
 ///
 /// Personal choices — which Plex user a profile plays as, whether a profile
 /// uses a server, and which libraries appear on a profile's Home — are NOT
-/// here; they live on `<Profile>` › Your Libraries.
+/// here; they live in the active profile's Libraries section.
 struct ServersAndLibrariesDetailView: View {
     let context: SettingsContext
 
@@ -20,7 +20,7 @@ struct ServersAndLibrariesDetailView: View {
             VStack(alignment: .leading, spacing: 28) {
                 SettingsPageHeader(
                     "Servers",
-                    subtitle: "Sign-ins are shared by everyone on this Apple TV. Choose what each profile sees under Profile › Your Libraries."
+                    subtitle: "Sign-ins are shared by everyone on this Apple TV. Choose what each profile sees under Libraries."
                 )
                 SettingsPanel {
                     // Rows separated by a gap rather than flush dividers: the
@@ -37,6 +37,7 @@ struct ServersAndLibrariesDetailView: View {
                             let groups = serverGroups(from: context.accounts)
                             ForEach(groups, id: \.serverKey) { group in
                                 serverSummaryRow(group)
+                                    .settingsWorkspaceEntry(group.serverKey == groups.first?.serverKey)
                             }
                         }
                         Button(action: context.onAddAccount) {
@@ -47,6 +48,7 @@ struct ServersAndLibrariesDetailView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(SettingsFocusButtonStyle(size: .prominent))
+                        .settingsWorkspaceEntry(context.accounts.isEmpty)
                     }
                 }
             }
@@ -61,9 +63,12 @@ struct ServersAndLibrariesDetailView: View {
     /// One server's at-a-glance row with a clear chevron so the affordance
     /// reads as "tap to open a level deeper," not just status.
     private func serverSummaryRow(_ group: ServerAccountGroup) -> some View {
-        NavigationLink(value: SettingsRoute.server(key: group.serverKey)) {
+        SettingsRouteLink(value: SettingsRoute.server(key: group.serverKey)) {
             HStack(alignment: .top, spacing: 16) {
-                ProviderIcon(provider: group.providerKind, size: 48, mediaShareTransport: group.transportKind)
+                ProviderIcon(
+                    provider: group.providerKind, size: 48, mediaShareTransport: group.transportKind,
+                    siteURL: group.accounts.first?.server.baseURL
+                )
                     .frame(width: 36)
                     .padding(.top, 4)
                 VStack(alignment: .leading, spacing: 4) {

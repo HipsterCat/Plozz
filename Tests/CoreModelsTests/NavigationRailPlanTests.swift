@@ -5,6 +5,58 @@ import XCTest
 /// they're wrong — a library that vanishes when a server is added, an order that
 /// resets, or a hidden library that comes back on relaunch.
 final class NavigationRailPlanTests: XCTestCase {
+    func testOfflineBadgesKeepDestinationsAndOnlyMarkAllLibrariesWhenAllAreOffline() {
+        let libraries = [
+            library("movies", title: "Movies", account: "a"),
+            library("shows", title: "Shows", account: "a", kind: .series),
+            library("movies", title: "Movies", account: "b")
+        ]
+        let baseline = NavigationRailPlan.entries(visibleLibraries: libraries, layout: .default)
+        for offline: Set<String> in [[], ["a"], ["a", "b"]] {
+            let entries = NavigationRailPlan.entries(
+                visibleLibraries: libraries, layout: .default, offlineAccountIDs: offline)
+            XCTAssertEqual(entries.map(\.id), baseline.map(\.id))
+            XCTAssertEqual(entries.map(\.destination), baseline.map(\.destination))
+            for entry in entries {
+                XCTAssertEqual(entry.isOffline, entry.library.map { offline.contains($0.accountID) } ?? (offline.count == 2))
+            }
+        }
+    }
+    func testPreparedEntriesPreserveEachStylesOrderAndVisibility() {
+        let libraries = [
+            library("1", title: "Movies", account: "a"),
+            library("2", title: "Shows", account: "a", kind: .series),
+            library("3", title: "Music", account: "a", isMusic: true),
+            library("1", title: "Other Movies", account: "b")
+        ]
+        let layouts: [NavigationLibraryLayout] = [
+            .default,
+            .init(order: ["b:1", "a:2", NavigationLibraryLayout.allLibrariesKey]),
+            .init(order: [NavigationLibraryLayout.settingsKey, "a:2"],
+                  hiddenKeys: [NavigationLibraryLayout.homeKey, "a:1"]),
+            .init(hiddenKeys: [NavigationLibraryLayout.allLibrariesKey, "b:1"])
+        ]
+        for visible in [libraries, Array(libraries.prefix(1)), []] {
+            for layout in layouts {
+                let entries = NavigationRailPlan.entries(visibleLibraries: visible, layout: layout)
+                for keys in [
+                    NavigationDestinationDefaults.compact(hasMusic: true),
+                    NavigationDestinationDefaults.sidebar(visibleLibraries: visible, hasMusic: true),
+                    NavigationDestinationDefaults.rail(visibleLibraries: visible, hasMusic: false)
+                ] {
+                    XCTAssertEqual(
+                        NavigationRailPlan.destinations(
+                            libraryEntries: entries, layout: layout, availableKeys: keys
+                        ),
+                        NavigationRailPlan.destinations(
+                            visibleLibraries: visible, layout: layout, availableKeys: keys
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     func testEditorDefaultsMatchEachTVNavigationStyle() {
         XCTAssertEqual(
             NavigationRailPlan.customizableKeys(visibleLibraries: [], style: .rail),
@@ -12,12 +64,72 @@ final class NavigationRailPlanTests: XCTestCase {
         )
         XCTAssertEqual(
             NavigationRailPlan.customizableKeys(visibleLibraries: [], style: .tabBar),
-            NavigationDestinationDefaults.compact(hasMusic: true)
+            NavigationDestinationDefaults.sidebar(visibleLibraries: [], hasMusic: true)
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             NavigationRailPlan.customizableKeys(visibleLibraries: [], style: .tabBar)
                 .contains(NavigationLibraryLayout.allLibrariesKey)
         )
+    }
+
+    func testHorizontalLibrariesAreOptInAndKeepTheirDistinctDestinationIdentities() {
+        let libraries = [
+            library("movies", title: "Movies", account: "a"),
+            library("movies", title: "Movies", account: "b"),
+            library("music", title: "Music", account: "a", isMusic: true)
+        ]
+        let keys = NavigationRailPlan.customizableKeys(visibleLibraries: libraries, style: .tabBar)
+        let automatic = NavigationRailPlan.automaticallyHiddenLibraryKeys(
+            visibleLibraries: libraries, style: .tabBar
+        )
+        XCTAssertEqual(automatic, [NavigationLibraryLayout.allLibrariesKey, "a:movies", "b:movies"])
+        var layout = NavigationLibraryLayout.default
+        func destinations() -> [NavigationRailDestination] {
+            NavigationRailPlan.destinations(
+                visibleLibraries: libraries,
+                layout: layout.resolvingAutomaticVisibility(hidden: automatic),
+                availableKeys: keys
+            )
+        }
+        XCTAssertEqual(destinations(), [.home, .watchlist, .liveTV, .search, .music, .settings])
+        layout.setVisible(true, for: "a:movies")
+        layout.setVisible(true, for: "b:movies")
+        layout.setVisible(true, for: NavigationLibraryLayout.allLibrariesKey)
+        layout.order = ["b:movies", NavigationLibraryLayout.homeKey, "a:movies"]
+        let resolved = destinations()
+        XCTAssertEqual(Array(resolved.prefix(3)), [.library("b:movies"), .home, .library("a:movies")])
+        XCTAssertTrue(resolved.contains(.allLibraries))
+        XCTAssertEqual(Set(resolved).count, resolved.count)
+        XCTAssertEqual(
+            NavigationRailPlan.resolvedSelection(.library("a:movies"), destinations: resolved),
+            .library("a:movies")
+        )
+        for destination in resolved {
+            XCTAssertEqual(NavigationRailDestination(storageValue: destination.storageValue), destination)
+        }
+        layout.setVisible(false, for: "a:movies")
+        XCTAssertFalse(destinations().contains(.library("a:movies")))
+        XCTAssertEqual(
+            NavigationRailPlan.resolvedSelection(.library("a:movies"), destinations: destinations()),
+            .library("b:movies")
+        )
+    }
+
+    func testSidebarsDoNotAutomaticallyHideLibrariesAndUnavailableLibrariesCannotReappear() {
+        let libraries = [library("movies", title: "Movies", account: "a")]
+        for style in [NavigationStyle.sidebar, .rail] {
+            XCTAssertTrue(NavigationRailPlan.automaticallyHiddenLibraryKeys(
+                visibleLibraries: libraries, style: style
+            ).isEmpty)
+        }
+        let layout = NavigationLibraryLayout(shownKeys: ["removed:movies", "a:movies"])
+        let destinations = NavigationRailPlan.destinations(
+            visibleLibraries: libraries, layout: layout,
+            availableKeys: NavigationRailPlan.customizableKeys(visibleLibraries: libraries, style: .tabBar)
+        )
+        XCTAssertTrue(destinations.contains(.library("a:movies")))
+        XCTAssertFalse(destinations.contains(.library("removed:movies")))
+        XCTAssertFalse(destinations.contains(.allLibraries))
     }
 
     func testIOSCanHideEveryContentDestinationIncludingDownloads() {

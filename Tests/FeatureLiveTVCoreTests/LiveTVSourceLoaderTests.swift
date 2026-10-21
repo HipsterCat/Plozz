@@ -1,9 +1,168 @@
 #if DEBUG
 import Foundation
+import CoreModels
 import XCTest
 @testable import FeatureLiveTVCore
 
 final class LiveTVSourceLoaderTests: XCTestCase {
+    func testDriveViewerAndLegacyLinksUseDownloadEndpointAndRetainCachePolicy() async throws {
+        for address in [
+            "https://drive.google.com/file/d/fixture/view?usp=sharing",
+            "https://drive.google.com/uc?id=fixture&export=download"
+        ] {
+            let original = try XCTUnwrap(URL(string: address))
+            let download = try XCTUnwrap(URL(string:
+                "https://drive.usercontent.google.com/download?id=fixture&export=download"
+            ))
+            LoaderProtocol.state.register(download, [
+                .init(status: 200, headers: ["ETag": "fixture", "Cache-Control": "max-age=0"], body: playlist),
+                .init(status: 304)
+            ])
+            defer { LoaderProtocol.state.remove(download) }
+            let loader = loader()
+            let first = try await loader.loadPlaylist(from: original)
+            let second = try await loader.loadPlaylist(from: original)
+            XCTAssertEqual(first.channels.count, 1)
+            XCTAssertEqual(first.channels, second.channels)
+            let requests = LoaderProtocol.state.requests(download)
+            XCTAssertEqual(requests.count, 2)
+            XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "If-None-Match"), "fixture")
+            XCTAssertTrue(LoaderProtocol.state.requests(original).isEmpty)
+        }
+    }
+
+    func testDriveDownloadHTMLIsRejectedWithoutFollowingConfirmationLinks() async throws {
+        let original = try XCTUnwrap(URL(string: "https://drive.google.com/open?id=fixture"))
+        let download = try XCTUnwrap(URL(string:
+            "https://drive.usercontent.google.com/download?id=fixture&export=download"
+        ))
+        LoaderProtocol.state.register(download, [.init(
+            status: 200, headers: ["Content-Type": "text/html"],
+            body: Data("<html><a href=\"?confirm=t\">Download anyway</a></html>".utf8)
+        )])
+        defer { LoaderProtocol.state.remove(download) }
+        do {
+            _ = try await loader().loadPlaylist(from: original)
+            XCTFail("An HTML download page is not a channel playlist.")
+        } catch {
+            XCTAssertEqual(error as? LiveTVSourceImportError, .invalidPlaylist)
+        }
+        XCTAssertEqual(LoaderProtocol.state.requests(download).count, 1)
+    }
+
+    func testProviderMetadataLoadsAsChannelsRatherThanOneDirectStream() async throws {
+        let url = fixtureURL()
+        let body = Data("""
+        #EXTM3U
+        #EXT-X-SESSION-DATA:DATA-ID="com.xui.1_5_5r2"
+        #EXTINF:-1,One
+        https://example.test/one.m3u8
+        #EXTINF:-1,Two
+        https://example.test/two.ts
+        """.utf8)
+        LoaderProtocol.state.register(url, [.init(
+            status: 200, headers: ["Content-Type": "application/octet-stream"], body: body
+        )])
+        defer { LoaderProtocol.state.remove(url) }
+        let imported = try await loader().loadPlaylist(from: url)
+        XCTAssertEqual(imported.channels.map(\.name), ["One", "Two"])
+        XCTAssertEqual(imported.entryCount, 2)
+        XCTAssertEqual(imported.skippedEntryCount, 0)
+        XCTAssertEqual(LoaderProtocol.state.requests(url).count, 1)
+    }
+
+    func testRequestsDoNotInheritSessionCookiesOrStoredCredentials() async throws {
+        let url = fixtureURL()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LoaderProtocol.self]
+        let cookie = try XCTUnwrap(HTTPCookie(properties: [
+            .domain: "example.test", .path: "/", .name: "session", .value: "playlist-only"
+        ]))
+        let storage = try XCTUnwrap(configuration.httpCookieStorage)
+        storage.setCookie(cookie)
+        XCTAssertTrue(storage.cookies(for: url)?.contains(cookie) == true)
+        LoaderProtocol.state.register(url, [.init(status: 200, body: playlist)])
+        defer { LoaderProtocol.state.remove(url) }
+
+        let loader = LiveTVSourceLoader(configuration: configuration)
+        XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertNil(configuration.urlCredentialStorage)
+        _ = try await loader.loadPlaylist(from: url)
+        let request = try XCTUnwrap(LoaderProtocol.state.requests(url).first)
+        XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testValidEmptyEventPlaylistLoadsAndCanBecomePopulated() async throws {
+        let url = fixtureURL()
+        LoaderProtocol.state.register(url, [
+            .init(status: 200, headers: ["Cache-Control": "max-age=0"],
+                  body: Data("# Playlist awaiting channels\n#EXTM3U\n".utf8)),
+            .init(status: 200, body: playlist)
+        ])
+        defer { LoaderProtocol.state.remove(url) }
+        let loader = loader()
+        let empty = try await loader.loadPlaylist(from: url)
+        XCTAssertEqual(empty.entryCount, 0)
+        XCTAssertTrue(empty.channels.isEmpty)
+        XCTAssertEqual(LoaderProtocol.state.requests(url).count, 1)
+        let updated = try await loader.loadPlaylist(from: url)
+        XCTAssertFalse(updated.channels.isEmpty)
+        XCTAssertEqual(LoaderProtocol.state.requests(url).count, 2)
+    }
+
+    func testOneHundredThousandEntriesLargerThanTwentyMiBAreNotTruncated() async throws {
+        let url = fixtureURL()
+        var body = Data("#EXTM3U\n".utf8)
+        let metadata = String(repeating: "x", count: 256)
+        for index in 0..<100_000 {
+            body.append(Data(("""
+            #EXTINF:-1 tvg-id="channel-\(index)" group-title="News",Channel \(index)
+            https://example.test/live/\(index).m3u8?fixture=\(metadata)
+
+            """).utf8))
+        }
+        XCTAssertGreaterThan(body.count, 20 * 1_024 * 1_024)
+        XCTAssertLessThan(body.count, LiveTVPlaylistParser.maximumBytes)
+        LoaderProtocol.state.register(url, [.init(
+            status: 200, headers: ["Content-Length": String(body.count)], body: body
+        )])
+        defer { LoaderProtocol.state.remove(url) }
+        let imported = try await loader().loadPlaylist(from: url)
+        XCTAssertEqual(imported.entryCount, 100_000)
+        XCTAssertEqual(imported.channels.count, 100_000)
+        XCTAssertEqual(imported.skippedEntryCount, 0)
+        XCTAssertEqual(imported.channels.first?.name, "Channel 0")
+        XCTAssertEqual(imported.channels.last?.name, "Channel 99999")
+        XCTAssertEqual(Set(imported.channels.map(\.id)).count, 100_000)
+    }
+
+    func testAdvertisedAndReceivedSizeFailuresReportDifferentLimits() async throws {
+        for advertisesSize in [true, false] {
+            let url = fixtureURL()
+            let count = LiveTVPlaylistParser.maximumBytes + 1
+            let diagnostics = PlaylistLimitRecorder()
+            LoaderProtocol.state.register(url, [.init(
+                status: 200,
+                headers: advertisesSize ? ["Content-Length": String(count)] : [:],
+                body: advertisesSize ? playlist : Data(repeating: 65, count: count)
+            )])
+            defer { LoaderProtocol.state.remove(url) }
+            do {
+                _ = try await loader().loadPlaylist(from: url)
+                XCTFail("The bounded import must reject oversized responses.")
+            } catch {
+                XCTAssertEqual(error as? LiveTVSourceImportError, .responseTooLarge)
+            }
+            XCTAssertEqual(diagnostics.values, [.init(
+                limit: advertisesSize ? .responseHeaderBytes : .responseBodyBytes,
+                observed: Int64(count), maximum: Int64(LiveTVPlaylistParser.maximumBytes)
+            )])
+            XCTAssertEqual(LoaderProtocol.state.requests(url).count, 1)
+        }
+    }
+
     func testNotModifiedResponseCanRevokeStorageAndRefreshFreshness() async throws {
         let noStore = fixtureURL()
         let fresh = fixtureURL()

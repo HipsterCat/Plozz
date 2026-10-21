@@ -3,6 +3,15 @@ import SwiftUI
 import PlozzCoreUI
 import CoreModels
 
+struct PlayerOptionsDivider: View {
+    @Environment(\.plozzHDRDisplayActive) private var hdrDisplayActive
+
+    var body: some View {
+        Color.primary.opacity(hdrDisplayActive ? 0.10 : 0.16)
+            .frame(height: PlozzFrostedSurface.dividerHeight)
+    }
+}
+
 /// A reusable full-width column of selectable / toggle track rows, extracted from
 /// `PlayerControls`. Shared by the Subtitles track list and the Audio pane — both
 /// render the same compact rows (title, optional external badge / subtitle,
@@ -15,9 +24,26 @@ struct PlayerMenuRowStack: View {
     @FocusState.Binding var focus: PlayerControls.FocusSlot?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: rows.contains { $0.versionPresentation != nil } ? 12 : 2) {
             ForEach(rows) { row in
-                if row.isToggle {
+                if row.startsSection {
+                    PlayerOptionsDivider()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .accessibilityHidden(true)
+                }
+                if let presentation = row.versionPresentation {
+                    MediaVersionChoiceButton(
+                        presentation: presentation,
+                        isSelected: row.isSelected,
+                        isFocused: focus == .row(row.id),
+                        action: row.action
+                    )
+                    .accessibilityIdentifier("player-option-row-\(row.id)")
+                    .focused($focus, equals: .row(row.id))
+                } else if let submenu = row.submenu {
+                    PlayerOptionsRow(row: submenu, palette: palette, focus: $focus, titleLineLimit: 2)
+                } else if row.isToggle {
                     compactToggleRow(row)
                 } else {
                     compactSelectableRow(row)
@@ -30,16 +56,30 @@ struct PlayerMenuRowStack: View {
         Button(action: row.action) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    row.title
-                        .font(.body)
-                        .lineLimit(1)
+                    #if os(tvOS)
+                    if row.marqueeTitle {
+                        MarqueeText(text: row.title)
+                    } else {
+                        row.title.font(.body).lineLimit(row.titleLineLimit)
+                    }
+                    #else
+                    row.title.font(.body).lineLimit(row.titleLineLimit)
+                    #endif
+                    if let facts = row.facts {
+                        facts
+                            .font(.caption2)
+                            .playerMenuRowSecondary()
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if let subtitle = row.subtitle {
                         subtitle
                             .font(.caption2)
                             .playerMenuRowSecondary()
                             .lineLimit(2)
+                            .truncationMode(row.facts == nil ? .tail : .middle)
                     }
                 }
+                .multilineTextAlignment(.leading)
                 if row.isExternal {
                     // Marks a subtitle that isn't embedded in the video — one you
                     // downloaded this session, or a local sidecar file — so it's
@@ -59,6 +99,7 @@ struct PlayerMenuRowStack: View {
         }
         .buttonStyle(PlayerMenuRowButtonStyle())
         .accessibilityIdentifier("player-option-row-\(row.id)")
+        .accessibilityAddTraits(row.isSelected ? .isSelected : [])
         .focusEffectDisabled()
         .focused($focus, equals: .row(row.id))
     }
@@ -76,15 +117,23 @@ struct PlayerMenuRowStack: View {
                     }
                 }
                 Spacer(minLength: 8)
-                Image(systemName: row.isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.body)
-                    .playerMenuRowMark(isSelected: row.isSelected, accent: palette.accent)
+                if row.isUpdating {
+                    ProgressView()
+                } else {
+                    Image(systemName: row.isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.body)
+                        .playerMenuRowMark(isSelected: row.isSelected, accent: palette.accent)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(PlayerMenuRowButtonStyle())
+        #if os(tvOS)
+        .accessibilityIdentifier("player-option-row-\(row.id)")
+        .accessibilityValue(row.isUpdating ? Text("Updating") : (row.isSelected ? Text("On") : Text("Off")))
+        #endif
         .focusEffectDisabled()
         .focused($focus, equals: .row(row.id))
     }
@@ -98,15 +147,30 @@ struct AudioPaneView: View {
     let rows: [PlayerControls.TrackRow]
     let palette: ThemePalette
     @FocusState.Binding var focus: PlayerControls.FocusSlot?
+    let close: () -> Void
 
     @ViewBuilder
     var body: some View {
         if rows.isEmpty {
+            #if os(tvOS)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("No audio controls available")
+                    .font(.title3)
+                    .plozzForeground(.secondary)
+                Button("Back", action: close)
+                    .buttonStyle(PlayerMenuRowButtonStyle())
+                    .focusEffectDisabled()
+                    .focused($focus, equals: .subBack)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 16)
+            #else
             Text("No alternate audio")
                 .font(.title3)
                 .plozzForeground(.secondary)
                 .padding(.horizontal, 28)
                 .padding(.vertical, 16)
+            #endif
         } else {
             PlayerMenuRowStack(rows: rows, palette: palette, focus: $focus)
                 .padding(.horizontal, 14)

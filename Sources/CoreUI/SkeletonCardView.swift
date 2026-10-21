@@ -25,11 +25,20 @@ public struct SkeletonCardView: View {
     public enum Style { case poster, landscape }
 
     private let style: Style
-    /// Mirrors `PosterCardView`'s series-artwork mode, which draws no caption at
-    /// all. The skeleton is deliberately pixel-1:1 with the loaded card, so it has
-    /// to drop the caption too — otherwise Continue Watching visibly shrinks the
-    /// moment real cards replace the placeholders.
-    private let showsCaption: Bool
+    /// An explicit resolved preference takes precedence over inherited presentation defaults.
+    private let captionOverride: Bool?
+    @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
+    @Environment(\.plozzContinueWatchingCaptionsHidden) private var continueWatchingCaptionsHidden
+    @Environment(\.plozzContinueWatchingCaptionsHiddenWithArtworkTitle) private var continueWatchingArtworkCaptionsHidden
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
+    @Environment(\.plozzContinueWatchingPlaybackDetails) private var playbackDetails
+    private var showsCaption: Bool {
+        if let captionOverride { return captionOverride }
+        if showsSeriesArtwork || artworkPolicy.area == .continueWatching {
+            return !(showsSeriesArtwork ? continueWatchingArtworkCaptionsHidden : continueWatchingCaptionsHidden)
+        }
+        return !captionsHidden
+    }
     /// Mirrors `PosterCardView`'s series-artwork shape: taller than 16:9 (it
     /// reserves a band for its chrome) and narrower to compensate. Kept explicit
     /// rather than inferred from `showsCaption` so the placeholder and the real
@@ -50,14 +59,14 @@ public struct SkeletonCardView: View {
 
     public init(
         style: Style = .poster,
-        showsCaption: Bool = true,
+        showsCaption: Bool? = nil,
         showsSeriesArtwork: Bool = false,
         isFocused: Bool = false,
         showsProgress: Bool = false,
         focus: PlozzCardFocus.Binding? = nil
     ) {
         self.style = style
-        self.showsCaption = showsCaption
+        self.captionOverride = showsCaption
         self.showsSeriesArtwork = showsSeriesArtwork
         self.isFocused = isFocused
         self.showsProgress = showsProgress
@@ -123,14 +132,14 @@ public struct SkeletonCardView: View {
     private var posterCard: some View {
         VStack(alignment: .leading, spacing: metrics.posterCaptionTopSpacing) {
             Color.clear
-                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                .aspectRatio(borderlessAspectRatio, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .overlay {
-                    RoundedRectangle(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: metrics.posterArtworkCornerRadius, style: .continuous)
                         .fill(palette.fill)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius, style: .continuous))
-                .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius)
+                .clipShape(RoundedRectangle(cornerRadius: metrics.posterArtworkCornerRadius, style: .continuous))
+                .plozzMediaEdge(cornerRadius: metrics.posterArtworkCornerRadius)
                 .overlay {
                     SkeletonLoadingIndicator(isVisible: showsProgress)
                 }
@@ -140,14 +149,15 @@ public struct SkeletonCardView: View {
             // the caption block the exact same height, so the row never shifts
             // vertically when real content swaps in.
             if showsCaption {
-                textLines(contentWidth: metrics.posterWidth - 2 * metrics.posterCaptionInset, spacing: 2)
+                textLines(contentWidth: metrics.posterWidth - 2 * metrics.posterCaptionHorizontalInset, spacing: 2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding([.horizontal, .bottom], metrics.posterCaptionInset)
+                    .padding(.horizontal, metrics.posterCaptionHorizontalInset)
+                    .padding(.bottom, metrics.posterCaptionInset)
             }
         }
         .shimmering()
         .plozzFramedMediaCard(
-            innerCornerRadius: PlozzTheme.Metrics.posterArtCornerRadius,
+            innerCornerRadius: metrics.posterArtworkCornerRadius,
             isFocused: surfaceFocused
         )
         .plozzCardRasterize(reduceTransparency: reduceTransparency)
@@ -161,25 +171,26 @@ public struct SkeletonCardView: View {
     // Mirrors `PosterCardView.landscapeCard`.
     private var landscapeCard: some View {
         VStack(alignment: .leading, spacing: metrics.landscapeCaptionTopSpacing) {
-            RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: metrics.landscapeArtworkCornerRadius, style: .continuous)
                 .fill(palette.fill)
                 .frame(width: artworkSize.width, height: artworkSize.height)
-                .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous))
-                .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
+                .clipShape(RoundedRectangle(cornerRadius: metrics.landscapeArtworkCornerRadius, style: .continuous))
+                .plozzMediaEdge(cornerRadius: metrics.landscapeArtworkCornerRadius)
                 .overlay {
                     SkeletonLoadingIndicator(isVisible: showsProgress)
                 }
 
             // PosterCardView's landscape caption uses VStack(spacing: 4).
             if showsCaption {
-                textLines(contentWidth: artworkSize.width - 2 * metrics.landscapeCaptionInset, spacing: 4)
-                    .padding([.horizontal, .bottom], metrics.landscapeCaptionInset)
+                textLines(contentWidth: artworkSize.width - 2 * metrics.landscapeCaptionHorizontalInset, spacing: 4)
+                    .padding(.horizontal, metrics.landscapeCaptionHorizontalInset)
+                    .padding(.bottom, metrics.landscapeCaptionInset)
                     .frame(width: artworkSize.width, alignment: .leading)
             }
         }
         .shimmering()
         .plozzFramedMediaCard(
-            innerCornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
+            innerCornerRadius: metrics.landscapeArtworkCornerRadius,
             isFocused: surfaceFocused
         )
         .plozzCardRasterize(reduceTransparency: reduceTransparency)
@@ -198,10 +209,12 @@ public struct SkeletonCardView: View {
     /// and the same corners as the real one.
     private var nativeCard: some View {
         VStack(spacing: metrics.nativePosterCaptionSpacing) {
-            nativeArtwork.frame(maxWidth: .infinity)
+            nativeArtwork
+                .shimmering(active: !showsProgress)
+                .frame(maxWidth: .infinity)
             if showsCaption {
                 nativeCaption
-                    .offset(y: isFocused ? metrics.focusCaptionPush(for: .system) : 0)
+                    .offset(y: isFocused ? metrics.nativePosterCaptionFocusTravel : 0)
             }
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
@@ -240,7 +253,7 @@ public struct SkeletonCardView: View {
             nativeCaptionLine(height: ceil(title.lineHeight), fraction: 0.7, pill: (16 * metrics.scale).rounded())
             nativeCaptionLine(height: ceil(subtitle.lineHeight), fraction: 0.45, pill: (13 * metrics.scale).rounded())
         }
-        .padding(.bottom, metrics.focusCaptionPush(for: .system))
+        .padding(.bottom, metrics.nativePosterCaptionFocusTravel)
         .shimmering()
     }
 
@@ -305,19 +318,18 @@ public struct SkeletonCardView: View {
     /// Aspect ratio for the borderless full-bleed image (matches `PosterCardView`).
     private var borderlessAspectRatio: CGFloat {
         switch style {
-        case .poster: return 2.0 / 3.0
+        case .poster: return showsSeriesArtwork ? playbackDetails.cardAspectRatio : 2.0 / 3.0
         case .landscape: return showsSeriesArtwork
             ? ContinueWatchingCardShape.aspectRatio
             : 16.0 / 9.0
         }
     }
 
-    /// Outer corner radius reused for a borderless image — the framed card's outer
-    /// (glass) radius, matching `PosterCardView.borderlessCornerRadius`.
+    /// Matches the loaded card's platform-specific artwork rounding.
     private var borderlessCornerRadius: CGFloat {
         switch style {
-        case .poster: return metrics.posterCardCornerRadius
-        case .landscape: return metrics.landscapeCardCornerRadius
+        case .poster: return metrics.borderlessPosterCornerRadius
+        case .landscape: return metrics.borderlessLandscapeCornerRadius
         }
     }
 
@@ -325,8 +337,8 @@ public struct SkeletonCardView: View {
     /// `PosterCardView.borderlessCaptionInset`.
     private var borderlessCaptionInset: CGFloat {
         switch style {
-        case .poster: return metrics.posterCaptionInset
-        case .landscape: return metrics.landscapeCaptionInset
+        case .poster: return metrics.posterCaptionHorizontalInset
+        case .landscape: return metrics.landscapeCaptionHorizontalInset
         }
     }
 
@@ -373,8 +385,8 @@ public struct SkeletonCardView: View {
     /// on load) while giving the placeholders soft, fully-rounded edges.
     private func textLines(contentWidth: CGFloat, spacing: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: spacing) {
-            capsuleLine(font: .system(size: metrics.cardTitleFontSize, weight: .semibold), width: max(contentWidth * 0.7, 1), height: (16 * metrics.scale).rounded())
-            capsuleLine(font: .system(size: metrics.cardSubtitleFontSize), width: max(contentWidth * 0.45, 1), height: (13 * metrics.scale).rounded())
+            capsuleLine(font: .system(size: style == .poster ? metrics.posterTitleFontSize : metrics.cardTitleFontSize, weight: .semibold), width: max(contentWidth * 0.7, 1), height: (16 * metrics.scale).rounded())
+            capsuleLine(font: .system(size: style == .poster ? metrics.posterSubtitleFontSize : metrics.cardSubtitleFontSize), width: max(contentWidth * 0.45, 1), height: (13 * metrics.scale).rounded())
         }
     }
 

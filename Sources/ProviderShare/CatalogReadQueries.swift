@@ -393,7 +393,12 @@ struct CatalogReadQueries {
                 title: self.columnText(stmt, 1) ?? "",
                 kind: .movie,
                 productionYear: self.columnOptInt(stmt, 2),
-                libraryID: ShareCatalogID.moviesLibrary
+                libraryID: ShareCatalogID.moviesLibrary,
+                librarySortValues: LibrarySortValues(
+                    sortName: self.columnText(stmt, 13),
+                    dateAdded: sqlite3_column_type(stmt, 14) == SQLITE_NULL
+                        ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 14))
+                )
             )
             rows.append((
                 item,
@@ -497,7 +502,11 @@ struct CatalogReadQueries {
             sqlite3_bind_int64($0, 2, Int64(limit)); sqlite3_bind_int64($0, 3, Int64(offset))
         }) { stmt in
             guard let key = self.columnText(stmt, 0) else { return }
-            let item = ShareCatalogReadProjection.seriesItem(key: key, title: self.columnText(stmt, 1) ?? key, library: library, year: self.columnOptInt(stmt, 2))
+            var item = ShareCatalogReadProjection.seriesItem(key: key, title: self.columnText(stmt, 1) ?? key, library: library, year: self.columnOptInt(stmt, 2))
+            item.librarySortValues = LibrarySortValues(
+                sortName: self.columnText(stmt, 13),
+                dateAdded: sqlite3_column_type(stmt, 14) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 14))
+            )
             rows.append((
                 item,
                 ShareCatalogID.series(key),
@@ -531,7 +540,82 @@ struct CatalogReadQueries {
             return "catalog_runtime IS NULL, catalog_runtime \(direction), catalog_sort_name ASC, catalog_stable_id ASC"
         case .random:
             return "catalog_random \(direction), catalog_stable_id ASC"
+        case .year, .criticRating, .userRating, .contentRating, .progress, .plays, .lastPlayed:
+            // These are ordered from compact query facts, not this SQL page path.
+            return "catalog_sort_name ASC, catalog_stable_id ASC"
         }
+    }
+
+    func libraryQueryFacets(in library: CatalogLibrary) -> LibraryQueryFacets {
+        var genres = Set<String>()
+        var years = Set<Int>()
+        let includesLocal = normalizedMetadataReady && hasAnyLocalMetadata()
+        let localColumns: [(MetadataField, Int32, Int32)] = [(.productionYear, 2, 3), (.genres, 4, 5)]
+        query("""
+        WITH catalog_items AS (
+          SELECT 'f:' || MIN(rel_path) AS item_id, MAX(year) AS year
+          FROM assets WHERE library=? AND library='movies' AND kind='movie'
+          GROUP BY COALESCE(movie_group_key, movie_key, rel_path)
+          UNION ALL
+          SELECT 'series:' || series_key, MAX(year)
+          FROM assets WHERE library=? AND library!='movies' AND kind='episode' AND series_key IS NOT NULL
+          GROUP BY series_key
+        )
+        SELECT DISTINCT c.year, e.genres_json, yn.value_json, yf.value_json, gn.value_json, gf.value_json
+        FROM catalog_items c
+        LEFT JOIN enrichment e ON e.item_id=c.item_id
+        LEFT JOIN metadata_values yn
+          ON yn.item_id=c.item_id AND yn.field='productionYear' AND yn.source='localNFO'
+        LEFT JOIN metadata_values yf
+          ON yf.item_id=c.item_id AND yf.field='productionYear' AND yf.source='filename'
+        LEFT JOIN metadata_values gn
+          ON gn.item_id=c.item_id AND gn.field='genres' AND gn.source='localNFO'
+        LEFT JOIN metadata_values gf
+          ON gf.item_id=c.item_id AND gf.field='genres' AND gf.source='filename';
+        """, bind: {
+            self.bindText($0, 1, library.rawValue)
+            self.bindText($0, 2, library.rawValue)
+        }) { stmt in
+            var item = MediaItem(
+                id: "", title: "", kind: library == .movies ? .movie : .series,
+                productionYear: self.columnOptInt(stmt, 0),
+                genres: CatalogJSON.decode([String].self, self.columnText(stmt, 1)) ?? []
+            )
+            if includesLocal {
+                var fields: [MetadataField: ShareCatalogReadProjection.LocalFieldRow] = [:]
+                for (field, nfoColumn, filenameColumn) in localColumns {
+                    if let json = self.columnText(stmt, nfoColumn) {
+                        fields[field] = .init(source: .localNFO, valueJSON: json)
+                    } else if let json = self.columnText(stmt, filenameColumn) {
+                        fields[field] = .init(source: .filename, valueJSON: json)
+                    }
+                }
+                item = ShareCatalogReadProjection.applyLocalMetadata(item, fields)
+            }
+            if let year = item.productionYear { years.insert(year) }
+            genres.formUnion(item.genres)
+        }
+        return LibraryQueryFacets(genres: Array(genres), years: Array(years))
+    }
+
+    func libraryQueryEpisodes(in library: CatalogLibrary, offset: Int, limit: Int) -> MediaPage {
+        var total = 0
+        query("SELECT COUNT(*) FROM assets WHERE library=? AND kind='episode';",
+              bind: { self.bindText($0, 1, library.rawValue) }) { total = Int(sqlite3_column_int64($0, 0)) }
+        var items: [MediaItem] = []
+        query("""
+        SELECT rel_path, title, kind, library, year, series_title, series_key, season, episode
+        FROM assets WHERE library=? AND kind='episode'
+        ORDER BY series_key, season, episode, rel_path LIMIT ? OFFSET ?;
+        """, bind: {
+            self.bindText($0, 1, library.rawValue)
+            sqlite3_bind_int64($0, 2, Int64(limit))
+            sqlite3_bind_int64($0, 3, Int64(offset))
+        }) { stmt in
+            guard let seriesKey = self.columnText(stmt, 6) else { return }
+            items.append(ShareCatalogReadProjection.episodeItem(from: stmt, seriesKey: seriesKey))
+        }
+        return MediaPage(items: withEnrichment(items), startIndex: offset, totalCount: total)
     }
 
     /// Deterministic local shuffle key. SQLite's `random()` would reorder between
@@ -1399,6 +1483,7 @@ struct CatalogReadQueries {
         MediaVersion(
             id: relPath,
             name: (basename as NSString).deletingPathExtension,
+            fileName: basename,
             height: resolutionHeight(fromName: basename),
             sizeBytes: size > 0 ? size : nil,
             videoRange: videoRange(fromName: basename),
@@ -1731,7 +1816,6 @@ struct CatalogReadQueries {
                     )
                 )
             }
-            guard !values.isEmpty else { return item }
             return ShareCatalogReadProjection.applyLocalArtwork(
                 item,
                 values,

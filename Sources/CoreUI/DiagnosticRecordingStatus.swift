@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 
 #if DEBUG
+import CoreModels
 import CoreNetworking
 import notify
 
@@ -18,7 +19,7 @@ enum DiagnosticRecordingPhase: String, CaseIterable {
         case .preparing:
             LocalizedStringResource("Preparing recording - please wait", comment: "Diagnostic recording status. Wait before performing the action being recorded.")
         case .recording:
-            LocalizedStringResource("Recording diagnostics - ready", comment: "Diagnostic recording status. Recording is active and the requested action can now be performed.")
+            LocalizedStringResource("Recording", comment: "Diagnostic recording status beside a red recording dot. Recording is active and the requested action can now be performed.")
         case .finished:
             LocalizedStringResource("Recording finished", comment: "Diagnostic recording has completed.")
         case .failed:
@@ -66,6 +67,9 @@ final class DiagnosticRecordingController {
         expiry?.cancel()
         let changed = self.phase != phase
         self.phase = phase
+        if changed, let imagePhase = DiagnosticImageMap.Phase(rawValue: phase.rawValue) {
+            DiagnosticImageMap.record(imagePhase)
+        }
         let label: UILabel
         if let badge {
             label = badge
@@ -96,10 +100,15 @@ final class DiagnosticRecordingController {
             badge = label
         }
         if changed {
-            label.text = "  \(String(localized: phase.text))  " // l10n:content — localized UIKit status label
-            label.backgroundColor = phase == .recording
-                ? UIColor(red: 0.65, green: 0.02, blue: 0.03, alpha: 1)
-                : UIColor(white: 0.12, alpha: 1)
+            let text = String(localized: phase.text) // l10n:content - UIKit status boundary; resolved when the diagnostic phase changes.
+            let indicator = phase == .recording ? "\u{25CF}  " : ""
+            let status = NSMutableAttributedString(string: "  \(indicator)\(text)  ") // l10n:content — localized UIKit status label
+            if phase == .recording {
+                status.addAttribute(.foregroundColor, value: UIColor.systemRed, range: NSRange(location: 2, length: 1))
+            }
+            label.attributedText = status
+            label.accessibilityLabel = text
+            label.backgroundColor = UIColor(white: 0.12, alpha: 1)
             window.layoutIfNeeded()
         }
         label.layer.removeAnimation(forKey: "recording-expiry")

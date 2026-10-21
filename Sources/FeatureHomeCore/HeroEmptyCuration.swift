@@ -29,7 +29,8 @@ public enum HeroEmptyCuration {
         recentlyAdded: [MediaItem],
         randomLibraries: [HeroRandomLibrary],
         seerConnected: Bool,
-        featuredDiscoveryEnabled: Bool? = nil
+        featuredDiscoveryEnabled: Bool? = nil,
+        collectionState: LoadState<[MediaItem]> = .idle
     ) -> Bool {
         guard settings.isActive else { return true }
         for source in settings.sources {
@@ -42,6 +43,8 @@ public enum HeroEmptyCuration {
                 if !recentlyAdded.isEmpty { return false }
             case .randomFromLibrary:
                 if !randomLibraries.isEmpty { return false }
+            case .collection:
+                if !settings.collections.isEmpty, collectionState != .empty { return false }
             case .featured:
                 // An enabled external feed may be empty or temporarily failing.
                 // Only an explicitly empty feed selection grants authority.

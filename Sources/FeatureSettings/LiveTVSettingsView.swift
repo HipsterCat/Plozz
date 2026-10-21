@@ -10,6 +10,9 @@ public struct LiveTVSettingsView: View {
     private let sourceManagement: (() -> AnyView)?
     @State private var settings: LiveTVViewSettings
     @State private var hiddenChannelsModel: LiveTVHiddenChannelsSettingsModel
+    #if os(tvOS)
+    @Environment(\.settingsInWorkspace) private var inWorkspace
+    #endif
 
     public init(
         store: any LiveTVViewSettingsStoring = LiveTVViewSettingsStore(),
@@ -114,7 +117,10 @@ public struct LiveTVSettingsView: View {
                 title: "Auto preview",
                 description: "Preview the focused channel as you browse."
             ) {
-                Toggle("Auto preview", isOn: $settings.autoPreview)
+                Toggle("Auto preview", isOn: Binding(
+                    get: { settings.allowsAutomaticPreview },
+                    set: { settings.chooseAutoPreview($0) }
+                ))
                     .toggleStyle(SettingsSwitchToggleStyle())
             },
             SettingsSplitRow(
@@ -165,15 +171,39 @@ public struct LiveTVSettingsView: View {
                 }
             },
         ]
-        guard sourceManagement != nil else { return browsingRows }
-        return [
+        let sources: [SettingsSplitRow] = sourceManagement == nil ? [] : [
             SettingsSplitRow(
                 id: "sources",
                 title: "Sources"
             ) {
                 sourceDestination
             }
-        ] + browsingRows
+        ]
+        guard inWorkspace else { return sources + browsingRows }
+        return sources.map { $0.page() } + [
+            SettingsSplitRow(id: "channel-order", title: "Channel order") {
+                SettingsSegmentedPicker(
+                    options: [false, true], selection: $settings.sortByName,
+                    title: { $0 ? "Name" : "Channel number" }
+                )
+            },
+            SettingsSplitRow(id: "guide", title: "Guide") {
+                SettingsControlRows {
+                    ForEach(browsingRows.filter { ["auto-preview", "keep-watching-while-browsing", "preview-after-watching", "recently-watched"].contains($0.id) }) { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            row.detail()
+                            if let description = row.description {
+                                description.settingsHelperText().fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            },
+            SettingsSplitRow(id: "filters", title: "Filters") {
+                Toggle("Favorites only", isOn: $settings.favoritesOnly)
+                Toggle("With guide listings", isOn: $settings.guideOnly)
+            }
+        ] + browsingRows.filter { $0.id == "hidden-channels" }.map { $0.page() }
     }
     #endif
 }
@@ -234,6 +264,16 @@ private struct LiveTVHiddenChannelsListContent: View {
                 }
             }
         } else {
+            if model.hasVisibilityRules {
+                SettingsSectionGroup {
+                    Text("Category and regional filtering is active. Review filtered channels in Live TV > Manage channels > Hidden channels.")
+                    Button("Reset category and region visibility") {
+                        model.resetVisibility()
+                    }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .disabled(model.hasPendingChanges)
+                }
+            }
             if let issue = model.issue {
                 LiveTVHiddenChannelsFailureSection(issue: issue) {
                     model.retry()
@@ -243,7 +283,7 @@ private struct LiveTVHiddenChannelsListContent: View {
             if model.hiddenChannels.isEmpty {
                 SettingsSectionGroup {
                     ContentUnavailableView(
-                        "No hidden channels",
+                        model.hasVisibilityRules ? "No individually hidden channels" : "No hidden channels",
                         systemImage: "eye"
                     )
                 }
@@ -313,6 +353,7 @@ final class LiveTVHiddenChannelsSettingsModel {
     private enum PendingMutation: Equatable {
         case restore(String)
         case restoreAll
+        case resetVisibility
     }
 
     @ObservationIgnored
@@ -327,6 +368,7 @@ final class LiveTVHiddenChannelsSettingsModel {
     var hiddenChannels: [LiveTVHiddenChannel] {
         preferences?.hiddenChannels ?? []
     }
+    var hasVisibilityRules: Bool { preferences?.organization.hasVisibilityRules == true }
 
     var hasLoadedPreferences: Bool {
         preferences != nil
@@ -364,6 +406,10 @@ final class LiveTVHiddenChannelsSettingsModel {
         apply(.restoreAll)
     }
 
+    func resetVisibility() {
+        apply(.resetVisibility)
+    }
+
     func retry() {
         reload()
     }
@@ -378,12 +424,15 @@ final class LiveTVHiddenChannelsSettingsModel {
             return
         }
 
-        let updated: LiveTVPreferences
+        var updated: LiveTVPreferences
         switch mutation {
         case let .restore(id):
             updated = current.restoringChannel(id: id)
         case .restoreAll:
             updated = current.restoringAllChannels()
+        case .resetVisibility:
+            updated = current
+            updated.organization = current.organization.resettingVisibility()
         }
 
         guard updated != current else {

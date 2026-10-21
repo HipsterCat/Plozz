@@ -4,33 +4,34 @@ import SwiftUI
 /// A compact − / value / + stepper for dialing a value through an ordered set of
 /// presets (e.g. skip intervals, playback speed).
 ///
-/// The − and + are *discrete focusable buttons*: you move focus between them with
-/// left/right and press **Select** to step. Deliberately not a value-on-left/right
-/// slider — that would hijack the left-press the split layout relies on to return
-/// focus to the master list. Here, a left-press from the − button just leaves the
-/// control like any other. The value clamps at the ends of the preset list.
+/// A labeled TV stepper makes its entire row one native focus target. Left/Right
+/// adjusts, Select increments, and Up/Down leaves. Other platforms retain their
+/// labeled row and separate decrement/increment buttons.
 public struct SettingsStepper<Value: Hashable>: View {
     public let options: [Value]
     @Binding public var selection: Value
     public let title: (Value) -> Text
-    /// Compact styling for tight surfaces (e.g. the in-player Speed menu): smaller
-    /// − / + buttons and a body-size value that matches the preset rows beside it,
-    /// so the stepper doesn't tower over the list. Defaults to the roomy style used
-    /// on the full Settings pages.
+    /// Compact spacing for tight surfaces. TV always uses the shared Settings font.
     public let compact: Bool
     /// When true the value wraps from the last option back to the first (and vice
     /// versa) and the − / + buttons never dim — for cyclic ranges like a clock
     /// time. When false (the default) the value clamps at the ends of the preset
     /// list and the end arrow dims.
     public let wraps: Bool
-    /// Called with `true` when either the − or + button gains focus and `false`
-    /// when focus leaves the stepper. Lets a caller drive a live preview while the
-    /// user is dialing the value (e.g. Circadian's Darkness/Warmth tint preview),
-    /// mirroring ``SettingsOptionPicker``'s hook.
+    /// Reports focus entering/leaving the whole control, including live previews.
     public let onFocusChange: ((Bool) -> Void)?
+    private let label: LocalizedStringResource?
+    private let subtitle: LocalizedStringResource?
+    private let labelWidth: CGFloat
 
     @Environment(\.themePalette) private var palette
     @FocusState private var focusedButton: StepperButton?
+    #if os(tvOS)
+    @FocusState private var isFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.settingsFormRowsFlushLeading) private var flushLeading
+    #endif
 
     private enum StepperButton { case minus, plus }
 
@@ -40,10 +41,14 @@ public struct SettingsStepper<Value: Hashable>: View {
         compact: Bool = false,
         wraps: Bool = false,
         onFocusChange: ((Bool) -> Void)? = nil,
+        label: LocalizedStringResource? = nil,
+        subtitle: LocalizedStringResource? = nil,
+        labelWidth: CGFloat = 240,
         title: @escaping (Value) -> LocalizedStringResource
     ) {
         self.init(options: options, selection: selection, compact: compact, wraps: wraps,
-                  onFocusChange: onFocusChange, title: { Text(title($0)) })
+                  onFocusChange: onFocusChange, label: label, subtitle: subtitle,
+                  labelWidth: labelWidth, title: { Text(title($0)) })
     }
 
     /// A stepper whose values are formatted CONTENT rather than copy — playback
@@ -55,10 +60,14 @@ public struct SettingsStepper<Value: Hashable>: View {
         compact: Bool = false,
         wraps: Bool = false,
         onFocusChange: ((Bool) -> Void)? = nil,
+        label: LocalizedStringResource? = nil,
+        subtitle: LocalizedStringResource? = nil,
+        labelWidth: CGFloat = 240,
         verbatimTitle: @escaping (Value) -> String
     ) {
         self.init(options: options, selection: selection, compact: compact, wraps: wraps,
-                  onFocusChange: onFocusChange, title: { Text(verbatim: verbatimTitle($0)) })
+                  onFocusChange: onFocusChange, label: label, subtitle: subtitle,
+                  labelWidth: labelWidth, title: { Text(verbatim: verbatimTitle($0)) })
     }
 
     private init(
@@ -67,6 +76,9 @@ public struct SettingsStepper<Value: Hashable>: View {
         compact: Bool,
         wraps: Bool,
         onFocusChange: ((Bool) -> Void)?,
+        label: LocalizedStringResource?,
+        subtitle: LocalizedStringResource?,
+        labelWidth: CGFloat,
         title: @escaping (Value) -> Text
     ) {
         self.options = options
@@ -74,12 +86,15 @@ public struct SettingsStepper<Value: Hashable>: View {
         self.compact = compact
         self.wraps = wraps
         self.onFocusChange = onFocusChange
+        self.label = label
+        self.subtitle = subtitle
+        self.labelWidth = labelWidth
         self.title = title
     }
 
     private var index: Int { options.firstIndex(of: selection) ?? 0 }
-    private var canDecrement: Bool { wraps || index > 0 }
-    private var canIncrement: Bool { wraps || index < options.count - 1 }
+    private var canDecrement: Bool { !options.isEmpty && (wraps || index > 0) }
+    private var canIncrement: Bool { !options.isEmpty && (wraps || index < options.count - 1) }
 
     private func stepped(by delta: Int) -> Value? {
         guard !options.isEmpty else { return nil }
@@ -95,27 +110,57 @@ public struct SettingsStepper<Value: Hashable>: View {
     private var buttonSize: CGFloat { compact ? 46 : 72 }
     private var glyphSize: CGFloat { compact ? 16 : 26 }
     private var rowSpacing: CGFloat { compact ? 12 : 24 }
-    private var valueMinWidth: CGFloat { compact ? 52 : 96 }
-    private var valueFont: Font { compact ? .body : .headline.weight(.semibold) }
+    private var valueMinWidth: CGFloat {
+        #if os(tvOS)
+        64
+        #else
+        compact ? 52 : 96
+        #endif
+    }
+    private var valueFont: Font {
+        #if os(tvOS)
+        SettingsRowMetrics.titleFont.weight(.regular)
+        #else
+        compact ? .body : .headline.weight(.semibold)
+        #endif
+    }
 
     public var body: some View {
+        #if os(tvOS)
+        SettingsAdjustmentFocusScope(
+            content: televisionControl,
+            screen: options,
+            adjustableRow: { isFocused ? 0 : nil },
+            onMove: { direction, _ in
+                switch direction {
+                case .left: step(by: -1)
+                case .right: step(by: 1)
+                default: break
+                }
+            }
+        )
+        .fixedSize(horizontal: label == nil, vertical: true)
+        .onChange(of: isFocused) { _, focused in onFocusChange?(focused) }
+        #else
+        if let label {
+            LabeledSettingRow(label, subtitle: subtitle, labelWidth: labelWidth) {
+                buttonPair
+            }
+        } else {
+            buttonPair
+        }
+        #endif
+    }
+
+    #if !os(tvOS)
+    private var buttonPair: some View {
         HStack(spacing: rowSpacing) {
             stepButton(symbol: "minus", dimmed: !canDecrement, focus: .minus) {
                 if let next = stepped(by: -1) { selection = next }
             }
 
-            // Reserve the widest option's width (hidden sizers behind the live
-            // value) so stepping between variable-width labels — e.g. "None" vs
-            // "Drop Shadow" — never nudges the − / + buttons.
-            ZStack {
-                ForEach(options.indices, id: \.self) { i in
-                    valueLabel(title(options[i])).hidden()
-                }
-                valueLabel(title(selection))
-                    .contentTransition(.numericText())
-            }
-            .frame(minWidth: valueMinWidth)
-            .animation(.easeOut(duration: 0.16), value: index)
+            value
+                .animation(.easeOut(duration: 0.16), value: index)
 
             stepButton(symbol: "plus", dimmed: !canIncrement, focus: .plus) {
                 if let next = stepped(by: 1) { selection = next }
@@ -128,6 +173,83 @@ public struct SettingsStepper<Value: Hashable>: View {
             onFocusChange?(focused != nil)
         }
     }
+    #endif
+
+    private func step(by delta: Int) {
+        if let next = stepped(by: delta) { selection = next }
+    }
+
+    #if os(tvOS)
+    @ViewBuilder private var televisionControl: some View {
+        if label != nil {
+            televisionButton
+                .buttonStyle(SettingsFormButtonStyle())
+                .padding(.leading, flushLeading ? -SettingsRowMetrics.horizontalPadding : 0)
+        } else {
+            televisionButton
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+    }
+
+    private var televisionButton: some View {
+        Button { step(by: 1) } label: {
+            if let label {
+                LabeledSettingRow(
+                    label, subtitle: subtitle, labelWidth: labelWidth, trailingAlignment: .trailing
+                ) {
+                    adjustmentValue
+                }
+            } else {
+                adjustmentValue
+            }
+        }
+        .focused($isFocused)
+        .disabled(options.isEmpty)
+        .accessibilityLabel(label.map(Text.init) ?? title(selection))
+        .accessibilityValue(title(selection))
+        .accessibilityHint(subtitle.map(Text.init) ?? Text(verbatim: ""))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .decrement: step(by: -1)
+            case .increment: step(by: 1)
+            @unknown default: break
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: index)
+    }
+
+    private var adjustmentValue: some View {
+        HStack(spacing: compact ? 12 : 16) {
+            adjustmentGlyph("minus", enabled: canDecrement)
+            value
+                .environment(\.layoutDirection, layoutDirection)
+            adjustmentGlyph("plus", enabled: canIncrement)
+        }
+        // Keep the physical arrows consistent while the enclosing row follows RTL.
+        .environment(\.layoutDirection, .leftToRight)
+    }
+
+    private func adjustmentGlyph(_ symbol: String, enabled: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(SettingsRowMetrics.titleFont.weight(.semibold))
+            .frame(width: 32, height: SettingsRowMetrics.minHeight(.secondary))
+            .opacity(enabled ? 1 : 0.35)
+            .accessibilityHidden(true)
+    }
+    #endif
+
+    private var value: some View {
+        ZStack {
+            // Reserve the widest option without exposing hidden sizing labels to VoiceOver.
+            ForEach(options.indices, id: \.self) { i in
+                valueLabel(title(options[i])).hidden().accessibilityHidden(true)
+            }
+            valueLabel(title(selection))
+                .contentTransition(.numericText())
+        }
+        .frame(minWidth: valueMinWidth)
+    }
 
     private func valueLabel(_ text: Text) -> some View {
         text
@@ -135,7 +257,9 @@ public struct SettingsStepper<Value: Hashable>: View {
             .monospacedDigit()
             .lineLimit(1)
             .fixedSize()
+            #if !os(tvOS)
             .foregroundStyle(palette.primaryText)
+            #endif
     }
 
     private func stepButton(symbol: String, dimmed: Bool, focus: StepperButton, action: @escaping () -> Void) -> some View {

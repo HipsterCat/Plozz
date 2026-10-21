@@ -95,6 +95,11 @@ struct SettingsContext {
 /// this to drill from a server summary row into `ServerDetailView`, and a
 /// future per-account flow can do the same without re-plumbing closures.
 public enum SettingsRoute: Hashable {
+    case language
+    case screensNavigation
+    case about
+    case artwork
+    case navigationLayout
     case profile
     case liveTV
     /// Per-profile settings page (Everyone › Profiles › <name>).
@@ -113,6 +118,7 @@ public enum SettingsRoute: Hashable {
     case parentalPINSetup
     /// The household's Parental PIN settings (Everyone › Parental PIN).
     case parentalPIN
+    case topShelf
     case servers
     case myLibraries
     case appearance
@@ -120,6 +126,7 @@ public enum SettingsRoute: Hashable {
     case detailPage
     case nightShift
     case playback
+    case subtitles
     case subtitleStyle(liveTV: Bool)
     case spoilers
     case integrations
@@ -139,6 +146,40 @@ public enum SettingsRoute: Hashable {
     case server(key: String)
 }
 
+enum SettingsRouteAccess: Equatable {
+    case allowed, parentalPIN, adultProfile
+}
+
+extension SettingsRoute {
+    var usesFullScreenDetail: Bool {
+        switch self {
+        case .subtitleStyle, .profileAppearance, .profileLockSetup, .parentalPINSetup:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func access(activeProfileID: String, isKids: Bool, isParentalSealed: Bool) -> SettingsRouteAccess {
+        guard isKids else { return .allowed }
+        switch self {
+        case .profile, .servers, .server, .parentalPIN, .topShelf,
+             .metadata, .metadataDiagnostics, .seerr, .seerUserPicker,
+             .syncSetup, .syncTroubleshooting:
+            return .adultProfile
+        case .myLibraries, .plexUser, .serverUser, .parentalPINSetup:
+            return isParentalSealed ? .parentalPIN : .allowed
+        case let .profileSettings(profileID), let .profileLockSetup(profileID):
+            guard profileID == activeProfileID else { return .adultProfile }
+            return isParentalSealed ? .parentalPIN : .allowed
+        case let .profileAppearance(profileID):
+            return profileID == activeProfileID ? .allowed : .adultProfile
+        default:
+            return .allowed
+        }
+    }
+}
+
 /// Settings navigation state that survives a top-bar/sidebar/rail shell swap.
 ///
 /// MainTabView owns this model's identity but never reads `path`. SettingsView is
@@ -148,18 +189,148 @@ public enum SettingsRoute: Hashable {
 @MainActor
 @Observable
 public final class SettingsNavigationModel {
+    #if os(tvOS)
+    let pages = SettingsPageNavigation<SettingsRoute>()
+    var path: [SettingsRoute] {
+        get { pages.routes }
+        set { pages.routes = newValue }
+    }
+    #else
     var path: [SettingsRoute] = []
+    #endif
+    var section: SettingsRoute = .playback
+    var isCategoryOpen: Bool {
+        #if os(tvOS)
+        !pages.pages.isEmpty
+        #else
+        !path.isEmpty
+        #endif
+    }
+    var focusInDetail = false
+    var restoringSidebar = true
+    var enteringDetail = false
+    var sidebarFocusRequest = 0
+    var detailFocusRequest = 0
     /// Live row mirrored in Appearance's detail pane. Stored beside the path so
     /// replacing the surrounding tab/sidebar shell restores not only Appearance,
     /// but the exact feature row the viewer was editing inside it.
     var appearanceRowID: String?
 
     public init() {}
+
+    func openArtwork() {
+        appearanceRowID = "artwork"
+        select(.appearance)
+        path = [.appearance, .artwork]
+        enterDetail()
+    }
+
+    func openMetadataProviders() {
+        reveal(.metadata)
+    }
+
+    private func reveal(_ route: SettingsRoute) {
+        select(route)
+        enterDetail()
+    }
+
+    func select(_ route: SettingsRoute) {
+        guard section != route else { return }
+        resetPages()
+        section = route
+    }
+
+    func enterDetail(sourceID: UUID? = nil) {
+        restoringSidebar = false
+        enteringDetail = true
+        detailFocusRequest += 1
+        if !isCategoryOpen {
+            #if os(tvOS)
+            pages.push(section, sourceID: sourceID)
+            #else
+            path = [section]
+            #endif
+        }
+    }
+
+    func returnToSidebar() {
+        resetPages()
+        restoreCategoryFocus()
+    }
+
+    func restoreCategoryFocus() {
+        #if os(tvOS)
+        let categoryAlreadyFocused = !focusInDetail && !enteringDetail && !restoringSidebar
+        #endif
+        enteringDetail = false
+        focusInDetail = false
+        #if os(tvOS)
+        if pages.returnSourceID != nil {
+            // A fading parent can regain native focus before the transition finishes.
+            restoringSidebar = !categoryAlreadyFocused
+            return
+        }
+        #endif
+        restoringSidebar = true
+        sidebarFocusRequest += 1
+    }
+
+    func resetForProfile() {
+        resetPages()
+        section = .playback
+        appearanceRowID = nil
+        returnToSidebar()
+    }
+
+    private func resetPages() {
+        #if os(tvOS)
+        pages.reset()
+        #else
+        path.removeAll()
+        #endif
+    }
 }
+
+extension View {
+    @ViewBuilder
+    func settingsWorkspaceEntry(_ isEntry: Bool = true, route: SettingsRoute? = nil) -> some View {
+        #if os(tvOS)
+        modifier(SettingsWorkspaceEntryFocus(isEntry: isEntry, route: route))
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(tvOS)
+private struct SettingsWorkspaceEntryFocus: ViewModifier {
+    let isEntry: Bool
+    let route: SettingsRoute?
+    @Environment(SettingsNavigationModel.self) private var navigation: SettingsNavigationModel?
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focused($focused)
+            .task(id: navigation?.detailFocusRequest) {
+                guard isEntry, let navigation, navigation.enteringDetail,
+                      navigation.path.last == route else { return }
+                focused = false
+                await Task.yield()
+                guard !Task.isCancelled, navigation.enteringDetail,
+                      navigation.path.last == route else { return }
+                focused = true
+            }
+    }
+}
+#endif
 
 extension EdgeInsets {
     /// The default uniform `SettingsPanel` inset — fine for text / non-row content.
-    static var settingsPanelDefault: EdgeInsets { EdgeInsets(top: 28, leading: 28, bottom: 28, trailing: 28) }
+    static var settingsPanelDefault: EdgeInsets {
+        EdgeInsets(top: SettingsFormMetrics.pageInset, leading: SettingsFormMetrics.pageInset,
+                   bottom: SettingsFormMetrics.pageInset, trailing: SettingsFormMetrics.pageInset)
+    }
 
     /// `SettingsPanel` inset tuned so list-row controls inside focus
     /// **concentrically** with the panel: 28pt horizontal / 16pt vertical, i.e.
@@ -167,7 +338,10 @@ extension EdgeInsets {
     /// plus a uniform 12pt gap on every side. Use for a panel whose content is a
     /// stack of toggle / checkable / selector rows (which also pass
     /// `flushLeading: false`).
-    static var settingsPanelRowContent: EdgeInsets { EdgeInsets(top: 16, leading: 28, bottom: 16, trailing: 28) }
+    static var settingsPanelRowContent: EdgeInsets {
+        EdgeInsets(top: PlozzTheme.Spacing.medium, leading: SettingsFormMetrics.pageInset,
+                   bottom: PlozzTheme.Spacing.medium, trailing: SettingsFormMetrics.pageInset)
+    }
 }
 
 /// A titled section rendered as a translucent panel. Reused by every Settings
@@ -210,7 +384,11 @@ struct SettingsPanel<Content: View>: View {
                     }
                     if let subtitle {
                         Text(subtitle)
+                            #if os(tvOS)
+                            .font(SettingsRowMetrics.helperFont)
+                            #else
                             .font(.footnote)
+                            #endif
                             .plozzForeground(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -219,7 +397,11 @@ struct SettingsPanel<Content: View>: View {
             content
             if let footer {
                 Text(footer)
+                    #if os(tvOS)
+                    .font(SettingsRowMetrics.helperFont)
+                    #else
                     .font(.footnote)
+                    #endif
                     .plozzForeground(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -238,7 +420,7 @@ private struct ConditionalRaisedSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         if active {
-            content.plozzSurface(.raised, cornerRadius: cornerRadius)
+            content.settingsGroupSurface(cornerRadius: cornerRadius)
         } else {
             content
         }
@@ -279,6 +461,7 @@ struct FocusableSettingsPanel<Content: View>: View {
     var body: some View {
         SettingsPanel(title: title, footer: footer, showsSurface: false) { content }
             .plozzFocusableCard(cornerRadius: PlozzTheme.Metrics.mediumCardCornerRadius)
+            .plozzAdaptiveCardSurface()
             .accessibilityElement(children: .combine)
             .onTapGesture { onActivate?() }
     }
@@ -302,12 +485,23 @@ struct ProviderIcon: View {
     let provider: ProviderKind
     var size: CGFloat = 14
     var mediaShareTransport: MediaShareTransportKind? = nil
+    var siteURL: URL? = nil
 
     var body: some View {
         // Delegates to the shared CoreUI mark so provider logos, brand tints,
         // the media-share drive glyph, and its transport badge have one
         // implementation across the app.
+        #if os(tvOS)
+        if provider == .iptv {
+            ProviderSiteIcon(url: siteURL, size: size) {
+                ProviderBrandMark(provider: provider, size: size)
+            }
+        } else {
+            ProviderBrandMark(provider: provider, size: size, mediaShareTransport: mediaShareTransport)
+        }
+        #else
         ProviderBrandMark(provider: provider, size: size, mediaShareTransport: mediaShareTransport)
+        #endif
     }
 
     static func tint(_ provider: ProviderKind) -> Color {

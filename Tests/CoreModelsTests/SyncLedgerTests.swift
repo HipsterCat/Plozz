@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import CoreModels
 
@@ -159,6 +160,17 @@ private final class FakeDevice {
         if let value { store[record] = value } else { store[record] = nil }
     }
 
+    func repairInventory() {
+        let inventory = server.fetchLive()
+        let candidates = ledger.inventoryDeletionCandidates(serverNames: Set(inventory.saved.map(\.recordName)))
+        let confirmed = Set(candidates.keys.filter { !server.exists($0) })
+        _ = ledger.reconcileLocal(desired: capture(), now: advance())
+        let changes = ledger.applyInventoryDeletions(
+            confirmedDeleted: confirmed, candidates: candidates, now: advance()
+        )
+        for (name, value) in changes { applyLocal(name, value) }
+    }
+
     /// Engine-rebuild redownload via the full-resync lifecycle. `tombstoneless` models
     /// a real CKErrorChangeTokenExpired resync (live records only, no tombstones).
     func redownload(tombstoneless: Bool = true) {
@@ -207,6 +219,162 @@ private func assertConverged(_ devices: [FakeDevice], _ msg: String = "",
 }
 
 final class SyncLedgerTests: XCTestCase {
+    func testInventoryRepairsFiveMissedProfileDeletionsWithoutReseedingCloud() throws {
+        let server = FakeCloudServer()
+        let phone = FakeDevice("phone", server: server, startClock: 100)
+        let tablet = FakeDevice("tablet", server: server, startClock: 200)
+        for index in 0..<10 { phone.edit("profile:\(index)", "Profile \(index)") }
+        drain([phone, tablet])
+        for index in 0..<5 { phone.remove("profile:\(index)") }
+        phone.sync()
+
+        // An old cursor advanced without applying these deletions. Empty outgoing
+        // queues and successful incremental fetches cannot heal this state.
+        tablet.fetchToken = server.headToken
+        tablet.sync()
+        XCTAssertEqual(phone.store.count, 5)
+        XCTAssertEqual(tablet.store.count, 10)
+        XCTAssertTrue(tablet.ledger.pendingUploads().isEmpty)
+        XCTAssertTrue(tablet.ledger.pendingDeletes().isEmpty)
+        let serverToken = server.headToken
+
+        tablet.repairInventory()
+        XCTAssertEqual(server.headToken, serverToken)
+        XCTAssertEqual(tablet.store, phone.store)
+        tablet.ledger = try JSONDecoder().decode(SyncLedger.self, from: JSONEncoder().encode(tablet.ledger))
+        drain([phone, tablet])
+        assertConverged([phone, tablet])
+        XCTAssertEqual(tablet.store.count, 5)
+        XCTAssertEqual(server.headToken, serverToken)
+    }
+
+    func testInventoryAbsenceDoesNotDeleteAnExistingProfile() {
+        let server = FakeCloudServer()
+        let device = FakeDevice("tablet", server: server, startClock: 100)
+        device.edit("profile:kept", "Kept")
+        device.sync()
+        server.hiddenFromFetch = ["profile:kept"]
+        device.repairInventory()
+        XCTAssertEqual(device.value("profile:kept"), "Kept")
+        XCTAssertTrue(server.exists("profile:kept"))
+        XCTAssertTrue(device.ledger.pendingUploads().isEmpty)
+    }
+
+    private func inventoryLedger() -> SyncLedger {
+        var ledger = SyncLedger()
+        _ = ledger.applyFetched(saved: [
+            .init(recordName: "profile:kept", value: Data("kept".utf8), editedAt: 1, systemFields: Data([1])),
+            .init(recordName: "profile:deleted", value: Data("deleted".utf8), editedAt: 2, systemFields: Data([2]))
+        ], deleted: [], now: 2)
+        return ledger
+    }
+
+    func testInventoryNeedsExplicitConfirmationAndAnObservedCandidate() {
+        var ledger = inventoryLedger()
+        let original = ledger
+        let candidates = ledger.inventoryDeletionCandidates(serverNames: ["profile:kept"])
+        XCTAssertEqual(Set(candidates.keys), ["profile:deleted"])
+        XCTAssertTrue(ledger.applyInventoryDeletions(confirmedDeleted: [], candidates: candidates, now: 3).isEmpty)
+        XCTAssertTrue(ledger.applyInventoryDeletions(
+            confirmedDeleted: ["profile:kept"], candidates: candidates, now: 3
+        ).isEmpty)
+        XCTAssertTrue(ledger.hasSamePersistedState(as: original))
+    }
+
+    func testInventoryExcludesNewDirtyAndPendingDeleteRecords() {
+        var ledger = inventoryLedger()
+        _ = ledger.reconcileLocal(
+            desired: ["profile:kept": Data("edited".utf8), "profile:new": Data("new".utf8)], now: 3
+        )
+        XCTAssertEqual(ledger.pendingDeletes(), ["profile:deleted"])
+        XCTAssertTrue(ledger.inventoryDeletionCandidates(serverNames: []).isEmpty)
+    }
+
+    func testInventoryKeepsLocalEditMadeDuringExistenceCheck() {
+        var ledger = inventoryLedger()
+        let candidates = ledger.inventoryDeletionCandidates(serverNames: ["profile:kept"])
+        var desired = ledger.syncedValues()
+        desired["profile:deleted"] = Data("edited during request".utf8)
+        _ = ledger.reconcileLocal(desired: desired, now: 3)
+        XCTAssertTrue(ledger.applyInventoryDeletions(
+            confirmedDeleted: ["profile:deleted"], candidates: candidates, now: 4
+        ).isEmpty)
+        XCTAssertEqual(ledger.entries["profile:deleted"]?.localValue, desired["profile:deleted"])
+        XCTAssertEqual(ledger.pendingUploads().map(\.recordName), ["profile:deleted"])
+    }
+
+    func testInventoryKeepsARecordResavedWhileVerificationWasInFlight() {
+        var ledger = inventoryLedger()
+        let candidates = ledger.inventoryDeletionCandidates(serverNames: ["profile:kept"])
+        _ = ledger.applyFetched(saved: [
+            .init(recordName: "profile:deleted", value: Data("deleted".utf8), editedAt: 4, systemFields: Data([3]))
+        ], deleted: [], now: 4)
+        XCTAssertTrue(ledger.applyInventoryDeletions(
+            confirmedDeleted: ["profile:deleted"], candidates: candidates, now: 5
+        ).isEmpty)
+        XCTAssertNotNil(ledger.entries["profile:deleted"])
+    }
+
+    func testInventoryAcceptsAnUnchangedFirstCaptureReceipt() {
+        var ledger = inventoryLedger()
+        let candidates = ledger.inventoryDeletionCandidates(serverNames: ["profile:kept"])
+        _ = ledger.reconcileLocal(desired: ledger.syncedValues(), now: 3)
+        let revision = ledger.remoteRevision
+        let changes = ledger.applyInventoryDeletions(
+            confirmedDeleted: ["profile:deleted"], candidates: candidates, now: 4
+        )
+        XCTAssertEqual(Set(changes.keys), ["profile:deleted"])
+        XCTAssertNil(changes["profile:deleted"]!)
+        XCTAssertNil(ledger.entries["profile:deleted"])
+        XCTAssertNotNil(ledger.entries["profile:kept"])
+        XCTAssertGreaterThan(ledger.remoteRevision, revision)
+        XCTAssertTrue(ledger.pendingDeletes().isEmpty)
+    }
+
+    func testInventoryDoesNotRaceAFullResync() {
+        var ledger = inventoryLedger()
+        let candidates = ledger.inventoryDeletionCandidates(serverNames: [])
+        ledger.beginFullResync()
+        XCTAssertTrue(ledger.inventoryDeletionCandidates(serverNames: []).isEmpty)
+        XCTAssertTrue(ledger.applyInventoryDeletions(
+            confirmedDeleted: Set(candidates.keys), candidates: candidates, now: 3
+        ).isEmpty)
+        XCTAssertEqual(ledger.entries.count, 2)
+    }
+
+    func testLocalCaptureReceiptSurvivesRemoteWinnerAndPersistence() throws {
+        var ledger = SyncLedger()
+        let local = Data("local".utf8)
+        let remote = Data("remote".utf8)
+        _ = ledger.reconcileLocal(desired: ["source": local], now: 10)
+        let receipt = Data(SHA256.hash(data: local))
+        XCTAssertEqual(ledger.entries["source"]?.localCaptureDigest, receipt)
+        _ = ledger.applyFetched(saved: [.init(
+            recordName: "source", value: remote, editedAt: 20, systemFields: Data()
+        )], deleted: [], now: 20)
+        XCTAssertEqual(ledger.entries["source"]?.localValue, remote)
+        XCTAssertEqual(ledger.entries["source"]?.localCaptureDigest, receipt)
+        let restored = try JSONDecoder().decode(SyncLedger.self, from: JSONEncoder().encode(ledger))
+        XCTAssertTrue(restored.hasSamePersistedState(as: ledger))
+        let stamp = ledger.entries["source"]?.editedAt
+        let echo = ledger.reconcileLocal(desired: ["source": remote], now: 30)
+        XCTAssertTrue(echo.isEmpty)
+        XCTAssertEqual(ledger.entries["source"]?.editedAt, stamp)
+        XCTAssertEqual(ledger.entries["source"]?.localCaptureDigest, Data(SHA256.hash(data: remote)))
+    }
+
+    func testLegacyEntryWithoutCaptureReceiptRemainsDecodable() throws {
+        let json = Data("""
+        {"entries":{"source":{"syncedEditedAt":0,"localValue":"YQ==","editedAt":1,
+        "dirty":true,"pendingDelete":false,"wasSynced":false,"resyncSeen":false}},"clock":1}
+        """.utf8)
+        var ledger = try JSONDecoder().decode(SyncLedger.self, from: json)
+        XCTAssertNil(ledger.entries["source"]?.localCaptureDigest)
+        _ = ledger.reconcileLocal(desired: ["source": Data("a".utf8)], now: 2)
+        XCTAssertEqual(ledger.entries["source"]?.localCaptureDigest, Data(SHA256.hash(data: Data("a".utf8))))
+        XCTAssertEqual(ledger.entries["source"]?.editedAt, 1)
+    }
+
 
     // MARK: Basic propagation
 

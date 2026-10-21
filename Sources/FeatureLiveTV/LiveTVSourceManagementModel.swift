@@ -118,13 +118,12 @@ final class LiveTVSourceManagementModel {
         }
     }
 
-    func setGuidePolicy(_ id: String, discovers: Bool? = nil, lookbackDays: Int? = nil, lookaheadDays: Int? = nil) {
+    func setGuidePolicy(_ id: String, lookbackDays: Int? = nil, lookaheadDays: Int? = nil) {
         perform {
             try mutate { configuration in
                 guard let index = configuration.playlists.firstIndex(where: { $0.id == id }) else {
                     throw MutationError.changedSource
                 }
-                if let discovers { configuration.playlists[index].discoversPlaylistGuides = discovers }
                 if let lookbackDays { configuration.playlists[index].guideLookbackDays = lookbackDays }
                 if let lookaheadDays { configuration.playlists[index].guideLookaheadDays = lookaheadDays }
             }

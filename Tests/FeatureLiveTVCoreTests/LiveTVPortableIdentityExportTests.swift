@@ -6,9 +6,9 @@ import XCTest
 
 final class LiveTVPortableIdentityExportTests: XCTestCase {
     @MainActor
-    func testTwoDevicesResolvePortableMappingToDifferentLocalDiscoveredGuideIDs() async throws {
-        let deviceA = try await guideDevice()
-        let deviceB = try await guideDevice()
+    func testTwoDevicesResolvePortableMappingToDifferentLocalCrossOriginDiscoveredGuideIDs() async throws {
+        let deviceA = try await guideDevice(guideHost: "guide.test")
+        let deviceB = try await guideDevice(guideHost: "guide.test")
         let idA = try XCTUnwrap(deviceA.model.channels.first?.id)
         let idB = try XCTUnwrap(deviceB.model.channels.first?.id)
         // The sender must retire its original ID regardless of random UUID order.
@@ -34,6 +34,15 @@ final class LiveTVPortableIdentityExportTests: XCTestCase {
         XCTAssertEqual(second.imports.guideSources.first?.id, secondGuideID)
         XCTAssertEqual(first.model.currentProgram(for: channelID)?.title, "Automatic programme")
         XCTAssertEqual(second.model.currentProgram(for: channelID)?.title, "Automatic programme")
+        let restored = LiveTVPrototypeImportModel(
+            configuration: first.configuration,
+            loader: PortableGuideFixtureLoader(guideURL: first.imports.guideSources[0].source.url),
+            cache: first.cache
+        )
+        let restoredModel = LiveTVPrototypeModel(now: first.model.now, channels: [])
+        await restored.restoreCachedCatalog(into: restoredModel, now: first.model.now)
+        XCTAssertEqual(restored.guideSources.first?.id, firstGuideID)
+        XCTAssertEqual(restoredModel.currentProgram(for: channelID)?.title, "Automatic programme")
         try await first.imports.setGuideMapping(
             channelID: channelID, guideSourceID: firstGuideID, guideChannelID: "manual"
         )
@@ -217,7 +226,7 @@ final class LiveTVPortableIdentityExportTests: XCTestCase {
     }
 
     @MainActor
-    private func guideDevice() async throws -> (
+    private func guideDevice(guideHost: String = "example.test") async throws -> (
         cache: LiveTVIndexedCache, imports: LiveTVPrototypeImportModel,
         model: LiveTVPrototypeModel, configuration: LiveTVSourcesConfiguration
     ) {
@@ -226,7 +235,7 @@ final class LiveTVPortableIdentityExportTests: XCTestCase {
             id: "source", name: "Local",
             playlistURL: try XCTUnwrap(URL(string: "https://example.test/list.m3u?token=playlist-secret"))
         )
-        let guideURL = try XCTUnwrap(URL(string: "https://example.test/guide.xml?token=guide-secret"))
+        let guideURL = try XCTUnwrap(URL(string: "https://\(guideHost)/guide.xml?token=guide-secret"))
         let configuration = LiveTVSourcesConfiguration(playlists: [source])
         let imports = LiveTVPrototypeImportModel(
             configuration: configuration, loader: PortableGuideFixtureLoader(guideURL: guideURL), cache: cache

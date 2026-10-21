@@ -2,6 +2,21 @@
 import CoreModels
 import SwiftUI
 
+enum NativePosterIndicatorLayer: Equatable {
+    case combined, background, foreground
+}
+
+private struct NativePosterIndicatorLayerKey: EnvironmentKey {
+    static let defaultValue = NativePosterIndicatorLayer.combined
+}
+
+extension EnvironmentValues {
+    var nativePosterIndicatorLayer: NativePosterIndicatorLayer {
+        get { self[NativePosterIndicatorLayerKey.self] }
+        set { self[NativePosterIndicatorLayerKey.self] = newValue }
+    }
+}
+
 public struct MediaCardPlaybackIndicators: View {
     /// Only the playback and request facts this view actually renders.
     ///
@@ -19,19 +34,24 @@ public struct MediaCardPlaybackIndicators: View {
     private let progressHeight: CGFloat
     private let progressHorizontalInset: CGFloat
     private let progressBottomInset: CGFloat
+    private let artworkCornerRadius: CGFloat?
     /// Offline state for this item, drawn bottom-trailing. Lives here (rather than
     /// only inside the resume chip) because "is this downloaded?" is wanted on
     /// EVERY card, including plain browsing posters that carry no chip.
     private let downloadState: MediaDownloadBadgeState?
+    private var rendersStatus = true
+    private var rendersBottom = true
+    private var rendersScrim = true
 
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzWatchStatusIndicator) private var watchStatusIndicator
+    @Environment(\.plozzShowsUnwatchedEpisodeCount) private var showsUnwatchedEpisodeCount
     /// Whether an unowned title can be requested, or is merely flagged as absent.
     @Environment(\.plozzSeerConnected) private var seerConnected
-    @Environment(\.themePalette) private var palette
     /// Published by the hosting card so this chrome can settle back at rest and
     /// come to full strength on focus (tvOS only — see ``PlozzMediaChrome``).
     @Environment(\.plozzChromeIsFocused) private var isFocused
+    @Environment(\.nativePosterIndicatorLayer) private var nativeIndicatorLayer
 
     public init(
         item: MediaItem,
@@ -41,9 +61,30 @@ public struct MediaCardPlaybackIndicators: View {
         progressHeight: CGFloat = 0,
         progressHorizontalInset: CGFloat = 0,
         progressBottomInset: CGFloat = 0,
-        downloadState: MediaDownloadBadgeState? = nil
+        downloadState: MediaDownloadBadgeState? = nil,
+        artworkCornerRadius: CGFloat? = nil
     ) {
-        self.playback = MediaPlaybackIndicatorState(item)
+        self.init(
+            playback: MediaPlaybackIndicatorState(item),
+            hidesStatus: hidesStatus, showsProgressBar: showsProgressBar,
+            badgeInset: badgeInset, progressHeight: progressHeight,
+            progressHorizontalInset: progressHorizontalInset, progressBottomInset: progressBottomInset,
+            downloadState: downloadState, artworkCornerRadius: artworkCornerRadius
+        )
+    }
+
+    init(
+        playback: MediaPlaybackIndicatorState,
+        hidesStatus: Bool,
+        showsProgressBar: Bool,
+        badgeInset: CGFloat,
+        progressHeight: CGFloat,
+        progressHorizontalInset: CGFloat,
+        progressBottomInset: CGFloat,
+        downloadState: MediaDownloadBadgeState? = nil,
+        artworkCornerRadius: CGFloat?
+    ) {
+        self.playback = playback
         self.hidesStatus = hidesStatus
         self.progressBarEnabled = showsProgressBar
         self.badgeInset = badgeInset
@@ -51,6 +92,7 @@ public struct MediaCardPlaybackIndicators: View {
         self.progressHorizontalInset = progressHorizontalInset
         self.progressBottomInset = progressBottomInset
         self.downloadState = downloadState
+        self.artworkCornerRadius = artworkCornerRadius
     }
 
     public var body: some View {
@@ -65,22 +107,84 @@ public struct MediaCardPlaybackIndicators: View {
             // was hard to see at all. The shared scrim holds clear until ~62% and
             // then ramps, so the darkening is concentrated where the chrome is.
             .overlay {
-                if hasTopChrome || hasBottomChrome {
-                    MediaArtworkChromeScrim(top: hasTopChrome, bottom: hasBottomChrome)
+                if nativeIndicatorLayer != .foreground, rendersScrim, let artworkScrim {
+                    artworkScrim
                 }
             }
             .overlay(alignment: .topTrailing) {
-                statusIndicator
+                if rendersStatus { statusIndicator }
             }
             .overlay(alignment: .bottom) {
-                if progressBarEnabled {
+                if nativeIndicatorLayer != .foreground && rendersBottom && progressBarEnabled {
                     progressBar
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                downloadBadge
+                if nativeIndicatorLayer != .foreground && rendersBottom { downloadBadge }
             }
             .allowsHitTesting(false)
+    }
+
+    struct BitmapInputs: Equatable {
+        let playback: MediaPlaybackIndicatorState
+        let hidesStatus: Bool
+        let progressBarEnabled: Bool
+        let badgeInset: CGFloat
+        let progressHeight: CGFloat
+        let progressHorizontalInset: CGFloat
+        let progressBottomInset: CGFloat
+        let artworkCornerRadius: CGFloat?
+        let downloadState: MediaDownloadBadgeState?
+        let rendersStatus: Bool
+        let rendersBottom: Bool
+        let rendersScrim: Bool
+    }
+
+    var bitmapInputs: BitmapInputs {
+        BitmapInputs(
+            playback: playback, hidesStatus: hidesStatus, progressBarEnabled: progressBarEnabled,
+            badgeInset: badgeInset, progressHeight: progressHeight,
+            progressHorizontalInset: progressHorizontalInset, progressBottomInset: progressBottomInset,
+            artworkCornerRadius: artworkCornerRadius, downloadState: downloadState,
+            rendersStatus: rendersStatus, rendersBottom: rendersBottom, rendersScrim: rendersScrim
+        )
+    }
+
+    fileprivate init(bitmapInputs: BitmapInputs) {
+        self.init(
+            playback: bitmapInputs.playback, hidesStatus: bitmapInputs.hidesStatus,
+            showsProgressBar: bitmapInputs.progressBarEnabled, badgeInset: bitmapInputs.badgeInset,
+            progressHeight: bitmapInputs.progressHeight,
+            progressHorizontalInset: bitmapInputs.progressHorizontalInset,
+            progressBottomInset: bitmapInputs.progressBottomInset,
+            downloadState: bitmapInputs.downloadState, artworkCornerRadius: bitmapInputs.artworkCornerRadius
+        )
+        rendersStatus = bitmapInputs.rendersStatus
+        rendersBottom = bitmapInputs.rendersBottom
+        rendersScrim = bitmapInputs.rendersScrim
+    }
+
+    var statusOnly: Self {
+        var result = self
+        result.rendersBottom = false
+        return result
+    }
+
+    var withoutStatus: Self {
+        var result = self
+        result.rendersStatus = false
+        return result
+    }
+
+    var withoutScrim: Self {
+        var result = self
+        result.rendersScrim = false
+        return result
+    }
+
+    var artworkScrim: MediaArtworkChromeScrim? {
+        hasTopChrome || hasBottomChrome
+            ? MediaArtworkChromeScrim(top: hasTopChrome, bottom: hasBottomChrome) : nil
     }
 
     private var showsProgressBar: Bool {
@@ -90,15 +194,23 @@ public struct MediaCardPlaybackIndicators: View {
     /// Any chrome along the card's bottom edge that needs the artwork darkened
     /// behind it — the progress bar, the download badge, or both.
     private var hasBottomChrome: Bool {
-        (progressBarEnabled && showsProgressBar) || downloadState != nil
+        rendersBottom && ((progressBarEnabled && showsProgressBar) || downloadState != nil)
     }
 
     /// Only the library mark needs the TOP of the artwork darkened. The watched
-    /// badge and the unwatched flag are solid brand-blue shapes that carry their
+    /// badge, unwatched flag, and episode counts have filled shapes that carry their
     /// own contrast; the library mark is a bare glyph and the scrim is the entire
     /// reason it stays legible over pale artwork.
     private var hasTopChrome: Bool {
-        libraryMark != nil
+        guard rendersStatus, case .library = status else { return false }
+        return true
+    }
+
+    private var status: MediaPlaybackIndicatorPresentation.Status? {
+        MediaPlaybackIndicatorPresentation.status(
+            for: playback, hidesStatus: hidesStatus, indicator: watchStatusIndicator,
+            showsEpisodeCount: showsUnwatchedEpisodeCount, seerConnected: seerConnected
+        )
     }
 
     @ViewBuilder
@@ -108,84 +220,37 @@ public struct MediaCardPlaybackIndicators: View {
         // don't have — you have neither watched it nor left it unwatched — so
         // the unwatched flag on an external credit was never information, and
         // the two never compete for the corner.
-        if let libraryMark {
-            MediaLibraryMarkView(mark: libraryMark, size: libraryMarkSize)
-                .padding(badgeInset)
-        } else if PosterCardPresentation.showsWatchStatus(for: playback.kind) {
-            switch watchStatusIndicator {
-            case .watched:
-                watchedBadge
-            case .unwatched:
-                unwatchedCorner
+        switch status {
+        case .library(let mark):
+            if nativeIndicatorLayer != .background {
+                MediaLibraryMarkView(mark: mark, size: metrics.watchedBadgeSize)
+                    .padding(floatingBadgeInset)
             }
+        case .episodeCount(let count):
+            episodeCountBadge(count)
+        case .watched:
+            if nativeIndicatorLayer != .background {
+                MediaWatchedBadge(size: metrics.watchedBadgeSize)
+                    .padding(floatingBadgeInset)
+            }
+        case .unwatched:
+            MediaUnwatchedCorner(size: metrics.unwatchedFlagSize)
+        case nil:
+            EmptyView()
         }
     }
 
-    /// The absent, requestable, or requested mark for this card, if it needs one.
-    /// Suppressed while the artwork is spoiler-hidden, for the same reason watch
-    /// state is: chrome on a masked poster gives away what the mask is hiding.
-    private var libraryMark: MediaLibraryMark? {
-        guard !hidesStatus else { return nil }
-        return playback.libraryMark(seerConnected: seerConnected)
+    private func episodeCountBadge(_ count: Int) -> some View {
+        MediaEpisodeCountBadge(
+            count: count, indicator: watchStatusIndicator, size: metrics.watchedBadgeSize,
+            cornerRadius: artworkCornerRadius ?? metrics.posterArtworkCornerRadius
+        )
+        .padding(watchStatusIndicator == .watched ? floatingBadgeInset : 0)
+        .accessibilityLabel(Text("Unwatched episodes: \(count)"))
     }
 
-    /// Sized from the badge slot the card gave us rather than from a constant, so
-    /// the mark keeps its proportion on the 167pt in-player cast poster and the
-    /// 280pt person-page one alike. `watchedBadgeSize` is the check badge's
-    /// diameter on this card, which is already density-scaled.
-    private var libraryMarkSize: CGFloat {
-        metrics.watchedBadgeSize
-    }
-
-    @ViewBuilder
-    private var watchedBadge: some View {
-        if MediaPlaybackIndicatorPresentation.showsWatchedBadge(
-            for: playback,
-            hidesStatus: hidesStatus
-        ) {
-            let size = metrics.watchedBadgeSize
-            Image(systemName: "checkmark")
-                .font(.system(size: size * 0.53, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: size, height: size)
-                .background(Circle().fill(ThemePalette.brandBlue))
-                .overlay {
-                    Circle()
-                        .inset(by: -0.5)
-                        .stroke(
-                            palette.isLight
-                                ? .black.opacity(0.15)
-                                : .white.opacity(0.4),
-                            lineWidth: max(1.5, size * 0.04)
-                        )
-                }
-                .padding(badgeInset)
-                .shadow(
-                    color: .black.opacity(0.4),
-                    radius: size * 0.08,
-                    y: size * 0.026
-                )
-        }
-    }
-
-    @ViewBuilder
-    private var unwatchedCorner: some View {
-        if MediaPlaybackIndicatorPresentation.showsUnwatchedFlag(
-            for: playback,
-            hidesStatus: hidesStatus
-        ) {
-            TopTrailingCornerFlag()
-                .fill(ThemePalette.brandBlue)
-                .shadow(color: .black.opacity(0.28), radius: 8)
-                .overlay(alignment: .topTrailing) {
-                    TopTrailingCornerFlagEdge()
-                        .stroke(Color.black.opacity(0.3), lineWidth: 1)
-                }
-                .frame(
-                    width: metrics.unwatchedFlagSize,
-                    height: metrics.unwatchedFlagSize
-                )
-        }
+    private var floatingBadgeInset: CGFloat {
+        max(badgeInset, MediaWatchIndicatorStyle.floatingInset(for: metrics.watchedBadgeSize))
     }
 
     /// Offline indicator, pinned to ONE fixed spot in the bottom-trailing corner.
@@ -262,6 +327,153 @@ public struct MediaCardPlaybackIndicators: View {
     }
 }
 
+enum NativePosterIndicators: View, Equatable {
+    case playback(MediaCardPlaybackIndicators.BitmapInputs)
+    case episode(isWatched: Bool, hasProgress: Bool, isVisible: Bool,
+                 style: WatchStatusIndicator, badgeSize: CGFloat, flagSize: CGFloat)
+
+    static func media(_ indicators: MediaCardPlaybackIndicators) -> Self {
+        .playback(indicators.bitmapInputs)
+    }
+
+    func hasContent(indicator: WatchStatusIndicator, showsEpisodeCount: Bool, seerConnected: Bool) -> Bool {
+        switch self {
+        case .playback(let inputs):
+            if inputs.rendersBottom { return true }
+            return inputs.rendersStatus && MediaPlaybackIndicatorPresentation.status(
+                for: inputs.playback, hidesStatus: inputs.hidesStatus, indicator: indicator,
+                showsEpisodeCount: showsEpisodeCount, seerConnected: seerConnected
+            ) != nil
+        case let .episode(isWatched, hasProgress, isVisible, style, _, _):
+            return isVisible && (style == .watched ? isWatched : !isWatched && !hasProgress)
+        }
+    }
+
+    @ViewBuilder var body: some View {
+        switch self {
+        case .playback(let inputs):
+            MediaCardPlaybackIndicators(bitmapInputs: inputs)
+        case let .episode(isWatched, hasProgress, isVisible, style, badgeSize, flagSize):
+            Color.clear.overlay(alignment: .topTrailing) {
+                if isVisible {
+                    switch style {
+                    case .watched:
+                        if isWatched {
+                            MediaWatchedBadge(size: badgeSize)
+                                .padding(max(12, MediaWatchIndicatorStyle.floatingInset(for: badgeSize)))
+                        }
+                    case .unwatched:
+                        if !isWatched && !hasProgress {
+                            MediaUnwatchedCorner(size: flagSize)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum MediaWatchIndicatorStyle {
+    static let fill = Color.white
+    static let foreground = Color(white: 0.13)
+    static let edge = Color.white.opacity(0.32)
+    static let countFill = Color(white: 0.08).opacity(0.88)
+    static let countForeground = Color.white
+    static let countEdge = Color.white.opacity(0.18)
+
+    static func floatingInset(for size: CGFloat) -> CGFloat {
+        16 * size / PlozzTheme.Metrics.watchedBadgeSize
+    }
+}
+
+struct MediaWatchedBadge: View {
+    let size: CGFloat
+    private var scale: CGFloat { size / PlozzTheme.Metrics.watchedBadgeSize }
+
+    var body: some View {
+        Image(systemName: "checkmark")
+            .font(.system(size: size * 0.53, weight: .bold))
+            .foregroundStyle(MediaWatchIndicatorStyle.foreground)
+            .frame(width: size, height: size)
+            .background(Circle().fill(MediaWatchIndicatorStyle.fill))
+            .overlay(Circle().stroke(MediaWatchIndicatorStyle.edge, lineWidth: scale))
+            .shadow(color: .black.opacity(0.2), radius: 3 * scale, y: scale)
+    }
+}
+
+struct MediaUnwatchedCorner: View {
+    let size: CGFloat
+    private var scale: CGFloat { size / PlozzTheme.Metrics.unwatchedFlagSize }
+
+    var body: some View {
+        TopTrailingCornerFlag()
+            .fill(MediaWatchIndicatorStyle.fill)
+            .shadow(color: .black.opacity(0.28), radius: 8 * scale)
+            .overlay {
+                TopTrailingCornerFlagEdge().stroke(.black.opacity(0.3), lineWidth: scale)
+            }
+            .frame(width: size, height: size)
+    }
+}
+
+struct MediaEpisodeCountBadge: View {
+    let count: Int
+    let indicator: WatchStatusIndicator
+    let size: CGFloat
+    let cornerRadius: CGFloat
+    @Environment(\.nativePosterIndicatorLayer) private var nativeIndicatorLayer
+    private var scale: CGFloat { size / PlozzTheme.Metrics.watchedBadgeSize }
+
+    private var digits: some View {
+        Text(count, format: .number.grouping(.never))
+            .font(.system(size: 24 * scale, weight: .bold))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .foregroundStyle(MediaWatchIndicatorStyle.countForeground)
+    }
+
+    @ViewBuilder var body: some View {
+        switch indicator {
+        case .watched:
+            if nativeIndicatorLayer != .background {
+                digits
+                    .padding(.horizontal, 12 * scale)
+                    .frame(minWidth: size, minHeight: size)
+                    .background(RoundedRectangle(cornerRadius: 11 * scale).fill(MediaWatchIndicatorStyle.countFill))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 11 * scale)
+                            .stroke(MediaWatchIndicatorStyle.countEdge, lineWidth: scale)
+                    }
+                    .shadow(color: .black.opacity(0.2), radius: 3 * scale, y: scale)
+            }
+        case .unwatched:
+            let height = 52 * scale
+            let width = max(48, 24 + CGFloat(String(count).count) * 16) * scale
+            let radius = min(cornerRadius, height / 2)
+            digits
+                .opacity(nativeIndicatorLayer == .background ? 0 : 1)
+                .padding(.horizontal, 12 * scale)
+                .frame(maxWidth: width, minHeight: height, maxHeight: height)
+                // Only the inner corner is rounded; the artwork clips the outer corner and shadow.
+                .background {
+                    if nativeIndicatorLayer != .foreground {
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 0, bottomLeadingRadius: radius,
+                            bottomTrailingRadius: 0, topTrailingRadius: 0, style: .circular
+                        )
+                        .fill(MediaWatchIndicatorStyle.countFill)
+                        .shadow(color: .black.opacity(0.28), radius: 8 * scale)
+                        .overlay {
+                            TopTrailingCurvedCornerEdge(radius: radius)
+                                .stroke(MediaWatchIndicatorStyle.countEdge, lineWidth: scale)
+                        }
+                    }
+                }
+        }
+    }
+}
+
 /// The playback and request facts a card's indicators draw from — scalars lifted out
 /// of `MediaItem` so a card's comparison surface is bounded by what it shows.
 /// See ``MediaCardPlaybackIndicators``'s stored property for the measurements.
@@ -269,6 +481,7 @@ public struct MediaPlaybackIndicatorState: Equatable, Sendable {
     public let kind: MediaItemKind
     public let isPlayed: Bool
     public let playedPercentage: Double?
+    public let unwatchedEpisodeCount: Int?
     public let resumePosition: Double?
     /// Ownership and request availability are separate: a pending request is
     /// still unowned, but must invalidate the snapshot to replace the plus.
@@ -278,13 +491,21 @@ public struct MediaPlaybackIndicatorState: Equatable, Sendable {
     public init(_ item: MediaItem) {
         kind = item.kind
         isPlayed = item.isPlayed
-        playedPercentage = item.playedPercentage
+        playedPercentage = item.playedPercentage ?? item.resumeProgressFraction
+        unwatchedEpisodeCount = item.unwatchedEpisodeCount
         resumePosition = item.resumePosition
         // Same shared classifier the corner mark and the detail page use, so a card
         // and its page can't disagree. Cards judge the item alone (no index work in
         // a card path), which is exactly `identitySources: []`.
         isNotInLibrary = TitleClassifier.isNotOwnedForBadge(item)
         availability = item.availability
+    }
+
+    public func episodeCountAccessibilityLabel(enabled: Bool, hidesStatus: Bool) -> LocalizedStringResource? {
+        guard let count = MediaPlaybackIndicatorPresentation.episodeCount(
+            for: self, enabled: enabled, hidesStatus: hidesStatus
+        ) else { return nil }
+        return LocalizedStringResource("Unwatched episodes: \(count)")
     }
 
     /// The corner mark this card should wear, if any. Shares
@@ -299,6 +520,36 @@ public struct MediaPlaybackIndicatorState: Equatable, Sendable {
 }
 
 enum MediaPlaybackIndicatorPresentation {
+    enum Status: Equatable {
+        case library(MediaLibraryMark), episodeCount(Int), watched, unwatched
+    }
+
+    static func status(
+        for item: MediaPlaybackIndicatorState, hidesStatus: Bool, indicator: WatchStatusIndicator,
+        showsEpisodeCount: Bool, seerConnected: Bool
+    ) -> Status? {
+        guard !hidesStatus, PosterCardPresentation.showsWatchStatus(for: item.kind) else { return nil }
+        if let mark = item.libraryMark(seerConnected: seerConnected) { return .library(mark) }
+        if let count = episodeCount(for: item, enabled: showsEpisodeCount, hidesStatus: hidesStatus) {
+            return .episodeCount(count)
+        }
+        switch indicator {
+        case .watched:
+            return showsWatchedBadge(for: item, hidesStatus: hidesStatus) ? .watched : nil
+        case .unwatched:
+            return showsUnwatchedFlag(for: item, hidesStatus: hidesStatus) ? .unwatched : nil
+        }
+    }
+
+    static func episodeCount(
+        for item: MediaPlaybackIndicatorState, enabled: Bool, hidesStatus: Bool
+    ) -> Int? {
+        guard enabled, !hidesStatus, !item.isNotInLibrary,
+              item.kind == .series || item.kind == .season,
+              let count = item.unwatchedEpisodeCount, count > 0 else { return nil }
+        return count
+    }
+
     /// Whether this card should wear a progress bar.
     ///
     /// A saved resume point is progress however small it looks as a fraction. The
@@ -340,7 +591,9 @@ enum MediaPlaybackIndicatorPresentation {
         for item: MediaPlaybackIndicatorState,
         hidesStatus: Bool
     ) -> Bool {
-        !item.isPlayed && !hasStartedPlayback(item) && !hidesStatus
+        let hasNoUnwatchedEpisodes = (item.kind == .series || item.kind == .season)
+            && item.unwatchedEpisodeCount == 0
+        return !item.isPlayed && !hasStartedPlayback(item) && !hidesStatus && !hasNoUnwatchedEpisodes
     }
 }
 

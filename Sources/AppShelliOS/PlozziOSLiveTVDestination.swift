@@ -13,6 +13,7 @@ import SwiftUI
 struct PlozziOSLiveTVDestination: View {
     let isActive: Bool
     let profileID: String
+    private let playbackOrientation: PlaybackOrientation
 
     @Environment(ProfilesModel.self) private var profiles
     @Environment(\.mediaItemNavigator) private var navigateToItem
@@ -39,6 +40,7 @@ struct PlozziOSLiveTVDestination: View {
         isActive: Bool,
         profileID: String,
         preferencesNamespace: String?,
+        playbackOrientation: PlaybackOrientation,
         importModel: LiveTVPrototypeImportModel? = nil,
         accountsProviders: AccountsProvidersModel? = nil,
         authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil,
@@ -52,6 +54,7 @@ struct PlozziOSLiveTVDestination: View {
         self.isActive = isActive
         self.profileID = profileID
         self.preferencesNamespace = preferencesNamespace
+        self.playbackOrientation = playbackOrientation
         self.importModel = importModel
         self._sessionProfileScope = State(initialValue: ProfileScope(id: profileID, namespace: preferencesNamespace))
         self.preferencesStore = LiveTVPreferencesStore(namespace: preferencesNamespace)
@@ -105,7 +108,9 @@ struct PlozziOSLiveTVDestination: View {
             prepareLibraryChannels: runtime.prepareForEditing,
             libraryIsAuthorized: { [weak runtime] in runtime?.authorizationID != nil },
             sourceApprovalContext: { [profiles] in LiveTVSourceApprovalContext(profiles: profiles) },
-            onOpenTitle: navigateToItem,
+            homeModel: HomeLiveTVRuntime.model(profileID: profileID),
+            homeAuthorizationID: HomeLiveTVRuntime.authorizationID(profileID: profileID, accounts: accountsProviders),
+            onOpenTitle: navigateToItem.map { navigator in { navigator($0) } },
             // The guide draws its own top row (browse controls and this), in
             // place of the navigation bar, which is hidden below.
             topBarAccessory: AnyView(PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings))
@@ -155,6 +160,13 @@ struct PlozziOSLiveTVDestination: View {
                 countsAsWatching: playback.countsAsWatching,
                 isMultiview: playback.isMultiview,
                 trackPreferences: runtime.trackPreferences,
+                touchSkipIntervals: {
+                    let settings = PlaybackSettingsStore(namespace: preferencesNamespace).load()
+                    return (settings.skipBackwardInterval, settings.skipForwardInterval)
+                },
+                touchLevelsEnabled: {
+                    PlaybackSettingsStore(namespace: preferencesNamespace).load().volumeBrightnessGestures
+                },
                 networkBlock: effectiveNetworkBlock,
                 isAuthorized: playback.isAuthorized && isCurrentProfileScope,
                 presentationControls: { AnyView(PlozziOSLivePresentationControls(context: $0)) },
@@ -178,6 +190,7 @@ struct PlozziOSLiveTVDestination: View {
                 onStopPlayback: playback.stopPlayback,
                 onOpenLibraryItem: playback.openLibraryItem,
                 program: playback.program,
+                earlierPrograms: playback.earlierPrograms,
                 loadOnNow: playback.onNow,
                 onTuneChannel: playback.tuneChannel,
                 guideOverlay: playback.guideOverlay
@@ -195,6 +208,10 @@ struct PlozziOSLiveTVDestination: View {
             }
         }
         .id(profileScope)
+        .plozziOSLivePlayerOrientation(
+            isPresented: isActive && isExpanded && isCurrentProfileScope,
+            orientation: playbackOrientation
+        )
         .toolbar(isExpanded ? .hidden : .visible, for: .tabBar)
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
@@ -284,7 +301,7 @@ private struct PlozziOSLiveTVSourcesContent: View {
     @State private var scanOfferSourceID: String?
 
     var body: some View {
-        SettingsPageList {
+        SettingsPageScroll {
             LiveTVSourcesView(
                 store: runtime.store, catalog: runtime.catalog, presentation: .settingsPane,
                 serverChoices: accounts.liveTVServerChoices,
@@ -295,7 +312,7 @@ private struct PlozziOSLiveTVSourcesContent: View {
                 scanCoordinator: runtime.scanBinding.coordinator,
                 didImportPlaylist: { scanOfferSourceID = $0 }
             )
-            if let scanOfferSourceID, runtime.isCurrent {
+            if let scanOfferSourceID, runtime.isPresentationCurrent {
                 LiveTVScanImportOffer(
                     coordinator: runtime.scanBinding.coordinator, sourceID: scanOfferSourceID,
                     skip: { self.scanOfferSourceID = nil }
@@ -304,7 +321,7 @@ private struct PlozziOSLiveTVSourcesContent: View {
         }
         .navigationTitle("Sources")
         .navigationDestination(isPresented: $managesChannels) {
-            if runtime.isCurrent {
+            if runtime.isPresentationCurrent {
                 LibraryChannelManagementView(
                     service: library.service, history: library.history, prepareLibraries: library.prepareForEditing,
                     automaticChannels: library.automaticChannelsPresentation)

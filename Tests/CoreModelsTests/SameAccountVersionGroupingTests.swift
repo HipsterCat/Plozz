@@ -158,11 +158,11 @@ final class SameAccountVersionGroupingTests: XCTestCase {
         XCTAssertEqual(version.sourceMetadata, item.mediaInfo)
         XCTAssertTrue(version.isHDR)
         XCTAssertEqual(version.resolutionLabel, "4K")
-        // The hero badge row reads exactly these, Dolby-grouped:
+        // The hero badge row reads these same source facts.
         XCTAssertEqual(version.technicalBadges, item.mediaInfo?.technicalBadges)
         XCTAssertEqual(
             version.technicalBadges.map(\.label),
-            ["4K", "Dolby Vision", "Dolby Atmos", "HDR10"]
+            ["4K", "Dolby Vision", "HDR10", "Dolby Digital+", "Dolby Atmos"]
         )
     }
 

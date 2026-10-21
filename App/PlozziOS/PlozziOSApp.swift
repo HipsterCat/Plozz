@@ -1,15 +1,23 @@
 import AppShelliOS
 import AppRuntime
+import CoreModels
 import PlozzCoreUI
 import SwiftUI
 import UIKit
 
 private final class PlozziOSAppDelegate: NSObject, UIApplicationDelegate {
     func application(
+        _ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        PlozziOSWindowOrientation.supportedOrientations(for: window)
+    }
+
+    func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions:
             [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        PlozziOSDownloadNotificationBridge.activate()
         PlozziOSBackgroundSessionBridge.activate()
         return true
     }
@@ -31,6 +39,7 @@ struct PlozziOSApp: App {
     @UIApplicationDelegateAdaptor(PlozziOSAppDelegate.self) private var appDelegate
 
     init() {
+        _ = AppInstallation.current
         ProcessSignalPolicy.ignoreBrokenPipe()
         URLCache.shared = URLCache(
             memoryCapacity: 64 * 1024 * 1024,

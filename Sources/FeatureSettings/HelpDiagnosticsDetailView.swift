@@ -50,7 +50,11 @@ struct HelpDiagnosticsDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                #if os(tvOS)
+                SettingsPageHeader("Help & Diagnostics")
+                #endif
                 reportPanel
+                    .settingsWorkspaceEntry()
                 sendDiagnosticsPanel
                 crashReportingPanel
                 diagnosticsPanel
@@ -71,7 +75,7 @@ struct HelpDiagnosticsDetailView: View {
     }
 
     private var crashReportingFooter: LocalizedStringResource {
-        "Anonymous crash and freeze reports. No servers, logins, credentials, or viewing activity."
+        "Anonymous crash, freeze, and IPTV setup failure reports. No servers, logins, credentials, or viewing activity."
     }
 
     // MARK: - Report a Problem
@@ -97,7 +101,7 @@ struct HelpDiagnosticsDetailView: View {
                         // correction for capacity to keep the QR scannable at 10
                         // feet. It's shown on a clean screen (no print damage to
                         // recover from), so low correction is fine here.
-                        SettingsQRCode(string: report.newIssueURLString, correctionLevel: "L")
+                        SettingsQRCode(string: report.newIssueURLString, correctionLevel: .low)
                             .frame(width: 200, height: 200)
                         Text("Scan to report\na bug")
                             .font(.caption)
@@ -182,7 +186,7 @@ struct HelpDiagnosticsDetailView: View {
         SettingsPanel(
             footer: "The most recent app log lines, kept only on this Apple TV and already stripped of tokens and secrets. Shown so a maintainer can ask what Plozz was doing when a bug happened."
         ) {
-            NavigationLink(value: SettingsRoute.recentActivity) {
+            SettingsRouteLink(value: SettingsRoute.recentActivity) {
                 SettingsRowLabel(icon: "list.bullet.rectangle", title: "Recent Activity") {
                     Text("The latest app log lines from this Apple TV")
                         .font(.subheadline)

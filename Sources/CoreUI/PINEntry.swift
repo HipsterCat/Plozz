@@ -1,4 +1,5 @@
 import CoreModels
+import Observation
 import SwiftUI
 
 /// Platform metrics for the PIN screen. A 10-foot remote-driven UI and a phone
@@ -70,6 +71,12 @@ public struct PINSequenceStep: Equatable, Sendable {
     }
 }
 
+public enum PINEntryAvailability: Equatable, Sendable {
+    case checking
+    case available
+    case unavailable
+}
+
 /// The shared 4-digit PIN screen.
 ///
 /// Everything that asks for four digits uses this — unlocking a profile,
@@ -110,6 +117,8 @@ public struct PINEntryScaffold<Badge: View>: View {
     public let errorMessage: LocalizedStringResource?
     /// Whether an attempt is in flight (shows a spinner, blocks the pad).
     public let isSubmitting: Bool
+    public let availability: PINEntryAvailability
+    public let onRetry: () -> Void
     /// Optional caveat under the identity block, e.g. the sync warning.
     public var footnote: LocalizedStringResource?
     /// Whether this scaffold is rendered INLINE in a constrained container
@@ -137,10 +146,7 @@ public struct PINEntryScaffold<Badge: View>: View {
     @ViewBuilder public let badge: () -> Badge
 
     @Environment(\.themePalette) private var palette
-    @State private var pin: String = ""
-    /// The last digit has landed and the pad is holding still long enough for
-    /// the fourth dot to actually appear on screen. See ``appendDigit(_:)``.
-    @State private var isCommitting = false
+    @State private var entry = PINEntryState()
 
     public init(
         title: LocalizedStringResource,
@@ -148,6 +154,8 @@ public struct PINEntryScaffold<Badge: View>: View {
         name: Text,
         errorMessage: LocalizedStringResource? = nil,
         isSubmitting: Bool = false,
+        availability: PINEntryAvailability = .available,
+        onRetry: @escaping () -> Void = {},
         footnote: LocalizedStringResource? = nil,
         sequenceStep: PINSequenceStep? = nil,
         isCompact: Bool = false,
@@ -161,6 +169,8 @@ public struct PINEntryScaffold<Badge: View>: View {
         self.name = name
         self.errorMessage = errorMessage
         self.isSubmitting = isSubmitting
+        self.availability = availability
+        self.onRetry = onRetry
         self.footnote = footnote
         self.sequenceStep = sequenceStep
         self.isCompact = isCompact
@@ -178,78 +188,89 @@ public struct PINEntryScaffold<Badge: View>: View {
             // costs a second blur pass for nothing.
             AppBackground(palette: palette).ignoresSafeArea()
 
-            #if os(tvOS)
-            // Prose on the left, pad on the right, and the PAIR centered on
-            // screen as one composition. The prose column is sized explicitly
-            // rather than absorbing the slack: when it was greedy the pad landed
-            // near 75% of the screen and had to be dragged back with a hand-tuned
-            // `.offset`, which moved pixels without moving layout.
-            //
-            // Which arrangement to use is a fact the HOST supplies, not something
-            // to measure. `ViewThatFits` here froze the app outright: the wide
-            // composition is 1208pt and the settings content column is 1200pt, so
-            // the candidates sat on the fit boundary and the enclosing view
-            // re-evaluated ~180 times a second. Before that a `GeometryReader`
-            // collapsed the pad to nothing inside a content-sized card. A flag
-            // is duller than both and cannot oscillate.
-            if isCompact {
-                VStack(spacing: 28) {
-                    prose(centered: true)
-                    padColumn
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 32)
-                .padding(.vertical, 28)
+            if availability != .available {
+                PINRequirementCheckView(
+                    name: name, availability: availability, errorMessage: errorMessage,
+                    onRetry: onRetry, onCancel: cancelEntry
+                )
             } else {
-                HStack(alignment: .center, spacing: PINMetrics.columnGap) {
-                    prose(centered: false)
-                        .frame(width: PINMetrics.proseColumnWidth, alignment: .leading)
-                    padColumn
-                }
-                .frame(maxWidth: PINMetrics.compositionWidth, maxHeight: .infinity)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.horizontal, PINMetrics.horizontalPadding)
-            }
-            #else
-            GeometryReader { proxy in
-                if usesTwoColumnLayout(proxy.size) {
-                    HStack(alignment: .center, spacing: 56) {
-                        prose(centered: false)
-                            .frame(width: 360, alignment: .leading)
-                        VStack(spacing: 24) {
-                            padColumn
-                            Button("Cancel", action: onCancel)
-                                .plozzActionButton(role: .secondary)
-                        }
-                    }
-                    // Centre the COMPOSITION, not each column independently.
-                    .frame(maxWidth: 780, maxHeight: .infinity)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 40)
-                } else {
-                    VStack(spacing: 32) {
-                        Spacer(minLength: 0)
+                #if os(tvOS)
+                // Prose on the left, pad on the right, and the PAIR centered on
+                // screen as one composition. The prose column is sized explicitly
+                // rather than absorbing the slack: when it was greedy the pad landed
+                // near 75% of the screen and had to be dragged back with a hand-tuned
+                // `.offset`, which moved pixels without moving layout.
+                //
+                // Which arrangement to use is a fact the HOST supplies, not something
+                // to measure. `ViewThatFits` here froze the app outright: the wide
+                // composition is 1208pt and the settings content column is 1200pt, so
+                // the candidates sat on the fit boundary and the enclosing view
+                // re-evaluated ~180 times a second. Before that a `GeometryReader`
+                // collapsed the pad to nothing inside a content-sized card. A flag
+                // is duller than both and cannot oscillate.
+                if isCompact {
+                    VStack(spacing: 28) {
                         prose(centered: true)
-                            .frame(maxWidth: .infinity, alignment: .center)
                         padColumn
-                        Spacer(minLength: 0)
-                        Button("Cancel", action: onCancel)
-                            .plozzActionButton(role: .secondary)
-                            .padding(.bottom, 24)
                     }
-                    .padding(.horizontal, PINMetrics.horizontalPadding)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 28)
+                } else {
+                    HStack(alignment: .center, spacing: PINMetrics.columnGap) {
+                        prose(centered: false)
+                            .frame(width: PINMetrics.proseColumnWidth, alignment: .leading)
+                        padColumn
+                    }
+                    .frame(maxWidth: PINMetrics.compositionWidth, maxHeight: .infinity)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, PINMetrics.horizontalPadding)
                 }
+                #else
+                GeometryReader { proxy in
+                    if usesTwoColumnLayout(proxy.size) {
+                        HStack(alignment: .center, spacing: 56) {
+                            prose(centered: false)
+                                .frame(width: 360, alignment: .leading)
+                            VStack(spacing: 24) {
+                                padColumn
+                                Button("Cancel", action: cancelEntry)
+                                    .plozzActionButton(role: .secondary)
+                            }
+                        }
+                        // Centre the COMPOSITION, not each column independently.
+                        .frame(maxWidth: 780, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, 40)
+                    } else {
+                        VStack(spacing: 32) {
+                            Spacer(minLength: 0)
+                            prose(centered: true)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                            padColumn
+                            Spacer(minLength: 0)
+                            Button("Cancel", action: cancelEntry)
+                                .plozzActionButton(role: .secondary)
+                                .padding(.bottom, 24)
+                        }
+                        .padding(.horizontal, PINMetrics.horizontalPadding)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                #endif
             }
-            #endif
         }
         #if os(tvOS)
         // Menu on the Siri remote backs out. iOS has no equivalent command, so
         // the Cancel button is the way out there.
-        .onExitCommand(perform: onCancel)
+        .onExitCommand(perform: cancelEntry)
         #endif
+        .onDisappear(perform: entry.reset)
+        .onChange(of: availability) { _, newValue in
+            if newValue != .available { entry.reset() }
+        }
         .onChange(of: errorMessage) { _, newValue in
-            if newValue != nil { pin = "" }
+            if newValue != nil { entry.reset() }
         }
     }
 
@@ -263,6 +284,7 @@ public struct PINEntryScaffold<Badge: View>: View {
             }
 
             Text(title)
+                .accessibilityIdentifier("pin-entry-title")
                 .font(PINMetrics.titleFont)
                 .foregroundStyle(palette.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -329,13 +351,13 @@ public struct PINEntryScaffold<Badge: View>: View {
     private var padColumn: some View {
         VStack(spacing: 28) {
             HStack(spacing: 18) {
-                PINProgressDots(filledCount: pin.count)
+                PINProgressDots(filledCount: entry.pin.count)
                 if isSubmitting {
                     ProgressView().controlSize(.large)
                 }
             }
             PINDialPad(onDigit: appendDigit, onDelete: deleteDigit)
-                .disabled(isSubmitting || isCommitting)
+                .disabled(isSubmitting || entry.isCommitting)
                 .opacity(isSubmitting ? 0.5 : 1.0)
         }
         #if os(tvOS)
@@ -348,43 +370,91 @@ public struct PINEntryScaffold<Badge: View>: View {
     // MARK: Entry
 
     private func appendDigit(_ d: String) {
-        guard !isSubmitting, !isCommitting else { return }
+        guard !isSubmitting else { return }
+        entry.appendDigit(d, onSubmit: onSubmit)
+    }
+
+    private func cancelEntry() {
+        entry.reset()
+        onCancel()
+    }
+
+    private func deleteDigit() {
+        guard !isSubmitting else { return }
+        entry.deleteDigit()
+    }
+}
+
+@MainActor @Observable
+final class PINEntryState {
+    private(set) var pin = ""
+    private(set) var isCommitting = false
+    @ObservationIgnored private var commitTask: Task<Void, Never>?
+
+    func appendDigit(_ d: String, onSubmit: @escaping @MainActor (String) -> Void) {
+        guard !isCommitting else { return }
         guard d.count == 1, d.first?.isNumber == true else { return }
         guard pin.count < ProfileLock.pinLength else { return }
         pin.append(d)
         if pin.count == ProfileLock.pinLength {
             let entered = pin
-            // Hold the completed PIN on screen for a beat before submitting.
-            //
-            // Appending the fourth digit and clearing the field used to happen in
-            // the SAME update, so SwiftUI only ever rendered the result: the
-            // fourth dot never appeared. A local profile PIN then verifies
-            // synchronously and the screen is torn down in that same frame, so
-            // the last press looked like it had been ignored — the entry read as
-            // incomplete right at the moment it succeeded. A Plex PIN hid this
-            // only because its caller raises a spinner while the network answers.
-            //
-            // The pad is inert during the hold, so the pause cannot swallow a
-            // fifth press or a delete.
+            // Show the fourth dot before synchronous verification can remove the view.
             isCommitting = true
-            Task { @MainActor in
+            commitTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(140))
-                // Cleared BEFORE submitting, deliberately. A caller that reports
-                // the same error twice running (two wrong PINs, same message)
-                // produces no change for `onChange` to see, which would strand
-                // four filled dots above a pad that ignores every press.
-                pin = ""
-                isCommitting = false
+                guard !Task.isCancelled, let self else { return }
+                // Reset before submitting so repeated identical errors also allow retry.
+                self.pin = ""
+                self.isCommitting = false
+                self.commitTask = nil
                 onSubmit(entered)
             }
         }
     }
 
-    private func deleteDigit() {
-        guard !isSubmitting, !isCommitting else { return }
-        if !pin.isEmpty { pin.removeLast() }
+    func reset() {
+        commitTask?.cancel()
+        commitTask = nil
+        pin = ""
+        isCommitting = false
     }
 
+    func deleteDigit() {
+        guard !isCommitting else { return }
+        if !pin.isEmpty { pin.removeLast() }
+    }
+}
+
+private struct PINRequirementCheckView: View {
+    let name: Text
+    let availability: PINEntryAvailability
+    let errorMessage: LocalizedStringResource?
+    let onRetry: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            name
+                .font(PINMetrics.nameFont)
+                .plozzForeground(.primary)
+            ContentStateView<Bool, EmptyView>(
+                state: availability == .checking ? .loading : .failed(.serverUnreachable),
+                errorMessage: errorMessage,
+                onRetry: onRetry,
+                loadingContent: {
+                    ProgressView()
+                        .accessibilityLabel("Loading")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                },
+                content: { _ in EmptyView() }
+            )
+            Button("Cancel", action: onCancel)
+                .plozzActionButton(role: .secondary)
+        }
+        .padding(PINMetrics.horizontalPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("pin-requirement-check")
+    }
 }
 
 /// Quiet progress for a chained profile-PIN then Plex-PIN gate.
@@ -506,16 +576,53 @@ public struct PINDialPad: View {
     }
 }
 
-/// A pill/circular key. Drawn entirely by the style so the rendered frame is
-/// exactly the size asked for — no auto-expanding fill from a bordered style and
-/// no inheritance from the parent layout. Focus inverts it to a solid light key
-/// with a soft bloom, which is what makes the focused digit obvious from a sofa.
-public struct PINKeyStyle: ButtonStyle {
+/// Native Liquid Glass for every PIN keypad, with the existing opaque/legacy fallback.
+public struct PINKeyStyle: PrimitiveButtonStyle {
     public let width: CGFloat
+    @Environment(\.plozzReduceTransparency) private var reduceTransparency
 
     public init(width: CGFloat) { self.width = width }
 
     public func makeBody(configuration: Configuration) -> some View {
+        if #available(iOS 26.0, tvOS 26.0, *), !reduceTransparency {
+            PINNativeKeyBody(configuration: configuration, width: width)
+        } else {
+            Button(role: configuration.role, action: configuration.trigger) {
+                configuration.label
+            }
+            .buttonStyle(PINFallbackKeyStyle(width: width))
+        }
+    }
+}
+
+@available(iOS 26.0, tvOS 26.0, *)
+private struct PINNativeKeyBody: View {
+    let configuration: PrimitiveButtonStyleConfiguration
+    let width: CGFloat
+    @State private var activationCount = 0
+
+    var body: some View {
+        Button(role: configuration.role) {
+            activationCount += 1
+            configuration.trigger()
+        } label: {
+            configuration.label
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(width == PINMetrics.keyDiameter ? .circle : .capsule)
+        .buttonSizing(.flexible)
+        .frame(width: width, height: PINMetrics.keyDiameter)
+        #if os(iOS)
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.7), trigger: activationCount)
+        #endif
+    }
+}
+
+private struct PINFallbackKeyStyle: ButtonStyle {
+    let width: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
         PINKeyBody(configuration: configuration, width: width)
     }
 }
@@ -526,6 +633,7 @@ private struct PINKeyBody: View {
 
     @Environment(\.isFocused) private var isFocused
     @Environment(\.themePalette) private var palette
+    @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
 
     /// A press is latched rather than read straight from
     /// `configuration.isPressed`.
@@ -575,6 +683,7 @@ private struct PINKeyBody: View {
                 cornerRadius: PINMetrics.keyDiameter / 2,
                 isFocused: isHighlighted
             )
+            .environment(\.plozzGradientCardSurface, gradientEnabled)
             .overlay {
                 // A capsule matches the key at both widths: the delete key is
                 // wider, but the corner radius is driven by the shared height.

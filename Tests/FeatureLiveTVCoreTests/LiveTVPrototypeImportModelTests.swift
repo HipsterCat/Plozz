@@ -320,6 +320,40 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
         XCTAssertFalse(imports.isLoading)
     }
 
+    func testLoaderCancellationIsRequestScopedWithoutCancellingCaller() async throws {
+        for boundary in [ImportLoaderStub.Boundary.playlist, .guide] {
+            let channel = LiveTVPrototypeCatalog.channels[0]
+            let loader = ImportLoaderStub(channels: [channel])
+            await loader.cancelNext(boundary)
+            let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
+            let model = LiveTVPrototypeModel(channels: [])
+            PerformanceDiagnostics.shared.start()
+            defer { PerformanceDiagnostics.shared.stop() }
+
+            await imports.reload(into: model)
+            XCTAssertFalse(Task.isCancelled)
+            XCTAssertEqual(model.channels.count, boundary == .guide ? 1 : 0)
+            XCTAssertFalse(imports.isLoading)
+            XCTAssertNil(imports.playlistFailure)
+            XCTAssertNil(imports.guideFailure)
+            let cancelled = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+            let firstRecords = (cancelled.recent + cancelled.slow).filter { $0.operation == .liveTVRefresh }
+            XCTAssertEqual(firstRecords.count, 1)
+            XCTAssertEqual(firstRecords.first?.outcome, .cancelled)
+            XCTAssertTrue(cancelled.active.isEmpty)
+
+            await imports.reload(into: model)
+            XCTAssertFalse(Task.isCancelled)
+            XCTAssertEqual(model.channels, [channel])
+            let recovered = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+            let records = (recovered.recent + recovered.slow).filter { $0.operation == .liveTVRefresh }
+            XCTAssertEqual(records.count, 2)
+            XCTAssertEqual(records.filter { $0.outcome == .cancelled }.count, 1)
+            XCTAssertEqual(records.filter { $0.outcome == .succeeded }.count, 1)
+            XCTAssertTrue(recovered.active.isEmpty)
+        }
+    }
+
     func testCancelledGuideDoesNotPublishOrPretendItFailedToParse() async {
         let channel = LiveTVPrototypeCatalog.channels[0]
         let started = expectation(description: "Guide suspended")
@@ -487,11 +521,13 @@ private actor OverlappingImportLoader: LiveTVSourceLoading {
 
 private actor ImportLoaderStub: LiveTVSourceLoading {
     enum Failure: Error { case unavailable }
+    enum Boundary: Equatable { case playlist, guide }
     let channels: [LiveTVPrototypeChannel]
     let programs: [LiveTVPrototypeProgram]
     let playlistFails: Bool
     let guideFails: Bool
     let beforeGuide: @Sendable () async -> Void
+    private var cancellation: Boundary?
     private(set) var guideLoads = 0
     private(set) var submittedChannelCount = 0
     private(set) var submittedGuideDate: Date?
@@ -508,7 +544,16 @@ private actor ImportLoaderStub: LiveTVSourceLoading {
         self.beforeGuide = beforeGuide
     }
 
+    func cancelNext(_ boundary: Boundary) { cancellation = boundary }
+
+    private func throwRequestedCancellation(_ boundary: Boundary) throws {
+        guard cancellation == boundary else { return }
+        cancellation = nil
+        throw CancellationError()
+    }
+
     func loadPlaylist(from url: URL) async throws -> LiveTVPlaylistImport {
+        try throwRequestedCancellation(.playlist)
         if playlistFails { throw Failure.unavailable }
         return LiveTVPlaylistImport(channels: channels, entryCount: channels.count, skippedEntryCount: 0)
     }
@@ -520,6 +565,7 @@ private actor ImportLoaderStub: LiveTVSourceLoading {
         submittedChannelCount = channels.count
         submittedGuideDate = now
         await beforeGuide()
+        try throwRequestedCancellation(.guide)
         if guideFails { throw Failure.unavailable }
         return LiveTVGuideImport(
             programs: programs, matchedChannelCount: Set(programs.map(\.channelID)).count,

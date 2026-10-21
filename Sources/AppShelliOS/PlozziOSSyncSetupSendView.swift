@@ -14,89 +14,23 @@ import FeatureSyncSetup
 @MainActor
 struct SyncSetupSentSuccessView: View {
     @Environment(\.themePalette) private var palette
+    @ScaledMetric(relativeTo: .caption) private var itemWidth = 90.0
     let accounts: [Account]
     let profiles: [Profile]
     let onDone: () -> Void
 
-    private var servers: [Account] {
-        var seen = Set<String>()
-        return accounts.filter { seen.insert($0.server.id).inserted }
-    }
-
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer(minLength: 0)
-            VStack(spacing: 8) {
-                Text("Your other device is set up")
-                    .font(.title2.bold()).multilineTextAlignment(.center)
-                    .foregroundStyle(palette.primaryText)
-            }
-            .padding(.horizontal, 24)
-
-            VStack(spacing: 14) {
-                if !servers.isEmpty {
-                    sectionCard(title: servers.count == 1 ? "Server" : "Servers") {
-                        ForEach(servers) { account in
-                            HStack(spacing: 14) {
-                                ProviderBrandMark(
-                                    provider: account.server.provider, size: 32,
-                                    mediaShareTransport: MediaShareTransportKind(
-                                        mediaShareScheme: account.server.baseURL.scheme))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(account.server.name)
-                                        .font(.body.weight(.semibold))
-                                        .foregroundStyle(palette.primaryText)
-                                    Text("Signed in")
-                                        .font(.caption).foregroundStyle(palette.secondaryText)
-                                }
-                                Spacer()
-                            }
-                        }
-                    }
-                }
-                if !profiles.isEmpty {
-                    sectionCard(title: profiles.count == 1 ? "Profile" : "Profiles") {
-                        // Wraps: a fixed row clipped the household's first and
-                        // last profiles once there were more than about five,
-                        // with nothing to say they were there.
-                        ProfileSummaryGrid(
-                            profiles: profiles,
-                            avatarSize: 56,
-                            itemWidth: 78,
-                            spacing: 14,
-                            nameFont: .caption
-                        )
-                        .foregroundStyle(palette.primaryText)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-
-            Spacer(minLength: 0)
-            Button("Done", action: onDone)
-                .syncPrimaryButtonStyle().controlSize(.large)
-                .padding(.bottom, 28)
+        SetupSummaryView(
+            title: "Your other device is set up",
+            serverGroups: SyncedServerAccountGroup.groups(from: accounts.map { SyncedAccountDescriptor(account: $0) }),
+            profileCount: profiles.count, actionTitle: "Done", onAction: onDone
+        ) {
+            ProfileSummaryGrid(
+                profiles: profiles, avatarSize: 56, itemWidth: min(itemWidth, 200), spacing: 14,
+                nameFont: .caption, nameLineLimit: nil
+            )
+            .foregroundStyle(palette.primaryText)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    @ViewBuilder
-    private func sectionCard<Content: View>(
-        title: LocalizedStringResource, @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).textCase(.uppercase)
-                .font(.caption2.weight(.semibold)).tracking(1.2)
-                .foregroundStyle(palette.secondaryText)
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(palette.cardSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(palette.cardBorder, lineWidth: 1)
-        )
     }
 }
 
@@ -140,7 +74,7 @@ struct SyncSetupCodeEntryScreen: View {
                     TextField("Code", text: $typedCode)
                         .textInputAutocapitalization(.characters).autocorrectionDisabled()
                         .multilineTextAlignment(.center)
-                        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                        .font(.system(.largeTitle, design: .monospaced).weight(.bold))
                         .textFieldStyle(.roundedBorder).padding(.horizontal, 40)
                     Button("Continue") { onSubmit(typedCode) }
                         .syncPrimaryButtonStyle()
@@ -156,9 +90,6 @@ struct SyncSetupCodeEntryScreen: View {
                 }
             }
         }
-        // Match the sheet's chrome (nav title, text field, keyboard) to the active
-        // theme so text never lands dark-on-dark (or light-on-light).
-        .preferredColorScheme(palette.isLight ? .light : .dark)
     }
 }
 

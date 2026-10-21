@@ -156,6 +156,7 @@ public final class LiveTVPlaybackPreparation {
     public private(set) var current: LiveTVPreparedStream?
     public private(set) var preparingChannelID: String?
     public private(set) var failure: LiveTVPlaybackPreparationError?
+    public private(set) var playbackFailure: LiveChannelFailureReport?
     public var isPreparing: Bool { preparingChannelID != nil }
 
     @ObservationIgnored private var serverProviderResolver: LiveTVServerProviderResolver
@@ -169,6 +170,7 @@ public final class LiveTVPlaybackPreparation {
     @ObservationIgnored private var currentLease: PreparedLiveTVLeaseOwner?
     @ObservationIgnored private var pendingLeases: [UUID: PreparedLiveTVLeaseOwner] = [:]
     @ObservationIgnored private var cleanups: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var iptvCleanupIDs = Set<UUID>()
     @ObservationIgnored private var operations: [UUID: LiveTVPreparationCompletion] = [:]
 
     public init(
@@ -208,13 +210,15 @@ public final class LiveTVPlaybackPreparation {
     /// The closure is retained while current: capture the needed models weakly
     /// and profile identity by value, not the owning view or this owner.
     ///
-    /// `accept` commits preview/watch intent synchronously after resolution. A
-    /// rejection never changes the current stream. There are no automatic retries.
+    /// `accept` checks intent before disturbing the current stream; rejection
+    /// preserves it. `commit` rechecks and applies presentation changes after
+    /// cleanup, without suspending before publication. There are no automatic retries.
     @discardableResult
     public func prepare(
         _ channel: LiveTVPrototypeChannel,
         serverReference: LiveTVServerChannelReference? = nil,
         isAuthorized: @escaping @MainActor @Sendable () -> Bool,
+        commit: @MainActor () -> Bool = { true },
         accept: @MainActor () -> Bool
     ) async -> Bool {
         guard !Task.isCancelled else { return false }
@@ -229,7 +233,7 @@ public final class LiveTVPlaybackPreparation {
         return await withTaskCancellationHandler {
             await prepareCandidate(
                 channel, serverReference: serverReference, requestID: requestID,
-                isAuthorized: isAuthorized, accept: accept
+                isAuthorized: isAuthorized, commit: commit, accept: accept
             )
         } onCancel: { [weak self] in
             Task { @MainActor [weak self] in
@@ -243,11 +247,13 @@ public final class LiveTVPlaybackPreparation {
         serverReference: LiveTVServerChannelReference?,
         requestID: UUID,
         isAuthorized: @escaping @MainActor @Sendable () -> Bool,
+        commit: @MainActor () -> Bool,
         accept: @MainActor () -> Bool
     ) async -> Bool {
         guard generation == requestID, !Task.isCancelled else { return false }
         preparingChannelID = channel.id
         failure = nil
+        playbackFailure = nil
         discardUnauthorizedCurrent()
         var candidate: PreparedLiveTVLeaseOwner?
         var resolving = false
@@ -260,6 +266,12 @@ public final class LiveTVPlaybackPreparation {
             preparingBinding = binding
             if let existing = current, canReuse(existing, binding: binding) {
                 guard accept() else {
+                    finishPreparation(requestID)
+                    discardUnauthorizedCurrent()
+                    return false
+                }
+                try requireCurrent(requestID, binding: binding)
+                guard commit() else {
                     finishPreparation(requestID)
                     discardUnauthorizedCurrent()
                     return false
@@ -321,6 +333,22 @@ public final class LiveTVPlaybackPreparation {
                 return false
             }
             try requireCurrent(requestID, binding: binding)
+            if channel.source == .iptv {
+                if currentBinding?.context?.kind == .iptv, currentLease != nil { retireCurrent() }
+                // A replacement URL must not reach the player while a previous
+                // IPTV proxy is still draining its provider connection.
+                let pending = cleanups.filter { iptvCleanupIDs.contains($0.key) }.map(\.value)
+                for cleanup in pending { await cleanup.value }
+                try requireCurrent(requestID, binding: binding)
+            }
+            guard commit() else {
+                finishPreparation(requestID)
+                pendingLeases.removeValue(forKey: requestID)
+                if let candidate { await release(candidate).value }
+                discardUnauthorizedCurrent()
+                return false
+            }
+            try requireCurrent(requestID, binding: binding)
             let previous = currentLease
             pendingLeases.removeValue(forKey: requestID)
             currentLease = candidate
@@ -357,6 +385,7 @@ public final class LiveTVPlaybackPreparation {
         cancelPreparation()
         retireCurrent()
         failure = nil
+        playbackFailure = nil
     }
 
     /// Handle a terminal player failure by prepared identity, never channel ID:
@@ -367,7 +396,8 @@ public final class LiveTVPlaybackPreparation {
     @discardableResult
     public func failCurrent(
         id: UUID,
-        reason: LiveTVPlaybackPreparationError = .playbackFailed
+        reason: LiveTVPlaybackPreparationError = .playbackFailed,
+        report: LiveChannelFailureReport? = nil
     ) -> LiveTVPlaybackFailureDisposition {
         guard current?.id == id else { return .ignored }
         retireCurrent()
@@ -375,6 +405,7 @@ public final class LiveTVPlaybackPreparation {
             return .awaitingReplacement(channelID: target)
         }
         failure = reason
+        playbackFailure = report
         return .stopped
     }
 
@@ -484,7 +515,7 @@ public final class LiveTVPlaybackPreparation {
                 throw LiveTVPlaybackPreparationError.accountUnavailable
             }
             guard context.kind == channel.source,
-                  [.jellyfin, .emby, .plex].contains(context.kind),
+                  [.jellyfin, .emby, .plex, .iptv].contains(context.kind),
                   !context.authorizationID.isEmpty,
                   reference.authorizationID == context.authorizationID else {
                 throw LiveTVPlaybackPreparationError.authorizationChanged
@@ -582,6 +613,7 @@ public final class LiveTVPlaybackPreparation {
         guard generation == requestID, isPreparing else { return }
         cancelPreparation()
         failure = nil
+        playbackFailure = nil
     }
 
     private func retireCurrent() {
@@ -610,11 +642,15 @@ public final class LiveTVPlaybackPreparation {
             await self?.finishedCleanup(id)
         }
         cleanups[id] = task
+        if case .authenticatedHTTP(let locator) = lease.playbackSource, locator.provider == .iptv {
+            iptvCleanupIDs.insert(id)
+        }
         return task
     }
 
     private func finishedCleanup(_ id: UUID) {
         cleanups.removeValue(forKey: id)
+        iptvCleanupIDs.remove(id)
     }
 
     private static func source(for provider: ProviderKind) -> LiveTVPrototypeSource? {
@@ -622,6 +658,7 @@ public final class LiveTVPlaybackPreparation {
         case .jellyfin: .jellyfin
         case .emby: .emby
         case .plex: .plex
+        case .iptv: .iptv
         default: nil
         }
     }

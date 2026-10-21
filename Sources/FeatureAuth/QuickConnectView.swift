@@ -92,12 +92,7 @@ public struct QuickConnectView: View {
 
         case let .awaitingApproval(code, expiresAt):
             HStack(spacing: 32) {
-                Text(code)
-                    .font(.plozzCode(size: 96))
-                    .tracking(12)
-                    .padding(.horizontal, 48)
-                    .padding(.vertical, 24)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: PlozzTheme.Metrics.Radius.panel))
+                ConnectionCodeView(code, size: 96)
 
                 ExpiryCountdown(expiresAt: expiresAt, lifetime: viewModel.codeLifetime)
             }

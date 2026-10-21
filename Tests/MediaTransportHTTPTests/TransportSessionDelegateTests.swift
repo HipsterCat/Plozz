@@ -4,6 +4,20 @@ import XCTest
 final class TransportSessionDelegateTests: XCTestCase {
     private let origin = TransportOrigin(url: URL(string: "https://nas.example.com/")!)!
 
+    func testAnonymousMediaNeverAnswersPasswordChallenges() {
+        let delegate = TransportSessionDelegate(
+            credential: .anonymous, trustPolicy: .system, origin: origin, isAnonymousMediaSession: true
+        )
+        for method in [NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest] {
+            let space = URLProtectionSpace(
+                host: origin.host, port: origin.port, protocol: origin.scheme, realm: "media", authenticationMethod: method
+            )
+            guard case .reject(.authenticationFailed) = delegate.passwordChallengeDecision(space: space, previousFailureCount: 0) else {
+                return XCTFail("anonymous media must not fall back to stored credentials")
+            }
+        }
+    }
+
     func testDigestChallengeUsesNonPersistentPasswordCredential() {
         let decision = evaluateChallenge(
             authenticationMethod: NSURLAuthenticationMethodHTTPDigest,

@@ -9,11 +9,12 @@ final class LiveTVPlaybackPreparationTests: XCTestCase {
         _ id: String = "one",
         server: Bool = true,
         url: String? = nil,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        sourceKind: LiveTVPrototypeSource? = nil
     ) -> LiveTVPrototypeChannel {
         LiveTVPrototypeChannel(
             id: "ui-\(id)", number: 1, name: "Fixture channel", category: "Fixture",
-            symbol: "tv", accent: 0, source: server ? .jellyfin : .iptv, tagline: "",
+            symbol: "tv", accent: 0, source: sourceKind ?? (server ? .jellyfin : .iptv), tagline: "",
             streamURL: url.flatMap(URL.init(string:)), httpHeaders: headers,
             configuredSourceID: server ? "server-source" : "playlist"
         )
@@ -35,11 +36,12 @@ final class LiveTVPlaybackPreparationTests: XCTestCase {
         closed: XCTestExpectation? = nil,
         onClose: (@MainActor @Sendable () -> Void)? = nil,
         closeEntered: XCTestExpectation? = nil,
-        closeGate: PreparationFixtureGate? = nil
+        closeGate: PreparationFixtureGate? = nil,
+        providerKind: ProviderKind = .jellyfin
     ) throws -> PreparationFixtureLease {
         PreparationFixtureLease(
             source: .authenticatedHTTP(try AuthenticatedHTTPPlaybackLocator(
-                provider: .jellyfin, accountID: accountID,
+                provider: providerKind, accountID: accountID,
                 credentialRevision: CredentialRevision(), itemID: id,
                 deliveryMode: .hls,
                 resource: AuthenticatedHTTPResource(
@@ -49,6 +51,39 @@ final class LiveTVPlaybackPreparationTests: XCTestCase {
             )),
             closed: closed, onClose: onClose, closeEntered: closeEntered, closeGate: closeGate
         )
+    }
+
+    func testIPTVReplacementWaitsForPreviousProxyCleanupAndHonorsCancellation() async throws {
+        for cancelsReplacement in [false, true] {
+            let closing = expectation(description: "Old IPTV connection draining")
+            let gate = PreparationFixtureGate()
+            let first = try lease("one", closeEntered: closing, closeGate: gate, providerKind: .iptv)
+            let second = try lease("two", providerKind: .iptv)
+            let provider = PreparationFixtureProvider([
+                "one": [.init(lease: first)], "two": [.init(lease: second)]
+            ])
+            let scope = PreparationFixtureScope(provider: provider)
+            scope.kind = .iptv
+            let owner = owner(scope)
+            let seeded = await prepare(
+                owner, channel: channel("one", sourceKind: .iptv), reference: reference("one"), scope: scope
+            )
+            XCTAssertTrue(seeded)
+            let replacement = Task {
+                await prepare(
+                    owner, channel: channel("two", sourceKind: .iptv), reference: reference("two"), scope: scope
+                )
+            }
+            await fulfillment(of: [closing], timeout: 2)
+            XCTAssertNil(owner.current, "The replacement cannot reach the player before old transport cleanup.")
+            XCTAssertTrue(owner.isPreparing)
+            if cancelsReplacement { replacement.cancel() }
+            await gate.release()
+            let accepted = await replacement.value
+            XCTAssertEqual(accepted, !cancelsReplacement)
+            XCTAssertEqual(owner.current?.channel.id, cancelsReplacement ? nil : "ui-two")
+            await owner.close()
+        }
     }
 
     private func owner(_ scope: PreparationFixtureScope) -> LiveTVPlaybackPreparation {
@@ -1458,6 +1493,7 @@ private final class PreparationFixtureScope {
     var accountEnabled = true
     var enabledSources: Set<String> = ["playlist", "server-source"]
     var provider: (any ServerLiveTVProviding)?
+    var kind: LiveTVPrototypeSource = .jellyfin
     var authorizationID: String { "\(profileID)|\(homeUserID)" }
 
     init(provider: (any ServerLiveTVProviding)? = nil) {
@@ -1468,7 +1504,7 @@ private final class PreparationFixtureScope {
         guard accountEnabled, accountID == "account", let provider else { return nil }
         return LiveTVAuthorizedServerProvider(
             accountID: accountID, authorizationID: authorizationID,
-            kind: .jellyfin, provider: provider
+            kind: kind, provider: provider
         )
     }
 

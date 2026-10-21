@@ -5,6 +5,111 @@ import XCTest
 
 @MainActor
 final class LiveTVPlaybackCoordinatorTests: XCTestCase {
+    func testIPTVPreviewKeepsItsTaskKeyUntilCleanupFinishes() async throws {
+        let closing = expectation(description: "Previous IPTV preview is draining")
+        let gate = CoordinatorFixtureGate()
+        let old = try CoordinatorFixtureLease("one", closeEntered: closing, closeGate: gate, iptv: true)
+        let fixture = CoordinatorFixture(kind: .iptv, replies: [
+            "one": [.init(lease: old)],
+            "two": [.init(lease: try CoordinatorFixtureLease("two", iptv: true))]
+        ])
+        fixture.coordinator.focus("one")
+        let first = try XCTUnwrap(fixture.preview.pendingRequest)
+        let seeded = await fixture.coordinator.preparePreview(first)
+        XCTAssertTrue(seeded)
+        fixture.coordinator.focus("two")
+        let request = try XCTUnwrap(fixture.preview.pendingRequest)
+        let replacement = Task { await fixture.coordinator.preparePreview(request) }
+        await fulfillment(of: [closing], timeout: 2)
+        XCTAssertNil(fixture.preparation.current)
+        XCTAssertEqual(fixture.preview.pendingRequest, request)
+        // SwiftUI cancels .task(id: pendingRequest) when committing changes its key.
+        if fixture.preview.pendingRequest != request { replacement.cancel() }
+        fixture.coordinator.synchronizePlayerState()
+        await gate.release()
+        let accepted = await replacement.value
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(fixture.preparation.current?.channel.id, "two")
+        XCTAssertEqual(fixture.model.playingChannelID, "two")
+        XCTAssertNil(fixture.preview.pendingRequest)
+        XCTAssertFalse(fixture.preview.isExpanded)
+        await fixture.preparation.close()
+    }
+
+    func testIPTVWatchCommitsItsTuneAfterCleanupNotBefore() async throws {
+        let closing = expectation(description: "Previous watched IPTV channel is draining")
+        let gate = CoordinatorFixtureGate()
+        let old = try CoordinatorFixtureLease("one", closeEntered: closing, closeGate: gate, iptv: true)
+        let fixture = CoordinatorFixture(kind: .iptv, replies: [
+            "one": [.init(lease: old)],
+            "two": [.init(lease: try CoordinatorFixtureLease("two", iptv: true))]
+        ])
+        _ = await fixture.coordinator.watch("one").value
+        let replacement = fixture.coordinator.watch("two")
+        await fulfillment(of: [closing], timeout: 2)
+        fixture.coordinator.synchronizePlayerState()
+        await gate.release()
+        let accepted = await replacement.value
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(fixture.preparation.current?.channel.id, "two")
+        XCTAssertEqual(fixture.model.playingChannelID, "two")
+        XCTAssertTrue(fixture.preview.isExpanded)
+        await fixture.preparation.close()
+    }
+
+    func testRejectedIPTVPreviewKeepsThePreviousStream() async throws {
+        let old = try CoordinatorFixtureLease("one", iptv: true)
+        let rejected = try CoordinatorFixtureLease("two", iptv: true)
+        let fixture = CoordinatorFixture(kind: .iptv, replies: [
+            "one": [.init(lease: old)], "two": [.init(lease: rejected)]
+        ])
+        fixture.coordinator.focus("one")
+        _ = await fixture.coordinator.preparePreview(try XCTUnwrap(fixture.preview.pendingRequest))
+        let oldID = fixture.preparation.current?.id
+        fixture.coordinator.focus("two")
+        let request = try XCTUnwrap(fixture.preview.pendingRequest)
+        fixture.model.query = "not in the channel list"
+        let accepted = await fixture.coordinator.preparePreview(request)
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(fixture.preparation.current?.id, oldID)
+        let closes = await old.closeCalls
+        XCTAssertEqual(closes, 0)
+        await fixture.preparation.close()
+    }
+
+    func testIPTVPreviewRechecksIntentAndAuthorityAfterDraining() async throws {
+        for change in ["focus", "inactivity", "profile", "cancellation"] {
+            let closing = expectation(description: "IPTV preview cleanup pending")
+            let gate = CoordinatorFixtureGate()
+            let old = try CoordinatorFixtureLease("one", closeEntered: closing, closeGate: gate, iptv: true)
+            let candidate = try CoordinatorFixtureLease("two", iptv: true)
+            let fixture = CoordinatorFixture(kind: .iptv, replies: [
+                "one": [.init(lease: old)], "two": [.init(lease: candidate)]
+            ])
+            fixture.coordinator.focus("one")
+            _ = await fixture.coordinator.preparePreview(try XCTUnwrap(fixture.preview.pendingRequest))
+            fixture.coordinator.focus("two")
+            let request = try XCTUnwrap(fixture.preview.pendingRequest)
+            let replacement = Task { await fixture.coordinator.preparePreview(request) }
+            await fulfillment(of: [closing], timeout: 2)
+            switch change {
+            case "focus": fixture.coordinator.focus("iptv")
+            case "inactivity": fixture.coordinator.setInteractionActive(false)
+            case "profile": fixture.scope.profileID = "different-profile"
+            default: replacement.cancel()
+            }
+            let pending = fixture.preview.pendingRequest
+            await gate.release()
+            let accepted = await replacement.value
+            XCTAssertFalse(accepted, change)
+            XCTAssertNil(fixture.preparation.current, change)
+            XCTAssertEqual(fixture.preview.pendingRequest, pending, change)
+            let closes = await candidate.closeCalls
+            XCTAssertEqual(closes, 1, change)
+            await fixture.preparation.close()
+        }
+    }
+
     func testAdoptingMultiviewOwnerRetainsPreparedIdentityAndNormalStopOwnership() async throws {
         let fixture = CoordinatorFixture()
         let retained = LiveTVPlaybackPreparation()
@@ -300,16 +405,50 @@ final class LiveTVPlaybackCoordinatorTests: XCTestCase {
         let fixture = CoordinatorFixture(replies: ["one": [.init(lease: first), .init(lease: second)]])
         _ = await fixture.coordinator.watch("one").value
         let oldID = try XCTUnwrap(fixture.preparation.current?.id)
-        fixture.coordinator.playbackFailed(oldID)
+        let report = LiveChannelFailureReport(failure: .bufferingTimedOut)
+        fixture.coordinator.playbackFailed(oldID, report: report)
+        XCTAssertEqual(fixture.coordinator.watchFailure?.playbackFailure, report)
+        XCTAssertEqual(fixture.coordinator.watchFailure?.message, report.message)
+        XCTAssertEqual(fixture.preparation.playbackFailure, report)
         XCTAssertNil(fixture.preparation.current)
         XCTAssertFalse(fixture.preview.isExpanded)
         _ = await fixture.coordinator.watch("one").value
+        XCTAssertNil(fixture.preparation.playbackFailure)
         XCTAssertNotEqual(fixture.preparation.current?.id, oldID)
-        fixture.coordinator.playbackFailed(oldID)
+        fixture.coordinator.playbackFailed(oldID, report: report)
+        XCTAssertNil(fixture.preparation.playbackFailure)
         XCTAssertNotNil(fixture.preparation.current)
         let opens = await fixture.provider.opens
         XCTAssertEqual(opens, ["one", "one"])
         await fixture.preparation.close()
+    }
+
+    func testVisibleIPTVRetryReleasesTheRefusedLeaseAndOpensANewOne() async throws {
+        for error in [AppError.rateLimited(retryAfter: 10), .conflict] {
+            let first = try CoordinatorFixtureLease("one", iptv: true)
+            let second = try CoordinatorFixtureLease("one", iptv: true)
+            let fixture = CoordinatorFixture(kind: .iptv, replies: [
+                "one": [.init(lease: first), .init(lease: second)]
+            ])
+            let opened = await fixture.coordinator.watch("one").value
+            XCTAssertTrue(opened)
+            let oldID = try XCTUnwrap(fixture.preparation.current?.id)
+            let report = LiveChannelFailureReport(failure: .engine(error))
+            fixture.coordinator.playbackFailed(oldID, report: report)
+            XCTAssertEqual(fixture.coordinator.watchFailure?.playbackFailure, report)
+            XCTAssertNil(fixture.preparation.current)
+            let retried = await fixture.coordinator.watch("one").value
+            XCTAssertTrue(retried)
+            XCTAssertNotEqual(fixture.preparation.current?.id, oldID)
+            XCTAssertNil(fixture.preparation.playbackFailure)
+            let opens = await fixture.provider.opens
+            let oldCloses = await first.closeCalls
+            let currentCloses = await second.closeCalls
+            XCTAssertEqual(opens, ["one", "one"])
+            XCTAssertEqual(oldCloses, 1)
+            XCTAssertEqual(currentCloses, 0)
+            await fixture.preparation.close()
+        }
     }
 
     func testNativePresentationSurvivesZapsButRetiredDismissalCannotAffectReplacement() async throws {
@@ -745,13 +884,13 @@ private final class CoordinatorFixture {
     let scope = CoordinatorFixtureScope()
     let provider: CoordinatorFixtureProvider
 
-    init(replies: [String: [CoordinatorFixtureProvider.Reply]] = [:]) {
+    init(kind: LiveTVPrototypeSource = .jellyfin, replies: [String: [CoordinatorFixtureProvider.Reply]] = [:]) {
         let provider = CoordinatorFixtureProvider(replies)
         self.provider = provider
         let channels = ["iptv", "one", "two"].enumerated().map { index, id in
             LiveTVPrototypeChannel(
                 id: id, number: index + 1, name: id, category: "Fixture", symbol: "tv",
-                accent: 0, source: id == "iptv" ? .iptv : .jellyfin, tagline: "",
+                accent: 0, source: id == "iptv" ? .iptv : kind, tagline: "",
                 streamURL: id == "iptv" ? URL(string: "https://fixture.invalid/public.m3u8") : nil,
                 configuredSourceID: id == "iptv" ? "playlist" : "server"
             )
@@ -764,9 +903,9 @@ private final class CoordinatorFixture {
         preparation = LiveTVPlaybackPreparation(serverProviderResolver: { id in
             guard id == "account", scope.profileID == profile else { return nil }
             return LiveTVAuthorizedServerProvider(
-                accountID: id, authorizationID: scope.authorizationID, kind: .jellyfin, provider: provider
+                accountID: id, authorizationID: scope.authorizationID, kind: kind, provider: provider
             )
-        })
+        }, authenticatedHTTPResolver: CoordinatorFixtureResolver())
         coordinator = LiveTVPlaybackCoordinator(
             model: model, preview: preview, preparation: preparation,
             reference: { id in
@@ -824,11 +963,21 @@ private actor CoordinatorFixtureLease: LiveTVStreamLease {
         reportEntered: XCTestExpectation? = nil,
         reportGate: CoordinatorFixtureGate? = nil,
         closeEntered: XCTestExpectation? = nil,
-        closeGate: CoordinatorFixtureGate? = nil
+        closeGate: CoordinatorFixtureGate? = nil,
+        iptv: Bool = false
     ) throws {
-        playbackSource = .publicURL(try SecretFreeURLSource(
-            url: URL(string: "https://fixture.invalid/\(channel).m3u8")!
-        ))
+        if iptv {
+            playbackSource = .authenticatedHTTP(try AuthenticatedHTTPPlaybackLocator(
+                provider: .iptv, accountID: "account", credentialRevision: .init(), itemID: channel,
+                deliveryMode: .hls,
+                resource: .init(pathBase: .configuredBaseURL, path: "\(channel).m3u8"),
+                playSessionID: channel
+            ))
+        } else {
+            playbackSource = .publicURL(try SecretFreeURLSource(
+                url: URL(string: "https://fixture.invalid/\(channel).m3u8")!
+            ))
+        }
         self.reportEntered = reportEntered
         self.reportGate = reportGate
         self.closeEntered = closeEntered
@@ -847,6 +996,13 @@ private actor CoordinatorFixtureLease: LiveTVStreamLease {
         closeCalls += 1
         closeEntered?.fulfill()
         await closeGate?.wait()
+    }
+}
+
+@MainActor
+private final class CoordinatorFixtureResolver: AuthenticatedHTTPResourceResolving {
+    func resolve(_ locator: AuthenticatedHTTPPlaybackLocator) async throws -> URL {
+        URL(string: "https://fixture.invalid/\(locator.itemID).m3u8")!
     }
 }
 

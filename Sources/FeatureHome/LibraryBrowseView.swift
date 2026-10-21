@@ -1,8 +1,39 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import Observation
 import CoreModels
 import PlozzCoreUI
 import FeatureHomeCore
+
+#if os(tvOS)
+import UIKit
+
+@MainActor
+@Observable
+private final class ShowcaseNavigationVisibility {
+    var focusedRowID: String?
+
+    func showsNavigation(in rowIDs: [String]) -> Bool {
+        guard let focusedRowID, rowIDs.contains(focusedRowID) else { return true }
+        return focusedRowID == rowIDs.first
+    }
+}
+
+private struct ShowcaseNavigationVisibilityModifier: ViewModifier {
+    let visibility: ShowcaseNavigationVisibility
+    let isRecommended: Bool
+    let rowIDs: [String]
+
+    func body(content: Content) -> some View {
+        let isVisible = !isRecommended || visibility.showsNavigation(in: rowIDs)
+        content
+            .opacity(isVisible ? 1 : 0)
+            .disabled(!isVisible)
+            .accessibilityHidden(!isVisible)
+            .animation(.easeOut(duration: 0.18), value: isVisible)
+    }
+}
+#endif
 
 /// A sparse, lazily-loaded poster grid for browsing a single library. System
 /// focus uses reusable UIKit media cells; custom styles use `PosterCardView`.
@@ -15,9 +46,13 @@ import FeatureHomeCore
 /// a single all-items request.
 public struct LibraryBrowseView: View {
     @State private var viewModel: LibraryBrowseViewModel
-    /// Tracks which items we've already warmed artwork for. A reference type (not a
-    /// `@State` `Set`) so inserting during scroll does not invalidate the view body.
+    #if os(tvOS)
+    @State private var showcaseNavigation = ShowcaseNavigationVisibility()
+    @State private var isFrontmost = false
+    #endif
+    /// Owns a bounded lookahead without invalidating the view on every scroll update.
     @State private var artworkPrefetch = ArtworkPrefetchTracker()
+    @Environment(\.scenePhase) private var scenePhase
     /// The rail letter that currently holds focus, or `nil` when focus is in the
     /// grid. Drives the fly-through highlight + the transient jumbo letter bubble.
     @State private var railFocusedLetter: String?
@@ -27,7 +62,6 @@ public struct LibraryBrowseView: View {
     /// you're actually flying through content. Reset when the rail's eligibility
     /// goes away (a non-name sort) so re-entering name sort re-arms the reveal.
     @State private var railHasRevealed = false
-    @State private var sortButtonHeight: CGFloat?
     @FocusState private var focusedGridIndex: Int?
     #if os(tvOS)
     @State private var nativeScrollTarget = NativeLibraryScrollTarget()
@@ -36,111 +70,212 @@ public struct LibraryBrowseView: View {
     /// our translated copy while a server's own name stays verbatim.
     private let title: Text
     private let spoilerSettings: SpoilerSettings
+    private let continueWatchingShowsSeriesArtwork: Bool
+    private let continueWatchingLayout: ContinueWatchingCardLayout
     private let onSelect: (MediaItem) -> Void
     private let onSelectAtIndex: ((MediaItem, VideoPlaylistPlaybackOrigin?) -> Void)?
 
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzArtworkSettings) private var artworkSettings
     /// Custom pinned-sidebar clearance. Native top/sidebar styles publish zero.
     @Environment(\.plozzNavigationContentInset) private var navigationContentInset
-    /// Per-profile card presentation. Decides how far a grid card insets its
-    /// artwork, which is what the banner's edges have to match.
+    @Environment(\.plozzNavigationStyle) private var navigationStyle
+    /// Align the visible card surface, not its invisible layout margins.
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.plozzCardFocusStyle) private var focusStyle
     /// App-wide media-share scan/enrich status (optional so previews/tests that
     /// don't inject it don't crash). Feeds the banner under this library's title.
     @Environment(ShareScanStatusModel.self) private var shareScanStatus: ShareScanStatusModel?
 
-    /// Library roots need a little more separation than Home rails: large focused
-    /// posters bloom toward the pinned icons, so the base sidebar inset alone
-    /// leaves them visually touching.
     private var contentLeadingPadding: CGFloat {
-        HomeLayout.horizontalPadding
-            + navigationContentInset
-            + (navigationContentInset > 0 ? 16 : 0)
+        HomeLayout.horizontalPadding + navigationContentInset
+    }
+
+    private var gridLeadingPadding: CGFloat {
+        metrics.cardRowLeadingPadding(contentLeadingPadding, cardStyle: cardStyle)
+    }
+
+    private var gridTrailingPadding: CGFloat {
+        metrics.cardRowLeadingPadding(HomeLayout.horizontalPadding, cardStyle: cardStyle)
+    }
+
+    private var isEntryContentPending: Bool {
+        if viewModel.contentMode == .recommended {
+            if case .idle = viewModel.recommendationState { return true }
+            return viewModel.recommendationState.isLoading
+        }
+        if case .idle = viewModel.state { return true }
+        return viewModel.state.isLoading
     }
 
     public init(
         viewModel: LibraryBrowseViewModel,
         title: Text,
         spoilerSettings: SpoilerSettings = .default,
+        continueWatchingShowsSeriesArtwork: Bool = true,
+        continueWatchingLayout: ContinueWatchingCardLayout = .landscape,
         onSelect: @escaping (MediaItem) -> Void,
         onSelectAtIndex: ((MediaItem, VideoPlaylistPlaybackOrigin?) -> Void)? = nil
     ) {
         _viewModel = State(initialValue: viewModel)
         self.title = title
         self.spoilerSettings = spoilerSettings
+        self.continueWatchingShowsSeriesArtwork = continueWatchingShowsSeriesArtwork
+        self.continueWatchingLayout = continueWatchingLayout
         self.onSelect = onSelect
         self.onSelectAtIndex = onSelectAtIndex
     }
 
     public var body: some View {
+        #if os(tvOS)
+        NativeLibraryFocusHost(scrollTarget: nativeScrollTarget, content: libraryContent)
+            .ignoresSafeArea(.container, edges: [.vertical, .trailing])
+            .toolbar(.hidden, for: .tabBar)
+        #else
+        libraryContent
+        #endif
+    }
+
+    private var libraryContent: some View {
         // Shared dense "Browse" wall — flexible columns from the live density
         // metrics so each glass tile stretches to fill its column and the wall
         // scales with the UI-density setting, with six columns at default density.
         let columns = metrics.libraryPosterColumns
         let generation = viewModel.contentGeneration
-        return ContentStateView(
-            state: viewModel.state,
-            emptyMessage: viewModel.emptyMessage,
-            onRetry: { Task { await viewModel.loadFirstPage() } },
-            loadingContent: {
-                if viewModel.isMediaShare || viewModel.browseScope == .collectionMembers {
-                    LibraryBrowseLoadingView()
-                } else {
-                    LoadingMessagesView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        return ZStack {
+            if viewModel.contentMode == .recommended {
+                recommendedContent
+            } else {
+                ContentStateView(
+                    state: viewModel.state,
+                    emptyMessage: viewModel.emptyMessage,
+                    errorMessage: viewModel.queryMessage,
+                    errorServers: viewModel.errorServers,
+                    errorReport: viewModel.browseDiagnostic.map(PlaybackDiagnosticReport.library),
+                    onRetry: { Task { await viewModel.loadFirstPage() } },
+                    loadingContent: {
+                        if let progress = viewModel.collectionProgress {
+                            LibraryCollectionLoadingView(progress: progress) {
+                                Task { await viewModel.loadFirstPage() }
+                            }
+                        } else if let progress = viewModel.queryProgress {
+                            LibraryQueryPreparationView(progress: progress) { Task { await viewModel.cancelIndex() } }
+                        } else if viewModel.isMediaShare || viewModel.browseScope == .collectionMembers {
+                            LibraryBrowseLoadingView()
+                        } else {
+                            LoadingMessagesView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                ) { total in
+                    #if os(tvOS)
+                    if focusStyle.usesSystemEffect {
+                        nativeGrid(total: total, generation: generation)
+                    } else {
+                        swiftUIGrid(total: total, generation: generation, columns: columns)
+                    }
+                    #else
+                    swiftUIGrid(total: total, generation: generation, columns: columns)
+                    #endif
                 }
             }
-        ) { total in
-            #if os(tvOS)
-            if focusStyle.usesSystemEffect {
-                nativeGrid(total: total, generation: generation)
-            } else {
-                swiftUIGrid(total: total, generation: generation, columns: columns)
-            }
-            #else
-            swiftUIGrid(total: total, generation: generation, columns: columns)
-            #endif
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationEntryFocus(isEntryContentPending ? .pending : nil)
         // Browse is a full-screen sub-page: hide the top tab bar so it reads as a
         // dedicated destination with no navigation chrome pinned at the top.
+        .environment(\.plozzCardCaptionView, viewModel.browseScope.cardCaptionView(for: viewModel.contentMode))
+        .environment(\.plozzArtworkArea, nil)
         .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .top, spacing: 0) {
-            // Keep switching available when there is no grid to scroll.
-            if viewModel.state.value == nil {
-                header
-                    .padding(.top, PlozzTheme.Spacing.large)
-            }
+            #if os(tvOS)
+            NativeLibraryScrollingHeader(
+                scrollTarget: nativeScrollTarget,
+                content: navigationHeader
+                    .padding(.vertical, PlozzTheme.Spacing.large)
+            )
+            .padding(.top, headerTopClearance)
+            .modifier(
+                ShowcaseNavigationVisibilityModifier(
+                    visibility: showcaseNavigation,
+                    isRecommended: viewModel.contentMode == .recommended,
+                    rowIDs: viewModel.recommendationState.value?.map(\.id) ?? []
+                )
+            )
+            #else
+            navigationHeader
+                .padding(.vertical, PlozzTheme.Spacing.large)
+            #endif
         }
         .safeAreaInset(edge: .bottom) {
-            if let error = viewModel.pageError {
-                HStack(spacing: PlozzTheme.Spacing.large) {
-                    Text(error.userMessage)
-                        .plozzForeground(.secondary)
-                    Button("Try Again") {
-                        Task { await viewModel.retryFailedPages() }
-                    }
-                    .plozzActionButton()
+            if viewModel.collectionScanIncomplete, viewModel.state.value != nil, viewModel.pageError == nil,
+               viewModel.contentMode == .collections {
+                LibraryCollectionLoadingView(progress: viewModel.collectionProgress) {
+                    Task { await viewModel.loadFirstPage() }
                 }
                 .padding()
             }
-            if viewModel.state.value == nil, let library = viewModel.fileBrowserLibrary {
-                LibraryFileBrowseButton(library: library, onSelect: onSelect)
-                    .plozzActionButton()
-                    .padding()
+            if viewModel.contentMode == .recommended, let error = viewModel.recommendationError,
+               viewModel.recommendationState.value != nil {
+                VStack(alignment: .leading, spacing: 12) {
+                    InlineErrorMessage(Text(error.userMessage))
+                    ContentFailureActions(report: viewModel.recommendationDiagnostic.map(PlaybackDiagnosticReport.library)) {
+                        Task { await viewModel.loadRecommendations() }
+                    }
+                }
+                .padding()
+            }
+            if viewModel.contentMode != .recommended, let error = viewModel.pageError {
+                VStack(alignment: .leading, spacing: PlozzTheme.Spacing.large) {
+                    if viewModel.collectionScanIncomplete {
+                        Text("Some collections haven't been checked yet. The list is incomplete.")
+                    }
+                    Text(viewModel.queryMessage ?? error.userMessage)
+                        .plozzForeground(.secondary)
+                    ContentFailureActions(report: viewModel.browseDiagnostic.map(PlaybackDiagnosticReport.library)) {
+                        Task { await viewModel.retryFailedPages() }
+                    }
+                }
+                .padding()
             }
         }
         .task { await viewModel.loadFirstPageIfNeeded() }
         .background {
             LibraryAlphabetFeedback(letter: viewModel.alphabet.jumpingTo, message: viewModel.alphabet.message)
         }
-        .onDisappear { viewModel.cancelLetterJump() }
+        .onDisappear {
+            viewModel.cancelPendingQuery()
+            artworkPrefetch.isActive = false
+            artworkPrefetch.reset()
+        }
+        .onChange(of: viewModel.contentGeneration) { _, _ in artworkPrefetch.reset() }
+        .onChange(of: metrics.libraryPosterColumns.count) { _, _ in
+            artworkPrefetch.reset()
+            prefetchArtwork(aheadFrom: viewModel.topVisibleIndex ?? 0)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            artworkPrefetch.reset()
+            if phase == .active { prefetchArtwork(aheadFrom: viewModel.topVisibleIndex ?? 0) }
+        }
         .onChange(of: viewModel.contentMode) { _, _ in
             railFocusedLetter = nil
             railHasRevealed = false
-            artworkPrefetch = ArtworkPrefetchTracker()
+            artworkPrefetch.reset()
+            #if os(tvOS)
+            nativeScrollTarget.moveHeader(with: 0)
+            #endif
         }
-        .onAppear { MainThreadStallProbe.context = "library" }
+        .onAppear {
+            MainThreadStallProbe.context = "library"
+            artworkPrefetch.isActive = true
+            prefetchArtwork(aheadFrom: viewModel.topVisibleIndex ?? 0)
+            #if os(tvOS)
+            isFrontmost = true
+            #endif
+        }
+        #if os(tvOS)
+        .onDisappear { isFrontmost = false }
+        #endif
         .background {
             if viewModel.isMediaShare {
                 ShareCatalogRefreshObserver(
@@ -176,23 +311,138 @@ public struct LibraryBrowseView: View {
             }
             while !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000_000) }
         }
+        #if os(tvOS)
+        // The inner hosting controller still inherits the hidden native tab bar's
+        // safe area. Only the library controls reserve visible chrome clearance.
+        .ignoresSafeArea(.container, edges: .top)
+        #endif
     }
+
+    #if os(tvOS)
+    private var headerTopClearance: CGFloat {
+        let overscan = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?.safeAreaInsets.top ?? 60
+        // The native sidebar's compact page button remains visible above content.
+        let pageButtonHeight: CGFloat = navigationStyle == .sidebar ? 60 : 0
+        return overscan + pageButtonHeight
+    }
+    #endif
+
+    private var recommendedContent: some View {
+        ContentStateView(
+            state: viewModel.recommendationState,
+            emptyMessage: viewModel.emptyMessage,
+            errorServers: viewModel.errorServers,
+            errorReport: viewModel.recommendationDiagnostic.map(PlaybackDiagnosticReport.library),
+            onRetry: { Task { await viewModel.loadRecommendations() } }
+        ) { sections in
+            #if os(tvOS)
+            recommendedShowcase(sections)
+            #else
+            recommendedRows(sections)
+            #endif
+        }
+    }
+
+    private func recommendedRows(_ sections: [LibrarySection]) -> some View {
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: metrics.sectionTitleSpacing) {
+                ForEach(sections) { section in
+                    recommendedRow(section)
+                }
+            }
+            .padding(.top, PlozzTheme.Spacing.large)
+            .padding(.bottom, PlozzTheme.Metrics.screenVerticalPadding)
+        }
+    }
+
+    private func recommendedCardStyle(_ section: LibrarySection) -> PosterCardView.Style {
+        section.id == "continueWatching"
+            ? continueWatchingLayout.cardStyle
+            : (section.style == .poster ? .poster : .landscape)
+    }
+
+    private func recommendedRow(_ section: LibrarySection) -> some View {
+        MediaRowView(
+            title: section.displayName,
+            items: section.items,
+            style: recommendedCardStyle(section),
+            spoilerSettings: spoilerSettings,
+            showsSeriesArtwork: section.id == "continueWatching" && continueWatchingShowsSeriesArtwork,
+            showsResumeChip: section.id == "continueWatching",
+            onSelect: onSelect
+        )
+        .environment(\.plozzArtworkArea, section.id == "continueWatching" ? .continueWatching : .recommended)
+        .navigationEntryFocus(.content)
+    }
+
+    #if os(tvOS)
+    private func recommendedShowcase(_ sections: [LibrarySection]) -> some View {
+        let rows = sections.map { section in
+            FocusHeroRow(
+                id: section.id,
+                itemIDs: section.items.map(\.stablePresentationID),
+                leadItem: section.items.first,
+                items: section.items,
+                cardArtwork: recommendedCardStyle(section) == .landscape
+                    ? { PosterCardView.leadingLandscapeArtwork(
+                        for: $0,
+                        showsSeriesArtwork: section.id == "continueWatching" && continueWatchingShowsSeriesArtwork,
+                        prefersTextlessArtwork: artworkSettings.prefersTextlessArtwork(in: .continueWatching)
+                    ) } : nil
+            )
+        }
+        let sectionsByID = Dictionary(uniqueKeysWithValues: sections.map { ($0.id, $0) })
+        return FocusHeroHomeView(
+            rows: rows,
+            settings: .default,
+            spoilerSettings: spoilerSettings,
+            navigationStyle: .tabBar,
+            isFrontmost: isFrontmost
+        ) { row, reporter in
+            if let section = sectionsByID[row.id] {
+                MediaRowView(
+                    title: section.displayName,
+                    items: section.items,
+                    style: recommendedCardStyle(section),
+                    spoilerSettings: spoilerSettings,
+                    showsSeriesArtwork: section.id == "continueWatching" && continueWatchingShowsSeriesArtwork,
+                    onFocusEntered: {
+                        reporter.entered()
+                        showcaseNavigation.focusedRowID = row.id
+                    },
+                    onFocusChange: { item in
+                        if let item { reporter.focusedItem(item) }
+                    },
+                    onCardFocused: { item in
+                        reporter.cardFocused(item)
+                        showcaseNavigation.focusedRowID = row.id
+                    },
+                    showsResumeChip: section.id == "continueWatching",
+                    onSelect: onSelect
+                )
+                .environment(\.plozzArtworkArea, section.id == "continueWatching" ? .continueWatching : .recommended)
+                .navigationEntryFocus(.content)
+            }
+        }
+        .ignoresSafeArea(.container, edges: .trailing)
+    }
+    #endif
 
     #if os(tvOS)
     private func nativeGrid(total: Int, generation: Int) -> some View {
         NativeLibraryGrid(
             viewModel: viewModel, total: total, generation: generation,
             spoilerSettings: spoilerSettings,
-            leadingInset: contentLeadingPadding, trailingInset: HomeLayout.horizontalPadding,
+            leadingInset: gridLeadingPadding, trailingInset: gridTrailingPadding,
             scrollTarget: nativeScrollTarget,
             hidesScrollIndicator: isRailVisible,
-            header: VStack(alignment: .leading, spacing: metrics.sectionTitleSpacing) {
-                header
-                scanBanner
-            }
-            .padding(.top, PlozzTheme.Spacing.large),
+            header: scanBanner,
             onSelect: { item, index in select(item, at: index) },
-            onLoaded: { prefetchArtwork(aheadFrom: $0) }
+            onLoaded: { prefetchArtwork(aheadFrom: $0) },
+            onScroll: { updateArtworkDirection(at: $0) }
         )
         .overlay(alignment: .trailing) {
             LibraryRailLayer(
@@ -228,7 +478,6 @@ public struct LibraryBrowseView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: metrics.sectionTitleSpacing) {
-                    header
                     scanBanner
                     LazyVGrid(columns: columns, spacing: metrics.gridSpacing) {
                         ForEach(0..<total, id: \.self) { index in
@@ -244,6 +493,7 @@ public struct LibraryBrowseView: View {
                                 onSelect: { select($0, at: index) },
                                 onAppear: { idx in
                                     await viewModel.itemAppeared(at: idx, generation: generation)
+                                    guard !Task.isCancelled, generation == viewModel.contentGeneration else { return }
                                     prefetchArtwork(aheadFrom: idx)
                                 },
                                 onDisappear: { viewModel.itemDisappeared(at: $0, generation: generation) }
@@ -252,11 +502,12 @@ public struct LibraryBrowseView: View {
                             // `scrollTo(startIndex)` lands on the right row.
                             .id(index)
                             .focused($focusedGridIndex, equals: index)
+                            .navigationEntryFocus(.content)
                         }
 
                     }
-                    .padding(.leading, contentLeadingPadding)
-                    .padding(.trailing, HomeLayout.horizontalPadding)
+                    .padding(.leading, gridLeadingPadding)
+                    .padding(.trailing, gridTrailingPadding)
                     .padding(.bottom, PlozzTheme.Metrics.screenVerticalPadding)
                     .focusSection()
                     .id(viewModel.contentMode)
@@ -279,6 +530,14 @@ public struct LibraryBrowseView: View {
             }
             // Never clip a focused card's lift, shadow or border.
             .scrollClipDisabled()
+            .onScrollGeometryChange(for: CGFloat.self) {
+                $0.contentOffset.y + $0.contentInsets.top
+            } action: { _, offset in
+                updateArtworkDirection(at: offset)
+                #if os(tvOS)
+                nativeScrollTarget.moveHeader(with: offset)
+                #endif
+            }
             // Rail + its "you are here" highlight live in a dedicated layer so
             // that tracking `topVisibleIndex` (which ticks on every cell that
             // scrolls in or out) re-renders only this small ~26-letter rail —
@@ -328,37 +587,41 @@ public struct LibraryBrowseView: View {
     /// actually flying through the library rather than sitting at the top.
     private var railRevealThreshold: Int { max(1, metrics.libraryPosterColumns.count) * 2 }
 
-    /// The library title and controls scroll with the loaded grid.
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            if viewModel.browseScope != .library {
-                title.font(.largeTitle.bold())
-            }
+    /// Keep the selected mode's focus target mounted while the grid is replaced.
+    private var navigationHeader: some View {
+        HStack {
             if viewModel.availableContentModes.count > 1 {
-                LibraryContentModeControl(viewModel: viewModel, buttonHeight: sortButtonHeight)
+                LibraryContentModeControl(viewModel: viewModel)
+                    .layoutPriority(1)
+            } else {
+                title
+                    .font(.largeTitle.bold())
+                    .layoutPriority(1)
             }
             Spacer(minLength: PlozzTheme.Spacing.large)
-            if let library = viewModel.fileBrowserLibrary {
-                LibraryFileBrowseButton(library: library, onSelect: onSelect)
-            }
-            if viewModel.alphabet.isVisible {
-                LibraryAlphabetMenu(entries: viewModel.letterEntries, isLoading: viewModel.alphabet.isLoading,
-                                    isJumping: viewModel.alphabet.jumpingTo != nil,
-                                    onSelect: { letter, id in viewModel.beginLetterJump(letter, menuPresentationID: id) },
-                                    onDismiss: viewModel.alphabet.menuDidDismiss,
-                                    onCancel: viewModel.cancelLetterJump,
-                                    onRetry: viewModel.retryLetterIndex)
+            if viewModel.contentMode != .recommended {
+                if let library = viewModel.fileBrowserLibrary {
+                    LibraryFileBrowseButton(library: library, onSelect: onSelect)
+                }
             }
             if !viewModel.availableSortFields.isEmpty {
-                sortControl
-                    .onGeometryChange(for: CGFloat.self) {
-                        $0.size.height
-                    } action: { height in
-                        if height > 0 { sortButtonHeight = height }
+                HStack(spacing: PlozzTheme.Spacing.medium) {
+                    if viewModel.showsFilterMenu {
+                        LibraryFilterMenu(
+                            filters: viewModel.filters, capabilities: viewModel.queryCapabilities, facets: viewModel.queryFacets,
+                            isLoading: viewModel.facetsLoading, hasError: viewModel.facetsError != nil,
+                            onChange: { value in Task { await viewModel.setFilters(value) } },
+                            onLoadFacets: { await viewModel.loadQueryFacetsIfNeeded() },
+                            onRetry: { Task { await viewModel.loadQueryFacetsIfNeeded(retry: true) } }
+                        )
                     }
+                    sortControl
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(1)
+                }
             }
         }
-
+        .lineLimit(1)
         .padding(.leading, contentLeadingPadding)
         .padding(.trailing, HomeLayout.horizontalPadding)
         .focusSection()
@@ -369,10 +632,8 @@ public struct LibraryBrowseView: View {
     /// growing. Renders nothing for a server-backed library or an idle share, and
     /// does its own status lookup so progress ticks never reach the poster grid.
     ///
-    /// Horizontally it lines up with the poster ARTWORK below it, not the grid's
-    /// column edges: a card insets its artwork inside its own surface, so matching
-    /// only the grid padding left the banner overhanging every poster by that
-    /// inset. Vertically it takes an equal, generous gap on both sides — the first
+    /// Horizontally it shares the header and visible card-surface keyline.
+    /// Vertically it takes an equal, generous gap on both sides — the first
     /// grid row scales up on focus (``mediumFocusedCardScale``) and would
     /// otherwise crowd the banner's lower edge.
     @ViewBuilder
@@ -382,16 +643,10 @@ public struct LibraryBrowseView: View {
                 status: shareScanStatus,
                 shareID: viewModel.sourceServerID
             )
-            .padding(.leading, contentLeadingPadding + posterArtworkInset)
-            .padding(.trailing, HomeLayout.horizontalPadding + posterArtworkInset)
+            .padding(.leading, contentLeadingPadding)
+            .padding(.trailing, HomeLayout.horizontalPadding)
             .padding(.vertical, Self.scanBannerVerticalGap)
         }
-    }
-
-    /// How far a grid card insets its artwork inside its own footprint, so the
-    /// banner can sit flush with the posters in either card style.
-    private var posterArtworkInset: CGFloat {
-        cardStyle == .framed ? metrics.cardInset : metrics.borderlessCardSideMargin
     }
 
     /// Equal breathing room above and below the banner, on top of the stack's own
@@ -414,6 +669,7 @@ public struct LibraryBrowseView: View {
         } label: {
             Label("Sort: \(viewModel.sort.field.displayName)", systemImage: "arrow.up.arrow.down")
         }
+        .accessibilityIdentifier("library-sort-menu")
     }
 
     private var sortFieldBinding: Binding<SortField> {
@@ -441,28 +697,37 @@ public struct LibraryBrowseView: View {
         )
     }
 
-    /// Warms decoded poster art for a short forward window once a cell appears so
-    /// rapid right-hold scrolling reuses ready thumbnails instead of flashing gray
-    /// placeholders.
+    /// Warms decoded poster art in the viewport's direction once a cell loads.
     private func prefetchArtwork(aheadFrom index: Int) {
         #if canImport(UIKit)
-        guard index >= 0, index < viewModel.totalCount else { return }
-        let upper = min(index + 10, viewModel.totalCount - 1)
-        guard index <= upper else { return }
-        for candidateIndex in index...upper {
-            guard let candidate = viewModel.item(at: candidateIndex) else { continue }
-            guard artworkPrefetch.seen.insert(candidate.id).inserted else { continue }
-            for url in candidate.artworkCandidates(for: .poster).prefix(2) {
-                ArtworkImageCache.shared.prefetch(url, variant: .posterCard)
+        guard artworkPrefetch.isActive, scenePhase == .active,
+              viewModel.contentMode != .recommended,
+              index >= 0, index < viewModel.totalCount else { return }
+        let tracker = artworkPrefetch
+        let range = tracker.indices(
+            aheadFrom: index, total: viewModel.totalCount,
+            columns: metrics.libraryPosterColumns.count, generation: viewModel.contentGeneration
+        )
+        tracker.window.update(range.flatMap { candidateIndex in
+            guard let candidate = viewModel.item(at: candidateIndex) else {
+                return [ArtworkPrefetchWindow.Request]()
             }
-        }
+            return candidate.artworkCandidates(for: .poster).prefix(2).compactMap {
+                ArtworkImageCache.shared.prefetchRequest(for: $0, variant: .posterCard)
+            }
+        })
         #endif
+    }
+
+    private func updateArtworkDirection(at offset: CGFloat) {
+        if artworkPrefetch.updateDirection(at: offset) {
+            prefetchArtwork(aheadFrom: viewModel.topVisibleIndex ?? 0)
+        }
     }
 }
 
 private struct LibraryContentModeControl: View {
     let viewModel: LibraryBrowseViewModel
-    let buttonHeight: CGFloat?
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
 
@@ -478,8 +743,7 @@ private struct LibraryContentModeControl: View {
                         .lineLimit(1)
                 }
                 .buttonStyle(LibraryContentSegmentStyle(
-                    isSelected: isSelected,
-                    height: buttonHeight
+                    isSelected: isSelected
                 ))
                 .accessibilityValue(isSelected ? Text("Selected") : Text(verbatim: ""))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -503,16 +767,14 @@ private struct LibraryContentModeControl: View {
 
 private struct LibraryContentSegmentStyle: ButtonStyle {
     let isSelected: Bool
-    let height: CGFloat?
 
     func makeBody(configuration: Configuration) -> some View {
-        SegmentBody(configuration: configuration, isSelected: isSelected, height: height)
+        SegmentBody(configuration: configuration, isSelected: isSelected)
     }
 
     private struct SegmentBody: View {
         let configuration: ButtonStyle.Configuration
         let isSelected: Bool
-        let height: CGFloat?
         @Environment(\.isFocused) private var isFocused
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.themePalette) private var palette
@@ -525,14 +787,13 @@ private struct LibraryContentSegmentStyle: ButtonStyle {
                     : (isSelected ? palette.primaryText : palette.secondaryText))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
-                .frame(height: height)
                 .background {
                     Capsule()
                         .fill(isFocused
                             ? (colorScheme == .dark ? Color.white : .black)
                             : palette.primaryText.opacity(isSelected ? 0.18 : 0))
                 }
-                .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.04 : 1))
+                .scaleEffect(configuration.isPressed ? 0.97 : 1)
                 .animation(.easeOut(duration: 0.16), value: isFocused)
                 .animation(.easeOut(duration: 0.16), value: isSelected)
                 .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
@@ -596,7 +857,6 @@ private struct LibraryGridCell: View {
                         item: item,
                         style: .poster,
                         spoilerSettings: spoilerSettings,
-                        enablesAsyncArtworkFallback: false,
                         focusRequest: focusRequest,
                         onFocusRequestHandled: {
                             if let focusRequest { onFocusRequestHandled(focusRequest) }
@@ -637,13 +897,60 @@ private struct PosterPlaceholderView: View {
     }
 }
 
-/// Reference-typed tracker of already-prefetched artwork item IDs. Kept in
-/// `@State` as a *class* so mutating its contents while scrolling does not
-/// invalidate the SwiftUI view body — a value-type `@State` `Set` would trigger a
-/// full-body re-render on every newly-seen item, hitching the scroll exactly when
-/// flying into not-yet-loaded content.
-private final class ArtworkPrefetchTracker {
-    var seen: Set<String> = []
+/// Non-observable ownership keeps scroll bookkeeping out of SwiftUI invalidation.
+@MainActor
+final class ArtworkPrefetchTracker {
+    var isActive = false
+    #if canImport(UIKit)
+    let window: ArtworkPrefetchWindow
+
+    init(limiter: ConcurrencyLimiter = ArtworkSession.warmLimiter) {
+        window = ArtworkPrefetchWindow(limiter: limiter)
+    }
+    #endif
+    private(set) var forward = true
+    private var viewportPosition: CGFloat?
+    private var anchor: Int?
+    private var generation: Int?
+    private var columns: Int?
+
+    /// Loading cells may finish in any order; only viewport movement changes direction.
+    @discardableResult
+    func updateDirection(at position: CGFloat) -> Bool {
+        defer { viewportPosition = position }
+        guard let viewportPosition, position != viewportPosition else { return false }
+        let nextForward = position > viewportPosition
+        guard forward != nextForward else { return false }
+        forward = nextForward
+        anchor = nil
+        return true
+    }
+
+    func indices(aheadFrom index: Int, total: Int, columns: Int, generation: Int) -> [Int] {
+        if self.generation != generation || self.columns != columns {
+            reset()
+            self.generation = generation
+            self.columns = columns
+        }
+        guard total > 0, index >= 0, index < total else { return [] }
+        let anchor = min(total - 1, self.anchor.map { forward ? max($0, index) : min($0, index) } ?? index)
+        self.anchor = anchor
+        let lookahead = max(1, columns) * 2
+        return forward
+            ? Array(anchor...min(anchor + lookahead, total - 1))
+            : Array((max(0, anchor - lookahead)...anchor).reversed())
+    }
+
+    func reset() {
+        #if canImport(UIKit)
+        window.cancelAll()
+        #endif
+        anchor = nil
+        generation = nil
+        columns = nil
+        viewportPosition = nil
+        forward = true
+    }
 }
 
 /// The alphabet rail plus its scroll-position highlight, isolated into its own
@@ -960,23 +1267,9 @@ private struct LetterJumpBubble: View {
 }
 
 #if canImport(UIKit)
-/// Probe that reaches its enclosing `UIScrollView`(s) and keeps the vertical
-/// scroll indicator hidden. `.scrollIndicators(.never)` and a one-shot
-/// `showsVerticalScrollIndicator = false` both proved unreliable on tvOS for this
-/// grid: SwiftUI re-asserts the indicator after every layout pass, and — crucially
-/// — tvOS's focus scroll bar (`_TVScrollBarView`) is a *dynamically re-created*
-/// subview that reappears on focus-driven scrolls, so hiding it once (or only on a
-/// `contentOffset` tick) misses the freshly-spawned instance. (Confirmed via
-/// research: tvOS `ScrollView` is a real `UIScrollView`; SwiftUI overrides
-/// introspected indicator properties; the tvOS bar is recreated on demand.)
-///
-/// Reliable fix: while hidden, drive a `CADisplayLink` that every frame walks the
-/// enclosing scroll view(s) and re-hides both the property and any indicator
-/// subview (`_UIScrollViewScrollIndicator` / `_TVScrollBarView`), catching the
-/// re-created bar the instant it appears. The link runs only while the rail is up;
-/// when the rail hides (non-name sort / scrolled to top) it stops and restores the
-/// default indicator. Applies to every scroll view in the ancestor chain in case
-/// the indicator lives on an outer `_UIHostingScrollView` rather than an inner one.
+/// SwiftUI can reassert indicator settings during layout. Enforce only the
+/// enclosing scroll views' public properties; never search their descendants
+/// or the window for UIKit's dynamically created index-bar views.
 private struct ScrollIndicatorHider: UIViewControllerRepresentable {
     var hidden: Bool
 
@@ -1004,23 +1297,6 @@ final class ScrollIndicatorHiderController: UIViewController {
     }
     private var scrollViews: [UIScrollView] = []
     private var displayLink: CADisplayLink?
-    /// Once we've located the tvOS index bar we cache its (private) class and the
-    /// view that hosts it. tvOS *re-creates* the bar on focus-driven scrolls, so we
-    /// can't just blank one instance — but every re-created bar is the same class
-    /// re-added to the same host, so each frame we only re-blank that host's
-    /// matching children (a fast `isKind(of:)` check), never re-walking the tree.
-    private var indexBarClass: AnyClass?
-    private weak var indexBarHost: UIView?
-    /// Throttles the (rare) full view-tree walk used to first discover the bar, so
-    /// that before it ever appears we aren't recursing the whole window every frame.
-    private var framesUntilDiscover = 0
-    private static let discoverInterval = 15
-    /// Once the bar's class + host are cached, we re-run discovery only very
-    /// occasionally — and only while idle (see `enforce()`) — purely to self-heal if
-    /// tvOS ever re-creates the bar under a *different* host. This is the rare case;
-    /// the common re-creation (same host) is caught for free by the per-frame
-    /// re-blank, so this walk never needs to run during an active scroll.
-    private static let revalidateInterval = 240
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1086,95 +1362,18 @@ final class ScrollIndicatorHiderController: UIViewController {
         enforce()
     }
 
-    /// Show or hide the tvOS fast-scrolling index bar. This is the private
-    /// `_UIFocusFastScrollingIndexBarView` — a trailing-edge bar tvOS auto-adds to
-    /// long focusable scroll views, rendered as a column of collapsed section-index
-    /// marks (the "dots") plus a `_UIFocusFastScrollingIndexBarIndicatorView`
-    /// circular thumb. It is NOT the ordinary scroll indicator, so
-    /// `showsVerticalScrollIndicator` / indicator-inset tricks never touched it.
-    ///
-    /// Crucially we must NOT hide the bar container itself: on tvOS the bar
-    /// participates in the fast-scroll interaction, so hiding the container
-    /// mid-scroll cancels the gesture and stalls scrolling. Instead we blank only
-    /// its visible leaf subviews (the dot labels + the thumb) via alpha, leaving the
-    /// container fully present and interactive. tvOS re-creates the bar on
-    /// focus-driven scrolls, so once we've learned its class + host view we simply
-    /// re-blank the host's matching children every frame — an `isKind(of:)` check
-    /// over a handful of siblings, not a walk of the whole view tree.
     private func enforce() {
-        // Nothing to do while we're off-screen (e.g. covered by a pushed
-        // destination): skip the scroll-view scan and any discovery walk so the
-        // display link, if it's still ticking, costs effectively nothing until we
-        // return to the window.
         guard isViewLoaded, view.window != nil else { return }
         if scrollViews.isEmpty { locateScrollViewsIfNeeded() }
-        let shouldHide = hidden
-        for scrollView in scrollViews where scrollView.showsVerticalScrollIndicator == shouldHide {
-            scrollView.showsVerticalScrollIndicator = !shouldHide
-        }
-        // A cached host that has left the window is stale — drop it so discovery
-        // re-runs against the live hierarchy on the next tick.
-        if let host = indexBarHost, host.window == nil {
-            indexBarClass = nil
-            indexBarHost = nil
-        }
-        // Learn the bar's class + host, then re-blank that host's matching children
-        // each frame. Discovery is throttled quickly while the bar hasn't been found
-        // yet; once cached, the only remaining re-discovery is a rare cross-host
-        // self-heal, which we defer until the scroll settles — a full-window walk
-        // mid-scroll drops frames and is the main source of scroll choppiness. The
-        // common re-creation (same host) is caught for free by the per-frame
-        // re-blank below, and a host leaving the window is dropped above.
-        if framesUntilDiscover > 0 { framesUntilDiscover -= 1 }
-        if framesUntilDiscover == 0 {
-            let cached = indexBarClass != nil && indexBarHost != nil
-            if cached {
-                framesUntilDiscover = Self.revalidateInterval
-                if !isScrolling { discoverIndexBar() }
-            } else {
-                framesUntilDiscover = Self.discoverInterval
-                discoverIndexBar()
+        for scrollView in scrollViews {
+            if scrollView.showsVerticalScrollIndicator == hidden {
+                scrollView.showsVerticalScrollIndicator = !hidden
             }
+            #if os(tvOS)
+            let mode: UIScrollView.IndexDisplayMode = hidden ? .alwaysHidden : .automatic
+            if scrollView.indexDisplayMode != mode { scrollView.indexDisplayMode = mode }
+            #endif
         }
-        guard let host = indexBarHost, let barClass = indexBarClass else { return }
-        let targetAlpha: CGFloat = shouldHide ? 0 : 1
-        for subview in host.subviews where subview.isKind(of: barClass) {
-            for element in subview.subviews where element.alpha != targetAlpha {
-                element.alpha = targetAlpha
-            }
-        }
-    }
-
-    /// True while any tracked scroll view is being dragged or is coasting, used to
-    /// keep the (rare, expensive) full-window re-discovery walk off the main thread
-    /// during an active scroll so it can't drop frames.
-    private var isScrolling: Bool {
-        scrollViews.contains { $0.isDragging || $0.isTracking || $0.isDecelerating }
-    }
-
-    /// One-off recursive walk (from the window, falling back to the scroll views) to
-    /// find the index bar and cache its class + host. Matched by class-name
-    /// substring so there are no private symbols at compile time; degrades
-    /// gracefully (bar simply stays visible) if tvOS ever renames the view.
-    private func discoverIndexBar() {
-        let roots: [UIView] = ([view.window].compactMap { $0 }) + scrollViews
-        for root in roots {
-            if let bar = firstIndexBarView(in: root) {
-                indexBarClass = type(of: bar)
-                indexBarHost = bar.superview
-                return
-            }
-        }
-    }
-
-    private func firstIndexBarView(in view: UIView) -> UIView? {
-        for subview in view.subviews {
-            if String(describing: type(of: subview)).contains("FastScrollingIndexBarView") {
-                return subview
-            }
-            if let found = firstIndexBarView(in: subview) { return found }
-        }
-        return nil
     }
 
     deinit { stopDisplayLink() }

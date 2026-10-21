@@ -43,9 +43,7 @@ final class MediaVersionTests: XCTestCase {
         XCTAssertEqual(version.compatibility(with: .init(supportsHDR10: false)), .transcode)
     }
 
-    func testTechnicalBadgesUseDolbyGroupedOrder() {
-        // A 4K DoVi+HDR10 Atmos version should emit
-        // 4K · Dolby Vision · Dolby Atmos · HDR10 — Dolby logos grouped.
+    func testTechnicalBadgesUsePictureThenAudioOrder() {
         let dovi = MediaVersion(
             id: "1",
             width: 3840,
@@ -57,7 +55,7 @@ final class MediaVersionTests: XCTestCase {
             audioProfile: "Dolby Atmos"
         )
         XCTAssertEqual(dovi.technicalBadges.map(\.label),
-                       ["4K", "Dolby Vision", "Dolby Atmos", "HDR10"])
+                       ["4K", "Dolby Vision", "HDR10", "Dolby Digital+", "Dolby Atmos"])
 
         // A 720p SDR stereo version should emit just 720p · SDR — no audio
         // headline, no HDR badges, and channels < 6 are not surfaced.
@@ -72,10 +70,6 @@ final class MediaVersionTests: XCTestCase {
         )
         XCTAssertEqual(sd.technicalBadges.map(\.label), ["720p", "SDR"])
 
-        // A 1080p HDR10 5.1 Dolby Digital+ version: resolution, HDR10 (not
-        // Dolby-styled), then Dolby Digital+ (Dolby-styled) — verifying the
-        // Dolby-grouping helper picks the audio-Dolby out of the trailing
-        // group when there's no Dolby-styled range.
         let dd = MediaVersion(
             id: "3",
             width: 1920,
@@ -87,8 +81,7 @@ final class MediaVersionTests: XCTestCase {
         )
         let labels = dd.technicalBadges.map(\.label)
         XCTAssertEqual(labels.first, "1080p")
-        // Dolby Digital+ (Dolby-styled audio) comes before HDR10 (non-Dolby range).
-        XCTAssertEqual(labels.dropFirst().prefix(2), ArraySlice(["Dolby Digital+", "HDR10"]))
+        XCTAssertEqual(labels.dropFirst().prefix(2), ArraySlice(["HDR10", "Dolby Digital+"]))
     }
 
     func testDisplayLabelPrefersDerivedFactsThenName() {
@@ -144,6 +137,325 @@ final class MediaVersionTests: XCTestCase {
         XCTAssertEqual(version.sizeLabel, "8.5 GB")
     }
 
+    func testPickerPresentationIncludesSourceAudioLanguagesFormatsAndRelease() {
+        let version = MediaVersion(
+            id: "file", name: "Extended Remux", fileName: "Film.Extended.2160p.REMUX-GROUP.mkv",
+            height: 2160, bitrate: 80_000_000, sizeBytes: 42_000_000_000, duration: 7_200,
+            sourceMetadata: .init(
+                video: .init(codec: "hevc", width: 3840, height: 2160, bitDepth: 10, videoRangeType: "DOVIWithHDR10"),
+                audio: .init(codec: "truehd", profile: "Atmos", channels: 8, language: "eng"),
+                audioLanguages: ["eng", "en", "fra", "und", ""]
+            )
+        )
+        let row = MediaVersion.PickerPresentation(version, locale: Locale(identifier: "en_US"))
+        XCTAssertEqual(row.title, "Extended · 4K · Dolby Vision · Remux · 42 GB")
+        XCTAssertEqual(row.supplementalFacts, [
+            "HDR10", "HEVC", "10-bit", "English, French", "Dolby TrueHD + Dolby Atmos + 7.1", "80 Mbps", "2h"
+        ])
+        XCTAssertEqual(row.releaseName, "Film.Extended.2160p.REMUX-GROUP.mkv")
+        XCTAssertEqual(row.badges.map(\.label), [
+            "4K", "Dolby Vision", "HDR10", "HEVC", "Dolby TrueHD", "Dolby Atmos", "English", "French"
+        ])
+        XCTAssertEqual(row.badges.first { $0.label == "HEVC" }?.style, .spec)
+        XCTAssertEqual(row.badges.suffix(2).map(\.style), [.audio, .audio])
+        XCTAssertEqual(row.badges.first { $0.label == "Dolby TrueHD" }?.style, .dolby)
+        XCTAssertEqual(row.titleWithoutBadges, "Extended · Remux · 42 GB")
+        XCTAssertEqual(row.supplementalFactsWithoutBadges, ["10-bit", "80 Mbps", "2h"])
+        XCTAssertEqual(row.summaryWithoutBadges, "Extended · Remux · 42 GB · 10-bit · 80 Mbps · 2h")
+        XCTAssertEqual(
+            version.audioLanguageNames(in: Locale(identifier: "es_ES")),
+            ["Inglés", "Francés"]
+        )
+    }
+
+    func testPickerAudioKeepsCodecProfileAndChannelsWithoutGuessingMissingFacts() {
+        XCTAssertEqual(MediaVersion(id: "a", audioCodec: "aac", audioChannels: 2).audioFormatLabel, "AAC Stereo")
+        XCTAssertEqual(
+            MediaVersion(id: "b", audioCodec: "dts", audioChannels: 8, audioProfile: "DTS-HD MA").audioFormatLabel,
+            "DTS-HD MA 7.1"
+        )
+        XCTAssertEqual(
+            MediaVersion(id: "c", audioCodec: "truehd", audioChannels: 6).audioFormatLabel,
+            "Dolby TrueHD 5.1"
+        )
+        XCTAssertEqual(MediaVersion(id: "d", audioCodec: "aac").audioFormatLabel, "AAC")
+        XCTAssertNil(MediaVersion(id: "e").audioFormatLabel)
+        let unknown = MediaVersion.PickerPresentation(.init(id: "unknown", sizeBytes: -1, duration: 0))
+        XCTAssertNil(unknown.title)
+        XCTAssertTrue(unknown.supplementalFacts.isEmpty)
+        XCTAssertNil(unknown.releaseName)
+        XCTAssertTrue(unknown.badges.isEmpty)
+        XCTAssertNil(unknown.titleWithoutBadges)
+        XCTAssertTrue(unknown.supplementalFactsWithoutBadges.isEmpty)
+        XCTAssertNil(MediaVersion(id: "invalid", duration: .infinity).durationLabel)
+        XCTAssertNil(MediaVersion(id: "invalid", duration: .nan).durationLabel)
+    }
+
+    func testPickerBadgesUseOnlyThisVersionsFactsAndIncludeAudioDetails() {
+        let surround = MediaVersion.PickerPresentation(.init(
+            id: "surround", height: 1080, videoCodec: "h264", videoRange: "SDR",
+            audioCodec: "ac3", audioChannels: 6
+        ))
+        XCTAssertEqual(surround.badges.map(\.accessibilityText), ["1080p", "SDR", "H.264", "Dolby Digital 5.1"])
+        XCTAssertNil(surround.titleWithoutBadges)
+        XCTAssertTrue(surround.supplementalFactsWithoutBadges.isEmpty)
+        let stereo = MediaVersion.PickerPresentation(.init(id: "stereo", height: 720, audioCodec: "aac", audioChannels: 2))
+        XCTAssertEqual(stereo.badges.map(\.label), ["720p", "AAC"])
+        XCTAssertEqual(stereo.badges.last?.detail, "Stereo")
+        XCTAssertTrue(stereo.supplementalFactsWithoutBadges.isEmpty)
+        XCTAssertFalse(stereo.badges.contains { $0.style == .dolby || $0.style == .sdr })
+        XCTAssertEqual(
+            MediaVersion.PickerPresentation(.init(id: "named", name: "Server copy")).titleWithoutBadges,
+            "Server copy"
+        )
+    }
+
+    func testPickerKeepsCodecBeforeAudioWithOrWithoutOtherPictureFacts() {
+        for version in [
+            MediaVersion(id: "flat", videoCodec: "h264", audioCodec: "aac"),
+            MediaVersion(id: "rich", sourceMetadata: .init(
+                video: .init(codec: "av1"),
+                audio: .init(codec: "aac"),
+                audioLanguages: ["eng"]
+            ))
+        ] {
+            let row = MediaVersion.PickerPresentation(version, locale: Locale(identifier: "en_US"))
+            XCTAssertEqual(row.formatBadges.map(\.style), [.spec, .audio])
+            XCTAssertEqual(row.formatBadges.first?.isAudio, false)
+            XCTAssertEqual(row.formatBadges.last?.isAudio, true)
+            XCTAssertEqual(row.badges.dropFirst(2).map(\.style),
+                           version.id == "rich" ? [.audio] : [])
+        }
+        let videoOnly = MediaVersion.PickerPresentation(.init(id: "video", videoCodec: "hevc"))
+        XCTAssertEqual(videoOnly.formatBadges, [MediaBadge("HEVC", style: .spec)])
+    }
+
+    func testPickerAudioBadgesPreserveCodecAndLayoutWithoutDuplicateChannelChips() {
+        let cases: [(MediaVersion, [MediaBadge])] = [
+            (.init(id: "truehd", audioCodec: "truehd", audioChannels: 6),
+             [MediaBadge("Dolby TrueHD", style: .dolby, detail: "5.1")]),
+            (.init(id: "atmos", audioCodec: "truehd", audioProfile: "Atmos"),
+             [MediaBadge("Dolby TrueHD", style: .dolby), MediaBadge("Dolby Atmos", style: .dolby)]),
+            (.init(id: "ddp", audioCodec: "eac3", audioProfile: "Atmos"),
+             [MediaBadge("Dolby Digital+", style: .dolby), MediaBadge("Dolby Atmos", style: .dolby)]),
+            (.init(id: "atmos-channels", audioCodec: "eac3", audioChannels: 6, audioProfile: "Atmos"),
+             [MediaBadge("Dolby Digital+", style: .dolby, detail: "5.1"), MediaBadge("Dolby Atmos", style: .dolby)]),
+            (.init(id: "atmos-layout", sourceMetadata: .init(
+                audio: .init(codec: "truehd", profile: "Atmos", channels: 8, channelLayout: "7.1")
+            )),
+             [MediaBadge("Dolby TrueHD", style: .dolby, detail: "7.1"), MediaBadge("Dolby Atmos", style: .dolby)]),
+            (.init(id: "dtsx-channels", audioCodec: "dts", audioChannels: 8, audioProfile: "DTS:X"),
+             [MediaBadge("DTS", style: .dts, detail: "7.1"), MediaBadge("DTS:X", style: .dts)]),
+            (.init(id: "dts", audioCodec: "dts", audioChannels: 8, audioProfile: "DTS-HD MA"),
+             [MediaBadge("DTS-HD", style: .dts, detail: "MA 7.1")]),
+            (.init(id: "aac", audioCodec: "aac", audioChannels: 6),
+             [MediaBadge("AAC", style: .audio, detail: "5.1")]),
+            (.init(id: "channels", audioChannels: 6), [MediaBadge("5.1", style: .audio)])
+        ]
+        for (version, expected) in cases {
+            let row = MediaVersion.PickerPresentation(version)
+            XCTAssertEqual(row.badges, expected, version.id)
+            XCTAssertTrue(row.supplementalFactsWithoutBadges.isEmpty, version.id)
+        }
+        XCTAssertEqual(
+            cases[1].0.technicalBadges,
+            [MediaBadge("Dolby TrueHD", style: .dolby), MediaBadge("Dolby Atmos", style: .dolby)],
+            "The detail hero and picker retain the same codec and spatial facts."
+        )
+    }
+
+    func testPickerLanguageBadgesAreLocalizedUniqueAndExcludeUnknownLanguages() {
+        let version = MediaVersion(id: "languages", sourceMetadata: .init(
+            audio: .init(language: "eng"),
+            audioLanguages: ["en", "eng", "fra", "und", "zxx", ""]
+        ))
+        let row = MediaVersion.PickerPresentation(version, locale: Locale(identifier: "es_ES"))
+        XCTAssertEqual(row.badges, [
+            MediaBadge("Inglés", style: .audio), MediaBadge("Francés", style: .audio)
+        ])
+        XCTAssertEqual(row.supplementalFacts, ["Inglés, Francés"])
+        XCTAssertTrue(row.supplementalFactsWithoutBadges.isEmpty)
+        XCTAssertTrue(MediaVersion.PickerPresentation(.init(id: "unknown")).badges.isEmpty)
+    }
+
+    func testPickerLanguagePriorityUsesOnlyReportedLanguagesAndKeepsTheFullInventory() {
+        let locale = Locale(identifier: "en_US")
+        let version = MediaVersion(id: "multi", sourceMetadata: .init(
+            audioLanguages: ["fra", "deu", "spa", "eng", "ita", "por", "jpn", "kor", "zho", "ara", "en"]
+        ))
+        let row = MediaVersion.PickerPresentation(version, locale: locale)
+        let preferred = row.prioritizedAudioLanguages(preferredLanguage: "eng", locale: locale)
+        XCTAssertEqual(preferred.first, "English")
+        XCTAssertEqual(preferred.count - 1, 9)
+        XCTAssertEqual(Set(preferred), Set(row.audioLanguages))
+        XCTAssertEqual(row.audioLanguages.first, "French", "Display priority must not rewrite the source inventory.")
+        XCTAssertEqual(
+            row.prioritizedAudioLanguages(preferredLanguage: "nl", locale: locale),
+            row.audioLanguages,
+            "A missing preferred language must never be invented."
+        )
+        XCTAssertEqual(row.prioritizedAudioLanguages(preferredLanguage: "fra", locale: locale).first, "French")
+        XCTAssertTrue(row.formatBadges.isEmpty)
+    }
+
+    func testPickerReleaseFallbackAndFilenameQualityDoNotChangeVersionIdentity() {
+        let original = MediaVersion(id: "raw", fileName: "Movie.2160p.WEB-DL-GROUP.mkv", height: 2160)
+        let qualified = original.qualified(accountID: "account", itemID: "item")
+        let row = MediaVersion.PickerPresentation(qualified)
+        XCTAssertEqual(row.title, "4K")
+        XCTAssertEqual(row.supplementalFacts, ["WEB-DL"])
+        XCTAssertEqual(row.releaseName, original.fileName)
+        XCTAssertEqual(qualified.playbackMediaSourceID, "raw")
+        XCTAssertNotEqual(qualified.id, "raw")
+        XCTAssertEqual(MediaVersion.PickerPresentation(.init(id: "a", name: "Release", height: 1080)).releaseName, "Release")
+        XCTAssertNil(MediaVersion.PickerPresentation(.init(id: "b", name: "Server Copy")).releaseName)
+    }
+
+    func testCachedMetadataAndSynthesizedVersionsPreserveLanguageFacts() throws {
+        let legacy = try JSONDecoder().decode(
+            MediaSourceMetadata.self, from: Data(#"{"audio":{"codec":"aac","language":"eng"}}"#.utf8)
+        )
+        XCTAssertNil(legacy.audioLanguages)
+        let metadata = MediaSourceMetadata(
+            fileName: "Movie.mkv", audio: legacy.audio, audioLanguages: ["eng", "jpn"]
+        )
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie, mediaInfo: metadata)
+        let version = MediaVersion.synthesized(from: item)
+        let restored = try JSONDecoder().decode(MediaVersion.self, from: JSONEncoder().encode(version))
+        XCTAssertEqual(restored, version)
+        XCTAssertEqual(restored.audioLanguageNames(in: Locale(identifier: "en_US")), ["English", "Japanese"])
+        XCTAssertEqual(MediaVersion.PickerPresentation(restored).releaseName, "Movie.mkv")
+        XCTAssertNil(restored.playbackMediaSourceID)
+        XCTAssertEqual(
+            MediaVersion(id: "legacy", sourceMetadata: legacy).audioLanguageNames(in: Locale(identifier: "en_US")),
+            ["English"]
+        )
+    }
+
+    func testPortsydeTorrentNamesAreDecodedWithoutChangingStoredSourceOrIdentity() throws {
+        let query = "torrent_name=Film%20%26%20Friends.Extended.2160p.REMUX-GROUP.mkv&id=tt123&media_type=movie"
+        for rawName in [
+            "https://media.example/stream?\(query)",
+            "n?\n\(query)",
+            query
+        ] {
+            let version = MediaVersion(
+                id: "raw-source", fileName: rawName, height: 2160,
+                sourceMetadata: .init(fileName: rawName)
+            ).qualified(accountID: "account", itemID: "item")
+            let cached = try JSONDecoder().decode(MediaVersion.self, from: JSONEncoder().encode(version))
+            let row = MediaVersion.PickerPresentation(cached)
+            XCTAssertEqual(row.title, "Extended · 4K")
+            XCTAssertEqual(row.supplementalFacts, ["Remux"])
+            XCTAssertEqual(row.releaseName, "Film & Friends.Extended.2160p.REMUX-GROUP.mkv")
+            XCTAssertEqual(cached.fileName, rawName)
+            XCTAssertEqual(cached.sourceMetadata?.fileName, rawName)
+            XCTAssertEqual(cached.playbackMediaSourceID, "raw-source")
+            XCTAssertEqual(cached.id, version.id)
+            XCTAssertTrue(cached.audioLanguageNames().isEmpty)
+            XCTAssertNil(cached.audioFormatLabel)
+        }
+    }
+
+    func testURLBackedProviderNameCannotLeakQueryTextIntoPickerTitles() {
+        let version = MediaVersion(
+            id: "source", name: "https://media.example/stream?torrent_name=Release%20Name&id=tt123"
+        )
+        XCTAssertEqual(version.displayLabel, "Release Name")
+        XCTAssertEqual(version.menuTitle, "Release Name")
+        XCTAssertNil(MediaVersion.PickerPresentation(version).releaseName)
+
+        let endpoint = MediaVersion(
+            id: "endpoint",
+            name: "https://media.example/stream?token=Extended.REMUX",
+            fileName: "stream?token=Extended.REMUX"
+        )
+        let row = MediaVersion.PickerPresentation(endpoint)
+        XCTAssertNil(row.title)
+        XCTAssertTrue(row.supplementalFacts.isEmpty)
+        XCTAssertNil(row.releaseName)
+    }
+
+    func testSourceDisplayNamesDecodeOnlyURLValuesAndPreserveOrdinaryNames() {
+        let cases: [(String, String?)] = [
+            ("torrent_name=%E6%8C%87%E7%8E%AF%E7%8E%8B.mkv&id=tt123", "指环王.mkv"),
+            ("torrent_name=Film%20%26%20Friends%2BPlus.mkv&id=tt123", "Film & Friends+Plus.mkv"),
+            ("torrent_name=Film+Plus.mkv&id=tt123", "Film+Plus.mkv"),
+            ("torrent_name=Film%2520Name.mkv&id=tt123", "Film%20Name.mkv"),
+            ("https://media.example/Film%20Name.mkv?token=fixture#fragment", "Film Name.mkv"),
+            ("Film.mkv?token=fixture#fragment", "Film.mkv"),
+            ("/movies/Film%20Name.mkv", "Film%20Name.mkv"),
+            (#"C:\Movies\Film.mkv"#, "Film.mkv"),
+            ("Film & Friends+Plus.mkv", "Film & Friends+Plus.mkv"),
+            ("https://media.example/stream?torrent_name=&id=tt123", nil),
+            ("torrent_name=%E6%8C&id=tt123", nil),
+            ("https://media.example/stream?token=fixture", nil),
+            ("https://media.example/stream", nil),
+            ("https://media.example/Zk9xa1JpN25vY2xEMnJpcFQ5dGxY", nil),
+            ("?token=fixture", nil),
+            ("torrent_name=https%3A%2F%2Fmedia.example%2Fstream%3Ftoken%3Dfixture", nil)
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(MediaSourceDisplayName.fileName(from: input), expected, input)
+        }
+        XCTAssertEqual(MediaSourceDisplayName.name(from: "Theatrical / Original"), "Theatrical / Original")
+        let fallback = MediaVersion.PickerPresentation(.init(
+            id: "fallback", name: "Server copy", fileName: "stream?token=fixture", height: 1080
+        ))
+        XCTAssertEqual(fallback.releaseName, "Server copy")
+    }
+
+    func testMultilineSourceDescriptionUsesItsMarkedReleaseFilename() {
+        let providerName = """
+        [Source] Remote
+        2160p • WEB-DL
+        Audio • English • French
+        🗂️ Film.2026.MULTi.2160p.WEB-DL.DDP5.1-GROUP.mkv
+        """
+        let version = MediaVersion(
+            id: "original-id", name: providerName,
+            fileName: "https://media.example/opaque-source-endpoint", height: 2160
+        )
+        let row = MediaVersion.PickerPresentation(version)
+        XCTAssertEqual(row.releaseName, "Film.2026.MULTi.2160p.WEB-DL.DDP5.1-GROUP.mkv")
+        XCTAssertFalse(row.releaseName?.contains("\n") ?? true)
+        XCTAssertEqual(version.name, providerName)
+        XCTAssertEqual(version.playbackMediaSourceID, "original-id")
+        XCTAssertTrue(version.audioLanguageNames().isEmpty, "Display text must not invent audio-track metadata.")
+    }
+
+    func testWrappedReleaseDescriptionsPreserveTheCompleteInternationalFilename() {
+        let names = [
+            ["Example.Brand.New.Day.2026.IMAX.MULTI.VF2.2160p.CORE.WEB-",
+             "DL.DV.HDR10+.DDP.Atmos.5.1.HEVC-HYPERION.mkv"],
+            ["Le.Fabuleux.Destin.d’Amélie.Édition.spéciale.2160p.",
+             "WEB-DL.DDP5.1-GROUPE.mkv"],
+            ["千と千尋の神隠し.特別版.日本語.2160p.",
+             "WEB-DL.HEVC-グループ.mkv"],
+            ["رحلة.إلى.القمر.نسخة.خاصة.2160p.",
+             "WEB-DL.HEVC-مجموعة.mkv"]
+        ]
+        for parts in names {
+            for marker in ["🗂️", "📁", "📂"] {
+                let description = "2160p • WEB-DL\r\n\(marker) \(parts.joined(separator: "\r\n  "))\r\n🌐 English | Multi"
+                let version = MediaVersion(id: "source", name: description, height: 2160)
+                let row = MediaVersion.PickerPresentation(version)
+                XCTAssertEqual(row.releaseName, parts.joined(), description)
+                XCTAssertEqual(version.name, description)
+                XCTAssertEqual(version.playbackMediaSourceID, "source")
+                XCTAssertTrue(row.audioLanguages.isEmpty, "Description text is not a track inventory.")
+            }
+        }
+        XCTAssertEqual(
+            MediaSourceDisplayName.name(from: "📁 Complete.mkv\nUnrelated field"),
+            "Complete.mkv"
+        )
+        XCTAssertEqual(
+            MediaSourceDisplayName.name(from: "📁 Incomplete\n🌐 English\nAnother.mkv"),
+            "Incomplete"
+        )
+    }
+
     func testFileSizeUsesAtMostOneFractionDigit() {
         let locale = Locale(identifier: "en_US")
         XCTAssertEqual(
@@ -167,6 +479,97 @@ final class MediaVersionTests: XCTestCase {
             ),
             "12 GB"
         )
+    }
+
+    func testExplicitSourceSizesDistinguishBytesFromBitratesAndFilenames() {
+        let cases: [(String, Int64?)] = [
+            ("🌍 MULTI | 27 Mb | 26,2 Go", 26_200_000_000),
+            ("📦 87.8 GB (80.7 Mbps)", 87_800_000_000),
+            ("Size 946 Mo", 946_000_000),
+            ("Size 1.5 GiB", 1_610_612_736),
+            ("Size 1 TB", 1_000_000_000_000),
+            ("Size 26,2\u{00a0}Go", 26_200_000_000),
+            ("26.2 GB | 26.2 GB", 26_200_000_000),
+            ("27 Mb | 26 Mbps | 26 MB/s | 26 MB / s", nil),
+            ("Movie.26 GB.mkv", nil),
+            ("📁 Movie.26 GB.mkv", nil),
+            ("26.2 GB\n📁 Movie.99 GB.mkv", 26_200_000_000),
+            ("https://media.example/26 GB.mkv?token=fixture", nil),
+            ("Source?size=26 GB", nil),
+            ("26 GB | 12 GB", nil),
+            ("-26 GB", nil),
+            ("1,234.5 GB", nil),
+            ("0 GB", nil),
+            ("9999999999999999999 TB", nil)
+        ]
+        for (description, expected) in cases {
+            XCTAssertEqual(MediaSourceDisplayName.declaredFileSizeBytes(from: description), expected, description)
+        }
+    }
+
+    func testDeclaredLanguagesReadOnlyNamedSourceFieldsWithoutCountingMulti() {
+        let cases: [(String?, [String])] = [
+            ("🌍 French | Multi | English", ["fr", "en"]),
+            ("🌐 ENGLISH | English | eng | MULTI | French", ["en", "fr"]),
+            ("Audio • English • French\r\n📁 Film.MULTI.VF2.mkv", ["en", "fr"]),
+            ("Audio languages: Japanese, Korean, Chinese, Arabic", ["ja", "ko", "zh", "ar"]),
+            ("Languages: German | Spanish | Italian | Portuguese", ["de", "es", "it", "pt"]),
+            ("🌎 French\n🌏 English", ["fr", "en"]),
+            ("🇫🇷 🇨🇦 🇬🇧 ✓ • 💾 87,8 Go • 🔎 Source", ["fr", "en"]),
+            ("🌍 🇫🇷 🇨🇦 🇬🇧 • 💾 87,8 Go • 🔎 Source", ["fr", "en"]),
+            ("🇫🇷 🇬🇧 ✓ • 💾 26,2 Go • 🔎 Source", ["fr", "en"]),
+            ("🌍 🇫🇷 • 💾 26,2 Go • 🔎 Source • 🔗 Source", ["fr"]),
+            ("🇬🇧 💬 ✓ • 💾 27,2 Go • 🔎 Source", ["en"]),
+            ("🌍 🇯🇵 🇵🇹 🇧🇷 • 💾 3 GB", ["ja", "pt"]),
+            ("🌍 🇨🇦 • 💾 3 GB", []),
+            ("🌍 Region 🇫🇷 • 💾 3 GB", []),
+            ("Subtitles 🇫🇷 • 💾 3 GB", []),
+            ("🌍 🇫🇷 • 3 GB", []),
+            ("🌍 🇫🇷 • 💾 unknown", []),
+            ("🌍 🇫🇷 • 💾 3 Mbps", []),
+            ("🌍 Multi", []),
+            ("🌍 MULTI | 27 Mb | 26,2 Go", []),
+            ("🌍 Subtitles: French | English", []),
+            ("Subtitles: French | English", []),
+            ("🌍 France | Canada", []),
+            ("🇫🇷 MULTI | 🇺🇸", []),
+            ("Film.English.French.MULTI.VF2.mkv", []),
+            ("📁 Film.mkv\n🌍 French | English", []),
+            ("📁 Film.mkv\n🇫🇷 🇬🇧 ✓ • 💾 26,2 Go", []),
+            ("🗂️ Film.\nFrench.English.mkv\n🌍 French | English", []),
+            ("https://fixture.test/stream?name=🌍 French | English", []),
+            ("🌍 https://fixture.test/French | English", []),
+            ("🌍 English | und | mul | zxx", []),
+            (nil, [])
+        ]
+        for (description, expected) in cases {
+            XCTAssertEqual(
+                MediaSourceDisplayName.declaredAudioLanguages(from: description), expected,
+                description ?? "nil"
+            )
+        }
+    }
+
+    func testCompactSummaryCombinesSizeQualityAndRuntimeWithoutEmptyRows() {
+        let version = MediaVersion(
+            id: "file", fileName: "Film.REMUX.mkv", height: 2160,
+            sizeBytes: 42_000_000_000, duration: 7_200
+        )
+        XCTAssertEqual(MediaVersion.PickerPresentation(version).summaryWithoutBadges, "42 GB · Remux · 2h")
+        XCTAssertNil(MediaVersion.PickerPresentation(.init(id: "unknown")).summaryWithoutBadges)
+        XCTAssertEqual(MediaVersion.PickerPresentation(.init(id: "duration", duration: 7_200)).summaryWithoutBadges, "2h")
+    }
+
+    func testFilenameWrappingPreservesVisibleCharactersAndOriginalIdentity() {
+        for name in [
+            "Spider-Man.Brand.New.Day.2026.IMAX.MULTI.VF2.2160p.CORE.WEB-DL.DV.HDR10+.DDP.Atmos.5.1.HEVC-HYPERION.mkv",
+            "Amélie_Édition.spéciale.mkv", "千と千尋の神隠し_日本語.mkv", "رحلة.إلى.القمر.mkv"
+        ] {
+            let wrapped = MediaSourceDisplayName.wrappingFileName(name)
+            XCTAssertEqual(wrapped.replacingOccurrences(of: "\u{200B}", with: ""), name)
+            XCTAssertTrue(wrapped.contains(".\u{200B}"))
+            XCTAssertEqual(MediaVersion.PickerPresentation(.init(id: "file", fileName: name)).releaseName, name)
+        }
     }
 
     func testQualityScoreRanksHDRAndResolution() {

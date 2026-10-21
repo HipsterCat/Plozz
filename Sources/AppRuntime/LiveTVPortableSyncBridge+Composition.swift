@@ -22,14 +22,18 @@ extension LiveTVPortableSyncBridge {
     }
 
     public static func makeRuntime(profiles: ProfilesModel, directory: URL) -> LiveTVPortableSyncBridge {
+        Task.detached(priority: .utility) {
+            LiveTVPortableLibraryExport.reclaimObsoleteTemporaryStorage()
+        }
+        let absentCatalogRevision = UUID()
         let sources: @MainActor (String) -> any LiveTVSourcesStoring = { profileID in
             let namespace = profileID == profiles.rootNamespaceOwnerID ? nil : profileID
             return LiveTVSourceStorage.approvalAwareStore(
                 profileID: profileID, namespace: namespace
             )
         }
-        return LiveTVPortableSyncBridge(
-            profiles: profiles, directory: directory, sourceStore: sources,
+        let bridge = LiveTVPortableSyncBridge(
+            profiles: profiles, directory: directory, followsMainSync: true, sourceStore: sources,
             definitions: { profileID in
                 LiveTVLibraryStorage.definitions(
                     profileID: profileID,
@@ -48,6 +52,7 @@ extension LiveTVPortableSyncBridge {
                 ).load()
                 let mappings = try await cache.mappingOverrides()
                 let channelIDs = preferences.favoriteIDs.union(preferences.hiddenChannelIDs)
+                    .union(preferences.organization.shownChannelIDs).union(preferences.organization.excludedFavoriteIDs)
                     .union(preferences.channelOverrides.keys).union(mappings.keys)
                 return try await cache.portableSyncIdentityHints(
                     configuration: configuration, channelIDs: channelIDs
@@ -58,7 +63,18 @@ extension LiveTVPortableSyncBridge {
                       let cache = LiveTVCatalogStorage.existingCache(profileID: profileID) else { return false }
                 try await cache.applyPortableIdentityHints(hints)
                 return true
+            },
+            captureIdentityRevision: { profileID in
+                guard let cache = LiveTVCatalogStorage.existingCache(profileID: profileID) else {
+                    return absentCatalogRevision
+                }
+                let store = sources(profileID)
+                let configuration = try (store as? any LiveTVPortableSourcesStoring)?.loadSyncConfiguration()
+                    ?? store.load()
+                return try await cache.portableSyncRevision(configuration: configuration)
             }
         )
+        bridge.refreshParticipation()
+        return bridge
     }
 }

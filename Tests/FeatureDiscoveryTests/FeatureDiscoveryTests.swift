@@ -1,5 +1,6 @@
 import XCTest
 import CoreModels
+import CoreNetworking
 @testable import FeatureDiscoveryCore
 
 final class JellyfinDiscoveryParserTests: XCTestCase {
@@ -113,6 +114,16 @@ final class JellyfinDiscoveryParserTests: XCTestCase {
 }
 
 final class ServerValidatorTests: XCTestCase {
+    func testValidationUsesTheHTTPSResponseAddressBeforeSignIn() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let server = try await ServerValidator(provider: kind, http: RedirectedValidationHTTP())
+                .validate(rawURL: "http://media.example/old")
+            XCTAssertEqual(server.baseURL.absoluteString, "https://media.example/secure")
+            XCTAssertEqual(server.provider, kind)
+            XCTAssertEqual(server.id, "server")
+        }
+    }
+
     func testValidatesJellyfinServer() async throws {
         let stub = StubHTTPClient()
         stub.stub(path: "/System/Info/Public", json: #"{"Id":"srv1","ServerName":"My Server","Version":"10.9.0"}"#)
@@ -123,6 +134,19 @@ final class ServerValidatorTests: XCTestCase {
         XCTAssertEqual(server.name, "My Server")
         XCTAssertEqual(server.version, "10.9.0")
         XCTAssertEqual(server.baseURL.absoluteString, "http://192.168.1.10:8096")
+    }
+
+    private struct RedirectedValidationHTTP: HTTPClient {
+        func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+            XCTAssertTrue(endpoint.headers.isEmpty)
+            return (
+                Data(#"{"Id":"server","ServerName":"Home"}"#.utf8),
+                HTTPURLResponse(
+                    url: URL(string: "https://media.example/secure/System/Info/Public")!,
+                    statusCode: 200, httpVersion: nil, headerFields: nil
+                )!
+            )
+        }
     }
 
     func testValidatesEmbyServerWithEmbyIdentity() async throws {

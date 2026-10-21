@@ -100,6 +100,11 @@ done
 
 if [[ "$SIM_BUILD" == "1" ]]; then OPTIMIZATION_LEVEL="-Onone"; fi
 BUILD_SETTING_OVERRIDES=("SWIFT_OPTIMIZATION_LEVEL=$OPTIMIZATION_LEVEL")
+# Sign with another team, e.g. an Xcode personal team (pair with --branded: a free
+# team cannot provision the canonical app's iCloud/App Group entitlements).
+if [[ -n "${PLOZZ_DEVELOPMENT_TEAM:-}" ]]; then
+  BUILD_SETTING_OVERRIDES+=("DEVELOPMENT_TEAM=$PLOZZ_DEVELOPMENT_TEAM" "CODE_SIGN_STYLE=Automatic" "-allowProvisioningUpdates")
+fi
 
 # --- BUILD PRE-FLIGHT (mandatory, see AGENTS.local.md) -----------------------
 # The host injects `safe.bareRepository=explicit`; without this export SwiftPM's

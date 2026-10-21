@@ -77,6 +77,57 @@ final class LiveTVServerGuideImportTests: XCTestCase {
         })
     }
 
+    func testRefreshRetainsEarlyGuideBatchFailureAfterLaterSuccessWithoutContaminatingNextRequest() async throws {
+        let channels = (0..<2_001).map { ServerLiveTVChannel(id: "channel-\($0)", name: "Channel \($0)") }
+        let provider = WindowGuideProvider(channels: channels, programs: [
+            program("first-batch", channelID: "channel-0"),
+            program("second-batch", channelID: "channel-2000")
+        ])
+        await provider.failNextGuide(.invalidGuideWindow)
+        let (imports, model) = makeImport(provider)
+        PerformanceDiagnostics.shared.start()
+        defer { PerformanceDiagnostics.shared.stop() }
+
+        await imports.reload(into: model)
+        let calls = await provider.guideCalls
+        XCTAssertEqual(calls.map { $0.channelIDs.count }, [2_000, 1])
+        XCTAssertEqual(model.channels.count, 2_001)
+        XCTAssertEqual(imports.serverGuideWindows.map(\.phase), [.failed, .loaded])
+        XCTAssertEqual(imports.serverSources[0].guidePhase, .loaded)
+        XCTAssertNil(imports.serverSources[0].guideFailure, "The latest-window UI status must remain unchanged.")
+        XCTAssertNil(model.currentProgram(for: try globalID("channel-0", in: imports)))
+        XCTAssertEqual(model.currentProgram(for: try globalID("channel-2000", in: imports))?.title, "second-batch")
+        let firstSnapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+        let firstRecords = (firstSnapshot.recent + firstSnapshot.slow).filter { $0.operation == .liveTVRefresh }
+        XCTAssertEqual(firstRecords.count, 1)
+        XCTAssertEqual(firstRecords.first?.outcome, .failed)
+        XCTAssertTrue(firstSnapshot.active.isEmpty)
+
+        await imports.reload(into: model)
+        let allCalls = await provider.guideCalls
+        XCTAssertEqual(allCalls.map { $0.channelIDs.count }, [2_000, 1, 2_000, 1])
+        XCTAssertEqual(imports.serverSources[0].guidePhase, .loaded)
+        XCTAssertNil(imports.serverSources[0].guideFailure)
+        XCTAssertEqual(model.currentProgram(for: try globalID("channel-0", in: imports))?.title, "first-batch")
+        XCTAssertEqual(model.currentProgram(for: try globalID("channel-2000", in: imports))?.title, "second-batch")
+        let nextSnapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+        let records = (nextSnapshot.recent + nextSnapshot.slow).filter { $0.operation == .liveTVRefresh }
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(records.filter { $0.outcome == .failed }.count, 1)
+        XCTAssertEqual(records.filter { $0.outcome == .succeeded }.count, 1)
+        XCTAssertTrue(nextSnapshot.active.isEmpty)
+    }
+
+    func testReloadResultAccumulationPreservesFailureAndCancellationPrecedence() {
+        typealias Result = LiveTVPrototypeImportModel.ReloadResult
+        XCTAssertEqual(Result.failed.merging(.completed), .failed)
+        XCTAssertEqual(Result.completed.merging(.failed), .failed)
+        XCTAssertEqual(Result.cancelled.merging(.failed), .cancelled)
+        XCTAssertEqual(Result.failed.merging(.cancelled), .cancelled)
+        XCTAssertEqual(Result.cancelled.merging(.completed), .cancelled)
+        XCTAssertEqual(Result.completed.merging(.completed), .completed)
+    }
+
     func testWindowReplacementPreservesOtherChannelsAndPreviouslyFetchedWindows() async throws {
         let current = [program("one-now"), program("two-now", channelID: "two")]
         let firstFuture = now.addingTimeInterval(2 * 86_400)
@@ -267,6 +318,34 @@ final class LiveTVServerGuideImportTests: XCTestCase {
         await imports.reloadServerGuides(channelIDs: [id], from: start, to: end, into: model)
         XCTAssertEqual(imports.serverGuideState(channelID: id, from: start, to: end), .noListings)
         XCTAssertNil(imports.serverSources[0].guideFailure)
+    }
+
+    func testUnsupportedGuideKeepsChannelsPlayableAndDoesNotLabelServerUnsupported() async throws {
+        let provider = WindowGuideProvider(channels: channels, programs: [program("current")])
+        let (imports, model) = makeImport(provider, kind: .iptv)
+        await imports.reload(into: model)
+        let id = try globalID("one", in: imports)
+        await provider.setGuideFailure(.unsupportedAPI)
+        await imports.reloadServerGuides(
+            channelIDs: [id], from: now, to: now.addingTimeInterval(21_600), into: model, force: true
+        )
+        let status = try XCTUnwrap(imports.serverSources.first)
+        XCTAssertNil(status.failure)
+        XCTAssertEqual(status.guideFailure, .guideUnavailable)
+        XCTAssertEqual(String(localized: LiveTVServerImportError.guideUnavailable.userDescription), "Guide unavailable")
+        XCTAssertTrue(status.supportsPlayback)
+        XCTAssertEqual(model.channels.count, channels.count)
+        XCTAssertEqual(model.currentProgram(for: id)?.title, "current")
+        XCTAssertEqual(imports.serverGuideState(channelID: id, from: now, to: now.addingTimeInterval(21_600)), .failed)
+    }
+
+    func testGuideErrorMappingIsSeparateFromCatalogAndPreservesAuthorization() {
+        XCTAssertEqual(LiveTVServerImportError.sanitizedGuide(AppError.notFound), .guideUnavailable)
+        XCTAssertEqual(LiveTVServerImportError.sanitizedGuide(AppError.serverUnreachable), .guideUnavailable)
+        XCTAssertEqual(LiveTVServerImportError.sanitizedGuide(AppError.invalidResponse), .invalidGuide)
+        XCTAssertEqual(LiveTVServerImportError.sanitizedGuide(AppError.unauthorized), .permissionDenied)
+        XCTAssertEqual(LiveTVServerImportError.sanitizedGuide(ServerLiveTVError.subscriptionRequired), .subscriptionRequired)
+        XCTAssertEqual(LiveTVServerImportError.sanitized(AppError.notFound, fallback: .serviceUnavailable), .unsupportedAPI)
     }
 
     func testOversizedWindowPreservesLastGoodScheduleAndReportsSanitizedGuideFailure() async throws {
@@ -576,6 +655,7 @@ private actor WindowGuideProvider: ServerLiveTVProviding {
     var suspended: XCTestExpectation?
     var continuation: CheckedContinuation<Void, Never>?
     var guideFailure: ServerLiveTVError?
+    private var nextGuideFailure: ServerLiveTVError?
     private(set) var guideCalls: [GuideCall] = []
     private(set) var catalogLoads = 0
     private(set) var opens = 0
@@ -589,6 +669,7 @@ private actor WindowGuideProvider: ServerLiveTVProviding {
     func replacePrograms(_ value: [ServerLiveTVProgramme]) { programs = value }
     func replaceChannels(_ value: [ServerLiveTVChannel]) { channels = value }
     func setGuideFailure(_ value: ServerLiveTVError?) { guideFailure = value }
+    func failNextGuide(_ value: ServerLiveTVError) { nextGuideFailure = value }
     func suspendNextGuide(_ expectation: XCTestExpectation) { suspended = expectation }
 
     func liveTVAvailability() async throws -> ServerLiveTVAvailability {
@@ -604,7 +685,8 @@ private actor WindowGuideProvider: ServerLiveTVProviding {
         guideCalls.append(GuideCall(channelIDs: channelIDs, from: from, to: to))
         let requested = Set(channelIDs)
         let response = programs.filter { requested.contains($0.channelID) && $0.endDate > from && $0.startDate < to }
-        let failure = guideFailure
+        let failure = nextGuideFailure ?? guideFailure
+        nextGuideFailure = nil
         if let expectation = suspended {
             suspended = nil
             await withCheckedContinuation {

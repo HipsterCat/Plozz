@@ -30,6 +30,7 @@ public struct MetadataSource: RawRepresentable, Codable, Hashable, Sendable {
     /// registration bundled in every build and `related` is public data, so this
     /// needs no user sign-in — signing in is only for a viewer's own history.
     public static let trakt = Self(rawValue: "trakt")
+    public static let wetrakr = Self(rawValue: "wetrakr")
     public static let deezer = Self(rawValue: "deezer")
     public static let musicbrainz = Self(rawValue: "musicbrainz")
     public static let legacyUnknown = Self(rawValue: "legacyUnknown")
@@ -81,9 +82,10 @@ public struct MetadataField: RawRepresentable, Codable, Hashable, Sendable {
     /// schedule resolver — never on the ordinary MediaItem field-fill path — so it
     /// adds no work to normal enrichment.
     public static let nextAiringEpisode = Self(rawValue: "nextAiringEpisode")
-    /// Billed cast. Only a file-based share needs this resolved externally — a
-    /// media server sends its people with the item.
+    /// Billed cast, filled externally only when absent from the hydrated item.
     public static let cast = Self(rawValue: "cast")
+    public static let directors = Self(rawValue: "directors")
+    public static let writers = Self(rawValue: "writers")
 
     public static func providerID(_ namespace: String) -> Self {
         Self(rawValue: "providerID.\(namespace.lowercased())")
@@ -141,6 +143,18 @@ public struct MetadataProvenance: Codable, Hashable, Sendable {
     }
 
     public var isEmpty: Bool { storage.isEmpty }
+
+    public var wetrakrWatchlistURL: URL? {
+        guard let attribution = storage[MetadataField(rawValue: "watchlist.wetrakr")],
+              attribution.source == .wetrakr, let url = attribution.sourceURL,
+              url.scheme == "https", url.host == "wetrakr.com",
+              url.port == nil, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil else { return nil }
+        let components = url.path.split(separator: "/")
+        guard components.count == 2, ["movies", "shows"].contains(String(components[0])),
+              Int(components[1]).map({ $0 > 0 }) == true else { return nil }
+        return url
+    }
 
     public subscript(field: MetadataField) -> MetadataAttribution? {
         get { storage[field] }

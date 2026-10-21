@@ -1,4 +1,5 @@
 import CoreModels
+import CoreSecureStore
 import PlozzCoreUI
 import Foundation
 import FeatureLiveTVCore
@@ -8,7 +9,7 @@ import SwiftUI
 @testable import FeatureLiveTV
 
 struct SourceOnboardingFixture: View {
-    private enum Destination: Hashable { case sources }
+    private enum Destination: Hashable { case sources, settings }
     @State private var path: [Destination] = []
     @State private var profiles = ProfilesModel(store: SourceSmokeProfiles())
     @State private var sources = SourceSmokeStore()
@@ -16,21 +17,21 @@ struct SourceOnboardingFixture: View {
     @State private var automaticLoadIssue: LibraryChannelError?
     private let usesTypedNavigation = ProcessInfo.processInfo.arguments.contains("--typed-sources")
     private let usesSettings = ProcessInfo.processInfo.arguments.contains("--source-settings")
+    private let usesTypedSettings = ProcessInfo.processInfo.arguments.contains("--typed-settings")
     private let usesAutomaticChannels = ProcessInfo.processInfo.arguments.contains("--automatic-channels")
 
     var body: some View {
         NavigationStack(path: $path) {
             if ProcessInfo.processInfo.arguments.contains("--setup-cards") {
                 SetupCardsFixture()
-            } else if usesSettings {
-                LiveTVSettingsView(
-                    store: SourceSmokeViewSettings(),
-                    preferencesStore: SourceSmokePreferences()
-                ) {
-                    AnyView(SourceSmokeSourcesPane(
-                        sources: sources, presentation: .settingsPane,
-                        automatic: usesAutomaticChannels ? automatic : nil))
+            } else if usesSettings && !usesTypedSettings {
+                settings
+            } else if usesTypedSettings {
+                List {
+                    NavigationLink("Live TV", value: Destination.settings)
+                        .accessibilityIdentifier("fixture-live-tv-settings")
                 }
+                .navigationDestination(for: Destination.self) { _ in settings }
             } else if usesTypedNavigation {
                 List {
                     NavigationLink("Sources", value: Destination.sources)
@@ -56,8 +57,11 @@ struct SourceOnboardingFixture: View {
                         .accessibilityIdentifier("fixture-unexpected-playback")
                 }
             }
+
         }
         .environment(profiles)
+        .environment(\.themePalette, ProcessInfo.processInfo.arguments.contains("--light") ? .light : .dark)
+        .environment(\.colorScheme, ProcessInfo.processInfo.arguments.contains("--light") ? .light : .dark)
         .task {
             guard usesAutomaticChannels else { return }
             do { try await automatic.service.load() }
@@ -85,6 +89,17 @@ struct SourceOnboardingFixture: View {
             }
         }
     }
+
+    private var settings: some View {
+        LiveTVSettingsView(
+            store: SourceSmokeViewSettings(),
+            preferencesStore: SourceSmokePreferences()
+        ) {
+            AnyView(SourceSmokeSourcesPane(
+                sources: sources, presentation: .settingsPane,
+                automatic: usesAutomaticChannels ? automatic : nil))
+        }
+    }
 }
 
 private struct SourceSmokeSourcesPane: View {
@@ -92,12 +107,32 @@ private struct SourceSmokeSourcesPane: View {
     let presentation: LiveTVSourcesView.Presentation
     let automatic: AutomaticChannelsFixtureModel?
     @State private var managesChannels = false
+    @State private var catalog: SourceSmokeCatalog?
+
+    init(
+        sources: SourceSmokeStore, presentation: LiveTVSourcesView.Presentation,
+        automatic: AutomaticChannelsFixtureModel?
+    ) {
+        self.sources = sources
+        self.presentation = presentation
+        self.automatic = automatic
+        _catalog = State(initialValue: ProcessInfo.processInfo.arguments.contains("--catalog-sources")
+            ? SourceSmokeCatalog(configuration: try! sources.load()) : nil)
+    }
 
     var body: some View {
-        LiveTVSourcesView(
-            store: sources, presentation: presentation,
-            createChannel: automatic == nil ? nil : { managesChannels = true }
-        )
+        Group {
+            #if os(iOS)
+            if presentation == .settingsPane {
+                SettingsPageScroll { sourceContent }
+                    .navigationTitle("Sources")
+            } else {
+                sourceContent
+            }
+            #else
+            sourceContent
+            #endif
+        }
         .navigationDestination(isPresented: $managesChannels) {
             if let automatic {
                 LibraryChannelManagementView(
@@ -106,6 +141,37 @@ private struct SourceSmokeSourcesPane: View {
             }
         }
     }
+
+    private var sourceContent: some View {
+        LiveTVSourcesView(
+            store: sources, imports: catalog?.imports, presentation: presentation,
+            createChannel: automatic == nil ? nil : { managesChannels = true },
+            scanCoordinator: catalog?.scans
+        )
+    }
+}
+
+@MainActor
+private final class SourceSmokeCatalog {
+    let imports: LiveTVPrototypeImportModel
+    let scans = LiveTVChannelScanCoordinator(store: SourceSmokeHealthStore())
+
+    init(configuration: LiveTVSourcesConfiguration) {
+        let cache = LiveTVIndexedCache(
+            url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).sqlite"),
+            namespace: "source-smoke", authorizationScope: "fixture", secureStore: InMemorySecureStore())
+        imports = LiveTVPrototypeImportModel(configuration: configuration, cache: cache)
+        try! scans.bind(profileID: "source-smoke", sources: configuration.playlists.map {
+            try LiveTVChannelScanSource(id: $0.id, generation: "fixture", targets: [])
+        })
+    }
+}
+
+private final class SourceSmokeHealthStore: LiveTVChannelHealthStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var records: [LiveTVChannelHealthRecord] = []
+    func load() throws -> [LiveTVChannelHealthRecord] { lock.withLock { records } }
+    func save(_ records: [LiveTVChannelHealthRecord]) throws { lock.withLock { self.records = records } }
 }
 
 @MainActor
@@ -203,7 +269,9 @@ final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable {
             self.configuration = LiveTVSourcesConfiguration(playlists: [
                 LiveTVPlaylistSource(
                     id: "fixture", name: "Fixture IPTV",
-                    playlistURL: URL(string: "https://example.invalid/fixture.m3u")!
+                    playlistURL: URL(string: "https://example.invalid/fixture.m3u")!,
+                    guideURLs: ProcessInfo.processInfo.arguments.contains("--source-guides")
+                        ? [URL(string: "https://example.invalid/guide.xml")!] : []
                 )
             ])
         }
@@ -213,6 +281,9 @@ final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable {
     var writeCount: Int { lock.withLock { writes } }
     func load() throws -> LiveTVSourcesConfiguration { lock.withLock { configuration } }
     func save(_ value: LiveTVSourcesConfiguration) throws {
+        if ProcessInfo.processInfo.arguments.contains("--source-save-fails") {
+            throw LiveTVSourcesStoreError.saveFailed
+        }
         try value.validate()
         lock.withLock {
             configuration = value

@@ -90,7 +90,7 @@ public struct LiveTVProgramSearchView: View {
                 failed = true
             }
         }
-        .sheet(item: $fallbackDetails) { program in
+        .plozzSheet(item: $fallbackDetails) { program in
             if let channel = model.channel(id: program.channelID),
                searchRequest.channelIDs.contains(channel.id),
                imports.isProgramSearchResultAvailable(program, catalog: model) {

@@ -97,10 +97,26 @@ public extension HTTPClient {
         baseURL: URL,
         decoder: JSONDecoder = .plozz
     ) async throws -> T {
+        try await decodeResponse(type, from: endpoint, baseURL: baseURL, decoder: decoder).value
+    }
+
+    func decodeResponse<T: Decodable>(
+        _ type: T.Type,
+        from endpoint: Endpoint,
+        baseURL: URL,
+        decoder: JSONDecoder = .plozz
+    ) async throws -> (value: T, response: HTTPURLResponse) {
         let (data, response) = try await send(endpoint, baseURL: baseURL)
+        let diagnostic = PerformanceDiagnostics.shared.begin(
+            .serverDecode, provider: PerformanceDiagnostics.provider, metrics: .init(bytes: data.count)
+        )
         do {
-            return try decoder.decode(T.self, from: data)
+            let value = try decoder.decode(T.self, from: data)
+            diagnostic?.finish(.succeeded)
+            return (value, response)
         } catch {
+            diagnostic?.finish(.failed)
+            HTTPResponseDiagnostics.recordDecodeFailure(error, data: data, response: response)
             let contentType = response.value(forHTTPHeaderField: "Content-Type") ?? "<none>"
             PlozzLog.networking.error(
                 "Decode failed method=\(endpoint.method.rawValue) path=\(endpoint.path) "
@@ -163,6 +179,7 @@ public struct URLSessionHTTPClient: HTTPClient {
 
     public func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
         let (data, http) = try await sendRaw(endpoint, baseURL: baseURL)
+        HTTPResponseDiagnostics.recordHTTPFailure(status: http.statusCode)
         switch http.statusCode {
         case 200...299:
             return (data, http)
@@ -196,6 +213,9 @@ public struct URLSessionHTTPClient: HTTPClient {
 
         let data: Data
         let response: URLResponse
+        let diagnostic = PerformanceDiagnostics.shared.begin(
+            .serverRequest, provider: PerformanceDiagnostics.provider
+        )
         do {
             switch endpoint.redirectPolicy {
             case .follow:
@@ -209,19 +229,31 @@ public struct URLSessionHTTPClient: HTTPClient {
                 (data, response) = try await session.data(for: request, delegate: delegate)
             }
         } catch let urlError as URLError {
+            HTTPResponseDiagnostics.recordTransportFailure(urlError)
+            diagnostic?.finish(
+                urlError.code == .cancelled ? .cancelled : .failed,
+                networkCode: urlError.errorCode
+            )
             if delivery?.confirmedNotSent == true {
                 throw HTTPRequestNotSentError(underlying: Self.map(urlError))
             }
             throw Self.map(urlError)
         } catch is CancellationError {
+            diagnostic?.finish(.cancelled)
             throw AppError.cancelled
         } catch {
+            diagnostic?.finish(.failed)
             throw AppError.serverUnreachable
         }
 
         guard let http = response as? HTTPURLResponse else {
+            diagnostic?.finish(.failed)
             throw AppError.invalidResponse
         }
+        diagnostic?.finish(
+            (200...299).contains(http.statusCode) ? .succeeded : .failed,
+            metrics: .init(bytes: data.count), httpStatus: http.statusCode
+        )
 
         PlozzLog.networking.debug(
             "← \(http.statusCode) \(endpoint.method.rawValue) "

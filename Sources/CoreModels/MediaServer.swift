@@ -19,6 +19,9 @@ public struct MediaServer: Codable, Hashable, Identifiable, Sendable {
     /// being pinned to one address that may have gone unreachable. `nil` for
     /// servers reached through a single fixed URL (e.g. a manually-entered host).
     public var connectionURLs: [URL]?
+    /// Addresses explicitly approved on this device for this sign-in. Separate
+    /// from Plex discovery so a discovery refresh cannot erase manual aliases.
+    public var alternateConnectionURLs: [URL]?
     /// Optional, non-secret indexing/presentation intent for a network-share root.
     /// `nil` means the legacy automatic behavior used by accounts saved before
     /// explicit share configuration existed.
@@ -31,6 +34,7 @@ public struct MediaServer: Codable, Hashable, Identifiable, Sendable {
         provider: ProviderKind,
         version: String? = nil,
         connectionURLs: [URL]? = nil,
+        alternateConnectionURLs: [URL]? = nil,
         mediaShareLibraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         self.id = id
@@ -39,6 +43,7 @@ public struct MediaServer: Codable, Hashable, Identifiable, Sendable {
         self.provider = provider
         self.version = version
         self.connectionURLs = connectionURLs
+        self.alternateConnectionURLs = alternateConnectionURLs
         self.mediaShareLibraryConfiguration = mediaShareLibraryConfiguration
     }
 }

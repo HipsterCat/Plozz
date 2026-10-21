@@ -71,4 +71,33 @@ struct SeasonContextRoute: Hashable {
     var seriesID: String { season.seriesID ?? season.id }
     var sourceAccountID: String? { season.sourceAccountID }
 }
+
+/// Provider-local IDs are only unique within an account. Keep route context and
+/// library origin distinct even when two servers use identical numeric IDs.
+enum DetailViewModelCacheKey: Hashable {
+    case title(itemID: String, accountID: String?, originID: String?, openingSource: MediaItemSourceIdentity?)
+    case episode(seriesID: String, episodeID: String, accountID: String?, originID: String?)
+    case season(seriesID: String, seasonID: String, accountID: String?, originID: String?)
+
+    static func title(for item: MediaItem, libraryOrigin: String?) -> Self {
+        .title(
+            itemID: item.id, accountID: item.sourceAccountID, originID: libraryOrigin,
+            openingSource: item.editionOpeningSource
+        )
+    }
+
+    init(_ route: EpisodeContextRoute) {
+        self = .episode(
+            seriesID: route.seriesID, episodeID: route.episode.id,
+            accountID: route.sourceAccountID, originID: route.originAccountID
+        )
+    }
+
+    init(_ route: SeasonContextRoute) {
+        self = .season(
+            seriesID: route.seriesID, seasonID: route.season.id,
+            accountID: route.sourceAccountID, originID: route.originAccountID
+        )
+    }
+}
 #endif

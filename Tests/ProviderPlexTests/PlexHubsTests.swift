@@ -1,5 +1,6 @@
 import XCTest
 import CoreModels
+import CoreNetworking
 @testable import ProviderPlex
 
 /// `PlexProvider.libraryHubs` maps `/hubs/sections/{id}` into the additive
@@ -82,6 +83,21 @@ final class PlexHubsTests: XCTestCase {
         XCTAssertTrue(sections.allSatisfy { $0.style == .poster && $0.items.count >= 3 })
     }
 
+    func testMalformedHubResponseKeepsTypedErrorAndSafeRouteDiagnostic() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/hubs/sections/1", json: #"{"MediaContainer":{"Hub":false}}"#)
+        let provider = PlexProvider(session: makeSession(), http: stub)
+        let captured = await HTTPResponseDiagnostics.capture {
+            try await provider.libraryHubs(libraryID: "1", kind: .movie, limit: 20)
+        }
+        guard case .failure(let error) = captured.result else { return XCTFail("Malformed hubs must fail") }
+        XCTAssertEqual(error as? AppError, .decoding)
+        let response = try XCTUnwrap(captured.responses.last)
+        XCTAssertEqual(response.route, .libraryHubs)
+        XCTAssertEqual(response.path, "MediaContainer.Hub")
+        XCTAssertEqual(response.reason, .wrongType)
+    }
+
     func testCapsItemsPerHubToLimit() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/hubs/sections/1", json: hubsJSON)
@@ -90,6 +106,51 @@ final class PlexHubsTests: XCTestCase {
         let sections = try await provider.libraryHubs(libraryID: "1", kind: .movie, limit: 2)
         // "More in Drama" has 3 items in the fixture; the limit clamps it to 2.
         XCTAssertEqual(sections.first?.items.count, 2)
+    }
+
+    func testHomeRequestsPromotedHubsWithoutFetchingTheLibraryRecommendationMenu() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/hubs/promoted", json: hubsJSON)
+        let provider = PlexProvider(session: makeSession(), http: stub)
+        let sections = try await provider.homeHubs(
+            libraryID: "1", kind: .movie, limit: 20, includeUnpromoted: false
+        )
+        XCTAssertTrue(sections.contains { $0.id == "recommendation:director:0" },
+                      "A genuinely Home-promoted row is not suppressed by a person-title heuristic.")
+        XCTAssertTrue(sections.allSatisfy { $0.isHomeDefault == true })
+        XCTAssertFalse(stub.sentPaths.contains { $0.contains("/hubs/sections/") })
+        let query = try XCTUnwrap(stub.queryItems(forPathSuffix: "/hubs/promoted"))
+        XCTAssertEqual(query.first { $0.name == "contentDirectoryID" }?.value, "1")
+        XCTAssertEqual(query.first { $0.name == "pinnedContentDirectoryID" }?.value, "1")
+    }
+
+    func testArrangerIncludesOptionalRowsWithoutCallingThemHomeDefaults() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/hubs/promoted", json: #"{"MediaContainer":{"Hub":[]}}"#)
+        stub.stub(pathSuffix: "/hubs/sections/1", json: hubsJSON)
+        let provider = PlexProvider(session: makeSession(), http: stub)
+        let sections = try await provider.homeHubs(
+            libraryID: "1", kind: .movie, limit: 8, includeUnpromoted: true
+        )
+        XCTAssertTrue(sections.contains { $0.id == "recommendation:actor:0" })
+        XCTAssertTrue(sections.allSatisfy { $0.isHomeDefault == false })
+        XCTAssertEqual(Set(sections.map(\.id)).count, sections.count)
+    }
+
+    func testHomeDynamicRecommendationIdentitySurvivesANewSubject() async throws {
+        let beforeStub = StubHTTPClient()
+        beforeStub.stub(pathSuffix: "/hubs/promoted", json: hubsJSON)
+        let afterStub = StubHTTPClient()
+        afterStub.stub(pathSuffix: "/hubs/promoted", json: hubsJSON
+            .replacingOccurrences(of: "movie.similar.10", with: "movie.similar.900")
+            .replacingOccurrences(of: "movie.by.director.7", with: "movie.by.director.800")
+            .replacingOccurrences(of: "Drama A", with: "A different movie"))
+        let before = try await PlexProvider(session: makeSession(), http: beforeStub)
+            .homeHubs(libraryID: "1", kind: .movie, limit: 20, includeUnpromoted: false)
+        let after = try await PlexProvider(session: makeSession(), http: afterStub)
+            .homeHubs(libraryID: "1", kind: .movie, limit: 20, includeUnpromoted: false)
+        XCTAssertEqual(before.map(\.id), after.map(\.id))
+        XCTAssertNotEqual(before.map(\.title), after.map(\.title))
     }
 
     func testIsBaseDuplicateHubMatchesStableTokensOnly() {

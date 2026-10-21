@@ -89,7 +89,7 @@ struct LiveTVShellDestination: View {
     @ViewBuilder
     var body: some View {
         if usesNativeNavigation {
-            LiveTVNavigationContainer(hidesNavigation: hidesNavigation) {
+            LiveTVNavigationContainer {
                 liveTVContent
             }
         } else {
@@ -139,6 +139,8 @@ struct LiveTVShellDestination: View {
             prepareLibraryChannels: library.prepareForEditing,
             libraryIsAuthorized: { [weak library] in library?.authorizationID != nil },
             sourceApprovalContext: { [profiles] in LiveTVSourceApprovalContext(profiles: profiles) },
+            homeModel: HomeLiveTVRuntime.model(profileID: profileID),
+            homeAuthorizationID: HomeLiveTVRuntime.authorizationID(profileID: profileID, accounts: accountsProviders),
             onOpenTitle: onOpenTitle
         ) { playback in
             LiveChannelPlayerView(
@@ -180,6 +182,7 @@ struct LiveTVShellDestination: View {
                 isAuthorized: playback.isAuthorized,
                 onOpenLibraryItem: playback.openLibraryItem,
                 program: playback.program,
+                earlierPrograms: playback.earlierPrograms,
                 loadOnNow: playback.onNow,
                 onTuneChannel: playback.tuneChannel,
                 guideOverlay: playback.guideOverlay
@@ -256,7 +259,7 @@ private struct LiveTVShellSourcesContent: View {
                 scanCoordinator: runtime.scanBinding.coordinator,
                 didImportPlaylist: { scanOfferSourceID = $0 }
             )
-            if let scanOfferSourceID, runtime.isCurrent {
+            if let scanOfferSourceID, runtime.isPresentationCurrent {
                 LiveTVScanImportOffer(
                     coordinator: runtime.scanBinding.coordinator, sourceID: scanOfferSourceID,
                     skip: { self.scanOfferSourceID = nil }
@@ -264,7 +267,7 @@ private struct LiveTVShellSourcesContent: View {
             }
         }
         .navigationDestination(isPresented: $managesChannels) {
-            if runtime.isCurrent {
+            if runtime.isPresentationCurrent {
                 LibraryChannelManagementView(
                     service: library.service, history: library.history, prepareLibraries: library.prepareForEditing,
                     automaticChannels: library.automaticChannelsPresentation)

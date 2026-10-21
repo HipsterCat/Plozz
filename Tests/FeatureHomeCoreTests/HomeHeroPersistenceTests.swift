@@ -7,6 +7,19 @@ import XCTest
 final class HomeHeroPersistenceTests: XCTestCase {
     private let settings = HeroSettings.default
 
+    func testKidsLaunchFiltersAttributedTitlesEvenInAMatchingStoredSnapshot() {
+        let settings = HeroSettings.default.applyingDiscoveryPolicy(allowed: false)
+        let store = InMemoryHomeContentStore()
+        var discovery = item("external")
+        discovery.discoverySources = [.tmdb]
+        store.saveHero([discovery, item("library")], for: HeroConfigurationKey(settings: settings))
+        let model = HomeViewModel(
+            accounts: [], layoutStore: InMemoryHomeLayoutStore(), contentStore: store
+        )
+        XCTAssertEqual(model.cachedHeroItems(for: settings)?.map(\.id), ["library"])
+        XCTAssertEqual(model.cachedHeroItems(for: settings)?.map(\.id), ["library"])
+    }
+
     private func item(_ id: String) -> MediaItem {
         MediaItem(id: id, title: id, kind: .movie)
     }

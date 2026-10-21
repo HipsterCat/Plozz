@@ -1,7 +1,73 @@
 import CoreModels
+import CoreNetworking
 import Foundation
 
 extension LiveTVPrototypeImportModel {
+    public func restoreCachedServerCatalogs(into model: LiveTVPrototypeModel) async {
+        let request = serverRevision
+        for source in configuration.servers where source.isEnabled {
+            guard request == serverRevision, !Task.isCancelled,
+                  ensureCatalogAuthorization(into: model) else { return }
+            let sourceRevision = serverSourceRevisions[source.id, default: 0]
+            guard let context = authorizedContext(for: source) else {
+                discardUnauthorizedSource(source.id, into: model)
+                continue
+            }
+            if serverSources.first(where: { $0.id == source.id })?.phase == .loading { continue }
+            if let cached = cachedServerCatalogs[source.id],
+               cached.authorizationID == context.authorizationID, cached.kind == context.kind,
+               serverSources.first(where: { $0.id == source.id })?.phase == .loaded { continue }
+            do {
+                guard let snapshot = try await context.provider.cachedLiveTVCatalog() else { continue }
+                try Task.checkCancellation()
+                guard acceptServerResult(
+                    source, context: context, request: request, sourceRevision: sourceRevision, into: model
+                ) else { continue }
+                let mapping = Task.detached {
+                    try LiveTVServerCatalog(source: source, context: context, channels: snapshot.channels)
+                }
+                let restored = try await withTaskCancellationHandler {
+                    try await mapping.value
+                } onCancel: { mapping.cancel() }
+                try Task.checkCancellation()
+                guard acceptServerResult(
+                    source, context: context, request: request, sourceRevision: sourceRevision, into: model
+                ) else { continue }
+                let previous = cachedServerCatalogs[source.id]
+                cachedServerCatalogs[source.id] = restored
+                do {
+                    try validateCacheBudget()
+                    try publishPlaylists(into: model)
+                } catch {
+                    cachedServerCatalogs[source.id] = previous
+                    throw error
+                }
+                updateServerStatus(source.id) {
+                    $0.phase = .loaded
+                    $0.failure = nil
+                    $0.channelCount = snapshot.channels.count
+                    $0.programCount = restored.programs.count
+                    $0.availability = .init(
+                        status: snapshot.channels.isEmpty ? .noChannels : .available,
+                        channelCount: snapshot.channels.count, supportsGuide: snapshot.supportsGuide
+                    )
+                    $0.guideFailure = restored.inlineGuideFailure
+                }
+            } catch {
+                guard currentServerRequest(source, request: request, sourceRevision: sourceRevision),
+                      !isCancellation(error) else { continue }
+                guard acceptServerResult(
+                    source, context: context, request: request, sourceRevision: sourceRevision, into: model
+                ) else { continue }
+                PlozzLog.app.error("Saved server Live TV catalogue could not be restored")
+                updateServerStatus(source.id) {
+                    $0.phase = .failed
+                    $0.failure = .sanitized(error, fallback: .invalidCatalog)
+                }
+            }
+        }
+    }
+
     public func setServerEnabled(
         _ sourceID: String, enabled: Bool, into model: LiveTVPrototypeModel
     ) throws {
@@ -41,9 +107,16 @@ extension LiveTVPrototypeImportModel {
         try publishPlaylists(into: model)
     }
 
-    public func reloadServers(into model: LiveTVPrototypeModel) async {
-        serverRevision &+= 1
-        cancelServerGuideRequests()
+    public func reloadServers(into model: LiveTVPrototypeModel, forceRefresh: Bool = true) async {
+        _ = await reloadServersResult(into: model, forceRefresh: forceRefresh)
+    }
+
+    func reloadServersResult(
+        into model: LiveTVPrototypeModel, forceRefresh: Bool, sourceID: String? = nil
+    ) async -> ReloadResult {
+        if let sourceID { serverSourceRevisions[sourceID, default: 0] &+= 1 }
+        else { serverRevision &+= 1 }
+        cancelServerGuideRequests(sourceID: sourceID)
         let request = serverRevision
         do { try configuration.validate() }
         catch {
@@ -52,15 +125,22 @@ extension LiveTVPrototypeImportModel {
                 serverSources[index].failure = .invalidCatalog
                 serverSources[index].guidePhase = .idle
             }
-            return
+            return .completed
         }
-        for index in serverSources.indices {
+        for index in serverSources.indices where sourceID == nil || serverSources[index].id == sourceID {
             if serverSources[index].phase == .loading { serverSources[index].phase = .idle }
             if serverSources[index].guidePhase == .loading { serverSources[index].guidePhase = .idle }
         }
-        let sources = serverSources.map(\.source).filter(\.isEnabled)
+        let sources = serverSources.map(\.source).filter {
+            $0.isEnabled && (sourceID == nil || $0.id == sourceID)
+        }
+        var result = ReloadResult.completed
+        var pendingGuideDiscovery: [
+            (source: LiveTVServerSource, context: LiveTVAuthorizedServerProvider,
+             revision: Int, availability: ServerLiveTVAvailability)
+        ] = []
         for source in sources {
-            guard request == serverRevision, !Task.isCancelled else { return }
+            guard request == serverRevision, !Task.isCancelled else { return .cancelled }
             let sourceRevision = serverSourceRevisions[source.id, default: 0]
             guard configuration.servers.contains(where: {
                 $0.id == source.id && $0.accountID == source.accountID && $0.isEnabled
@@ -82,7 +162,8 @@ extension LiveTVPrototypeImportModel {
                 $0.guidePhase = .idle
             }
             do {
-                let availability = try await context.provider.liveTVAvailability()
+                let availability = try await forceRefresh
+                    ? context.provider.refreshLiveTVAvailability() : context.provider.liveTVAvailability()
                 try Task.checkCancellation()
                 guard acceptServerResult(
                     source, context: context, request: request, sourceRevision: sourceRevision, into: model
@@ -118,7 +199,16 @@ extension LiveTVPrototypeImportModel {
                 guard acceptServerResult(
                     source, context: context, request: request, sourceRevision: sourceRevision, into: model
                 ) else { continue }
-                var catalog = try LiveTVServerCatalog(source: source, context: context, channels: channels)
+                let mapping = Task.detached(priority: .userInitiated) {
+                    try LiveTVServerCatalog(source: source, context: context, channels: channels)
+                }
+                var catalog = try await withTaskCancellationHandler {
+                    try await mapping.value
+                } onCancel: { mapping.cancel() }
+                try Task.checkCancellation()
+                guard acceptServerResult(
+                    source, context: context, request: request, sourceRevision: sourceRevision, into: model
+                ) else { continue }
                 let previous = cachedServerCatalogs[source.id]
                 if let previous {
                     let known = Set(catalog.channels.map(\.id))
@@ -149,20 +239,25 @@ extension LiveTVPrototypeImportModel {
                     $0.lastRefresh = Date()
                     $0.guideFailure = catalog.inlineGuideFailure
                 }
-                guard availability.supportsGuide, !channels.isEmpty else { continue }
+                guard !channels.isEmpty else { continue }
+                guard availability.supportsGuide else {
+                    pendingGuideDiscovery.append((source, context, sourceRevision, availability))
+                    continue
+                }
                 let warmup = context.kind == .plex
                     ? Array(catalog.channels.prefix(Self.serverGuideWarmupChannelLimit)) : catalog.channels
-                await reloadServerGuides(
+                let guideResult = await reloadServerGuidesResult(
                     channelIDs: warmup.map(\.id), from: model.now, to: model.now.addingTimeInterval(21_600),
                     into: model, force: true
                 )
+                result = result.merging(guideResult)
             } catch {
                 guard currentServerRequest(source, request: request, sourceRevision: sourceRevision) else {
                     continue
                 }
                 if isCancellation(error) {
                     updateServerStatus(source.id) { $0.phase = .idle; $0.guidePhase = .idle }
-                    return
+                    return .cancelled
                 }
                 guard acceptServerResult(
                     source, context: context, request: request, sourceRevision: sourceRevision, into: model
@@ -180,6 +275,45 @@ extension LiveTVPrototypeImportModel {
                 }
             }
         }
+        for pending in pendingGuideDiscovery {
+            guard !Task.isCancelled else { return .cancelled }
+            let source = pending.source
+            let context = pending.context
+            guard acceptServerResult(
+                source, context: context, request: request, sourceRevision: pending.revision, into: model
+            ) else { continue }
+            do {
+                guard let supportsGuide = try await context.provider.completeLiveTVGuideDiscovery() else { continue }
+                try Task.checkCancellation()
+                guard acceptServerResult(
+                    source, context: context, request: request, sourceRevision: pending.revision, into: model
+                ), let catalog = cachedServerCatalogs[source.id] else { continue }
+                updateServerStatus(source.id) {
+                    $0.availability = .init(
+                        status: pending.availability.status,
+                        channelCount: catalog.channels.count, supportsGuide: supportsGuide
+                    )
+                }
+                guard supportsGuide else { continue }
+                let warmup = context.kind == .plex
+                    ? Array(catalog.channels.prefix(Self.serverGuideWarmupChannelLimit)) : catalog.channels
+                result = result.merging(await reloadServerGuidesResult(
+                    channelIDs: warmup.map(\.id), from: model.now, to: model.now.addingTimeInterval(21_600),
+                    into: model, force: true
+                ))
+            } catch {
+                if isCancellation(error) { return .cancelled }
+                guard acceptServerResult(
+                    source, context: context, request: request, sourceRevision: pending.revision, into: model
+                ) else { continue }
+                updateServerStatus(source.id) {
+                    $0.guidePhase = .failed
+                    $0.guideFailure = .sanitizedGuide(error)
+                }
+                result = .failed
+            }
+        }
+        return result
     }
 
     func applyServerConfiguration(_ sources: [LiveTVServerSource]) {
@@ -215,7 +349,7 @@ extension LiveTVPrototypeImportModel {
 
     func authorizedContext(for source: LiveTVServerSource) -> LiveTVAuthorizedServerProvider? {
         guard let context = serverProviderResolver(source.accountID), context.accountID == source.accountID,
-              !context.authorizationID.isEmpty, [.jellyfin, .plex, .emby].contains(context.kind)
+              !context.authorizationID.isEmpty, [.jellyfin, .plex, .emby, .iptv].contains(context.kind)
         else { return nil }
         return context
     }

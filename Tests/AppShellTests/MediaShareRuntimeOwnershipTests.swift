@@ -100,6 +100,9 @@ final class MediaShareRuntimeOwnershipTests: XCTestCase {
             try wrapped.mediaShareCredential(for: accountID, revision: revision)
         }
         func add(_ account: Account, token: String) throws { try wrapped.add(account, token: token) }
+        func registerAuthenticatedSession(_ session: UserSession) throws -> AccountRegistration {
+            try wrapped.registerAuthenticatedSession(session)
+        }
         func addMediaShare(
             _ account: Account,
             credential: MediaShareCredentialEnvelope,

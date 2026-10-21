@@ -25,6 +25,7 @@ public struct PlozzMetrics: Equatable, Sendable {
     public let density: UIDensity
     /// The multiplier applied to every size/gap below (1.0 == standard).
     public let scale: CGFloat
+    private let geometryScale: CGFloat
 
     // MARK: Card artwork sizes (scaled)
 
@@ -75,20 +76,20 @@ public struct PlozzMetrics: Equatable, Sendable {
     /// its slot, so cards separate and the focus outline has room (scaled).
     public let borderlessCardSideMargin: CGFloat
 
-    /// Height of a card's watched-progress bar, scaled with density and floored at
-    /// `PlozzTheme.Metrics.progressBarMinHeight` so it tracks the display-size
-    /// setting without ever shrinking to an illegible sliver.
-    public let progressBarHeight: CGFloat
+    /// Full-width card progress matches the Detailed resume bar, including density and Dynamic Type.
+    public var progressBarHeight: CGFloat { resumeChipBarHeight }
 
     /// Leg length of the "unwatched" corner flag, density-scaled and floored at
     /// `PlozzTheme.Metrics.unwatchedFlagMinSize` so it grows with the display-size
     /// setting yet never shrinks below a clearly-visible minimum on tiny cards.
     public let unwatchedFlagSize: CGFloat
 
-    /// Diameter of the "watched" check badge, density-scaled and floored at
-    /// `PlozzTheme.Metrics.watchedBadgeMinSize` so it grows with the display-size
-    /// setting (like the unwatched flag) yet never shrinks below a legible minimum.
+    /// Density-scaled watched check: a 20pt minimum on touch, 36pt on TV.
     public let watchedBadgeSize: CGFloat
+    public var folderNavigationBadgeSize: CGFloat {
+        max((PlozzTheme.Metrics.watchedBadgeSize * scale * geometryScale).rounded(),
+            PlozzTheme.Metrics.watchedBadgeMinSize)
+    }
 
     // MARK: Media spacing (scaled)
 
@@ -137,6 +138,9 @@ public struct PlozzMetrics: Equatable, Sendable {
     public let cardTitleFontSize: CGFloat
     /// Point size for a media card's subtitle/metadata line, scaled with density.
     public let cardSubtitleFontSize: CGFloat
+    /// Poster captions use a smaller touch text style without shrinking landscape or TV captions.
+    public let posterTitleFontSize: CGFloat
+    public let posterSubtitleFontSize: CGFloat
     /// Artwork status-cue typography and insets. These scale with card density but
     /// retain explicit floors so compact poster walls never make the cue illegible.
     public let cardStatusCueFontSize: CGFloat
@@ -201,8 +205,32 @@ public struct PlozzMetrics: Equatable, Sendable {
     /// own offset must both come from here, or the card's footprint changes with
     /// focus and the whole row shifts.
     public func focusCaptionPush(for focusStyle: CardFocusStyle) -> CGFloat {
+        guard geometryScale == 1 else { return 0 }
         guard focusStyle == .highlight else { return focusCaptionPush }
         return (focusCaptionPush * PlozzTheme.Metrics.highlightCaptionPushRatio).rounded()
+    }
+
+    /// Artwork dimensions shared by real cards and their Settings illustrations.
+    public func artworkSize(
+        for style: PosterCardView.Style,
+        showsSeriesArtwork: Bool = false,
+        playbackDetails: ContinueWatchingPlaybackDetails = .default
+    ) -> CGSize {
+        switch style {
+        case .poster:
+            return CGSize(
+                width: posterWidth,
+                height: showsSeriesArtwork ? posterWidth / playbackDetails.cardAspectRatio : posterHeight
+            )
+        case .landscape:
+            if showsSeriesArtwork {
+                return CGSize(
+                    width: continueWatchingWidth,
+                    height: (continueWatchingWidth / ContinueWatchingCardShape.aspectRatio).rounded()
+                )
+            }
+            return CGSize(width: landscapeWidth, height: landscapeHeight)
+        }
     }
 
     /// Exact rail footprint for a shared media card. Home uses this instead of a
@@ -213,10 +241,7 @@ public struct PlozzMetrics: Equatable, Sendable {
         cardStyle: CardStyle,
         showsSeriesArtwork: Bool = false
     ) -> CGFloat {
-        let artworkWidth = switch style {
-        case .poster: posterWidth
-        case .landscape: showsSeriesArtwork ? continueWatchingWidth : landscapeWidth
-        }
+        let artworkWidth = artworkSize(for: style, showsSeriesArtwork: showsSeriesArtwork).width
         let sideInset = switch cardStyle {
         case .framed: cardInset
         case .borderless: borderlessCardSideMargin
@@ -235,6 +260,22 @@ public struct PlozzMetrics: Equatable, Sendable {
         }
     }
 
+    /// Fits the visible surface, including the partial final poster, rather than
+    /// counting invisible side margins as artwork. The viewport already excludes
+    /// navigation safe-area insets. Browse grids keep their own sizing.
+    public func portraitRowSlotWidth(
+        viewportWidth: CGFloat, leadingInset: CGFloat, cardStyle: CardStyle
+    ) -> CGFloat {
+        guard viewportWidth > 0 else { return posterWidth }
+        let visibleCards = PlozzTheme.Metrics.portraitRowVisibleCards / CGFloat(density.scale)
+        let wholeCards = floor(visibleCards)
+        let partialCard = visibleCards - wholeCards
+        let sideMargin = cardStyle == .borderless ? borderlessCardSideMargin : 0
+        return max(1, (
+            viewportWidth - leadingInset - wholeCards * cardSpacing + partialCard * 2 * sideMargin
+        ) / visibleCards)
+    }
+
     /// These metrics with portrait posters scaled by `factor`, for a surface
     /// that wants more of them on screen.
     public func scalingPosters(by factor: CGFloat) -> PlozzMetrics {
@@ -246,28 +287,39 @@ public struct PlozzMetrics: Equatable, Sendable {
 
     // MARK: Concentric card corner radii (derived)
 
-    /// Outer (glass) corner radius for a poster ("Browse") card: its fixed inner
-    /// artwork radius plus the shared `cardInset`. Deriving it this way keeps the
-    /// glass border a true constant-width ring concentric with the artwork —
-    /// `outer = inner + inset` — at every density.
+    /// Touch artwork keeps the same rounding across responsive card sizes.
+    public var posterArtworkCornerRadius: CGFloat {
+        geometryScale < 1 ? PlozzTheme.Metrics.touchMediaCornerRadius : PlozzTheme.Metrics.posterArtCornerRadius
+    }
+
+    public var landscapeArtworkCornerRadius: CGFloat {
+        geometryScale < 1 ? PlozzTheme.Metrics.touchMediaCornerRadius : PlozzTheme.Metrics.mediumMediaCornerRadius
+    }
+
+    /// Keep the glass frame concentric with the artwork at every card size.
     public var posterCardCornerRadius: CGFloat {
-        PlozzTheme.Metrics.posterArtCornerRadius + cardInset
+        posterArtworkCornerRadius + cardInset
     }
 
     /// Outer (glass) corner radius for a landscape / music media card, derived
     /// from its inner media radius + `cardInset` for the same concentric border.
     public var landscapeCardCornerRadius: CGFloat {
-        PlozzTheme.Metrics.mediumMediaCornerRadius + cardInset
+        landscapeArtworkCornerRadius + cardInset
+    }
+
+    /// Touch posters have no glass inset; TV retains its existing outer rounding.
+    public var borderlessPosterCornerRadius: CGFloat {
+        geometryScale < 1 ? posterArtworkCornerRadius : posterCardCornerRadius
+    }
+
+    public var borderlessLandscapeCornerRadius: CGFloat {
+        geometryScale < 1 ? landscapeArtworkCornerRadius : landscapeCardCornerRadius
     }
 
     // MARK: Caption corner-clearance (derived)
 
-    /// Extra inset for a poster card's caption — *beyond* the shared `cardInset` —
-    /// applied to its left, right *and* bottom so title/metadata text clears the
-    /// rounded outer corners instead of crowding them, leaving the text in a
-    /// balanced safe area. Sized so the text's total inset from the glass edge is
-    /// `captionCornerClearanceFactor` × the outer radius, and scales with the
-    /// radius (and thus density). The artwork is unaffected.
+    /// Bottom corner clearance beyond `cardInset`; also the horizontal
+    /// clearance on TV. Touch captions use a separate, smaller horizontal inset.
     public var posterCaptionInset: CGFloat {
         max(posterCardCornerRadius * PlozzTheme.Metrics.captionCornerClearanceFactor - cardInset, 0)
     }
@@ -277,23 +329,33 @@ public struct PlozzMetrics: Equatable, Sendable {
         max(landscapeCardCornerRadius * PlozzTheme.Metrics.captionCornerClearanceFactor - cardInset, 0)
     }
 
-    /// Gap between a poster card's artwork and its caption: the shared base
-    /// (`cardCaptionSpacing`) plus a fraction (`captionTopClearanceFactor`) of the
-    /// card's side/bottom `captionInset`, so the top breathing room scales up with
-    /// the side clearance but only ~half as much (the top edge isn't a corner the
-    /// text crowds).
+    /// Horizontal clearance from the artwork edge, independent of bottom rounding.
+    public var posterCaptionHorizontalInset: CGFloat {
+        geometryScale < 1 ? PlozzTheme.Metrics.touchCaptionHorizontalInset : posterCaptionInset
+    }
+
+    public var landscapeCaptionHorizontalInset: CGFloat {
+        geometryScale < 1 ? PlozzTheme.Metrics.touchCaptionHorizontalInset : landscapeCaptionInset
+    }
+
+    /// Resting artwork-to-caption gap; focus travel is reserved separately on TV.
     public var posterCaptionTopSpacing: CGFloat {
-        PlozzTheme.Metrics.cardCaptionSpacing + posterCaptionInset * PlozzTheme.Metrics.captionTopClearanceFactor
+        geometryScale < 1 ? 4 : PlozzTheme.Metrics.cardCaptionSpacing
     }
 
     /// Landscape / music card counterpart of `posterCaptionTopSpacing`.
     public var landscapeCaptionTopSpacing: CGFloat {
-        PlozzTheme.Metrics.cardCaptionSpacing + landscapeCaptionInset * PlozzTheme.Metrics.captionTopClearanceFactor
+        geometryScale < 1 ? 4 : PlozzTheme.Metrics.cardCaptionSpacing
     }
 
-    /// No extra resting gap beyond the native image's reserved focus frame.
-    /// Caption travel is reserved separately, without resizing its slot.
-    public var nativePosterCaptionSpacing: CGFloat { 0 }
+    /// Shared resting clearance for native media and library captions. Native
+    /// focus margins are drawing overflow, not space in the artwork layout slot.
+    public var nativePosterCaptionSpacing: CGFloat { landscapeCaptionTopSpacing }
+
+    /// Native poster artwork overflow needs clearance above the focused caption.
+    public var nativePosterCaptionFocusTravel: CGFloat {
+        max(focusCaptionPush, PlozzTheme.Metrics.nativeFocusCaptionMinimumPush)
+    }
 
     /// - Parameter dynamicTypeSize: the reader's current text size. Pass the
     ///   view's `\.dynamicTypeSize` so the metrics REBUILD when it changes —
@@ -319,6 +381,7 @@ public struct PlozzMetrics: Equatable, Sendable {
         let s = densityScale * geometryScale
         self.density = density
         self.scale = densityScale
+        self.geometryScale = geometryScale
 
         #if canImport(UIKit)
         // Resolve typography against the size we were HANDED rather than whatever
@@ -380,17 +443,13 @@ public struct PlozzMetrics: Equatable, Sendable {
 
         self.focusCaptionPush = step(PlozzTheme.Metrics.focusCaptionPush)
         self.borderlessCardSideMargin = step(PlozzTheme.Metrics.borderlessCardSideMargin)
-        self.progressBarHeight = max(
-            step(PlozzTheme.Metrics.progressBarHeight),
-            PlozzTheme.Metrics.progressBarMinHeight
-        )
         self.unwatchedFlagSize = max(
             step(PlozzTheme.Metrics.unwatchedFlagSize),
             PlozzTheme.Metrics.unwatchedFlagMinSize
         )
         self.watchedBadgeSize = max(
             step(PlozzTheme.Metrics.watchedBadgeSize),
-            PlozzTheme.Metrics.watchedBadgeMinSize
+            geometryScale < 1 ? 20 : PlozzTheme.Metrics.watchedBadgeMinSize
         )
 
         self.cardSpacing = step(PlozzTheme.Metrics.cardSpacing)
@@ -444,6 +503,13 @@ public struct PlozzMetrics: Equatable, Sendable {
         #endif
         self.cardTitleFontSize = (baseTitleFontSize * densityScale).rounded()
         self.cardSubtitleFontSize = (baseSubtitleFontSize * densityScale).rounded()
+        #if os(iOS)
+        self.posterTitleFontSize = (preferred(.footnote) * max(1, densityScale)).rounded()
+        self.posterSubtitleFontSize = (preferred(.caption1) * max(1, densityScale)).rounded()
+        #else
+        self.posterTitleFontSize = self.cardTitleFontSize
+        self.posterSubtitleFontSize = self.cardSubtitleFontSize
+        #endif
 
         // Resume chip. iOS/iPadOS derives from `.subheadline` so the chip sits with
         // the card's own typography, rather than inheriting tvOS point sizes (which

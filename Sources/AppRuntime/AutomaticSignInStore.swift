@@ -20,12 +20,18 @@ public struct AutomaticSignInStore {
         struct AccountAccess: Codable, Equatable {
             let id: String
             let credentialRevision: CredentialRevision
+            let provider: ProviderKind?
+            let serverIdentity: String?
+            let userID: String?
             let homeUserID: String?
             let requiresPIN: Bool?
 
             init(_ account: Account, profile: Profile) {
                 id = account.id
                 credentialRevision = account.credentialRevision
+                provider = account.server.provider
+                serverIdentity = account.server.identityKey
+                userID = account.userID
                 let binding = account.server.provider == .plex
                     ? profile.homeUserBinding(forPlexAccount: account.id) : nil
                 homeUserID = binding?.homeUserID
@@ -36,6 +42,7 @@ public struct AutomaticSignInStore {
         struct PlexCredential: Codable {
             let serverToken: String
             let discoverToken: String
+            var pinVerified: Bool? = nil
         }
 
         let profile: ProfileAccess

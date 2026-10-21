@@ -48,6 +48,8 @@ struct DetailHeroView: View, Equatable {
             && lhs.spoilerSettings == rhs.spoilerSettings
             && lhs.playTitle == rhs.playTitle
             && lhs.showsPlayPlaceholder == rhs.showsPlayPlaceholder
+            && lhs.isRetryingPlaybackInventory == rhs.isRetryingPlaybackInventory
+            && (lhs.onRetryPlaybackInventory == nil) == (rhs.onRetryPlaybackInventory == nil)
             && lhs.playProgress == rhs.playProgress
             && lhs.playRemainingText == rhs.playRemainingText
             && lhs.playSeasonEpisodeText == rhs.playSeasonEpisodeText
@@ -81,6 +83,7 @@ struct DetailHeroView: View, Equatable {
     @Environment(HeroTrailerController.self) private var heroTrailerController
     @Environment(HeroBackgroundSettingsModel.self) private var heroBackground
     @Environment(\.detailHeaderSettings) private var detailHeaderSettings
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
     #if os(tvOS)
     @Environment(\.detailEntranceSession) private var detailEntrance
     #endif
@@ -140,6 +143,8 @@ struct DetailHeroView: View, Equatable {
     let playTitle: LocalizedStringResource?
     let onPlay: (() -> Void)?
     var showsPlayPlaceholder: Bool = false
+    var onRetryPlaybackInventory: (() -> Void)?
+    var isRetryingPlaybackInventory = false
     /// When provided (`0..<1`), a thin watched-progress bar is shown inside the
     /// Play button, between the play icon and the remaining-time line.
     var playProgress: Double? = nil
@@ -277,6 +282,7 @@ struct DetailHeroView: View, Equatable {
     /// otherwise yank focus off Play the moment the page finishes loading, on both
     /// movies and series).
     @State private var userInitiatedSourceSwitch = false
+    @State private var isVersionPickerPresented = false
 
     /// Drives the hero's first-appearance fade-in. Starts hidden and eases to
     /// visible `.onAppear`, so the backdrop + title/metadata dissolve in rather
@@ -539,6 +545,19 @@ struct DetailHeroView: View, Equatable {
     /// Self-labelling in a way an icon button is not: it says both where you are
     /// and that you can leave, and it sits where the eye naturally starts rather
     /// than in a row of watch-state actions where navigation doesn't belong.
+    private struct SeriesBreadcrumbButtonStyle: ButtonStyle {
+        let isFocused: Bool
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .foregroundStyle(Color.primary)
+                .opacity(configuration.isPressed ? 0.7 : (isFocused ? 1 : 0.9))
+                .scaleEffect(isFocused && !reduceMotion ? 1.06 : 1, anchor: .leading)
+                .contentShape(Rectangle())
+        }
+    }
+
     @ViewBuilder
     private func seriesBreadcrumb(_ show: String, action: MediaItemAction) -> some View {
         HStack(spacing: 0) {
@@ -553,18 +572,12 @@ struct DetailHeroView: View, Equatable {
                 }
                 .font(.system(size: 30, weight: .semibold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SeriesBreadcrumbButtonStyle(isFocused: heroActionRowFocus == .parent))
+            .disabled(onPlay != nil && !breadcrumbAcceptsFocus)
             .focused($heroActionRowFocus, equals: .parent)
-            // tvOS gives entry focus to the topmost focusable element, and no
-            // amount of `defaultFocus` (tried at `.automatic` and
-            // `.userInitiated`, on both this view and the scroll column) beat it
-            // — the page kept opening focused on "leave" instead of "play".
-            // Removing the breadcrumb from the focus system until focus has
-            // landed is what actually decides it. `.focusable(false)` rather
-            // than `.disabled` so it never *looks* inert; and the gate opens on
-            // the action row actually taking focus rather than on a timer, which
-            // raced and let the breadcrumb win whenever the page was slow.
-            .focusable(breadcrumbAcceptsFocus)
+            // Gate the actual button, not a second focusable wrapper that
+            // receives Select without invoking its action. The style stays
+            // legible while entry focus is reserved for Play.
             .accessibilityLabel("Go to \(show)")
             .accessibilityHint(action.title)
             Spacer(minLength: 0)
@@ -577,10 +590,11 @@ struct DetailHeroView: View, Equatable {
         // uses to catch "up" from a far-right season chip.
         .frame(maxWidth: .infinity, alignment: .leading)
         .focusSection()
-        .onChange(of: heroActionRowFocus) { _, focus in
-            // Any hero control taking focus means entry focus has resolved, so
-            // the breadcrumb can safely join the focus system.
-            if focus != nil { breadcrumbAcceptsFocus = true }
+        .onChange(
+            of: heroActionRowFocus != nil || playButtonHasFocus || playButtonFocus?.wrappedValue == true,
+            initial: true
+        ) { _, hasFocus in
+            if hasFocus { breadcrumbAcceptsFocus = true }
         }
     }
 
@@ -813,7 +827,7 @@ struct DetailHeroView: View, Equatable {
                 HeroLogoArtwork(
                     references: backdrop.artworkReferences(for: .logo),
                     asyncFallbackURL: tmdbLogoFallback,
-                    backgroundSample: heroBackgroundSample,
+                    displayedArtworkID: "detail:\(backdrop.id)",
                     // Cap the WIDTH as well as the height, matching the Home hero.
                     // With only a height cap a wide, short wordmark fits against an
                     // unbounded width and then floats inside the full 200pt frame,
@@ -1044,6 +1058,7 @@ struct DetailHeroView: View, Equatable {
             // opposite the text instead.
             if !presentsEpisodeStill {
                 heroBackdrop()
+                    .heroArtworkSource(id: "detail:\(backdrop.id)")
                     // Re-key on the backdrop identity so a server switch (the only
                     // thing that changes the backdrop — episode focus deliberately
                     // keeps the show-level backdrop) cross-fades the old artwork out
@@ -1102,6 +1117,11 @@ struct DetailHeroView: View, Equatable {
         }
         .contextMenu {
             heroContextMenu
+        }
+        .plozzSheet(isPresented: $isVersionPickerPresented) {
+            MediaVersionPicker(versions: versions, selectedVersionID: selectedVersionID) {
+                onSelectVersion?($0)
+            }
         }
         // Artwork (including an inherited trailer) is visible immediately. Only
         // the foreground fades, keeping its focus targets and geometry stable.
@@ -1187,7 +1207,7 @@ struct DetailHeroView: View, Equatable {
         // `HeroBackdropLayer` shares Home's static shading while preserving the
         // detail page's own dissolve and full-bleed treatment. Hero artwork is never spoiler-blurred;
         // episode spoiler masking remains limited to episode text and cards.
-        let ladder = backdrop.artworkReferences(for: .detailBackdrop)
+        let ladder = artworkPolicy.forArea(.details).references(for: backdrop, placement: .detailBackdrop)
         HeroArtDiagnostics.emitOnce(
             stage: "detail-draw",
             key: backdrop.id
@@ -1230,28 +1250,37 @@ struct DetailHeroView: View, Equatable {
         let liveResumeText = resumeText
         let sizingText = reservedResumeText ?? liveResumeText
         let button = Button {
-            if let action {
+            if let onRetryPlaybackInventory {
+                onRetryPlaybackInventory()
+            } else if let action {
                 heroTrailerController.stop()
                 action()
             }
         } label: {
             ZStack {
-                if let sizingText {
+                if let sizingText, onRetryPlaybackInventory == nil {
                     playResumeSizer(remaining: sizingText).hidden()
                 }
-                PlayResumeButtonLabel(
-                    title: title,
-                    progress: playProgress,
-                    remainingText: playRemainingText,
-                    seasonEpisodeText: playSeasonEpisodeText,
-                    onLight: playButtonHasFocus || colorScheme == .light,
-                    isPlaceholder: action == nil,
-                    separatesEpisodeText: (actionItem ?? item).startsWatching
-                )
+                if onRetryPlaybackInventory != nil {
+                    NoStreamsButtonLabel(
+                        isLoading: isRetryingPlaybackInventory,
+                        onLight: playButtonHasFocus || colorScheme == .light
+                    )
+                } else {
+                    PlayResumeButtonLabel(
+                        title: title,
+                        progress: playProgress,
+                        remainingText: playRemainingText,
+                        seasonEpisodeText: playSeasonEpisodeText,
+                        onLight: playButtonHasFocus || colorScheme == .light,
+                        isPlaceholder: action == nil,
+                        separatesEpisodeText: (actionItem ?? item).startsWatching
+                    )
+                }
             }
         }
         .modifier(HeroActionButtonStyle(prominent: true))
-        .disabled(action == nil)
+        .disabled((action == nil && onRetryPlaybackInventory == nil) || isRetryingPlaybackInventory)
         .focused($playButtonHasFocus)
         .focused($heroActionRowFocus, equals: .play)
         .accessibilityIdentifier("detail-hero-play")
@@ -1506,29 +1535,9 @@ struct DetailHeroView: View, Equatable {
                 .pickerStyle(.menu)
             }
         }
-        if versions.count > 1, let onSelectVersion {
-            let currentVersion = versions.first {
-                $0.id == selectedVersionID
-            } ?? versions.first
-            if let currentVersion {
-                Picker(
-                    selection: Binding(
-                        get: { currentVersion.id },
-                        set: onSelectVersion
-                    )
-                ) {
-                    ForEach(versions.sortedForPicker()) { version in
-                        versionTitleText(version.displayLabel)
-                            .tag(version.id)
-                    }
-                } label: {
-                    Label {
-                        versionTitleText(currentVersion.displayLabel)
-                    } icon: {
-                        Image(systemName: "film.stack")
-                    }
-                }
-                .pickerStyle(.menu)
+        if versions.count > 1, onSelectVersion != nil {
+            Button("Version", systemImage: "film.stack") {
+                isVersionPickerPresented = true
             }
         }
     }
@@ -1732,17 +1741,6 @@ struct DetailHeroView: View, Equatable {
         }
     }
 
-    /// Renders a `MediaVersion` title: the joined technical facts (or provider
-    /// name) verbatim when known, otherwise our own generic "Version" copy —
-    /// kept as a real resource here rather than baked into a `String` so it
-    /// translates like everything else.
-    private func versionTitleText(_ displayLabel: String?) -> Text {
-        if let displayLabel {
-            return Text(verbatim: displayLabel)
-        }
-        return Text("Version", comment: "Generic label for a playback version/source with no distinguishing facts (resolution, edition, etc.) known.")
-    }
-
     /// The owning show's name, shown above the title when this page's subject is
     /// an episode in its own right. `nil` on a series page, whose hero already
     /// shows the show's logo — and where `titleFallbackOverride` pins the title to
@@ -1819,27 +1817,6 @@ struct DetailHeroView: View, Equatable {
         }
     }
 
-    /// Effective colour of the hero artwork behind the logo, used to decide
-    /// whether the logo needs a legibility halo. Mirrors the backdrop resolution
-    /// order (`heroBackdropURL`/`backdropURL` → TMDb hero → poster placeholder) so
-    /// it measures the same image the user actually sees. Keyless/on-device; nil
-    /// when no image can be sampled, in which case the halo stays on to be safe.
-    private var heroBackgroundSample: (@Sendable () async -> HeroBackgroundSample?)? {
-        #if canImport(UIKit)
-        let urls = [backdrop.heroBackdropURL, backdrop.backdropURL].compactMap { $0 }
-        let source = backdrop
-        return {
-            if let sample = await HeroBackgroundSampler.sample(urls: urls) { return sample }
-            if let tmdb = await ArtworkRouter.shared.artworkURL(.hero, for: source),
-               let sample = await HeroBackgroundSampler.sample(urls: [tmdb]) { return sample }
-            if let poster = source.posterURL,
-               let sample = await HeroBackgroundSampler.sample(urls: [poster]) { return sample }
-            return nil
-        }
-        #else
-        return nil
-        #endif
-    }
 }
 
 /// The checkmark glyph used by the watched toggle. `progress` (0...1) is the
@@ -2049,9 +2026,7 @@ private struct SeriesHeroContentLiftModifier: ViewModifier {
 
     private func heroOffset(receded: Bool) -> CGFloat {
         guard model != nil else { return 0 }
-        if reduceMotion {
-            return receded ? -SeriesEpisodeBrowserLayout.heroContentRecedeLift : 0
-        }
+        // This is the resting layout, not optional animation travel.
         return receded
             ? -SeriesEpisodeBrowserLayout.heroContentRecedeLift
             : SeriesEpisodeBrowserLayout.heroContentRestDrop

@@ -103,7 +103,7 @@ public final class ScreenshotDirector {
     public func startWatchingForRequests() {
         #if DEBUG
         guard poll == nil,
-              ProcessInfo.processInfo.environment["PLOZZ_SHOTS_NFS_HOST"] != nil,
+              captureIsRequested,
               let directory = Self.directory
         else { return }
 
@@ -127,6 +127,14 @@ public final class ScreenshotDirector {
             }
         }
         #endif
+    }
+
+    private var captureIsRequested: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        #if DEBUG && targetEnvironment(simulator)
+        if environment["PLOZZ_SHOTS_SETTINGS"] == "1" { return true }
+        #endif
+        return environment["PLOZZ_SHOTS_NFS_HOST"] != nil
     }
 
     public enum Request: Equatable, Sendable {

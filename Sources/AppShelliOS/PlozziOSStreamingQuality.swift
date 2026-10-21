@@ -10,14 +10,27 @@ enum PlozziOSStreamingNetwork {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let monitor = NWPathMonitor()
             monitor.pathUpdateHandler = { path in
+                let interfacePreference: [StreamingNetwork] = path.availableInterfaces.map { interface in
+                    switch interface.type {
+                    case .wifi: .wifi
+                    case .cellular: .cellular
+                    case .wiredEthernet: .wired
+                    default: .unknown
+                    }
+                }
                 let network = StreamingNetwork.classify(
                     isSatisfied: path.status == .satisfied,
                     usesCellular: path.usesInterfaceType(.cellular),
                     usesWiFi: path.usesInterfaceType(.wifi),
-                    usesEthernet: path.usesInterfaceType(.wiredEthernet)
+                    usesEthernet: path.usesInterfaceType(.wiredEthernet),
+                    interfacePreference: interfacePreference
                 )
                 HandoffDiagnostics.emit(
-                    "streaming PATH network=\(network) expensive=\(path.isExpensive) constrained=\(path.isConstrained)"
+                    "streaming PATH network=\(network) status=\(path.status) "
+                        + "wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular)) "
+                        + "wired=\(path.usesInterfaceType(.wiredEthernet)) other=\(path.usesInterfaceType(.other)) "
+                        + "preference=\(interfacePreference) "
+                        + "expensive=\(path.isExpensive) constrained=\(path.isConstrained)"
                 )
                 continuation.yield(network)
             }
@@ -44,6 +57,7 @@ struct PlozziOSStreamingSettings: View {
     @Binding var settings: StreamingQualitySettings
     let hasCompatibleServer: Bool
     var support: StreamingQualitySupport = .standard
+    let onShowAdvanced: () -> Void
 
     var body: some View {
         SettingsSectionGroup("Streaming quality") {
@@ -51,29 +65,78 @@ struct PlozziOSStreamingSettings: View {
                 StreamingQualityPicker(title: "Local network", selection: $settings.local, support: support)
                 StreamingQualityPicker(title: "Remote Wi-Fi / Ethernet", selection: $settings.remote, support: support)
                 StreamingQualityPicker(title: "Cellular", selection: $settings.cellular, support: support)
-                Picker("Transcoding codec", selection: $settings.codec) {
-                    ForEach(support.codecs) { Text($0.title).tag($0) }
-                    if !support.codecs.contains(settings.codec) {
-                        Text(settings.codec.title).tag(settings.codec).disabled(true)
+                Button(action: onShowAdvanced) {
+                    HStack {
+                        Text("Advanced")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                if let notice = support.notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
-                Text(settings.codec.explanation).font(.footnote).foregroundStyle(.secondary)
-                DisclosureGroup("Advanced") {
-                    Toggle("Force transcoding", isOn: $settings.forceTranscoding)
-                    Text("Uses your server to convert video even when the original can play. HDR and audio formats may change.")
-                        .foregroundStyle(.secondary)
-                }
+                .accessibilityIdentifier("streaming-advanced")
             } else {
-                Text("Original quality")
+                Picker("Quality", selection: .constant(StreamingQuality.original)) {
+                    Text("Original quality").tag(StreamingQuality.original)
+                }
+                .disabled(true)
+                .accessibilityIdentifier("streaming-unavailable")
             }
         } footer: {
-            if hasCompatibleServer {
-                Text("For movies and episodes from Plex, Jellyfin, Emby, and Silo. The original plays when it fits the limit; otherwise your server converts it. Available resolutions and codecs depend on the server. Codec preferences may fall back without increasing the quality limit. Downloads, Live TV, and file shares are unchanged.")
-            } else {
-                Text("File shares play original files and can’t convert video. Quality controls become available when you connect a compatible media server.")
+            if !hasCompatibleServer {
+                Text("Unavailable for network shares.")
             }
         }
+    }
+}
+
+struct PlozziOSAdvancedStreamingSettings: View {
+    @Binding var settings: StreamingQualitySettings
+    let support: StreamingQualitySupport
+
+    var body: some View {
+        List {
+            SettingsSectionGroup {
+                Menu {
+                    ForEach(codecChoices) { codec in
+                        Button { settings.codec = codec } label: {
+                            if settings.codec == codec {
+                                Label {
+                                    Text(codec.title)
+                                } icon: {
+                                    Image(systemName: "checkmark")
+                                }
+                            } else {
+                                Text(codec.title)
+                            }
+                        }
+                        .disabled(!support.codecs.contains(codec))
+                    }
+                } label: {
+                    SettingsMenuLabel("Transcoding codec", value: settings.codec.title)
+                }
+                .accessibilityLabel("Transcoding codec")
+                .accessibilityValue(Text(settings.codec.title))
+                .accessibilityIdentifier("streaming-codec")
+                Toggle("Force transcoding", isOn: $settings.forceTranscoding)
+                    .accessibilityIdentifier("streaming-force-transcoding")
+            } footer: {
+                if !support.codecs.contains(settings.codec) {
+                    Text("Choose a supported codec.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if settings.forceTranscoding {
+                    Text("May change HDR and audio formats.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .settingsPageSurface()
+        .navigationTitle("Streaming quality")
+    }
+
+    private var codecChoices: [StreamingCodecPreference] {
+        support.codecs.contains(settings.codec) ? support.codecs : support.codecs + [settings.codec]
     }
 }
 
@@ -96,17 +159,14 @@ struct StreamingQualityPicker: View {
             } label: {
                 Text(title)
             }
+            .pickerStyle(.inline)
             Button("Custom…") { editingQuality = selection }
         } label: {
-            LabeledContent {
-                Text(selection.title)
-            } label: {
-                Text(title)
-            }
+            SettingsMenuLabel(title, value: selection.title)
         }
         .accessibilityLabel(Text(title))
         .accessibilityValue(Text(selection.title))
-        .sheet(item: $editingQuality) { quality in
+        .plozzSheet(item: $editingQuality) { quality in
             StreamingCustomQualityEditor(quality: quality, support: support) { selection = $0 }
         }
         if let message = support.validationMessage(for: selection) {
@@ -164,6 +224,7 @@ private struct StreamingCustomQualityEditor: View {
                 }
             }
             .navigationTitle("Custom quality")
+            .toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -253,7 +314,9 @@ struct PlozziOSStreamingQualitySheet: View {
                     Section { Text(error.userMessage).foregroundStyle(.secondary) }
                 }
             }
+            .toggleStyle(SettingsSwitchToggleStyle())
             .navigationTitle("Streaming quality")
+            .toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

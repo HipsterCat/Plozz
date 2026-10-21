@@ -119,7 +119,7 @@ public struct HeroFreshnessSnapshot: Equatable, Sendable {
     }
 
     public func ranksDiscovery(_ source: HeroSourceKind, settings: HeroSettings) -> Bool {
-        isEnabled && (source == .featured || source == .randomFromLibrary
+        isEnabled && (source == .featured || source == .randomFromLibrary || source == .collection
             || (source == .watchlist && settings.watchlistDiscoveryEnabled))
     }
 
@@ -214,6 +214,28 @@ public struct HeroFreshnessCandidatePool: Codable, Equatable, Sendable {
             replacement.fillingMissingPresentation(from: original)
             return replacement
         }
+    }
+
+    /// Keep unexposed cached alternatives ahead of new arrivals. This prepares
+    /// the next launch; it never changes a session's displayed lineup.
+    public func preservingUnseen(
+        from previous: HeroFreshnessCandidatePool,
+        history: HeroExposureHistory
+    ) -> HeroFreshnessCandidatePool {
+        HeroFreshnessCandidatePool(buckets: buckets.map { bucket in
+            // A new membership window must not perpetuate removed collection titles.
+            guard bucket.source != .collection else { return bucket }
+            let old = previous.buckets.first { $0.source == bucket.source }?.items ?? []
+            let freshTokens = bucket.items.map { HeroDedupe.tokens(for: $0) }
+            let retained = old.filter { item in
+                guard history.lastSeenAt(for: item) == nil else { return false }
+                let tokens = HeroDedupe.tokens(for: item)
+                return !freshTokens.contains { !tokens.isDisjoint(with: $0) }
+            }.map { item in
+                item.discoverySources.isEmpty ? item : item.removingDiscoveryOwnership()
+            }
+            return Bucket(source: bucket.source, items: retained + bucket.items)
+        })
     }
 
     public func mapItems(_ transform: (MediaItem) -> MediaItem) -> HeroFreshnessCandidatePool {

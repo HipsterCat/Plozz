@@ -2,6 +2,41 @@ import XCTest
 @testable import CoreModels
 
 final class AppVersionIdentityTests: XCTestCase {
+    func testDevelopmentFeatureIsDisplayOnly() {
+        let identity = AppVersionIdentity(infoDictionary: [
+            "CFBundleShortVersionString": "2026.9.25",
+            "CFBundleVersion": "4776.4",
+            "PlozzDevelopmentFeature": "wetrakr"
+        ])
+        XCTAssertEqual(identity.displayBuild, "4776.4 wetrakr")
+        XCTAssertEqual(identity.build, "4776.4")
+        XCTAssertEqual(identity.displayVersion, "2026.9.25")
+    }
+
+    func testReleaseIdentityOrChannelSuppressesStaleDevelopmentLabel() {
+        for marker in [
+            ["PlozzReleaseID": "release/045"],
+            ["PlozzReleaseChannel": "testflight"],
+            ["PlozzReleaseChannel": "production"]
+        ] {
+            let identity = AppVersionIdentity(infoDictionary: marker.merging([
+                "CFBundleVersion": "45", "PlozzDevelopmentFeature": "wetrakr"
+            ]) { first, _ in first })
+            XCTAssertNil(identity.developmentFeature)
+            XCTAssertEqual(identity.displayBuild, "45")
+        }
+    }
+
+    func testEmptyOrUnexpandedDevelopmentLabelsDoNotChangeBuildDisplay() {
+        for feature in ["", " \n", "$(PLOZZ_DEV_FEATURE)"] {
+            let identity = AppVersionIdentity(infoDictionary: [
+                "CFBundleVersion": "4776.4", "PlozzDevelopmentFeature": feature
+            ])
+            XCTAssertNil(identity.developmentFeature)
+            XCTAssertEqual(identity.displayBuild, "4776.4")
+        }
+    }
+
     func testDistributedReleaseUsesPublicLabelAndRetainsAppleIdentity() {
         let identity = AppVersionIdentity(infoDictionary: [
             "CFBundleShortVersionString": "2026.9.25",

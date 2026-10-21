@@ -84,7 +84,7 @@ public struct ProfileSetupLibrariesView: View {
         HStack {
             Spacer()
             Button(action: onDone) {
-                Text("Done").frame(minWidth: 220)
+                Text("Done")
             }
             .plozzActionButton()
             Spacer()

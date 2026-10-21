@@ -1,0 +1,82 @@
+name: TestFlight issue resolutions
+
+on:
+  push:
+    paths:
+      - .github/workflows/testflight-resolutions.yml
+      - tools/testflight-resolutions.py
+      - tools/testflight-discord.py
+      - tools/discord-bridge.py
+      - tools/release-notes.py
+      - tools/tests/test_testflight_resolutions.py
+      - tools/tests/test_testflight_discord.py
+      - tools/tests/test_discord_bridge.py
+  release:
+    types: [published]
+  schedule:
+    - cron: "11,26,41,56 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preview delivery-gated resolutions, or synchronize GitHub and Discord.
+        type: choice
+        options: [check, sync]
+        default: check
+        required: true
+
+permissions:
+  contents: read
+
+# Existing report mirroring and this deterministic watcher share forum messages.
+concurrency:
+  group: discord-issue-bridge
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Offline regression tests
+        run: python3 -m unittest discover -s tools/tests -p 'test_*discord*.py' && python3 -m unittest discover -s tools/tests -p 'test_testflight_resolutions.py'
+
+  resolve:
+    if: >-
+      github.repository == 'brandomoore/Plozz' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'check') ||
+       (vars.TESTFLIGHT_RESOLUTION_ENABLED == 'true' &&
+        (github.event_name != 'push' || github.ref == 'refs/heads/main')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install JWT signing dependency
+        run: python3 -m pip install --disable-pip-version-check -r tools/testflight-discord-requirements.txt
+      - name: Offline regression tests
+        run: python3 -m unittest discover -s tools/tests -p 'test_*discord*.py' && python3 -m unittest discover -s tools/tests -p 'test_testflight_resolutions.py'
+      - name: Resolve delivered fixes without model calls
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          ASC_KEY_ID: ${{ secrets.TESTFLIGHT_ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.TESTFLIGHT_ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.TESTFLIGHT_ASC_PRIVATE_KEY }}
+          DISCORD_BRIDGE_ENABLED: ${{ vars.DISCORD_BRIDGE_ENABLED }}
+          TESTFLIGHT_RESOLUTION_ENABLED: ${{ vars.TESTFLIGHT_RESOLUTION_ENABLED }}
+          TESTFLIGHT_DISCORD_MIN_BUILD: ${{ vars.TESTFLIGHT_DISCORD_MIN_BUILD }}
+          RESOLUTION_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'check' && 'check' || 'sync' }}
+        run: python3 tools/testflight-resolutions.py --mode "$RESOLUTION_MODE"

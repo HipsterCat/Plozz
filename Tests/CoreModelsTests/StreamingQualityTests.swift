@@ -284,13 +284,83 @@ final class StreamingQualityTests: XCTestCase {
         ), .wired)
         XCTAssertEqual(StreamingNetwork.classify(
             isSatisfied: true, usesCellular: true, usesWiFi: true, usesEthernet: false
-        ), .cellular, "An explicitly cellular path must not evade the cellular limit")
+        ), .cellular, "Without interface preference, keep the conservative cellular limit")
         XCTAssertEqual(StreamingNetwork.classify(
             isSatisfied: true, usesCellular: false, usesWiFi: false, usesEthernet: false
         ), .unknown, "Do not guess a tunneled path's underlying interface")
         XCTAssertEqual(StreamingNetwork.classify(
             isSatisfied: false, usesCellular: false, usesWiFi: true, usesEthernet: false
         ), .offline)
+    }
+
+    func testMixedPathUsesPreferredEligibleInterfaceWithoutGuessingFromAvailability() {
+        let cases: [([StreamingNetwork], Bool, Bool, Bool, StreamingNetwork)] = [
+            ([.wifi, .cellular], true, true, false, .wifi),
+            ([.cellular, .wifi], true, true, false, .cellular),
+            ([.wired, .wifi, .cellular], true, true, true, .wired),
+            ([.unknown, .wifi, .cellular], true, true, false, .wifi),
+            ([.wifi, .cellular], true, false, false, .cellular),
+            ([.cellular, .wifi], false, true, false, .wifi),
+            ([.wired, .wifi], false, true, false, .wifi),
+            ([.wifi, .cellular], false, false, false, .unknown),
+            ([.unknown], true, true, false, .cellular),
+            ([], true, true, false, .cellular)
+        ]
+        for (preference, cellular, wifi, wired, expected) in cases {
+            XCTAssertEqual(StreamingNetwork.classify(
+                isSatisfied: true, usesCellular: cellular, usesWiFi: wifi,
+                usesEthernet: wired, interfacePreference: preference
+            ), expected, "preference=\(preference), cellular=\(cellular), wifi=\(wifi), wired=\(wired)")
+            XCTAssertEqual(StreamingNetwork.classify(
+                isSatisfied: false, usesCellular: cellular, usesWiFi: wifi,
+                usesEthernet: wired, interfacePreference: preference
+            ), .offline)
+        }
+    }
+
+    func testWiFiPreferredMixedPathDoesNotApplyCellularTranscodingLimit() {
+        var settings = StreamingQualitySettings()
+        settings.cellular = .hd720High
+        for locality in [SourceLocality.local, .remote] {
+            let network = StreamingNetwork.classify(
+                isSatisfied: true, usesCellular: true, usesWiFi: true, usesEthernet: false,
+                interfacePreference: [.wifi, .cellular]
+            )
+            let connection = StreamingConnection.resolve(network: network, locality: locality)
+            let options = settings.options(for: connection)
+            XCTAssertEqual(connection, locality == .local ? .local : .remote)
+            XCTAssertEqual(options.quality, .original)
+            XCTAssertNil(options.quality.maximumBitrate)
+            XCTAssertFalse(options.requiresConversionPolicy)
+
+            let cellular = StreamingNetwork.classify(
+                isSatisfied: true, usesCellular: true, usesWiFi: true, usesEthernet: false,
+                interfacePreference: [.cellular, .wifi]
+            )
+            let cellularConnection = StreamingConnection.resolve(network: cellular, locality: locality)
+            XCTAssertEqual(cellularConnection, .cellular)
+            XCTAssertEqual(settings.options(for: cellularConnection).quality.maximumBitrate, 4_000_000)
+            XCTAssertTrue(settings.options(for: cellularConnection).requiresConversionPolicy)
+        }
+    }
+
+    func testOfflineTransitionDoesNotStartACellularConversionButRecoveryUsesTheNewRoute() {
+        for previous in [StreamingConnection.local, .remote, .cellular] {
+            XCTAssertEqual(StreamingConnection.resolve(
+                network: .offline, locality: .unknown, previousConnection: previous
+            ), previous)
+            XCTAssertEqual(StreamingConnection.resolve(
+                network: .cellular, locality: .local, previousConnection: previous
+            ), .cellular)
+            XCTAssertEqual(StreamingConnection.resolve(
+                network: .wifi, locality: .remote, previousConnection: previous
+            ), .remote)
+            XCTAssertEqual(StreamingConnection.resolve(
+                network: .unknown, locality: .local, previousConnection: previous
+            ), .cellular, "An opaque usable path must not inherit an unbounded Wi-Fi selection")
+        }
+        XCTAssertEqual(StreamingConnection.resolve(network: .offline, locality: .local), .cellular,
+                       "A new session does not inherit another session's network selection")
     }
 
     @MainActor

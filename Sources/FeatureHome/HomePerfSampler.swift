@@ -7,9 +7,9 @@ import Darwin
 
 /// Live, on-device Home performance sampler for the ``HomePerfOverlay`` HUD.
 ///
-/// Drives a `CADisplayLink` to measure **actual frame pacing** while browsing Home
-/// — the truest signal of smoothness on older Apple TV hardware. Per frame it
-/// accumulates hitches (frames that blow the display's budget) and a smoothed FPS,
+/// Drives a `CADisplayLink` to sample callback pacing while browsing Home.
+/// Callback gaps are diagnostic evidence, not measured presented-frame hitches.
+/// Per callback it accumulates gaps beyond the display budget and a smoothed FPS,
 /// then publishes a snapshot only a few times a second (so the HUD itself never
 /// becomes the thing causing churn). Also samples thermal state, memory footprint,
 /// and the device model, and reads the latest curate/artwork timings from
@@ -50,6 +50,13 @@ public final class HomePerfSampler {
     @ObservationIgnored private var emitWorstEnd: CFTimeInterval = 0
 
     public nonisolated init() {}
+
+    isolated deinit {
+        stop()
+    }
+
+    var displayLinkForTesting: CADisplayLink? { link }
+    var lifecycleObserversForTesting: [NSObjectProtocol] { lifecycleObservers }
 
     public func start() {
         guard link == nil else { return }

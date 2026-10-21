@@ -7,6 +7,76 @@ import XCTest
 final class LiveTVServerImportTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testServerRetryPreservesAnUnrelatedInFlightGuide() async throws {
+        let first = source(id: "first", accountID: "one")
+        let second = source(id: "second", accountID: "two")
+        let started = expectation(description: "Other server guide requested")
+        let firstProvider = ServerImportProvider(
+            availability: .init(status: .available, supportsGuide: false), channels: [channel()]
+        )
+        let secondProvider = ServerImportProvider(
+            channels: [channel()], programs: [program()], suspended: .guide, started: started
+        )
+        let contexts = [first.accountID: authorized(first, firstProvider), second.accountID: authorized(second, secondProvider)]
+        let imports = LiveTVPrototypeImportModel(
+            configuration: .init(servers: [first, second]), serverProviderResolver: { contexts[$0] }
+        )
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        let refresh = Task { await imports.reload(into: model) }
+        await fulfillment(of: [started], timeout: 3)
+
+        try await imports.reloadSource(first.id, into: model)
+        XCTAssertEqual(imports.serverSources.last?.guidePhase, .loading)
+        await secondProvider.resume()
+        await refresh.value
+
+        XCTAssertEqual(imports.serverSources.last?.guidePhase, .loaded)
+        XCTAssertEqual(imports.serverSources.last?.programCount, 1)
+        let calls = await secondProvider.calls
+        XCTAssertEqual(calls.guides, 1)
+    }
+
+    func testServerRetryDoesNotRequestOtherServersOrPlaylists() async throws {
+        let first = source(id: "first", accountID: "one")
+        let second = source(id: "second", accountID: "two")
+        let firstProvider = ServerImportProvider(
+            availability: .init(status: .serviceUnavailable), channels: [channel()]
+        )
+        let secondProvider = ServerImportProvider(channels: [channel()])
+        let contexts = [
+            first.accountID: authorized(first, firstProvider),
+            second.accountID: authorized(second, secondProvider)
+        ]
+        let playlist = LiveTVPlaylistSource(
+            id: "playlist", name: "Playlist", playlistURL: URL(string: "https://example.test/list.m3u")!
+        )
+        let loader = ServerMixPlaylistLoader()
+        let imports = LiveTVPrototypeImportModel(
+            configuration: .init(playlists: [playlist], servers: [first, second]), loader: loader,
+            serverProviderResolver: { contexts[$0] }
+        )
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(imports.serverSources.first?.failure, .serviceUnavailable)
+        let healthy = imports.serverSources.last
+        let before = await secondProvider.calls
+        let playlistLoads = await loader.playlistLoads
+        await firstProvider.setAvailability(.init(status: .available, channelCount: 1, supportsGuide: false))
+
+        try await imports.reloadSource(first.id, into: model)
+
+        XCTAssertNil(imports.serverSources.first?.failure)
+        XCTAssertEqual(imports.serverSources.first?.channelCount, 1)
+        XCTAssertEqual(imports.serverSources.last, healthy)
+        let after = await secondProvider.calls
+        XCTAssertEqual(after.availability, before.availability)
+        XCTAssertEqual(after.catalogs, before.catalogs)
+        XCTAssertEqual(after.guides, before.guides)
+        let afterPlaylistLoads = await loader.playlistLoads
+        XCTAssertEqual(afterPlaylistLoads, playlistLoads)
+        XCTAssertEqual(model.channels.count, 3)
+    }
+
     func testRuntimeChannelReferenceEqualityIncludesCatalogAuthorization() {
         let original = LiveTVServerChannelReference(
             sourceID: "server", accountID: "account", authorizationID: "profile-one", channelID: "native"
@@ -355,6 +425,69 @@ final class LiveTVServerImportTests: XCTestCase {
         XCTAssertEqual(calls.catalogs, 1)
     }
 
+    func testUpstreamRefusalsAreNotReportedAsMissingProfileMembership() {
+        for error: AppError in [.unauthorized, .invalidCredentials, .accessRestricted] {
+            XCTAssertEqual(LiveTVServerImportError.sanitized(error, fallback: .invalidCatalog), .permissionDenied)
+        }
+        XCTAssertEqual(
+            LiveTVServerImportError.sanitized(LiveTVServerImportError.accountUnavailable, fallback: .invalidCatalog),
+            .accountUnavailable
+        )
+    }
+
+    func testCacheRestoreDoesNotInvalidateAnAlreadyLoadingGuide() async throws {
+        let server = source()
+        let started = expectation(description: "Guide pending")
+        let provider = ServerImportProvider(
+            channels: [channel()], programs: [program()], suspended: .guide, started: started
+        )
+        let context = authorized(server, provider)
+        let imports = LiveTVPrototypeImportModel(
+            configuration: .init(servers: [server]), serverProviderResolver: { _ in context }
+        )
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        let reload = Task { await imports.reloadServers(into: model) }
+        await fulfillment(of: [started], timeout: 2)
+        await imports.restoreCachedServerCatalogs(into: model)
+        await provider.resume()
+        await reload.value
+        XCTAssertEqual(imports.programCount, 1)
+        XCTAssertEqual(imports.serverSources.first?.guidePhase, .loaded)
+    }
+
+    func testLateCachedChannelsCannotRestoreAfterProfileChangeRemovalOrCancellation() async throws {
+        for boundary in ["profile", "removal", "cancellation"] {
+            let server = source()
+            let started = expectation(description: "Saved catalogue pending")
+            let provider = ServerImportProvider(channels: [channel()], suspended: .cache, started: started)
+            let authorization = ServerAuthorizationFixture()
+            authorization.contexts[server.accountID] = authorized(server, provider, authorizationID: "profile-one")
+            let imports = LiveTVPrototypeImportModel(
+                configuration: .init(servers: [server]),
+                serverProviderResolver: { authorization.resolve($0) }
+            )
+            let model = LiveTVPrototypeModel(now: now, channels: [])
+            let restore = Task { await imports.restoreCachedServerCatalogs(into: model) }
+            await fulfillment(of: [started], timeout: 2)
+            switch boundary {
+            case "profile":
+                authorization.contexts[server.accountID] = authorized(
+                    server, provider, authorizationID: "profile-two"
+                )
+            case "removal":
+                try imports.applyConfiguration(.empty, into: model)
+            default:
+                restore.cancel()
+            }
+            await provider.resume()
+            await restore.value
+            XCTAssertTrue(model.channels.isEmpty)
+            XCTAssertTrue(imports.serverChannelReferences.isEmpty)
+            let calls = await provider.calls
+            XCTAssertEqual(calls.availability + calls.catalogs + calls.guides + calls.opens, 0)
+        }
+    }
+
     func testProfileIdentityChangeDuringAwaitRejectsOldResultsEvenWithoutReplacingResolver() async throws {
         let server = source()
         let started = expectation(description: "Old profile catalog suspended")
@@ -390,6 +523,45 @@ final class LiveTVServerImportTests: XCTestCase {
         XCTAssertEqual(imports.serverSources[0].failure, .accountUnavailable)
         let calls = await provider.calls
         XCTAssertEqual(calls.availability, 0)
+    }
+
+    func testProviderCancellationAtEveryServerBoundaryIsRequestScopedForDiagnostics() async throws {
+        for boundary in [ServerImportProvider.Boundary.availability, .channels, .guide] {
+            let server = source()
+            let provider = ServerImportProvider(channels: [channel()], programs: [program()])
+            await provider.cancelNext(boundary)
+            let context = authorized(server, provider)
+            let imports = LiveTVPrototypeImportModel(
+                configuration: LiveTVSourcesConfiguration(servers: [server]), serverProviderResolver: { _ in context }
+            )
+            let model = LiveTVPrototypeModel(now: now, channels: [])
+            PerformanceDiagnostics.shared.start()
+            defer { PerformanceDiagnostics.shared.stop() }
+
+            await imports.reload(into: model)
+            XCTAssertFalse(Task.isCancelled)
+            XCTAssertEqual(model.channels.count, boundary == .guide ? 1 : 0)
+            XCTAssertEqual(imports.programCount, 0)
+            XCTAssertNil(imports.serverSources[0].failure)
+            XCTAssertNil(imports.serverSources[0].guideFailure)
+            XCTAssertFalse(imports.isLoading)
+            let cancelled = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+            let firstRecords = (cancelled.recent + cancelled.slow).filter { $0.operation == .liveTVRefresh }
+            XCTAssertEqual(firstRecords.count, 1)
+            XCTAssertEqual(firstRecords.first?.outcome, .cancelled)
+            XCTAssertTrue(cancelled.active.isEmpty)
+
+            await imports.reload(into: model)
+            XCTAssertFalse(Task.isCancelled)
+            XCTAssertEqual(model.channels.count, 1)
+            XCTAssertEqual(imports.programCount, 1)
+            let recovered = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+            let records = (recovered.recent + recovered.slow).filter { $0.operation == .liveTVRefresh }
+            XCTAssertEqual(records.count, 2)
+            XCTAssertEqual(records.filter { $0.outcome == .cancelled }.count, 1)
+            XCTAssertEqual(records.filter { $0.outcome == .succeeded }.count, 1)
+            XCTAssertTrue(recovered.active.isEmpty)
+        }
     }
 
     func testCancellationAtEveryServerBoundaryCannotPublishLateDataOrFakeAFailure() async {
@@ -479,11 +651,12 @@ private actor ServerMixPlaylistLoader: LiveTVSourceLoading {
 }
 
 private actor ServerImportProvider: ServerLiveTVProviding {
-    enum Boundary: Equatable { case availability, channels, guide }
+    enum Boundary: Equatable { case availability, channels, guide, cache }
     var availability: ServerLiveTVAvailability
     let channels: [ServerLiveTVChannel]
     var programs: [ServerLiveTVProgramme]
     var suspended: Boundary?
+    private var cancellation: Boundary?
     let started: XCTestExpectation?
     var continuation: CheckedContinuation<Void, Never>?
     private(set) var calls = (
@@ -503,23 +676,38 @@ private actor ServerImportProvider: ServerLiveTVProviding {
 
     func setAvailability(_ value: ServerLiveTVAvailability) { availability = value }
     func replaceGuide(_ value: [ServerLiveTVProgramme]) { programs = value }
+    func cancelNext(_ boundary: Boundary) { cancellation = boundary }
+
+    private func throwRequestedCancellation(_ boundary: Boundary) throws {
+        guard cancellation == boundary else { return }
+        cancellation = nil
+        throw CancellationError()
+    }
 
     func liveTVAvailability() async throws -> ServerLiveTVAvailability {
         calls.availability += 1
         await waitIfSuspended(.availability)
+        try throwRequestedCancellation(.availability)
         return availability
     }
 
     func liveTVChannels() async throws -> [ServerLiveTVChannel] {
         calls.catalogs += 1
         await waitIfSuspended(.channels)
+        try throwRequestedCancellation(.channels)
         return channels
+    }
+
+    func cachedLiveTVCatalog() async throws -> ServerLiveTVCatalogSnapshot? {
+        await waitIfSuspended(.cache)
+        return .init(channels: channels, supportsGuide: availability.supportsGuide)
     }
 
     func liveTVGuide(channelIDs: [String], from: Date, to: Date) async throws -> [ServerLiveTVProgramme] {
         calls.guides += 1
         calls.guideChannelIDs = channelIDs
         await waitIfSuspended(.guide)
+        try throwRequestedCancellation(.guide)
         return programs
     }
 

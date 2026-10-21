@@ -135,9 +135,11 @@ public struct LiveTVXMLTVParser: Sendable {
         let metadataDelegate = XMLTVDelegate()
         try parseXML(stream: makeStream(), delegate: metadataDelegate)
         try checkCancellation()
+        var guideChannels = metadataDelegate.guideChannels
+        for id in metadataDelegate.undeclaredGuideIDs { guideChannels[id] = [] }
         let matching = LiveTVGuideMatcher(provider: provider).matching(
             channels: channels,
-            guideChannels: metadataDelegate.guideChannels,
+            guideChannels: guideChannels,
             overrides: overrides
         )
         try checkCancellation()
@@ -149,9 +151,9 @@ public struct LiveTVXMLTVParser: Sendable {
         try parseXML(stream: makeStream(), delegate: programmeDelegate)
         try checkCancellation()
         return try programmeDelegate.makeResult(
-            guideChannelCount: metadataDelegate.guideChannels.count,
+            guideChannelCount: guideChannels.count,
             assignments: matching.assignments,
-            guideChannels: metadataDelegate.guideChannels
+            guideChannels: guideChannels
         )
     }
 
@@ -196,6 +198,7 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
     private let lowerBound: Date?
     private let upperBound: Date?
     private(set) var guideChannels: [String: [String]] = [:]
+    private(set) var undeclaredGuideIDs = Set<String>()
     private(set) var retainedTextBytes: Int
     private var programs: [LiveTVPrototypeProgram] = []
     private var retainedProgramCount = 0
@@ -337,7 +340,20 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
                     parser.abortParsing()
                     return
                 }
-                guard case .programmes = pass else { return }
+                if case .metadata = pass {
+                    if let id = bounded(attributeDict["channel"], maximum: 4_096),
+                       guideChannels[id] == nil, !undeclaredGuideIDs.contains(id) {
+                        guard guideChannels.count + undeclaredGuideIDs.count < LiveTVXMLTVParser.maximumGuideChannels,
+                              retainedTextBytes + id.utf8.count <= LiveTVXMLTVParser.maximumRetainedTextBytes else {
+                            error = .guideTooLarge
+                            parser.abortParsing()
+                            return
+                        }
+                        undeclaredGuideIDs.insert(id)
+                        retainedTextBytes += id.utf8.count
+                    }
+                    return
+                }
                 insideProgramme = true
                 guard let guideChannelID = bounded(attributeDict["channel"], maximum: 4_096),
                       let startText = bounded(attributeDict["start"], maximum: 64),
@@ -598,13 +614,18 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
                 return
             }
         } else {
-            guard guideChannels.count < LiveTVXMLTVParser.maximumGuideChannels else {
+            let wasReferenced = undeclaredGuideIDs.contains(identifier)
+            let addedBytes = currentChannelTextBytes + (wasReferenced ? 0 : identifier.utf8.count)
+            guard guideChannels.count + undeclaredGuideIDs.count + (wasReferenced ? 0 : 1)
+                    <= LiveTVXMLTVParser.maximumGuideChannels,
+                  retainedTextBytes + addedBytes <= LiveTVXMLTVParser.maximumRetainedTextBytes else {
                 error = .guideTooLarge
                 parser.abortParsing()
                 return
             }
+            undeclaredGuideIDs.remove(identifier)
             guideChannels[identifier] = currentChannelNames
-            retainedTextBytes += currentChannelTextBytes
+            retainedTextBytes += addedBytes
         }
     }
 
@@ -762,11 +783,16 @@ public enum XMLTVDateParser {
         } else if remainder == "Z" {
             offsetText = "+0000"
         } else {
-            guard remainder.count == 5,
-                  ["+", "-"].contains(String(remainder.prefix(1))),
-                  remainder.dropFirst().allSatisfy(\.isNumber)
+            let parts = remainder.split(separator: ":", omittingEmptySubsequences: false)
+            if parts.count == 2, parts[0].utf8.count == 3, parts[1].utf8.count == 2 {
+                offsetText = parts.joined()
+            } else {
+                offsetText = remainder
+            }
+            guard offsetText.utf8.count == 5,
+                  ["+", "-"].contains(String(offsetText.prefix(1))),
+                  offsetText.utf8.dropFirst().allSatisfy({ (48...57).contains($0) })
             else { return nil }
-            offsetText = remainder
         }
         let digits = Array(timestamp.utf8)
         func integer(_ start: Int, _ count: Int) -> Int {

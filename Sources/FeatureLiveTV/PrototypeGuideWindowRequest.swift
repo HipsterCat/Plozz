@@ -16,12 +16,12 @@ struct PrototypeGuideWindowRequest: Equatable {
     private let mappings: [String: LiveTVGuideMappingOverride]
 
     init?(
-        rows: [LiveTVGuideRowID], anchor: LiveTVGuideRowID?,
+        rows: [LiveTVGuideRowID], anchorIndex: Int?,
         from: Date, to: Date, sources: [LiveTVGuideSourceStatus],
         enabledSourceIDs: Set<String>, mappings: [String: LiveTVGuideMappingOverride]
     ) {
         let channels = PrototypeServerGuideRequest.nearbyChannelIDs(
-            rows: rows, anchor: anchor, limit: Self.rowLimit
+            rows: rows, anchorIndex: anchorIndex, limit: Self.rowLimit
         )
         let enabled = sources.filter { enabledSourceIDs.contains($0.id) }
         guard !channels.isEmpty, !enabled.isEmpty, from < to else { return nil }
@@ -30,7 +30,8 @@ struct PrototypeGuideWindowRequest: Equatable {
         self.sources = enabled.map {
             SourceRevision(id: $0.id, phase: $0.phase, refreshedAt: $0.lastRefresh, programCount: $0.programCount)
         }
-        let ids = Set(channels)
-        self.mappings = mappings.filter { ids.contains($0.key) }
+        self.mappings = Dictionary(uniqueKeysWithValues: channels.compactMap { id in
+            mappings[id].map { (id, $0) }
+        })
     }
 }

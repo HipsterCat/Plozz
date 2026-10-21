@@ -5,6 +5,86 @@ import XCTest
 @testable import FeatureLiveTVCore
 
 final class LiveTVIndexedCacheTests: XCTestCase {
+    @MainActor
+    func testLateWeekBrowsingKeepsRequestedListingsAndSeparatePlaybackLookback() async throws {
+        let fixture = try CacheFixture()
+        defer { fixture.removeOwnedFiles() }
+        let guideURL = try XCTUnwrap(URL(string: "https://example.test/week.xml"))
+        let source = LiveTVPlaylistSource(
+            id: "source", name: "Source", playlistURL: try XCTUnwrap(URL(string: "https://example.test/list.m3u")),
+            guideURLs: [guideURL]
+        )
+        let guideID = try XCTUnwrap(source.guideSourceIDs.first)
+        let resolved = try await fixture.cache.reconcile(playlist((0..<48).map { channel($0) }), sourceID: source.id)
+        try await fixture.cache.storePlaylist(resolved.playlist, source: source, now: now)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMddHHmmss Z"
+        var xml = "<tv>"
+        for index in 0..<48 { xml += "<channel id=\"g\(index)\"><display-name>Channel \(index)</display-name></channel>" }
+        for slot in -16..<(7 * 96) {
+            let start = now.addingTimeInterval(Double(slot) * 900)
+            let end = start.addingTimeInterval(900)
+            let startText = formatter.string(from: start)
+            let endText = formatter.string(from: end)
+            for index in 0..<48 {
+                xml += "<programme channel=\"g\(index)\" start=\"\(startText)\" stop=\"\(endText)\"><title>Slot \(slot)</title></programme>"
+            }
+        }
+        xml += "</tv>"
+        _ = try await fixture.cache.importGuide(
+            data: Data(xml.utf8), sourceID: guideID, channels: resolved.playlist.channels,
+            provider: nil, now: now, sourceURL: guideURL
+        )
+        let imports = LiveTVPrototypeImportModel(
+            configuration: .init(playlists: [source]), loader: IndexedImportFixtureLoader(now: now), cache: fixture.cache
+        )
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        await imports.restoreCachedCatalog(into: model, now: now)
+        let range = DateInterval(start: now.addingTimeInterval(6 * 86_400), duration: 86_400)
+        await imports.loadGuideWindow(channelIDs: model.channels.map(\.id), range: range, into: model)
+        XCTAssertNil(imports.cacheFailure)
+        for channel in model.channels {
+            XCTAssertFalse(model.earlierPrograms(for: channel.id).isEmpty)
+            XCTAssertEqual(model.programs(for: channel.id, from: range.start, hours: 24).count, 96)
+        }
+        XCTAssertEqual(model.channels.count, 48)
+    }
+
+    func testPortableRevisionTracksKeychainAndFileChangesAcrossCacheInstances() async throws {
+        let fixture = try CacheFixture()
+        defer { fixture.removeOwnedFiles() }
+        let fileID = UUID()
+        let source = LiveTVPlaylistSource(
+            id: fileID.uuidString, name: "Source",
+            playlistURL: try XCTUnwrap(URL(string: "plozz-playlist://" + fileID.uuidString.lowercased()))
+        )
+        let configuration = LiveTVSourcesConfiguration(playlists: [source])
+        let initial = try await fixture.cache.portableSyncRevision(configuration: configuration)
+        let repeated = try await fixture.cache.portableSyncRevision(configuration: configuration)
+        XCTAssertEqual(initial, repeated)
+        let other = fixture.reopen()
+        try await other.setMapping(
+            .init(guideSourceID: "guide", guideChannelID: "station"), channelID: "channel"
+        )
+        let mapped = try await fixture.cache.portableSyncRevision(configuration: configuration)
+        XCTAssertNotEqual(initial, mapped)
+        let data = Data("#EXTM3U\n#EXTINF:-1 tvg-id=\"station\",Station\nhttps://example.test/live\n".utf8)
+        _ = try await other.storeImportedPlaylist(data: data, id: fileID)
+        let imported = try await fixture.cache.portableSyncRevision(configuration: configuration)
+        XCTAssertNotEqual(mapped, imported)
+        let stable = try await fixture.cache.portableSyncRevision(configuration: configuration)
+        XCTAssertEqual(imported, stable)
+        try await other.removeImportedPlaylist(id: fileID)
+        let removed = try await fixture.cache.portableSyncRevision(configuration: configuration)
+        XCTAssertNotEqual(imported, removed)
+        let resolved = try await other.reconcile(playlist([channel(0)]), sourceID: source.id)
+        try await other.storePlaylist(resolved.playlist, source: source, now: now)
+        let catalog = try await fixture.cache.portableSyncRevision(configuration: configuration)
+        XCTAssertNotEqual(removed, catalog)
+    }
+
     func testPortableMappingNotificationsAreChangedOnlyAndFollowDurableWrites() async throws {
         let fixture = try CacheFixture()
         defer { fixture.removeOwnedFiles() }

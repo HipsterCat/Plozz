@@ -2,6 +2,7 @@
 import AppRuntime
 import CoreModels
 import PlozzCoreUI
+import FeatureHomeCore
 import SwiftUI
 
 struct PlozziOSLibrarySelectionView: View {
@@ -16,34 +17,53 @@ struct PlozziOSLibrarySelectionView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                content
-
-                Section {
-                    Button("Continue", action: onContinue)
-                        .frame(maxWidth: .infinity)
-                } footer: {
-                    Text("You can change these choices later in Settings.")
+            Group {
+                if isLoading {
+                    SettingsPageScroll {
+                        SetupProgressCard(
+                            title: "Finding your libraries",
+                            detail: "Checking your connected sources for available libraries.",
+                            symbol: "rectangle.stack"
+                        )
+                        VStack(spacing: 12) {
+                            Button(action: onContinue) {
+                                Text("Choose later").frame(maxWidth: .infinity)
+                            }
+                            .plozzActionButton(role: .primary)
+                            Text("You can change these choices later in Settings.")
+                                .font(.footnote)
+                                .plozzForeground(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                } else {
+                    Form {
+                        content
+                        Section {
+                            Button(action: onContinue) {
+                                Text("Continue").frame(maxWidth: .infinity)
+                            }
+                            .plozzActionButton(role: .primary)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                        } footer: {
+                            Text("You can change these choices later in Settings.")
+                        }
+                    }
+                    .settingsPageSurface()
                 }
             }
-            .settingsPageSurface()
             .navigationTitle("Choose Your Libraries")
             .navigationBarTitleDisplayMode(.inline)
-            .task { await loadLibraries() }
         }
+        .task { await loadLibraries() }
         .interactiveDismissDisabled()
     }
 
     @ViewBuilder
     private var content: some View {
-        if isLoading {
-            Section {
-                HStack {
-                    ProgressView()
-                    Text("Finding your libraries…")
-                }
-            }
-        } else if libraries.isEmpty {
+        if libraries.isEmpty {
             Section {
                 ContentUnavailableView(
                     loadFailed ? "Couldn’t Load Libraries" : "No Video Libraries",
@@ -65,7 +85,7 @@ struct PlozziOSLibrarySelectionView: View {
                             library.library.title,
                             isOn: Binding(
                                 get: {
-                                    visibility.isEnabled(library.key)
+                                    visibility.isVisibleOnHome(library.key, library: library.library)
                                 },
                                 set: {
                                     visibility.setEnabled($0, for: library.key)
@@ -114,33 +134,14 @@ struct PlozziOSLibrarySelectionView: View {
         let generation = loadGeneration
         isLoading = true
         loadFailed = false
-        var loaded: [LibraryChoice] = []
-        for account in accounts {
-            do {
-                let accountLibraries = try await account.provider.libraries()
-                loaded.append(
-                    contentsOf: accountLibraries
-                        .filter { !$0.isMusic }
-                        .map {
-                            LibraryChoice(
-                                accountID: account.account.id,
-                                serverName: account.account.server.name,
-                                library: $0
-                            )
-                        }
-                )
-            } catch is CancellationError {
-                guard generation == loadGeneration else { return }
-                isLoading = false
-                return
-            } catch {
-                guard generation == loadGeneration else { return }
-                loadFailed = true
-            }
+        let discovery = await HomeAggregator().libraryDiscovery(from: accounts)
+        guard !Task.isCancelled, generation == loadGeneration else { return }
+        loadFailed = !discovery.unreachableAccountIDs.isEmpty
+        libraries = discovery.libraries.filter { !$0.library.isMusic }.map {
+            LibraryChoice(accountID: $0.accountID, serverName: $0.serverName, library: $0.library)
         }
-        guard generation == loadGeneration else { return }
-        libraries = loaded
         isLoading = false
+        if discovery.canSkipSelection(for: accounts) { onContinue() }
     }
 }
 

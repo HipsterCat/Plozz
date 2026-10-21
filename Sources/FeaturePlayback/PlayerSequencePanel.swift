@@ -56,6 +56,7 @@ struct PlayerSequencePanel: View {
 
     @Environment(\.playerCardMetrics) private var metrics
     @Environment(\.plozzMetrics) private var cardMetrics
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
     let player: PlayerViewModel
     let source: Source
     @FocusState.Binding var focus: PlayerControls.FocusSlot?
@@ -460,7 +461,7 @@ struct PlayerSequencePanel: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(height: layout.titleHeight, alignment: .center)
-                        .padding(.horizontal, cardMetrics.landscapeCaptionInset)
+                        .padding(.horizontal, cardMetrics.landscapeCaptionHorizontalInset)
                         .padding(.top, cardMetrics.landscapeCaptionTopSpacing)
                     }
                     .padding([.top, .horizontal], cardMetrics.cardInset)
@@ -492,9 +493,13 @@ struct PlayerSequencePanel: View {
     @ViewBuilder
     private func thumbnail(_ item: MediaItem) -> some View {
         if item.kind == .episode {
-            let source = EpisodeArtworkSource(item: item, spoilerSettings: player.spoilerSettings)
+            let source = EpisodeArtworkSource(
+                item: item, spoilerSettings: player.spoilerSettings,
+                policy: artworkPolicy.forArea(.playback)
+            )
             FallbackAsyncImage(
                 references: source.references, variant: .landscapeCard,
+                artworkPolicy: source.policy,
                 asyncFallbackURL: source.fallbackURL, pinIdentity: source.pinIdentity
             ) {
                 thumbnailPlaceholder
@@ -502,8 +507,13 @@ struct PlayerSequencePanel: View {
             .blur(radius: player.spoilerSettings.shouldHideThumbnail(for: item)
                   && player.spoilerSettings.mode == .blur ? 28 : 0)
         } else {
+            let source = MediaArtworkSource(
+                item: item, placement: .detailBackdrop, policy: artworkPolicy.forArea(.playback)
+            )
             FallbackAsyncImage(
-                references: item.artworkReferences(for: .episodeThumbnail), variant: .landscapeCard
+                references: source.references, variant: .landscapeCard,
+                artworkPolicy: source.policy,
+                asyncFallbackURL: source.fallbackURL, pinIdentity: source.itemIdentity
             ) {
                 thumbnailPlaceholder
             }
@@ -599,7 +609,7 @@ struct PlayerEpisodeLoadingCard: View {
                         .fill(palette.fill)
                         .frame(width: layout.imageWidth * 0.65, height: layout.metrics.castNameSize * 0.7)
                         .frame(height: layout.titleHeight)
-                        .padding(.horizontal, layout.cardMetrics.landscapeCaptionInset)
+                        .padding(.horizontal, layout.cardMetrics.landscapeCaptionHorizontalInset)
                         .padding(.top, layout.cardMetrics.landscapeCaptionTopSpacing)
                 }
                 .padding([.top, .horizontal], layout.cardMetrics.cardInset)

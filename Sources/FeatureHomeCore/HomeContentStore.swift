@@ -25,6 +25,8 @@ public protocol HomeContentStoring: AnyObject, Sendable {
     /// Stable identity for ordering asynchronous writes. On-disk stores use their
     /// profile-scoped file path so replacement view models share one write stream.
     var persistenceScope: String { get }
+    /// Profile identity for artwork keys, independent of the installed container path.
+    var libraryArtworkScope: String { get }
     /// The last persisted snapshot, or `nil` on a miss (no file / stale / decode
     /// failure / empty). Read **synchronously** so `HomeViewModel` can hydrate its
     /// initial state at construction. `HomeContentStore` memoizes the first decode,
@@ -73,6 +75,8 @@ public extension HomeContentStoring {
         "instance:\(ObjectIdentifier(self))"
     }
 
+    var libraryArtworkScope: String { persistenceScope }
+
     func loadHeroCandidatePool(for key: HeroConfigurationKey) -> HeroFreshnessCandidatePool? { nil }
     func saveHeroCandidatePool(_ pool: HeroFreshnessCandidatePool, for key: HeroConfigurationKey) {
         saveHero(pool.durable().orderedItems(for: key), for: key)
@@ -110,6 +114,7 @@ public actor HomeContentPrewarmer {
 /// excluded: changing them does not change which titles can appear, and must not
 /// throw away a good carousel.
 public struct HeroConfigurationKey: Codable, Hashable, Sendable {
+    public var allowsDiscovery: Bool
     public var sources: [HeroSourceKind]
     public var maxItems: Int
     public var hideWatched: Bool
@@ -121,8 +126,10 @@ public struct HeroConfigurationKey: Codable, Hashable, Sendable {
     /// for different titles — unlike the *resolved* library list, which changes
     /// whenever a server finishes loading and must not retire anything.
     public var randomLibraryKeys: Set<String>
+    public var collections: [HeroCollectionSelection]
 
     public init(settings: HeroSettings?) {
+        allowsDiscovery = settings?.allowsDiscovery ?? true
         guard let settings, settings.isActive else {
             sources = []
             maxItems = 0
@@ -131,6 +138,7 @@ public struct HeroConfigurationKey: Codable, Hashable, Sendable {
             discoverySources = []
             discoveryContentVersion = 0
             randomLibraryKeys = []
+            collections = []
             return
         }
         sources = settings.sources
@@ -143,18 +151,25 @@ public struct HeroConfigurationKey: Codable, Hashable, Sendable {
         randomLibraryKeys = settings.isEnabled(.randomFromLibrary)
             ? settings.randomLibraryKeys
             : []
+        collections = settings.isEnabled(.collection)
+            ? HeroCollectionSelection.normalized(settings.collections) : []
     }
 
     private enum CodingKeys: String, CodingKey {
         case sources, maxItems, hideWatched, randomLibraryKeys, watchlistDiscoveryEnabled, discoverySources
         case discoveryContentVersion
+        case collections
+        case allowsDiscovery
     }
+
+    private enum LegacyCodingKeys: String, CodingKey { case collection }
 
     /// Lenient, like ``HeroSettings``: a persisted key written before a field
     /// existed reads as that field's default rather than failing the whole decode
     /// and discarding an otherwise usable seed.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        allowsDiscovery = try container.decodeIfPresent(Bool.self, forKey: .allowsDiscovery) ?? true
         sources = try container.decode([HeroSourceKind].self, forKey: .sources)
         maxItems = try container.decode(Int.self, forKey: .maxItems)
         hideWatched = try container.decode(Bool.self, forKey: .hideWatched)
@@ -174,6 +189,19 @@ public struct HeroConfigurationKey: Codable, Hashable, Sendable {
                 Set<String>.self,
                 forKey: .randomLibraryKeys
             )) ?? nil) ?? []
+        if sources.contains(.collection) {
+            if container.contains(.collections) {
+                collections = HeroCollectionSelection.normalized(
+                    try container.decodeIfPresent([HeroCollectionSelection].self, forKey: .collections) ?? []
+                )
+            } else {
+                let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+                collections = try legacy.decodeIfPresent(HeroCollectionSelection.self, forKey: .collection)
+                    .map { [$0] } ?? []
+            }
+        } else {
+            collections = []
+        }
     }
 }
 
@@ -196,6 +224,10 @@ public final class HomeContentStore: HomeContentStoring, @unchecked Sendable {
     public var persistenceScope: String {
         fileURL?.standardizedFileURL.path
             ?? "disabled:\(ObjectIdentifier(self))"
+    }
+
+    public var libraryArtworkScope: String {
+        fileURL.map { "home-profile:\($0.lastPathComponent)" } ?? persistenceScope
     }
 
     /// Wire format: the bounded content plus the time it was captured (for

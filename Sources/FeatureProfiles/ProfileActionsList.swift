@@ -6,17 +6,14 @@ import SwiftUI
 /// The things you can do to a profile: change how it looks, lock it, restrict
 /// it, delete it.
 ///
-/// One implementation, two hosts — the picker's Edit sheet and Settings →
-/// Everyone → Profiles → *name*. They were the same four choices rendered twice,
-/// which is how they'd have drifted.
+/// Shared by the picker's Edit sheet and individual profile settings.
 ///
-/// Rows are `SettingsRowLabel` + `SettingsFocusButtonStyle`, the same pair every
-/// other row in Settings uses, so these read as one control family with the rest
-/// of the app rather than as a bespoke list that happens to look similar.
+/// Settings pages own separate action, automatic-sign-in and deletion sections.
+/// Dialogs keep their ungrouped, native-focus rows.
 ///
-/// Every row **opens something** and carries a chevron to say so. Kids Profile is
+/// Management rows open a destination or confirmation. Kids Profile is
 /// deliberately not an inline switch: it has a real consequence and an honest
-/// caveat (it restricts settings, not content), and a switch you can nudge past
+/// caveat (library content still follows the server user's access), and a switch you can nudge past
 /// while scrolling is the wrong affordance for that.
 ///
 /// Notably there is no intermediate "Profile Lock" page. Selecting the lock row
@@ -40,6 +37,8 @@ public struct ProfileActionsList: View {
     /// flag, the profile's own lock and Delete are all ways a child could undo
     /// their own restrictions from inside.
     private let restrictedActionsSealed: Bool
+    private let groupsActions: Bool
+    private let automaticSignIn: AutomaticSignInSettings?
     private let onEditAppearance: () -> Void
     /// Asks the host to show the Profile Lock PIN setup.
     ///
@@ -72,6 +71,8 @@ public struct ProfileActionsList: View {
         offersPlexPINReuse: Bool = false,
         hasParentalPIN: Bool,
         restrictedActionsSealed: Bool,
+        groupsActions: Bool = false,
+        automaticSignIn: AutomaticSignInSettings? = nil,
         onEditAppearance: @escaping () -> Void,
         onEditLock: @escaping () -> Void = {},
         onCreateParentalPIN: @escaping () -> Void = {},
@@ -90,6 +91,8 @@ public struct ProfileActionsList: View {
         self.offersPlexPINReuse = offersPlexPINReuse
         self.hasParentalPIN = hasParentalPIN
         self.restrictedActionsSealed = restrictedActionsSealed
+        self.groupsActions = groupsActions
+        self.automaticSignIn = automaticSignIn
         self.onEditAppearance = onEditAppearance
         self.onEditLock = onEditLock
         self.onCreateParentalPIN = onCreateParentalPIN
@@ -131,21 +134,25 @@ public struct ProfileActionsList: View {
                 // iOS Settings sheet, a tvOS navigation stack under RootView's
                 // stacked covers — and a modal asked for from a covered view is
                 // silently dropped, which would leave the unlock button dead.
-                PINEntryScaffold(
-                    title: ProfileLockCopy.unlockToEdit,
-                    name: Text(verbatim: profile.name),
-                    errorMessage: unlockError,
-                    // Rendered inline in a settings card / actions dialog, never
-                    // full screen — see the note on `isCompact`.
-                    isCompact: true,
-                    // The dialog hosting this already shows the avatar and name
-                    // in its header, so the scaffold's own identity row put the
-                    // same name on screen twice.
-                    showsIdentity: false,
-                    onSubmit: submitUnlock,
-                    onCancel: { unlocking = false; unlockError = nil }
-                ) {
-                    ProfileAvatarView(profile: profile, size: PINLayout.badgeSize)
+                ProfileActionSection(grouped: groupsActions) {
+                    PINEntryScaffold(
+                        title: ProfileLockCopy.unlockToEdit,
+                        name: Text(verbatim: profile.name),
+                        errorMessage: unlockError,
+                        // Rendered inline in a settings card / actions dialog, never
+                        // full screen — see the note on `isCompact`.
+                        isCompact: true,
+                        // The dialog hosting this already shows the avatar and name
+                        // in its header, so the scaffold's own identity row put the
+                        // same name on screen twice.
+                        showsIdentity: false,
+                        onSubmit: submitUnlock,
+                        onCancel: {
+                            unlocking = false; unlockError = nil
+                        }
+                    ) {
+                        ProfileAvatarView(profile: profile, size: PINLayout.badgeSize)
+                    }
                 }
             } else if isSealed {
                 sealedContent
@@ -158,7 +165,7 @@ public struct ProfileActionsList: View {
     /// What a locked profile shows instead of its settings: one way in.
     @ViewBuilder
     private var sealedContent: some View {
-        VStack(spacing: 14) {
+        ProfileActionSection(grouped: groupsActions) {
             actionRow(
                 icon: "lock.fill",
                 title: ProfileLockCopy.unlockToEdit,
@@ -183,72 +190,87 @@ public struct ProfileActionsList: View {
 
     @ViewBuilder
     private var actions: some View {
-        VStack(spacing: 14) {
-            actionRow(
-                icon: "paintpalette",
-                title: "Appearance",
-                subtitle: "Name, avatar, and color",
-                action: onEditAppearance
-            )
+        VStack(spacing: groupsActions ? 16 : 14) {
+            ProfileActionSection(grouped: groupsActions) {
+                actionRow(
+                    icon: "paintpalette",
+                    title: "Appearance",
+                    subtitle: "Name, avatar, and color",
+                    action: onEditAppearance
+                )
+                .accessibilityIdentifier("profile.appearance")
+
+                if !restrictedActionsSealed {
+                    actionRow(
+                        icon: profile.isLocked || offersPlexPINReuse
+                            ? "lock.fill"
+                            : "lock.open",
+                        title: ProfileLockCopy.title,
+                        // A profile bound to a PIN-protected Plex user already asks for a
+                        // code, so a bare "Off" here reads as a bug. Say which lock is
+                        // which instead: Plex guards playing AS that user, a Profile Lock
+                        // guards the whole profile.
+                        subtitle: (!profile.isLocked && offersPlexPINReuse) ? ProfileLockCopy.plexAlreadyAsks : nil,
+                        value: profile.isLocked
+                            ? ProfileLockCopy.on
+                            : (offersPlexPINReuse
+                                ? ProfileLockCopy.plexPIN
+                                : ProfileLockCopy.off)
+                    ) {
+                        // Straight to the thing. No summary page in between.
+                        if profile.isLocked {
+                            showingLockOptions = true
+                        } else {
+                            onEditLock()
+                        }
+                    }
+                    .accessibilityIdentifier("profile.lock")
+
+                    actionRow(
+                        icon: "figure.and.child.holdinghands",
+                        title: KidsProfileCopy.title,
+                        value: profile.isKids ? ProfileLockCopy.on : ProfileLockCopy.off
+                    ) {
+                        showingKidsOptions = true
+                    }
+                    .accessibilityIdentifier("profile.kids")
+
+                    // Without a household Parental PIN, settings and profile switching remain open —
+                    // say so here rather than let the "On" above imply otherwise. This
+                    // replaced a nudge to lock your own profile, which was the
+                    // workaround for not having a Parental PIN.
+                    if profile.isKids, !hasParentalPIN {
+                        Label {
+                            Text(KidsProfileCopy.kidsNeedsParentalPIN)
+                                .font(.footnote)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
+                        }
+                        .foregroundStyle(palette.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                    }
+                }
+            }
 
             if !restrictedActionsSealed {
-            actionRow(
-                icon: profile.isLocked || offersPlexPINReuse
-                    ? "lock.fill"
-                    : "lock.open",
-                title: ProfileLockCopy.title,
-                // A profile bound to a PIN-protected Plex user already asks for a
-                // code, so a bare "Off" here reads as a bug. Say which lock is
-                // which instead: Plex guards playing AS that user, a Profile Lock
-                // guards the whole profile.
-                subtitle: (!profile.isLocked && offersPlexPINReuse) ? ProfileLockCopy.plexAlreadyAsks : nil,
-                value: profile.isLocked
-                    ? ProfileLockCopy.on
-                    : (offersPlexPINReuse
-                        ? ProfileLockCopy.plexPIN
-                        : ProfileLockCopy.off)
-            ) {
-                // Straight to the thing. No summary page in between.
-                if profile.isLocked {
-                    showingLockOptions = true
-                } else {
-                    onEditLock()
-                }
-            }
-
-            actionRow(
-                icon: "figure.and.child.holdinghands",
-                title: KidsProfileCopy.title,
-                value: profile.isKids ? ProfileLockCopy.on : ProfileLockCopy.off
-            ) {
-                showingKidsOptions = true
-            }
-
-            // A Kids Profile with no household Parental PIN restricts nothing —
-            // say so here rather than let the "On" above imply otherwise. This
-            // replaced a nudge to lock your own profile, which was the
-            // workaround for not having a Parental PIN.
-            if profile.isKids, !hasParentalPIN {
-                Label {
-                    Text(KidsProfileCopy.kidsNeedsParentalPIN)
+                if let automaticSignIn {
+                    ProfileActionSection(grouped: groupsActions) {
+                        AutomaticSignInToggle(settings: automaticSignIn)
+                            .toggleStyle(SettingsSwitchToggleStyle(flushLeading: false))
+                    }
+                    AutomaticSignInErrorMessage(settings: automaticSignIn)
                         .font(.footnote)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle")
                 }
-                .foregroundStyle(palette.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-            }
-
-            if onDelete != nil {
-                Button(role: .destructive) {
-                    confirmDelete = true
-                } label: {
-                    Label("Delete Profile", systemImage: "trash")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                if onDelete != nil {
+                    ProfileActionSection(grouped: groupsActions) {
+                        deleteButton
+                            .labelStyle(.titleAndIcon)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("profile.delete")
+                    }
                 }
-            }
             }
         }
         .confirmationDialog(
@@ -256,8 +278,16 @@ public struct ProfileActionsList: View {
             isPresented: $showingLockOptions,
             titleVisibility: .visible
         ) {
-            Button { onEditLock() } label: { Text(ProfileLockCopy.editPIN) }
-            Button(role: .destructive) { onSetLock(nil) } label: { Text(ProfileLockCopy.delete) }
+            Button {
+                onEditLock()
+            } label: {
+                Text(ProfileLockCopy.editPIN)
+            }
+            Button(role: .destructive) {
+                onSetLock(nil)
+            } label: {
+                Text(ProfileLockCopy.delete)
+            }
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(
@@ -269,14 +299,24 @@ public struct ProfileActionsList: View {
             // hides the household section, so "go to Everyone" is an instruction
             // this profile can't follow.
             if !hasParentalPIN {
-                Button { onCreateParentalPIN() } label: {
+                Button {
+                    onCreateParentalPIN()
+                } label: {
                     Text(KidsProfileCopy.parentalPINCreate)
                 }
             }
             if profile.isKids {
-                Button(role: .destructive) { onSetKids(false) } label: { Text(KidsProfileCopy.turnOff) }
+                Button(role: .destructive) {
+                    onSetKids(false)
+                } label: {
+                    Text(KidsProfileCopy.turnOff)
+                }
             } else {
-                Button { onSetKids(true) } label: { Text(KidsProfileCopy.turnOn) }
+                Button {
+                    onSetKids(true)
+                } label: {
+                    Text(KidsProfileCopy.turnOn)
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -291,6 +331,46 @@ public struct ProfileActionsList: View {
     }
 
     // MARK: Rows
+
+    @ViewBuilder
+    private var deleteButton: some View {
+        #if os(tvOS)
+        if groupsActions {
+            Button(role: .destructive) { confirmDelete = true } label: {
+                SettingsRowLabel(icon: "trash", title: "Delete Profile")
+            }
+            .buttonStyle(SettingsFocusButtonStyle())
+        } else {
+            nativeDeleteButton
+        }
+        #else
+        nativeDeleteButton
+        #endif
+    }
+
+    private var nativeDeleteButton: some View {
+        Button(role: .destructive) { confirmDelete = true } label: {
+            if groupsActions {
+                LabeledContent {
+                    EmptyView()
+                } label: {
+                    deleteLabel
+                }
+            } else {
+                deleteLabel
+            }
+        }
+    }
+
+    private var deleteLabel: some View {
+        Label {
+            Text("Delete Profile")
+        } icon: {
+            Image(systemName: "trash")
+                .frame(width: groupsActions ? SettingsRowMetrics.iconColumnWidth : nil)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
     /// A row in the app's standard settings shape: icon, title, optional second
     /// line, then a value and a chevron. The chevron is the point — every one of
@@ -307,6 +387,47 @@ public struct ProfileActionsList: View {
         title: LocalizedStringResource,
         subtitle: LocalizedStringResource? = nil,
         value: LocalizedStringResource? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        #if os(iOS)
+        if groupsActions {
+            Button(action: action) {
+                SettingsDisclosureLabel {
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(title)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if let subtitle {
+                                Text(subtitle)
+                                    .font(.footnote)
+                                    .settingsRowSecondary()
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    } icon: {
+                        Image(systemName: icon)
+                            .frame(width: SettingsRowMetrics.iconColumnWidth)
+                            .settingsRowIcon()
+                    }
+                    .labelStyle(.titleAndIcon)
+                } value: {
+                    if let value { Text(value) }
+                }
+            }
+            .accessibilityElement(children: .contain)
+        } else {
+            focusedActionRow(icon: icon, title: title, subtitle: subtitle, value: value, action: action)
+        }
+        #else
+        focusedActionRow(icon: icon, title: title, subtitle: subtitle, value: value, action: action)
+        #endif
+    }
+
+    private func focusedActionRow(
+        icon: String,
+        title: LocalizedStringResource,
+        subtitle: LocalizedStringResource?,
+        value: LocalizedStringResource?,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -332,6 +453,26 @@ public struct ProfileActionsList: View {
             }
         }
         .buttonStyle(SettingsFocusButtonStyle())
+    }
+}
+
+private struct ProfileActionSection<Content: View>: View {
+    let grouped: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if grouped {
+            #if os(tvOS)
+            VStack(spacing: 14) { content }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(SettingsFormMetrics.pageInset)
+                .settingsGroupSurface(cornerRadius: PlozzTheme.Metrics.mediumCardCornerRadius)
+            #else
+            SettingsSectionGroup { content }
+            #endif
+        } else {
+            VStack(spacing: 14) { content }
+        }
     }
 }
 #endif

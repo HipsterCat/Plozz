@@ -4,15 +4,26 @@ import CoreModels
 import CoreNetworking
 
 public enum LibraryContentMode: String, CaseIterable, Sendable {
+    case recommended
     case titles
     case collections
     case playlists
 
     public var displayName: LocalizedStringResource {
         switch self {
+        case .recommended: "Recommended"
         case .titles: "Browse"
         case .collections: "Collections"
         case .playlists: "Playlists"
+        }
+    }
+
+    public var cardCaptionView: CardCaptionView {
+        switch self {
+        case .recommended: .recommended
+        case .titles: .browse
+        case .collections: .collections
+        case .playlists: .playlists
         }
     }
 }
@@ -21,6 +32,10 @@ public enum LibraryBrowseScope: String, Hashable, Sendable {
     case library
     case collectionMembers
     case playlistMembers
+
+    public func cardCaptionView(for mode: LibraryContentMode) -> CardCaptionView {
+        self == .library ? mode.cardCaptionView : .browse
+    }
 }
 
 /// Drives a *sparse* library grid: it loads the first page to learn the
@@ -57,7 +72,69 @@ public final class LibraryBrowseViewModel {
     /// A non-fatal error from loading a follow-up page, if any. Surfaced for
     /// diagnostics; the failed page is retried when its cells reappear.
     public private(set) var pageError: AppError?
+    private let queryPresentation = LibraryQueryPresentation()
+    public private(set) var filters: LibraryFilters {
+        get { queryPresentation.filters }
+        set { queryPresentation.filters = newValue }
+    }
+    public private(set) var queryFacets: LibraryQueryFacets {
+        get { queryPresentation.facets }
+        set { queryPresentation.facets = newValue }
+    }
+    public private(set) var facetsLoading: Bool {
+        get { queryPresentation.facetsLoading }
+        set { queryPresentation.facetsLoading = newValue }
+    }
+    public private(set) var facetsError: AppError? {
+        get { queryPresentation.facetsError }
+        set { queryPresentation.facetsError = newValue }
+    }
+    public private(set) var queryProgress: Double? {
+        get { queryPresentation.progress }
+        set { queryPresentation.progress = newValue }
+    }
+    public private(set) var queryMessage: LocalizedStringResource? {
+        get { queryPresentation.message }
+        set { queryPresentation.message = newValue }
+    }
+    @ObservationIgnored private var firstPageTask: Task<HTTPResponseDiagnostics.CapturedResult<MediaPage>, Never>?
+    private let querySession: LibraryQuerySession
+    private let preferencesStore: LibraryBrowsePreferencesStore
+    private let preferenceAccountID: String
+    private let settingsNamespace: String?
+    private var capabilitiesRevision: Int {
+        get { queryPresentation.capabilitiesRevision }
+        set { queryPresentation.capabilitiesRevision = newValue }
+    }
+    @ObservationIgnored private var browseVisible = false
+    @ObservationIgnored private var watchQueryDirty = false
+    @ObservationIgnored private var needsRefreshRetry = false
+    @ObservationIgnored private var watchRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var recommendationsDirty = false
+    @ObservationIgnored private var recommendationWatchRevision = 0
+    @ObservationIgnored private var recommendationTask: (id: UUID, task: Task<Void, Never>)?
+
+    public var queryCapabilities: LibraryQueryCapabilities {
+        guard browseScope == .library, contentMode == .titles else { return LibraryQueryCapabilities() }
+        return (provider as? any MediaLibraryQueryProviding)?
+            .libraryQueryCapabilities(in: containerID, kind: containerKind) ?? LibraryQueryCapabilities()
+    }
+
+    public var showsFilterMenu: Bool {
+        queryCapabilities.filters.count > 1 || queryCapabilities.supportsGenres || queryCapabilities.supportsYears
+    }
     public private(set) var contentMode: LibraryContentMode = .titles
+    public private(set) var recommendationState: LoadState<[LibrarySection]> = .idle
+    public private(set) var recommendationDiagnostic: LibraryLoadDiagnostic?
+    public var recommendationError: AppError? { recommendationDiagnostic?.failures.first?.error }
+    public var browseDiagnostic: LibraryLoadDiagnostic? { queryPresentation.failureDiagnostic }
+    public var collectionProgress: LibraryCollectionProgress? { queryPresentation.collectionProgress }
+    public var collectionScanIncomplete: Bool { queryPresentation.collectionScanIncomplete }
+
+    public var supportsRecommendations: Bool {
+        browseScope == .library && provider.kind != .mediaShare
+            && (containerKind == .movie || containerKind == .series || containerKind == .video)
+    }
 
     public var supportsCollections: Bool {
         browseScope == .library && (containerKind == .movie || containerKind == .series)
@@ -70,7 +147,8 @@ public final class LibraryBrowseViewModel {
     }
 
     public var availableContentModes: [LibraryContentMode] {
-        [.titles] + (supportsCollections ? [.collections] : [])
+        (supportsRecommendations ? [.recommended] : []) + [.titles]
+            + (supportsCollections ? [.collections] : [])
             + (supportsPlaylists ? [.playlists] : [])
     }
 
@@ -82,7 +160,8 @@ public final class LibraryBrowseViewModel {
         if browseScope == .collectionMembers { return "This collection is empty." }
         if browseScope == .playlistMembers { return "This playlist is empty." }
         switch contentMode {
-        case .titles: return "This library is empty."
+        case .recommended: return "No recommendations in this library."
+        case .titles: return filters.isEmpty ? "This library is empty." : "No titles match these filters."
         case .collections: return "No collections in this library."
         case .playlists: return "No playlists in this library."
         }
@@ -110,8 +189,7 @@ public final class LibraryBrowseViewModel {
     private let sourceAccountID: String?
 
     /// The order the grid is currently sorted by. Changing it via `setSort`
-    /// restarts paging from the first page and persists the choice per container
-    /// kind so it is restored next time a library of that kind is opened.
+    /// restarts paging and remembers the choice for this library/account/profile.
     public private(set) var sort: CoreModels.SortDescriptor
 
     /// The A–Z fast-scroll rail's jump targets: for each present letter, the
@@ -128,18 +206,27 @@ public final class LibraryBrowseViewModel {
     public var isMediaShare: Bool { provider.kind == .mediaShare }
     /// Stable share id used to select this grid's status from ShareScanStatusModel.
     public var sourceServerID: String { provider.session.server.id }
+    public private(set) var errorServers: [MediaServer] = []
+
+    private func failureServers(for error: Error) -> [MediaServer] {
+        if let failure = error as? LibrarySourceFailure { return failure.servers }
+        if provider is any LibraryQueryFailureRecovering { return [] }
+        return [provider.session.server]
+    }
 
     public var availableSortFields: [SortField] {
-        if browseScope != .library { return [] }
+        _ = capabilitiesRevision
+        if browseScope != .library || contentMode == .recommended { return [] }
         if browseKind == .collection { return [.name, .dateAdded] }
         if browseKind == .playlist { return [.name] }
         return (provider as? any MediaSortFieldProviding)?
             .supportedSortFields(in: containerID, kind: containerKind)
-            ?? SortField.allCases
+            ?? SortField.legacyFields
     }
 
     private var browseKind: MediaItemKind {
         switch contentMode {
+        case .recommended: containerKind
         case .titles: containerKind
         case .collections: .collection
         case .playlists: .playlist
@@ -204,10 +291,7 @@ public final class LibraryBrowseViewModel {
 
     /// Distinguishes this grid's remembered sort from other grids of the same kind.
     ///
-    /// Sort is remembered per *kind* so every movie library opens the way the
-    /// viewer last left one. The combined "All Libraries" grid isn't a kind, so it
-    /// passes a suffix and gets its own remembered sort instead of silently
-    /// sharing (and overwriting) the `.unknown` bucket.
+    /// Used only to migrate the default profile's legacy per-kind sort.
     private let sortKeySuffix: String?
 
     public init(
@@ -218,7 +302,9 @@ public final class LibraryBrowseViewModel {
         defaults: UserDefaults = .standard,
         sortKeySuffix: String? = nil,
         sourceAccountID: String? = nil,
-        browseScope: LibraryBrowseScope = .library
+        browseScope: LibraryBrowseScope = .library,
+        initialContentMode: LibraryContentMode? = nil,
+        settingsNamespace: String? = nil
     ) {
         self.provider = provider
         self.containerID = containerID
@@ -230,6 +316,10 @@ public final class LibraryBrowseViewModel {
         self.defaults = defaults
         self.sortKeySuffix = sortKeySuffix
         self.sourceAccountID = sourceAccountID
+        self.settingsNamespace = settingsNamespace
+        self.preferencesStore = LibraryBrowsePreferencesStore(namespace: settingsNamespace, defaults: defaults)
+        self.preferenceAccountID = sourceAccountID ?? "\(provider.session.server.id):\(provider.session.userID)"
+        self.querySession = LibraryQuerySession(provider: provider, containerID: containerID, kind: containerKind)
         self.sort = browseScope != .library
             ? .default
             : Self.loadSort(for: containerKind, suffix: sortKeySuffix, from: defaults)
@@ -237,6 +327,11 @@ public final class LibraryBrowseViewModel {
             let field = availableSortFields.first ?? .name
             self.sort = CoreModels.SortDescriptor(field: field, direction: field.defaultDirection)
         }
+        let defaultMode: LibraryContentMode = supportsRecommendations ? .recommended : .titles
+        self.contentMode = initialContentMode.flatMap {
+            availableContentModes.contains($0) ? $0 : nil
+        } ?? defaultMode
+        if contentMode == .titles { restorePreferences() }
     }
 
     /// The item at `index`, or `nil` if it hasn't been loaded yet (placeholder).
@@ -289,10 +384,21 @@ public final class LibraryBrowseViewModel {
     /// (``loadFirstPage()`` for pull-to-refresh or a sort change, and
     /// ``refreshAfterCatalogChange()`` after a scan).
     public func loadFirstPageIfNeeded() async {
+        browseVisible = true
+        if contentMode == .recommended {
+            await loadRecommendationsIfNeeded()
+            return
+        }
+        guard !queryPresentation.firstPageLoading else { return }
+        if collectionScanIncomplete {
+            await loadFirstPage()
+            return
+        }
         switch state {
         case .loaded:
             // Already showing this library. Keep the presentation, and with it the
             // scroll position, exactly as the user left it.
+            if watchQueryDirty { await refreshAfterCatalogChange(preservingFileFacts: true) }
             return
         case .idle, .loading, .empty, .failed:
             // An empty or failed library keeps retrying on reappear: there is no
@@ -305,15 +411,34 @@ public final class LibraryBrowseViewModel {
 
     /// Loads (or reloads) the first page and sizes the grid to the full library.
     public func loadFirstPage() async {
+        let retriesFailedQuery: Bool
+        if case .failed = state { retriesFailedQuery = true }
+        else { retriesFailedQuery = false }
+        firstPageTask?.cancel()
         loadGeneration += 1
         contentGeneration += 1
         let generation = loadGeneration
         let mode = contentMode
-        let request = pageRequest(forPage: 0)
+        queryPresentation.firstPageLoading = true
+        defer {
+            if generation == loadGeneration {
+                firstPageTask = nil
+                queryPresentation.firstPageLoading = false
+                queryPresentation.collectionProgress = nil
+                if state == .loading { state = .idle }
+            }
+        }
         state = .loading
+        errorServers = []
         loaded = []
         totalCount = 0
         pageError = nil
+        queryPresentation.failureDiagnostic = nil
+        queryPresentation.collectionProgress = nil
+        queryPresentation.collectionScanIncomplete = false
+        needsRefreshRetry = false
+        queryMessage = nil
+        queryProgress = nil
         cancelAllPageLoads()
         pagesInFlight = []
         pagesLoaded = []
@@ -330,33 +455,73 @@ public final class LibraryBrowseViewModel {
         PlozzLog.app.info(
             "LibraryBrowse: loading first page for \(containerID) (\(containerKind.rawValue)) firstPage=\(firstPageSize) steadyPage=\(subsequentPageSize)"
         )
+        var captured: HTTPResponseDiagnostics.CapturedResult<MediaPage>?
         do {
-            let page = try await Self.fetchPage(
-                provider: provider,
-                containerID: containerID,
-                containerKind: containerKind,
-                browseScope: browseScope,
-                contentMode: mode,
-                request: request,
-                priority: .userInitiated
-            )
+            if retriesFailedQuery {
+                await querySession.invalidate()
+                guard !Task.isCancelled, generation == loadGeneration else { return }
+            }
+            if let source = provider as? any MediaLibraryQueryProviding, mode == .titles {
+                let before = availableSortFields
+                try await source.prepareLibraryQueryCapabilities()
+                guard !Task.isCancelled, generation == loadGeneration else { return }
+                capabilitiesRevision += 1
+                if before != availableSortFields { restorePreferences() }
+            }
+            if watchQueryDirty {
+                await querySession.invalidate(preservingFileFacts: true)
+                watchQueryDirty = false
+            }
+            let request = pageRequest(forPage: 0)
+            let task = Task {
+                await HTTPResponseDiagnostics.capture {
+                    try await Self.fetchPage(
+                        provider: provider,
+                        querySession: querySession,
+                        containerID: containerID,
+                        containerKind: containerKind,
+                        browseScope: browseScope,
+                        contentMode: mode,
+                        request: request,
+                        priority: .userInitiated,
+                        progress: { [weak self] completed, total in
+                            await self?.reportQueryProgress(completed, total: total, generation: generation)
+                        },
+                        collectionProgress: { [weak self] progress in
+                            await self?.reportCollectionProgress(progress, generation: generation)
+                        }
+                    )
+                }
+            }
+            firstPageTask = task
+            let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             guard !Task.isCancelled, generation == loadGeneration else { return }
+            if result.isCancelled { return }
+            captured = result
+            let page = try result.result.get()
             totalCount = page.totalCount
-            loaded = Self.makeSlots(count: page.totalCount)
+            resize(to: page.totalCount)
             fill(page)
             pagesLoaded.insert(0)
+            queryPresentation.collectionScanIncomplete = false
             state = page.totalCount == 0 ? .empty : .loaded(page.totalCount)
+            queryProgress = nil
             loadLetterIndexIfNeeded()
         } catch is CancellationError {
             return
-        } catch let error as AppError {
-            PlozzLog.app.error("LibraryBrowse: first page failed for \(containerID): \(String(describing: error))")
-            guard !Task.isCancelled, generation == loadGeneration else { return }
-            state = .failed(error)
         } catch {
-            PlozzLog.app.error("LibraryBrowse: first page failed for \(containerID): \(String(describing: error))")
             guard !Task.isCancelled, generation == loadGeneration else { return }
-            state = .failed(.unknown(""))
+            let underlying = LibrarySourceFailure.underlying(error)
+            guard (underlying as? AppError) != .cancelled else { return }
+            errorServers = failureServers(for: error)
+            queryProgress = nil
+            queryMessage = (underlying as? LibraryQueryFailure)?.message
+            let failure = recordBrowseFailure(error, mode: mode, captured: captured)
+            if collectionScanIncomplete, !loaded.isEmpty {
+                pageError = failure
+            } else {
+                state = .failed(failure)
+            }
         }
     }
 
@@ -365,7 +530,23 @@ public final class LibraryBrowseViewModel {
     /// until the fresh first page arrives, avoiding a full-screen loading flash.
     /// Resetting `pagesLoaded` ensures any currently-visible deeper page refetches
     /// against the new catalog instead of retaining pre-scan cards.
-    public func refreshAfterCatalogChange() async {
+    public func refreshAfterCatalogChange(preservingFileFacts: Bool = false) async {
+        if !preservingFileFacts {
+            queryPresentation.facetsRevision += 1
+            queryPresentation.facetsTask?.cancel()
+            queryPresentation.facetsTask = nil
+            queryPresentation.hasLoadedFacets = false
+            facetsLoading = false
+            facetsError = nil
+        }
+        let facetsRevision = queryPresentation.facetsRevision
+        await refreshCatalogPages(preservingFileFacts: preservingFileFacts)
+        if !preservingFileFacts, facetsRevision == queryPresentation.facetsRevision {
+            await loadQueryFacetsIfNeeded()
+        }
+    }
+
+    private func refreshCatalogPages(preservingFileFacts: Bool) async {
         switch state {
         case .idle, .loading: return
         case .loaded, .empty, .failed: break
@@ -374,9 +555,13 @@ public final class LibraryBrowseViewModel {
         let generation = loadGeneration
         let mode = contentMode
         let sortAtRequest = sort
+        await querySession.invalidate(preservingFileFacts: preservingFileFacts)
+        guard !Task.isCancelled, generation == loadGeneration else { return }
+        watchQueryDirty = false
         do {
             let firstPage = try await Self.fetchPage(
                 provider: provider,
+                querySession: querySession,
                 containerID: containerID,
                 containerKind: containerKind,
                 browseScope: browseScope,
@@ -394,6 +579,7 @@ public final class LibraryBrowseViewModel {
                 .min() {
                 let page = try await Self.fetchPage(
                     provider: provider,
+                    querySession: querySession,
                     containerID: containerID,
                     containerKind: containerKind,
                     browseScope: browseScope,
@@ -401,7 +587,7 @@ public final class LibraryBrowseViewModel {
                     request: PageRequest(
                         startIndex: startIndex(forPage: pageIndex),
                         limit: pageSpan(forPage: pageIndex),
-                        sort: sortAtRequest
+                        sort: sortAtRequest, filters: filters
                     ),
                     priority: .userInitiated
                 )
@@ -414,6 +600,9 @@ public final class LibraryBrowseViewModel {
             pagesLoaded = []
             failedPages = []
             pageError = nil
+            queryPresentation.failureDiagnostic = nil
+            queryMessage = nil
+            needsRefreshRetry = false
             totalCount = firstPage.totalCount
             resize(to: firstPage.totalCount)
             // Native cells observe these objects directly. Replacing the array
@@ -432,12 +621,19 @@ public final class LibraryBrowseViewModel {
             letterIndexTask?.cancel()
             alphabet.reset()
             loadLetterIndexIfNeeded()
+        } catch is CancellationError {
+            return
         } catch {
             // Keep the still-usable old page on a transient refresh failure; normal
             // page/retry behavior remains available.
-            PlozzLog.app.error(
-                "LibraryBrowse: catalog refresh failed for \(containerID): \(String(describing: error))"
-            )
+            if !Task.isCancelled, generation == loadGeneration {
+                let underlying = LibrarySourceFailure.underlying(error)
+                guard (underlying as? AppError) != .cancelled else { return }
+                watchQueryDirty = true
+                needsRefreshRetry = true
+                pageError = recordBrowseFailure(error, mode: mode)
+                queryMessage = (underlying as? LibraryQueryFailure)?.message
+            }
         }
     }
 
@@ -445,11 +641,39 @@ public final class LibraryBrowseViewModel {
     /// slots. Plex, Jellyfin, SMB, and future share transports all use this path, so
     /// badges and progress bars update immediately without a provider refetch.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
+        var refreshEpisodeCounts = false
         for slot in loaded {
             guard let item = slot.item else { continue }
+            refreshEpisodeCounts = refreshEpisodeCounts
+                || (mutation.refreshEpisodeCounts && mutation.affectsEpisodeCount(in: item))
             let updated = mutation.applied(to: item)
             if updated != item {
                 slot.item = updated
+            }
+        }
+        if case .loaded(var sections) = recommendationState {
+            for index in sections.indices {
+                sections[index].items = sections[index].items.map { mutation.applied(to: $0) }
+            }
+            recommendationState = .loaded(sections)
+        }
+        guard browseScope == .library else { return }
+        watchQueryDirty = true
+        recommendationsDirty = true
+        recommendationWatchRevision += 1
+        if browseVisible, contentMode == .recommended, recommendationTask == nil {
+            Task { [weak self] in
+                guard let self, self.browseVisible, self.contentMode == .recommended else { return }
+                await self.loadRecommendationsIfNeeded()
+            }
+        }
+        let dependsOnWatchState = [.unwatched, .inProgress].contains(filters.filter)
+            || [.progress, .plays, .lastPlayed].contains(sort.field)
+            || refreshEpisodeCounts
+        if browseVisible, contentMode == .titles, dependsOnWatchState {
+            watchRefreshTask?.cancel()
+            watchRefreshTask = Task { [weak self] in
+                await self?.refreshAfterCatalogChange(preservingFileFacts: true)
             }
         }
     }
@@ -471,12 +695,12 @@ public final class LibraryBrowseViewModel {
         alphabet.isLoading = true
         alphabet.message = nil
         let sortAtRequest = sort
+        let queryAtRequest = pageRequest(forPage: 0)
         let generation = contentGeneration
         letterIndexTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let entries = try await self.provider.letterIndex(
-                    in: self.containerID, kind: self.containerKind, sort: sortAtRequest)
+                let entries = try await self.querySession.letterIndex(page: queryAtRequest)
                 guard !Task.isCancelled, generation == self.contentGeneration,
                       sortAtRequest == self.sort else { return }
                 guard Set(entries.map(\.letter)).count == entries.count,
@@ -525,6 +749,7 @@ public final class LibraryBrowseViewModel {
         let id = alphabet.jumpID
         let generation = contentGeneration
         let requestedSort = sort
+        let queryAtRequest = pageRequest(forPage: 0)
         alphabet.jumpingTo = letter
         alphabet.message = nil
         let task = Task<Int?, Never> { [weak self] in
@@ -540,8 +765,7 @@ public final class LibraryBrowseViewModel {
                 let index: Int?
                 if let known = entry.startIndex { index = known }
                 else {
-                    index = try await self.provider.letterPosition(
-                        in: self.containerID, kind: self.containerKind, letter: letter, sort: requestedSort)
+                    index = try await self.querySession.letterPosition(letter, page: queryAtRequest)
                 }
                 guard !Task.isCancelled, self.alphabet.jumpID == id,
                       self.contentGeneration == generation, self.sort == requestedSort else { return nil }
@@ -692,7 +916,7 @@ public final class LibraryBrowseViewModel {
     public func setSort(_ newSort: CoreModels.SortDescriptor) async {
         guard availableSortFields.contains(newSort.field), newSort != sort else { return }
         sort = newSort
-        Self.saveSort(newSort, for: browseKind, suffix: currentSortKeySuffix, to: defaults)
+        savePreferences()
         await loadFirstPage()
     }
 
@@ -701,20 +925,360 @@ public final class LibraryBrowseViewModel {
     public func setContentMode(_ newMode: LibraryContentMode) async {
         guard newMode != contentMode, availableContentModes.contains(newMode) else { return }
         contentMode = newMode
-        let restoredSort = Self.loadSort(for: browseKind, suffix: currentSortKeySuffix, from: defaults)
-        let field = availableSortFields.first ?? .name
-        sort = availableSortFields.contains(restoredSort.field)
-            ? restoredSort
-            : CoreModels.SortDescriptor(field: field, direction: field.defaultDirection)
+        loadGeneration += 1
+        firstPageTask?.cancel()
+        firstPageTask = nil
+        queryPresentation.firstPageLoading = false
+        queryPresentation.collectionProgress = nil
+        queryPresentation.collectionScanIncomplete = false
+        if state == .loading { state = .idle }
+        cancelAllPageLoads()
+        letterIndexTask?.cancel()
+        cancelLetterJump()
+        if newMode != .recommended { recommendationTask?.task.cancel() }
+        if newMode == .recommended {
+            await loadRecommendationsIfNeeded()
+            return
+        }
+        restorePreferences()
         await loadFirstPage()
     }
 
+    private var preferenceAddress: String {
+        LibraryBrowsePreferencesStore.address(accountID: preferenceAccountID, libraryID: containerID, mode: contentMode.rawValue)
+    }
+
+    private func restorePreferences() {
+        let saved = preferencesStore.preferences(at: preferenceAddress)
+        let legacy = settingsNamespace == nil
+            ? Self.loadSort(for: browseKind, suffix: currentSortKeySuffix, from: defaults) : .default
+        let desired = saved?.sort ?? legacy
+        let field = availableSortFields.first ?? .name
+        sort = availableSortFields.contains(desired.field)
+            ? desired : SortDescriptor(field: field, direction: field.defaultDirection)
+        filters = contentMode == .titles ? saved?.filters ?? .all : .all
+        let capabilities = queryCapabilities
+        if !capabilities.filters.contains(filters.filter) { filters.filter = .all }
+        if !capabilities.supportsGenres { filters.genre = nil }
+        if !capabilities.supportsYears { filters.year = nil }
+    }
+
+    private func savePreferences() {
+        preferencesStore.save(LibraryBrowsePreferences(sort: sort, filters: filters), at: preferenceAddress)
+    }
+
+    public func setFilters(_ value: LibraryFilters) async {
+        guard showsFilterMenu, value != filters,
+              queryCapabilities.filters.contains(value.filter),
+              value.genre == nil || queryCapabilities.supportsGenres,
+              value.year == nil || queryCapabilities.supportsYears else { return }
+        filters = value
+        savePreferences()
+        await loadFirstPage()
+    }
+
+    public func loadQueryFacetsIfNeeded(retry: Bool = false) async {
+        guard !Task.isCancelled, !queryPresentation.hasLoadedFacets || retry,
+              queryCapabilities.supportsGenres || queryCapabilities.supportsYears,
+              showsFilterMenu, let source = provider as? any MediaLibraryQueryProviding else { return }
+        if let pending = queryPresentation.facetsTask {
+            await pending.value
+            return
+        }
+        let revision = queryPresentation.facetsRevision
+        facetsLoading = true
+        facetsError = nil
+        let task = Task {
+            defer {
+                if revision == queryPresentation.facetsRevision {
+                    facetsLoading = false
+                    queryPresentation.facetsTask = nil
+                }
+            }
+            do {
+                let facets = try await source.libraryQueryFacets(in: containerID, kind: containerKind)
+                try Task.checkCancellation()
+                guard revision == queryPresentation.facetsRevision else { return }
+                queryFacets = facets
+                queryPresentation.hasLoadedFacets = true
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, revision == queryPresentation.facetsRevision,
+                      (error as? AppError) != .cancelled else { return }
+                PlozzLog.app.error("Library facets failed: \(String(describing: error))")
+                facetsError = (LibrarySourceFailure.underlying(error) as? AppError) ?? .unknown("")
+            }
+        }
+        queryPresentation.facetsTask = task
+        await task.value
+    }
+
+    public func cancelPendingQuery() {
+        browseVisible = false
+        loadGeneration += 1
+        watchRefreshTask?.cancel()
+        firstPageTask?.cancel()
+        firstPageTask = nil
+        queryPresentation.firstPageLoading = false
+        queryPresentation.collectionProgress = nil
+        if state == .loading { state = .idle }
+        recommendationTask?.task.cancel()
+        cancelAllPageLoads()
+        letterIndexTask?.cancel()
+        cancelLetterJump()
+    }
+
+    public func cancelIndex() async {
+        watchRefreshTask?.cancel()
+        firstPageTask?.cancel()
+        await querySession.invalidate(preservingFileFacts: true)
+        filters = .all
+        if !queryCapabilities.nativeSortFields.contains(sort.field) { sort = .default }
+        savePreferences()
+        await loadFirstPage()
+    }
+
+    private func reportQueryProgress(_ completed: Int, total: Int, generation: Int) {
+        guard generation == loadGeneration else { return }
+        queryProgress = total > 0 ? min(1, Double(completed) / Double(total)) : 0
+    }
+
+    private func reportCollectionProgress(_ progress: LibraryCollectionProgress, generation: Int) {
+        guard !Task.isCancelled, generation == loadGeneration, contentMode == .collections else { return }
+        queryPresentation.collectionScanIncomplete = true
+        queryPresentation.collectionProgress = progress
+        guard progress.items.count > loaded.count else { return }
+        let previousCount = loaded.count
+        resize(to: progress.items.count)
+        // The grid count here is confirmed-so-far, never an estimated MediaPage total.
+        totalCount = progress.items.count
+        fill(MediaPage(
+            items: Array(progress.items.dropFirst(previousCount)),
+            startIndex: previousCount, totalCount: progress.items.count
+        ))
+        state = .loaded(progress.items.count)
+    }
+
+    private var recommendationGeneration = 0
+
+    public func loadRecommendationsIfNeeded() async {
+        switch recommendationState {
+        case .loaded where !recommendationsDirty: return
+        default: await loadRecommendations()
+        }
+    }
+
+    public func loadRecommendations() async {
+        guard supportsRecommendations else { return }
+        while !Task.isCancelled {
+            let pending: (id: UUID, task: Task<Void, Never>)
+            if let existing = recommendationTask {
+                if existing.task.isCancelled {
+                    await existing.task.value
+                    if recommendationTask?.id == existing.id { recommendationTask = nil }
+                    if !browseVisible || contentMode != .recommended { return }
+                    continue
+                }
+                pending = existing
+            } else {
+                let task = Task {
+                    while !Task.isCancelled {
+                        let revision = recommendationWatchRevision
+                        await loadRecommendationSnapshot(watchRevision: revision)
+                        guard revision != recommendationWatchRevision,
+                              browseVisible, contentMode == .recommended else { return }
+                    }
+                }
+                pending = (UUID(), task)
+                recommendationTask = pending
+            }
+            let task = pending.task
+            await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            if recommendationTask?.id == pending.id { recommendationTask = nil }
+            if !task.isCancelled { return }
+            if !browseVisible || contentMode != .recommended { return }
+        }
+    }
+
+    private func loadRecommendationSnapshot(watchRevision: Int) async {
+        recommendationGeneration += 1
+        let generation = recommendationGeneration
+        recommendationsDirty = true
+        let previousState = recommendationState
+        if recommendationState.value == nil { recommendationState = .loading }
+        defer {
+            if generation == recommendationGeneration, case .loading = recommendationState {
+                recommendationState = previousState
+            }
+        }
+        let provider = provider
+        let libraryID = containerID
+        let kind = containerKind
+        let accountID = sourceAccountID
+        let limit = 20
+        async let recent = HTTPResponseDiagnostics.capture {
+            try await provider.items(
+                in: libraryID, kind: kind,
+                page: PageRequest(
+                    startIndex: 0, limit: limit,
+                    sort: SortDescriptor(field: .dateAdded, direction: .descending)
+                )
+            )
+        }
+        async let continueWatching = HTTPResponseDiagnostics.capture {
+            try await provider.continueWatching(limit: limit, inLibraries: [libraryID])
+        }
+        async let hubs = HTTPResponseDiagnostics.capture {
+            try await provider.libraryHubs(libraryID: libraryID, kind: kind, limit: limit)
+        }
+        let (latestResult, watchingResult, hubResult) = await (recent, continueWatching, hubs)
+        guard !Task.isCancelled, generation == recommendationGeneration,
+              watchRevision == recommendationWatchRevision,
+              !latestResult.isCancelled, !watchingResult.isCancelled, !hubResult.isCancelled else { return }
+        let previousSections = recommendationState.value ?? []
+        var sections: [LibrarySection] = []
+        var failures: [LibraryLoadDiagnostic.Failure] = []
+        var failedServers: [MediaServer] = []
+        func record(
+            _ error: Error, section: LibraryLoadDiagnostic.Section,
+            responses: [ResponseDecodingDiagnostic], paging: [LibraryPagingDiagnostic],
+            transport: [ResponseTransportDiagnostic], http: [ResponseStatusDiagnostic]
+        ) {
+            let underlying = LibrarySourceFailure.underlying(error)
+            let mapped = (underlying as? AppError) ?? .unknown(underlying.localizedDescription)
+            for server in failureServers(for: error) where !failedServers.contains(server) {
+                failedServers.append(server)
+            }
+            failures.append(.init(
+                section: section, error: mapped, responses: responses, paging: paging, transport: transport, http: http
+            ))
+        }
+        switch watchingResult.result {
+        case .success(let items):
+            let scoped = items.filter { provider.contains($0, inLibrary: libraryID) }
+            if !scoped.isEmpty {
+                sections.append(LibrarySection(
+                    id: "continueWatching", title: "Continue Watching", localizedTitle: "Continue Watching",
+                    style: .landscape, items: scoped.map { item in
+                        accountID.map { item.taggingSource($0) } ?? item
+                    }
+                ))
+            }
+        case .failure(let error):
+            record(error, section: .continueWatching, responses: watchingResult.responses, paging: watchingResult.paging,
+                   transport: watchingResult.transport, http: watchingResult.http)
+            sections += previousSections.filter { $0.id == "continueWatching" }
+        }
+        switch hubResult.result {
+        case .success(let hubs):
+            var occurrences: [String: Int] = [:]
+            sections += hubs.compactMap { section -> LibrarySection? in
+                guard !section.items.isEmpty else { return nil }
+                let key = "\(section.id.utf8.count):\(section.id)\(section.title)"
+                let occurrence = occurrences[key, default: 0]
+                occurrences[key] = occurrence + 1
+                return LibrarySection(
+                    id: "hub:\(key):\(occurrence)", title: section.title,
+                    localizedTitle: section.localizedTitle, localizedTitleSuffix: section.localizedTitleSuffix,
+                    style: section.style,
+                    items: section.items.map {
+                        let item = $0.libraryID == nil ? $0.taggingLibrary(libraryID) : $0
+                        return accountID.map { item.taggingSource($0) } ?? item
+                    }
+                )
+            }
+        case .failure(let error):
+            record(error, section: .recommendations, responses: hubResult.responses, paging: hubResult.paging,
+                   transport: hubResult.transport, http: hubResult.http)
+            sections += previousSections.filter { $0.id.hasPrefix("hub:") }
+        }
+        switch latestResult.result {
+        case .success(let page):
+            if !page.items.isEmpty {
+                sections.append(LibrarySection(
+                    id: "recentlyAdded", title: "Recently Added", localizedTitle: "Recently Added",
+                    items: page.items.map { item in
+                        accountID.map { item.taggingSource($0) } ?? item
+                    }
+                ))
+            }
+        case .failure(let error):
+            record(error, section: .recentlyAdded, responses: latestResult.responses, paging: latestResult.paging,
+                   transport: latestResult.transport, http: latestResult.http)
+            sections += previousSections.filter { $0.id == "recentlyAdded" }
+        }
+        let firstError = failures.first?.error
+        errorServers = failedServers
+        recommendationDiagnostic = failures.isEmpty ? nil : .init(provider: provider.kind, failures: failures)
+        if let recommendationDiagnostic {
+            PlozzLog.app.error("Library recommendations failed: \(recommendationDiagnostic.supportText)")
+        }
+        recommendationsDirty = firstError != nil
+        if !sections.isEmpty {
+            recommendationState = .loaded(sections)
+        } else if let firstError {
+            if recommendationState.value == nil {
+                guard !Task.isCancelled, generation == recommendationGeneration,
+                      watchRevision == recommendationWatchRevision else { return }
+                recommendationState = .failed(firstError)
+            }
+        } else {
+            recommendationState = .empty
+        }
+    }
+
     public func retryFailedPages() async {
+        if collectionScanIncomplete {
+            await loadFirstPage()
+            return
+        }
+        if needsRefreshRetry {
+            await refreshAfterCatalogChange(preservingFileFacts: true)
+            return
+        }
         let generation = contentGeneration
         for page in failedPages.sorted() {
             guard !Task.isCancelled, generation == contentGeneration else { return }
             await ensurePageLoaded(page)
         }
+    }
+
+    @discardableResult
+    private func recordBrowseFailure(
+        _ error: Error, mode: LibraryContentMode,
+        captured: HTTPResponseDiagnostics.CapturedResult<MediaPage>? = nil
+    ) -> AppError {
+        let mapped = (LibrarySourceFailure.underlying(error) as? AppError) ?? .unknown("")
+        queryMessage = (LibrarySourceFailure.underlying(error) as? LibraryQueryFailure)?.message
+        if mapped == .serverUnreachable {
+            queryMessage = "Couldn't connect to the server. Check your connection and try again."
+        }
+        let section: LibraryLoadDiagnostic.Section
+        switch browseScope {
+        case .collectionMembers: section = .collectionMembers
+        case .playlistMembers: section = .playlistMembers
+        case .library:
+            switch mode {
+            case .collections: section = .collections
+            case .playlists: section = .playlists
+            case .recommended: section = .recommendations
+            case .titles: section = .browse
+            }
+        }
+        let diagnostic = LibraryLoadDiagnostic(provider: provider.kind, operation: .libraryBrowse, failures: [
+            .init(
+                section: section, error: mapped, responses: captured?.responses ?? [],
+                paging: captured?.paging ?? [], transport: captured?.transport ?? [], http: captured?.http ?? []
+            )
+        ])
+        queryPresentation.failureDiagnostic = diagnostic
+        PlozzLog.app.error("Library browse failed: \(diagnostic.supportText)")
+        return mapped
     }
 
     private static func defaultsKey(for kind: MediaItemKind, suffix: String?) -> String {
@@ -734,16 +1298,6 @@ public final class LibraryBrowseViewModel {
         return descriptor
     }
 
-    private static func saveSort(
-        _ sort: CoreModels.SortDescriptor,
-        for kind: MediaItemKind,
-        suffix: String?,
-        to defaults: UserDefaults
-    ) {
-        guard let data = try? JSONEncoder().encode(sort) else { return }
-        defaults.set(data, forKey: defaultsKey(for: kind, suffix: suffix))
-    }
-
     /// Tuned paging plan for library browse. The default provider limit (60) is
     /// split into a small first page for near-instant first paint and a larger
     /// steady-state page size for efficient long-scroll throughput.
@@ -759,7 +1313,8 @@ public final class LibraryBrowseViewModel {
         PageRequest(
             startIndex: startIndex(forPage: page),
             limit: pageSpan(forPage: page),
-            sort: sort
+            sort: sort,
+            filters: browseScope == .library && contentMode == .titles ? filters : .all
         )
     }
 
@@ -800,7 +1355,7 @@ public final class LibraryBrowseViewModel {
     }
 
     private func startPageLoadIfNeeded(_ page: Int, priority forcedPriority: TaskPriority? = nil) -> Task<Void, Never>? {
-        guard page >= 0 else { return nil }
+        guard page >= 0, !collectionScanIncomplete else { return nil }
         let start = startIndex(forPage: page)
         guard start < totalCount else { return nil }
         guard !pagesLoaded.contains(page) else { return nil }
@@ -832,9 +1387,10 @@ public final class LibraryBrowseViewModel {
             if pageRequestIDs[page] == requestID { finishPageLoad(page) }
         }
         guard !Task.isCancelled, generation == contentGeneration else { return }
-        do {
-            let response = try await Self.fetchPage(
+        let captured = await HTTPResponseDiagnostics.capture {
+            try await Self.fetchPage(
                 provider: provider,
+                querySession: querySession,
                 containerID: containerID,
                 containerKind: containerKind,
                 browseScope: browseScope,
@@ -842,7 +1398,10 @@ public final class LibraryBrowseViewModel {
                 request: request,
                 priority: priority
             )
-            guard !Task.isCancelled, generation == contentGeneration else { return }
+        }
+        guard !Task.isCancelled, generation == contentGeneration, !captured.isCancelled else { return }
+        do {
+            let response = try captured.result.get()
             if response.totalCount != totalCount {
                 totalCount = response.totalCount
                 resize(to: response.totalCount)
@@ -857,20 +1416,23 @@ public final class LibraryBrowseViewModel {
             fill(response)
             pagesLoaded.insert(page)
             failedPages.remove(page)
-            if failedPages.isEmpty { pageError = nil }
+            if failedPages.isEmpty {
+                pageError = nil
+                queryPresentation.failureDiagnostic = nil
+                queryMessage = nil
+            }
             cancelOutOfRangeInFlightPages()
         } catch is CancellationError {
             return
-        } catch let error as AppError {
+        } catch LibraryQueryFailure.restartRequired {
             guard !Task.isCancelled, generation == contentGeneration else { return }
-            PlozzLog.app.error("LibraryBrowse: page \(page) failed for \(containerID): \(String(describing: error))")
-            failedPages.insert(page)
-            pageError = error
+            PlozzLog.app.info("LibraryBrowse: restarting after refined source identities")
+            finishPageLoad(page)
+            await loadFirstPage()
         } catch {
             guard !Task.isCancelled, generation == contentGeneration else { return }
-            PlozzLog.app.error("LibraryBrowse: page \(page) failed for \(containerID): \(String(describing: error))")
             failedPages.insert(page)
-            pageError = .unknown("")
+            pageError = recordBrowseFailure(error, mode: mode, captured: captured)
         }
     }
 
@@ -918,14 +1480,18 @@ public final class LibraryBrowseViewModel {
 
     private nonisolated static func fetchPage(
         provider: any MediaProvider,
+        querySession: LibraryQuerySession,
         containerID: String,
         containerKind: MediaItemKind,
         browseScope: LibraryBrowseScope,
         contentMode: LibraryContentMode,
         request: PageRequest,
-        priority: TaskPriority
+        priority: TaskPriority,
+        progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in },
+        collectionProgress: @escaping @Sendable (LibraryCollectionProgress) async -> Void = { _ in }
     ) async throws -> MediaPage {
-        let task = Task.detached(priority: priority) {
+        // Preserve task-local failure evidence without inheriting the UI actor.
+        let task = Task(priority: priority) {
             if browseScope == .collectionMembers {
                 return try await fetchCollectionMembers(
                     provider: provider, collectionID: containerID, request: request
@@ -937,12 +1503,12 @@ public final class LibraryBrowseViewModel {
                 )
             }
             if contentMode == .collections {
-                return try await provider.collections(in: containerID, page: request)
+                return try await provider.collections(in: containerID, page: request, progress: collectionProgress)
             }
             if contentMode == .playlists {
                 return try await provider.videoPlaylists(in: containerID, page: request)
             }
-            return try await provider.items(in: containerID, kind: containerKind, page: request)
+            return try await querySession.page(request, progress: progress)
         }
         return try await withTaskCancellationHandler {
             try await task.value

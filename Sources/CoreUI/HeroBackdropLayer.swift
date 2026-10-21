@@ -12,7 +12,11 @@ public enum DetailBackdropArtwork {
         // Discovery enrichment owns its first backdrop; do not race a different chooser.
         guard !isDiscoveryItem || item.heroBackdropURL != nil || item.backdropURL != nil else { return nil }
         return {
-            await ArtworkRouter.shared.heroArtworkURL(for: item, placement: .detailBackdrop) ?? item.posterURL
+            if let hero = await ArtworkRouter.shared.heroArtworkURL(for: item, placement: .detailBackdrop) {
+                return hero
+            }
+            if let poster = item.libraryArtworkURL(item.posterURL) { return poster }
+            return await ArtworkRouter.shared.artworkURL(.poster, for: item)
         }
     }
 }
@@ -26,11 +30,12 @@ struct DetailBackdropArtworkSource {
     let key: String
     let previewKey: String
 
-    init(item: MediaItem) {
+    init(item: MediaItem, policy: ArtworkPresentationPolicy) {
+        let policy = policy.forArea(.details).forPlacement(.detailBackdrop)
         self.init(
-            references: item.artworkReferences(for: .detailBackdrop),
+            references: policy.references(for: item, placement: .detailBackdrop),
             pinIdentity: "detail:\(item.id)",
-            settings: MetadataProviderSettingsStore().load(),
+            settings: policy.metadataSettings,
             fallback: DetailBackdropArtwork.fallback(
                 for: item, isDiscoveryItem: TitleClassifier.isDiscoveryRouting(item, identitySources: item.sources)
             )
@@ -63,8 +68,8 @@ final class DetailBackdropArtworkRequest {
     let task: Task<FirstPaintArtwork?, Never>
     private let warmup: DetailBackdropWarmup?
 
-    init?(item: MediaItem) {
-        let source = DetailBackdropArtworkSource(item: item)
+    init?(item: MediaItem, policy: ArtworkPresentationPolicy) {
+        let source = DetailBackdropArtworkSource(item: item, policy: policy)
         guard !source.references.isEmpty else { return nil }
         key = source.key
         let warmup = DetailBackdropFocusPrewarmer.claim(matching: key)
@@ -74,7 +79,6 @@ final class DetailBackdropArtworkRequest {
             await ArtworkFirstPaintResolver.resolve(
                 references: source.references, variant: .heroPreview, maxAspectRatio: 3,
                 asyncOnlineURL: fallback,
-                maximumOnlineWait: ArtworkFirstPaintResolver.focalArtworkWait,
                 prefersOnlineArtwork: source.settings.preferOnlineArtwork
             )
         }
@@ -126,7 +130,6 @@ fileprivate final class DetailBackdropWarmup {
             await ArtworkFirstPaintResolver.resolve(
                 references: source.references, variant: .heroPreview, maxAspectRatio: 3,
                 asyncOnlineURL: fallback,
-                maximumOnlineWait: ArtworkFirstPaintResolver.focalArtworkWait,
                 prefersOnlineArtwork: source.settings.preferOnlineArtwork,
                 background: true
             )
@@ -175,10 +178,12 @@ enum DetailBackdropFocusPrewarmer {
 private struct DetailBackdropFocusWarmup: ViewModifier {
     let item: MediaItem?
     let isFocused: Bool
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
 
     func body(content: Content) -> some View {
         let source = isFocused ? item.flatMap { item in
-            item.kind == .movie || item.kind == .series ? DetailBackdropArtworkSource(item: item) : nil
+            item.kind == .movie || item.kind == .series
+                ? DetailBackdropArtworkSource(item: item, policy: artworkPolicy) : nil
         } : nil
         content.task(id: source?.key) {
             guard let source else { return }
@@ -228,8 +233,10 @@ public extension View {
 /// `EmptyView` by default (today), so the image-only path is byte-for-byte the
 /// same as the detail hero's original backdrop.
 public struct HeroBackdropLayer<Video: View>: View {
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
     #if os(tvOS)
     @Environment(\.detailEntranceSession) private var detailEntrance
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var artworkResolution = ArtworkResolutionState()
     #endif
     /// Ordered candidate backdrop URLs (first that loads and is wide enough wins).
@@ -331,12 +338,13 @@ public struct HeroBackdropLayer<Video: View>: View {
             // Put a real image up while the 2000px pass decodes. Home's hero has
             // always done this; the detail hero opened onto a scrim instead.
             previewVariant: .heroPreview,
+            artworkPolicy: artworkPolicy.forArea(.details).forPlacement(.detailBackdrop),
             asyncFallbackURL: asyncFallbackURL,
-            preferredArtworkWait: ArtworkFirstPaintResolver.focalArtworkWait,
             pinIdentity: pinIdentity,
             content: ArtworkFillImage.init,
             placeholder: { ambientPlaceholder }
         )
+        .reportingHeroArtwork(id: pinIdentity)
         #if os(tvOS)
         .environment(\.artworkResolutionState, artworkResolution)
         .onChange(of: artworkResolution.image, initial: true) { _, image in
@@ -366,13 +374,29 @@ public struct HeroBackdropLayer<Video: View>: View {
         .modifier(OverscanBreakout(enabled: ignoresOverscan))
     }
 
-    /// Legibility scrim: a seamless edge vignette (same darkening on every side)
-    /// plus a faint all-over wash, so the title/logo/overview read clearly against
-    /// the artwork while the darkening blends evenly across the whole hero instead
-    /// of pooling on one side — matching the Home hero. Lives *under* the dissolve
-    /// mask so it fades away with the image and never tints the revealed background.
-    @ViewBuilder
+    /// Details have no rail: retain the softer upper corner for every navigation
+    /// style, and reveal the shading before the foreground without moving it.
     private var scrim: some View {
+        scrimContent
+            #if os(tvOS)
+            .opacity(isScrimVisible ? 1 : 0)
+            .animation(
+                reduceMotion ? nil : detailEntrance.map {
+                    DetailEntranceMotion.reveal(duration: $0.timing.reveal)
+                },
+                value: isScrimVisible
+            )
+            #endif
+    }
+
+    #if os(tvOS)
+    private var isScrimVisible: Bool {
+        reduceMotion || (detailEntrance?.isBackdropShadingVisible ?? true)
+    }
+    #endif
+
+    @ViewBuilder
+    private var scrimContent: some View {
         if usesCachedScrim {
             HeroLegibilityTexture(tone: scrimTone)
         } else {
@@ -390,16 +414,10 @@ public struct HeroBackdropLayer<Video: View>: View {
     }
 
     private var analyticScrim: some View {
-        // TEST: top and trailing dropped. Detail-page content runs along the
-        // LEFT and fades out at the BOTTOM, so those two edges are the only ones
-        // doing legibility work; darkening the other two only costs contrast on
-        // the part of the artwork the viewer is actually looking at.
         HeroLegibilityScrim(
             tone: scrimTone,
             edgePeak: 0.55,
             edges: [.leading, .bottom],
-            // Keep the top-left clean: nothing is drawn over it, so darkening it
-            // only flattens the artwork. The wash arrives where the content is.
             sideDarkeningStart: 0.34
         )
     }

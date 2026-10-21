@@ -1,22 +1,48 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import CoreModels
 
 public struct SyncStatusPresentation {
     let summary: LocalizedStringResource
     let isSyncing: Bool
     let itemCount: Int?
     let accountTag: String?
+    let isRecovering: Bool
 
     public init(
         summary: LocalizedStringResource,
         isSyncing: Bool,
         itemCount: Int? = nil,
-        accountTag: String? = nil
+        accountTag: String? = nil,
+        isRecovering: Bool = false
     ) {
         self.summary = summary
         self.isSyncing = isSyncing
         self.itemCount = itemCount
         self.accountTag = accountTag
+        self.isRecovering = isRecovering
+    }
+}
+
+public struct SyncRecoveryWarning: View {
+    public init() {}
+
+    public var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Only for troubleshooting")
+                    .font(.callout.weight(.semibold))
+                Text("Sync is automatic. You should not normally need either option. If changes are missing, try Reload first. Use Reset only if Reload does not help.")
+                    .font(.footnote)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("cloud-sync-recovery-warning")
     }
 }
 
@@ -34,9 +60,16 @@ public struct SyncStatusPresentation {
 /// Deferring the read to here confines the invalidation to this one line.
 public struct SyncStatusProvider {
     let make: () -> SyncStatusPresentation
+    let inventory: (() async throws -> SyncDataInventory)?
 
     /// - Parameter make: called from ``SyncStatusLine``'s body, never earlier.
-    public init(_ make: @escaping () -> SyncStatusPresentation) { self.make = make }
+    public init(
+        inventory: (() async throws -> SyncDataInventory)? = nil,
+        _ make: @escaping () -> SyncStatusPresentation
+    ) {
+        self.inventory = inventory
+        self.make = make
+    }
 }
 
 public struct SyncStatusLine: View {
@@ -99,6 +132,14 @@ public struct SyncStatusLine: View {
             return status.summary
         }
         return Self.longSyncMessages[longSyncMessageIndex]
+    }
+}
+
+struct SyncRecoveryDisabled: ViewModifier {
+    let provider: SyncStatusProvider?
+
+    func body(content: Content) -> some View {
+        content.disabled(provider?.make().isRecovering == true)
     }
 }
 #endif

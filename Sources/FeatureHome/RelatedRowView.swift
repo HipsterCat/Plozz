@@ -46,6 +46,11 @@ struct RelatedRowView: View {
                     },
                     onSelect: onSelect
                 )
+                #if os(tvOS)
+                // Bridge the empty gutter of a short rail before focus reaches Cast.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .focusSection()
+                #endif
             } else if !hasResolved {
                 placeholder
             }
@@ -55,6 +60,7 @@ struct RelatedRowView: View {
         // mirrors it around its non-scrolling HStack. Keeping this modifier outside
         // the branch makes their title, cards, and total footprint identical.
         .padding(.top, -metrics.railTopPadding)
+        .environment(\.plozzCardCaptionView, .related)
         .padding(.bottom, -metrics.railVerticalPadding)
         // Resolved and empty: the row collapses. A title with nothing related in
         // this library is rare but real, and permanent placeholders for content

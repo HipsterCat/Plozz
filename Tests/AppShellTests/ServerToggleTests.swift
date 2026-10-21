@@ -182,6 +182,9 @@ final class ServerToggleTests: XCTestCase {
             state.plexHomeUsers.plexHomeUserSwitch = { homeUserID, _, _, _ in
                 "account-token-\(homeUserID)"
             }
+            state.plexHomeUsers.plexHomeUsersFetch = { _, _ in
+                ["child-a", "child-b"].map { PlexHomeUser(id: $0, name: $0, requiresPIN: false) }
+            }
             state.plexHomeUsers.plexServerTokenResolve = { _, userToken, _ in
                 "server-\(userToken)"
             }
@@ -415,6 +418,56 @@ final class ServerToggleTests: XCTestCase {
         )
     }
 
+    func testPlexSourceToggleScopesPINWithoutChangingSavedUserOrLibraryVisibility() async throws {
+        let store = AccountStore(secureStore: InMemorySecureStore())
+        var plexAccount = account(id: "plex", host: "plex.example.test")
+        plexAccount.server.provider = .plex
+        try store.add(plexAccount, token: "owner-token")
+        let profiles = ProfilesModel(store: ProfileStore(defaults: makeDefaults()))
+        let binding = PlexHomeUserBinding(homeUserID: "parent", name: "Parent", requiresPIN: true,
+                                         pinRequirementVerified: true)
+        profiles.update(profiles.activeProfile.settingHomeUserBinding(binding, forPlexAccount: "plex"))
+        profiles.setActiveAccountIDs([], for: profiles.activeProfileID)
+        let libraryStore = HomeLibraryVisibilityStore(defaults: makeDefaults())
+        libraryStore.save(.init(disabledKeys: ["plex:movies", "plex:shows"]))
+        let visibility = HomeLibraryVisibilityModel(store: libraryStore)
+        let state = AppState(accountStore: store, profilesModel: profiles,
+                             homeLibraryVisibilityModel: visibility)
+        state.plexHomeUsers.plexHomeUsersFetch = { _, _ in
+            [PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true)]
+        }
+        state.plexHomeUsers.plexHomeUserSwitch = { _, pin, _, _ in
+            XCTAssertEqual(pin, "2468")
+            return "parent-cloud"
+        }
+        state.plexHomeUsers.plexServerTokenResolve = { _, _, _ in "parent-server" }
+        state.bootstrap()
+        XCTAssertNil(state.plexHomeUsers.pendingPlexPINRequest)
+        XCTAssertNil(state.accountsProviders.provider(forAccountID: "plex"))
+
+        state.profileFlow.setAccount("plex", includedInActiveProfile: true)
+        XCTAssertEqual(state.plexHomeUsers.pendingPlexPINRequest?.accountID, "plex")
+        XCTAssertEqual(visibility.visibility.disabledKeys, ["plex:movies", "plex:shows"])
+        XCTAssertNil(state.accountsProviders.tokenResolver("plex"))
+        await state.plexHomeUsers.waitForPlexPINRequirementCheck()
+        state.plexHomeUsers.submitPlexPIN("2468")
+        await state.plexHomeUsers.waitForPlexPINRequirementCheck()
+        XCTAssertEqual(state.accountsProviders.tokenResolver("plex"), "parent-server")
+
+        state.profileFlow.setAccount("plex", includedInActiveProfile: false)
+        XCTAssertNil(state.plexHomeUsers.pendingPlexPINRequest)
+        XCTAssertNil(state.accountsProviders.tokenResolver("plex"))
+        XCTAssertNil(state.plexHomeUsers.plexDiscoverTokens.token(for: "plex"))
+        XCTAssertEqual(profiles.activeProfile.homeUserBinding(forPlexAccount: "plex"), binding)
+
+        state.profileFlow.switchProfile(to: profiles.activeProfileID)
+        XCTAssertNil(state.plexHomeUsers.pendingPlexPINRequest)
+        state.profileFlow.setAccount("plex", includedInActiveProfile: true)
+        XCTAssertEqual(state.plexHomeUsers.pendingPlexPINRequest?.accountID, "plex")
+        XCTAssertNil(state.accountsProviders.tokenResolver("plex"))
+        XCTAssertEqual(visibility.visibility.disabledKeys, ["plex:movies", "plex:shows"])
+    }
+
     func testAuthenticatedHTTPResolverUsesFreshAccountAndRejectsOldRevision() async throws {
         let store = AccountStore(secureStore: InMemorySecureStore())
         try store.add(account(id: "a", host: "old.example.com"), token: "token-a")
@@ -538,6 +591,9 @@ private final class FailingRemovalAccountStore:
     }
 
     func add(_ account: Account, token: String) throws {}
+    func registerAuthenticatedSession(_ session: UserSession) throws -> AccountRegistration {
+        throw AccountStoreError.metadataUpdatesUnavailable
+    }
 
     func addMediaShare(
         _ account: Account,

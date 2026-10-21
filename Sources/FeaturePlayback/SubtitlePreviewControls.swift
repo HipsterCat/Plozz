@@ -18,7 +18,7 @@ struct SubtitlePreviewControls: View {
     @State private var expanded = false
 
     var body: some View {
-        VStack(spacing: 2) {
+        SettingsControlRows {
             Button {
                 options.beginFullscreenPresentation()
                 fullscreenPresented = true
@@ -39,7 +39,6 @@ struct SubtitlePreviewControls: View {
             .focused($focus, equals: .header)
             .accessibilityHint("Select for full-screen preview. Move down for preview options.")
             if expanded {
-                PlozzDivider().padding(.horizontal, 16).padding(.vertical, 4)
                 option("Animate background", selection: $options.animatesBackground, control: .background)
                 option("Preview file formatting", selection: $options.showsFileFormatting, control: .fileFormatting)
                 option("HDR preview", selection: $options.showsHDRBrightness, control: .hdrBrightness)
@@ -48,17 +47,19 @@ struct SubtitlePreviewControls: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .settingsGroupSurface(cornerRadius: 28)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("subtitle-preview-controls")
         .focusSection()
         .task(id: focus) {
             if focus == nil {
                 await Task.yield()
                 guard !Task.isCancelled, focus == nil, !fullscreenPresented else { return }
             }
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+            withAnimation(reduceMotion ? nil : SettingsPageMotion.animation) {
                 expanded = focus != nil
             }
         }
-        .fullScreenCover(isPresented: $fullscreenPresented, onDismiss: {
+        .plozzFullScreenCover(isPresented: $fullscreenPresented, onDismiss: {
             options.finishFullscreenPresentation()
             focus = .header
         }) {

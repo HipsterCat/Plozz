@@ -8,6 +8,44 @@ import FoundationNetworking
 #endif
 
 extension SiloProviderTests {
+    func testAddressEditsPreserveActiveMediaAndSubtitleGrantsWithoutCrossLoginReuse() async throws {
+        let registry = ProviderRegistry()
+        let (provider, _, _, request) = try await subtitleFixture(registry: registry)
+        let subtitleContext = RemoteSubtitleContext(request: request)
+        let results = try await provider.remoteSubtitleSearch(context: subtitleContext, language: "en", preference: .default)
+        let downloaded = try await provider.downloadRemoteSubtitle(context: subtitleContext, subtitleID: results[0].id)
+        guard case .authenticatedHTTP(let subtitle) = downloaded?.deliverySource,
+              case .authenticatedHTTP(let media) = request.playbackSource else {
+            return XCTFail("Missing active media/subtitle grants")
+        }
+        let beforeMedia = try await provider.resolveHTTPResource(media)
+        let beforeSubtitle = try await provider.resolveHTTPResource(subtitle)
+        let otherContext = ProviderResolutionContext(session: provider.session, accountID: "other",
+                                                     credentialRevision: CredentialRevision())
+        let other = try XCTUnwrap(registry.provider(for: otherContext) as? SiloProvider)
+        let alias = URL(string: "http://192.168.1.50:8090")!
+        var session = provider.session
+        for accountID in ["other", provider.accountID] {
+            registry.updateServerAddresses(accountID: accountID, alternatives: [alias])
+            if accountID == provider.accountID { session.server.alternateConnectionURLs = [alias] }
+            let current = try XCTUnwrap(registry.provider(for: .init(session: session, accountID: provider.accountID,
+                credentialRevision: provider.credentialRevision)) as? SiloProvider)
+            XCTAssertTrue(current === provider)
+            let afterMedia = try await current.resolveHTTPResource(media)
+            let afterSubtitle = try await current.resolveHTTPResource(subtitle)
+            XCTAssertEqual(afterMedia, beforeMedia)
+            XCTAssertEqual(afterSubtitle, beforeSubtitle)
+        }
+        XCTAssertFalse(other === provider)
+        let differentLogin = try XCTUnwrap(registry.provider(for: .init(session: session,
+            accountID: provider.accountID, credentialRevision: CredentialRevision())) as? SiloProvider)
+        XCTAssertFalse(differentLogin === provider)
+        do {
+            _ = try await differentLogin.resolveHTTPResource(media)
+            XCTFail("A new credential revision must not inherit another login's grants")
+        } catch { XCTAssertEqual(error as? AppError, .unauthorized) }
+    }
+
     func testSubtitleSearchAndDownloadFollowSelectedFileAndFetchAuthorizedCues() async throws {
         let (provider, http, _, request) = try await subtitleFixture()
         let context = RemoteSubtitleContext(request: request)
@@ -169,7 +207,7 @@ extension SiloProviderTests {
         } catch { XCTAssertEqual(error as? AppError, .invalidResponse) }
     }
 
-    private func subtitleFixture(unavailable: Bool = false, failDownload: Bool = false,
+    private func subtitleFixture(registry: ProviderRegistry? = nil, unavailable: Bool = false, failDownload: Bool = false,
                                  warningsOnly: Bool = false, distributedMedia: Bool = false,
                                  wrongReceiptFile: Bool = false) async throws
         -> (SiloProvider, SiloSubtitleHTTP, SiloCredentialStub, PlaybackRequest) {
@@ -193,7 +231,14 @@ extension SiloProviderTests {
         let http = SiloSubtitleHTTP(fixtures: fixtures, unavailable: unavailable,
                                     failDownload: failDownload, warningsOnly: warningsOnly,
                                     wrongReceiptFile: wrongReceiptFile)
-        let provider = try SiloProvider(context: context(raw), credentials: store, http: http)
+        let context = context(raw)
+        let provider: SiloProvider
+        if let registry {
+            registry.register(.silo) { try SiloProvider(context: $0, credentials: store, http: http) }
+            provider = try XCTUnwrap(registry.provider(for: context) as? SiloProvider)
+        } else {
+            provider = try SiloProvider(context: context, credentials: store, http: http)
+        }
         let request = try await provider.playbackInfo(for: "movie:1", mediaSourceID: "43", forceTranscode: false)
         return (provider, http, store, request)
     }

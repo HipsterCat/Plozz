@@ -44,6 +44,7 @@ CURRENT_PROJECT_VERSION = 1;
 PLOZZ_RELEASE_CHANNEL = "";
 PLOZZ_RELEASE_ID = "";
 PLOZZ_RELEASE_VERSION = "";
+PLOZZ_DEV_FEATURE_LABEL = "";
 MARKETING_VERSION = 0.1;
 CURRENT_PROJECT_VERSION = 1;
 EOF
@@ -88,6 +89,27 @@ EOF
             for setting in ["PLOZZ_RELEASE_VERSION", "PLOZZ_RELEASE_ID", "PLOZZ_RELEASE_CHANNEL"]:
                 self.assertIn(f'{setting} = "";', project.read_text())
 
+            (root / ".plozz-dev-feature").write_text("wetrakr\n")
+            result = bake(PLOZZ_BUILD_NUMBER="4776.4")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PLOZZ_DEV_FEATURE_LABEL = "wetrakr";', project.read_text())
+            self.assertIn("CURRENT_PROJECT_VERSION = 4776.4;", project.read_text())
+            self.assertIn("Development display: build 4776.4 wetrakr", result.stdout)
+            result = bake(PLOZZ_BUILD_NUMBER="4776.4", PLOZZ_DEV_FEATURE="focus")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PLOZZ_DEV_FEATURE_LABEL = "focus";', project.read_text())
+            result = bake(PLOZZ_BUILD_NUMBER="4776.4", PLOZZ_DEV_FEATURE="")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PLOZZ_DEV_FEATURE_LABEL = "";', project.read_text())
+            for invalid in ['a' * 33, 'wetrakr\nfocus', 'bad"; value = "x', "$(FEATURE)"]:
+                result = bake(PLOZZ_BUILD_NUMBER="4776.4", PLOZZ_DEV_FEATURE=invalid)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("development feature label", result.stderr)
+            for overrides in [selected, {**selected, "PLOZZ_RELEASE_CHANNEL": ""}]:
+                result = bake(**overrides, PLOZZ_DEV_FEATURE="wetrakr")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('PLOZZ_DEV_FEATURE_LABEL = "";', project.read_text())
+
             for changes in (
                 {"PLOZZ_BUILD_NUMBER": "46"},
                 {"PLOZZ_MARKETING_VERSION": "2026.9.29.1"},
@@ -97,6 +119,22 @@ EOF
                 with self.subTest(changes=changes):
                     result = bake(**{**selected, **changes})
                     self.assertNotEqual(result.returncode, 0)
+
+            catalog_path = root / "App/Resources/ReleaseNotes.json"
+            catalog = json.loads(catalog_path.read_text())
+            catalog["releases"].insert(0, {
+                **catalog["releases"][0], "id": "release/045.1", "build": "45.1"
+            })
+            catalog_path.write_text(json.dumps(catalog))
+            result = bake(PLOZZ_RELEASE_ID="release/045.1", PLOZZ_BUILD_NUMBER="45.1",
+                          PLOZZ_RELEASE_CHANNEL="testflight")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(project.read_text().count("CURRENT_PROJECT_VERSION = 45.1;"), 2)
+            self.assertIn('PLOZZ_RELEASE_ID = "release/045.1";', project.read_text())
+            self.assertIn('PLOZZ_RELEASE_VERSION = "2026.9.29";', project.read_text())
+            result = bake(PLOZZ_RELEASE_ID="release/045.1", PLOZZ_BUILD_NUMBER="45",
+                          PLOZZ_RELEASE_CHANNEL="testflight")
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

@@ -5,9 +5,12 @@ import PlozzCoreUI
 /// Shared metrics for the Settings detail panes so spacing is consistent (and
 /// tunable in one place) across every feature form.
 enum SettingsMetrics {
-    /// Vertical gap between top-level sections within a detail pane (the enable
-    /// toggle and each headed group). Deliberately generous for the 10-foot UI.
+    /// Legacy split panes and workspace forms share the same control-group spacing.
+    #if os(tvOS)
+    static let sectionSpacing = SettingsFormMetrics.controlSpacing
+    #else
     static let sectionSpacing: CGFloat = 80
+    #endif
 }
 
 /// One row in a Settings master/detail split. The left list shows the row's
@@ -18,6 +21,17 @@ enum SettingsMetrics {
 /// toggle revealing Movies/TV/Anime). Set `indented` for those revealed
 /// children so they read as nested under their parent toggle.
 struct SettingsSplitRow: Identifiable {
+    enum Presentation {
+        case inline
+        case compactRow
+        case labeledControl
+        case page
+    }
+    enum SectionStart {
+        case heading(Text)
+        case divider
+    }
+
     let id: String
     /// Pre-built so a row can carry either localized app copy or verbatim
     /// provider content, without the render site having to know which. See the
@@ -25,7 +39,62 @@ struct SettingsSplitRow: Identifiable {
     let title: Text
     let description: Text?
     let indented: Bool
+    let sectionStart: SectionStart?
+    let subpage: SettingsDetailSubpage?
     let detail: () -> AnyView
+    var presentation: Presentation = .inline
+    var route: SettingsRoute?
+    var summary: Text?
+    var childRows: (() -> [SettingsSplitRow])?
+    var hasGroupedContent = false
+    var hasIllustratedContent = false
+
+    func illustratedContent() -> Self {
+        var row = self
+        row.hasIllustratedContent = true
+        return row
+    }
+
+    func groupedContent() -> Self {
+        var row = self
+        row.hasGroupedContent = true
+        return row
+    }
+
+    static func page(
+        id: String, title: LocalizedStringResource,
+        rows: @escaping () -> [SettingsSplitRow]
+    ) -> Self {
+        var row = Self(id: id, title: title) { EmptyView() }
+        row.presentation = .page
+        row.childRows = rows
+        return row
+    }
+
+    func page(summary: Text? = nil) -> Self {
+        var row = self
+        row.presentation = .page
+        row.summary = summary
+        return row
+    }
+
+    func compactRow() -> Self {
+        var row = self
+        row.presentation = .compactRow
+        return row
+    }
+
+    func labeledControl() -> Self {
+        var row = self
+        row.presentation = .labeledControl
+        return row
+    }
+
+    func destination(_ route: SettingsRoute) -> Self {
+        var row = self
+        row.route = route
+        return row
+    }
 
     /// A row whose label is app COPY — the common case.
     ///
@@ -37,13 +106,17 @@ struct SettingsSplitRow: Identifiable {
         id: String,
         title: LocalizedStringResource,
         description: LocalizedStringResource? = nil,
+        sectionStart: SectionStart? = nil,
         indented: Bool = false,
+        subpage: SettingsDetailSubpage? = nil,
         @ViewBuilder detail: @escaping () -> Detail
     ) {
         self.init(id: id,
                   title: Text(title),
                   description: description.map(Text.init),
+                  sectionStart: sectionStart,
                   indented: indented,
+                  subpage: subpage,
                   detail: detail)
     }
 
@@ -54,13 +127,17 @@ struct SettingsSplitRow: Identifiable {
         id: String,
         verbatimTitle: String,
         description: LocalizedStringResource? = nil,
+        sectionStart: SectionStart? = nil,
         indented: Bool = false,
+        subpage: SettingsDetailSubpage? = nil,
         @ViewBuilder detail: @escaping () -> Detail
     ) {
         self.init(id: id,
                   title: Text(verbatim: verbatimTitle),
                   description: description.map(Text.init),
+                  sectionStart: sectionStart,
                   indented: indented,
+                  subpage: subpage,
                   detail: detail)
     }
 
@@ -68,20 +145,24 @@ struct SettingsSplitRow: Identifiable {
         id: String,
         title: Text,
         description: Text?,
+        sectionStart: SectionStart?,
         indented: Bool,
+        subpage: SettingsDetailSubpage?,
         @ViewBuilder detail: @escaping () -> Detail
     ) {
         self.id = id
         self.title = title
         self.description = description
         self.indented = indented
+        self.sectionStart = sectionStart
+        self.subpage = subpage
         self.detail = { AnyView(detail()) }
     }
 }
 
 /// A native tvOS master/detail layout for Level-2 settings pages.
 ///
-/// LEFT (master): a focusable **flat** vertical list of setting *names* under a
+/// LEFT (master): a focusable vertical list of setting *names* under a
 /// single page header. The list owns focus; moving focus up/down
 /// **live-updates** the detail pane via `selectedRowID`.
 ///
@@ -91,15 +172,9 @@ struct SettingsSplitRow: Identifiable {
 /// control; **left / Menu** returns to the list. This mirrors Apple's own
 /// Settings/Music master-detail choreography on tvOS.
 ///
-/// ## There are no visible groups on this page
-/// The master list is deliberately FLAT: one row per setting, under the one page
-/// header. There is no rendered sub-grouping, so this layout takes plain rows
-/// and offers no section/header type to pass one. Grouping copy that isn't shown
-/// is worse than none — it makes call sites (and the people reading them) believe
-/// in categories the viewer can't see. To group *controls*, put them inside a
-/// single row's detail pane with `SettingsDetailGroup`, which really does render
-/// a heading. Related rows can still be assembled by a computed `[SettingsSplitRow]`
-/// in the host page — that reads as code organisation, which is all it is.
+/// Rows remain flat unless a caller explicitly supplies `sectionStart` headings
+/// or dividers. These are non-focusable; row IDs still own selection and restoration.
+/// To group controls within a detail pane, use `SettingsDetailGroup`.
 ///
 /// `rows` is expected to be a *computed* value in the host page, so flipping a
 /// toggle in the detail pane recomputes the list on the next render.
@@ -126,6 +201,7 @@ struct SettingsSplitLayout: View {
     /// left-press out of a control has exactly one place to land (the row you
     /// came in from), with no geometrically-nearer row to steal it.
     @State private var focusInDetail = false
+    @State private var detailNavigation = SettingsDetailNavigation()
     /// During a shell re-host, only the persisted row is focusable. tvOS otherwise
     /// lands briefly on the first row, then overrides our focus request and writes
     /// "language" over the saved "navigation" selection.
@@ -135,6 +211,7 @@ struct SettingsSplitLayout: View {
     @State private var focusRestoreGeneration = 0
     #if os(tvOS)
     @Environment(\.resetFocus) private var resetFocus
+    @Environment(\.settingsInWorkspace) private var inWorkspace
     #endif
 
     init(
@@ -177,6 +254,18 @@ struct SettingsSplitLayout: View {
     }
 
     var body: some View {
+        #if os(tvOS)
+        if inWorkspace {
+            SettingsFormLayout(title: Text(title), rows: rows)
+        } else {
+            legacyBody
+        }
+        #else
+        legacyBody
+        #endif
+    }
+
+    private var legacyBody: some View {
         GeometryReader { geo in
             HStack(alignment: .top, spacing: 60) {
                 masterList
@@ -208,6 +297,9 @@ struct SettingsSplitLayout: View {
                 selectedRowID = ids.first
             }
         }
+        .onChange(of: selectedRowID) { _, _ in
+            detailNavigation.reset()
+        }
         .onDisappear {
             // Invalidate any delayed restoration owned by this view instance.
             focusRestoreGeneration &+= 1
@@ -220,9 +312,6 @@ struct SettingsSplitLayout: View {
     private var masterList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
-                // The page's one and only header, always in sync with the nav row
-                // the user came from. The rows below are a flat list — see the
-                // type's note on why there is no sub-grouping.
                 Text(title)
                     .font(.title2.weight(.bold))
                     .foregroundStyle(.primary)
@@ -230,6 +319,20 @@ struct SettingsSplitLayout: View {
                     .padding(.bottom, 12)
 
                 ForEach(rows) { row in
+                    switch row.sectionStart {
+                    case .heading(let title)?:
+                        title
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 18)
+                            .padding(.bottom, 4)
+                            .accessibilityAddTraits(.isHeader)
+                    case .divider?:
+                        Divider().padding(.vertical, 12)
+                    case nil:
+                        EmptyView()
+                    }
                     masterRow(row)
                         .focused($focusedRow, equals: row.id)
                         .tvOSPrefersDefaultFocus(selectedRowID == row.id, in: masterScope)
@@ -320,11 +423,13 @@ struct SettingsSplitLayout: View {
             SettingsMasterRowLabel(row: row, isSelected: selectedRowID == row.id)
         }
         .buttonStyle(SettingsFocusButtonStyle())
+        .accessibilityIdentifier("settings-master-\(row.id)")
         // While editing OR restoring after a shell swap, take every other row out
         // of the focus order. Focus restoration must be solved by controlling
         // eligibility, not by racing tvOS after it lands on Language.
         .disabled(
-            (focusInDetail || isRestoringExternalFocus)
+            detailNavigation.awaitingFocus
+                || (focusInDetail || isRestoringExternalFocus)
                 && selectedRowID != row.id
         )
     }
@@ -332,32 +437,19 @@ struct SettingsSplitLayout: View {
     // MARK: - Detail pane (right)
 
     private var detailPane: some View {
-        ScrollView {
-            // Exactly two children: the title/description block and the control.
-            // The spacing is therefore the gap between the description and the
-            // first toggle/checkmark/box below it.
-            VStack(alignment: .leading, spacing: 44) {
-                if let row = selectedRow {
-                    VStack(alignment: .leading, spacing: 12) {
-                        row.title
-                            .settingsFeatureTitle()
-                        if let description = row.description {
-                            description
-                                .settingsHelperText()
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+        Group {
+            if let row = selectedRow {
+                if let subpage = row.subpage {
+                    SettingsDetailPages(navigation: detailNavigation) {
+                        SettingsDetailContent(row: row)
+                    } detail: {
+                        subpage.content()
                     }
-
-                    row.detail()
-                        .toggleStyle(SettingsSwitchToggleStyle())
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    .id(row.id)
+                } else {
+                    SettingsDetailContent(row: row)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 56)
-            .padding(.bottom, 48)
-            .padding(.leading, 80)
-            .padding(.trailing, 120)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // Full-height detail panel, separated from the master list by a single
@@ -381,6 +473,41 @@ struct SettingsSplitLayout: View {
         // So the detail pane updates INSTANTLY as focus moves (no `.animation`
         // here). A tap that pins a row still animates via its `withAnimation`.
         .tvOSFocusSection()
+    }
+}
+
+struct SettingsDetailSubpage {
+    let content: () -> AnyView
+
+    init<Content: View>(@ViewBuilder content: @escaping () -> Content) {
+        self.content = { AnyView(content()) }
+    }
+}
+
+private struct SettingsDetailContent: View {
+    let row: SettingsSplitRow
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 44) {
+                VStack(alignment: .leading, spacing: 12) {
+                    row.title.settingsFeatureTitle()
+                    if let description = row.description {
+                        description
+                            .settingsHelperText()
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                row.detail()
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 56)
+            .padding(.bottom, 48)
+            .padding(.leading, 80)
+            .padding(.trailing, 120)
+        }
     }
 }
 
@@ -409,7 +536,7 @@ private struct SettingsMasterRowLabel: View {
                     .frame(width: 26)
             }
             row.title
-                .font(.callout.weight(.medium))
+                .font(SettingsRowMetrics.titleFont)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 12)
@@ -447,7 +574,7 @@ struct SettingsRevealSection<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        SettingsControlRows(nonTVSpacing: 20) {
             Toggle(isOn: $isOn) {
                 Text(masterLabel)
             }
@@ -459,7 +586,7 @@ struct SettingsRevealSection<Content: View>: View {
                             .settingsSectionHeader()
                             .padding(.top, 4)
                     }
-                    content()
+                    SettingsControlRows(nonTVSpacing: 16, content: content)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -479,19 +606,29 @@ struct SettingsRevealSection<Content: View>: View {
 struct SettingsDetailGroup<Content: View>: View {
     let title: LocalizedStringResource
     var description: LocalizedStringResource? = nil
+    var illustrated = false
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(title)
                 .settingsSectionHeader()
+                #if os(tvOS)
+                .padding(.horizontal, SettingsFormMetrics.headingInset)
+                #endif
             if let description {
                 Text(description)
                     .settingsSectionDescription()
                     .fixedSize(horizontal: false, vertical: true)
+                    #if os(tvOS)
+                    .padding(.horizontal, SettingsFormMetrics.headingInset)
+                    #endif
             }
-            content()
-                .padding(.top, 4)
+            #if os(tvOS)
+            SettingsControlGroup(illustrated: illustrated, content: content)
+            #else
+            content().padding(.top, 4)
+            #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

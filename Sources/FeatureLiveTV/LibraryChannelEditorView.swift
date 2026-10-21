@@ -366,7 +366,7 @@ private struct LibraryChannelManagementContent: View {
         #if os(tvOS)
         .toggleStyle(SettingsSwitchToggleStyle(flushLeading: false))
         #elseif os(iOS)
-        .toggleStyle(SettingsTouchSwitchToggleStyle())
+        .toggleStyle(SettingsSwitchToggleStyle())
         #endif
         .task {
             guard canManage(), automaticChannels == nil else { return }

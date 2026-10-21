@@ -67,10 +67,12 @@ enum EngineFailurePolicy {
         currentEngineKind: PlaybackEngineKind,
         alternateEngineKind: PlaybackEngineKind?,
         resume: TimeInterval,
+        allowsCompatibilityFallback: Bool = true,
         state: inout EngineFallbackState
     ) -> EngineFailureAction {
         guard tokenMatches else { return .ignoreStale }
         guard hasRequest else { return .failNoRequest }
+        guard allowsCompatibilityFallback else { return .exhausted }
 
         // 1a) A network-file source that failed on Plozzigen retries a *fresh*
         //     Plozzigen instance once — re-using the same raw stream, not the
@@ -409,6 +411,10 @@ final class EngineHandoffCoordinator {
 
     // MARK: Cross-engine failure fallback
 
+    func resetFallbackState() {
+        fallbackState = EngineFallbackState()
+    }
+
     /// Formats the typed `.unknown` payload as a redacted ` detail=…` suffix for a
     /// failure log line (empty string for classified errors or an empty payload),
     /// so a stall/retry line names the underlying throw without leaking URLs or
@@ -448,6 +454,9 @@ final class EngineHandoffCoordinator {
             currentEngineKind: currentEngineKind,
             alternateEngineKind: alternateEngineKind,
             resume: resume,
+            allowsCompatibilityFallback: PlayerViewModel.streamingFailure(
+                error, evidence: engine.streamingFailure
+            )?.allowsCodecFallback != false,
             state: &fallbackState
         )
 

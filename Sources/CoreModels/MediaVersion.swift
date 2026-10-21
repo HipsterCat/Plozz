@@ -286,7 +286,9 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
     /// A compact audio badge label, e.g. `Atmos`, `7.1`, `5.1`, `Stereo`.
     /// Prefers the authoritative `sourceMetadata` audio classification.
     public var audioLabel: String? {  // l10n:content — brand/format name (Atmos, channel layout), never translated
-        if let sourceMetadata, let headline = sourceMetadata.audioBadges.first {
+        if let sourceMetadata, let headline = sourceMetadata.audioBadges.first(where: {
+            $0.label == "Dolby Atmos" || $0.label == "DTS:X"
+        }) ?? sourceMetadata.audioBadges.first {
             return headline.label
         }
         if let profile = audioProfile, profile.lowercased().contains("atmos") { return "Atmos" }
@@ -314,7 +316,8 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
 
     /// Runtime of this file in the app's compact duration style.
     public var durationLabel: String? {  // l10n:content — formatted duration, not copy
-        duration?.runtimeBadgeText
+        guard let duration, duration.isFinite, duration > 0 else { return nil }
+        return duration.runtimeBadgeText
     }
 
     /// The edition / cut to surface for this version: the provider's explicit
@@ -327,14 +330,15 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
             let trimmed = edition.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
         }
-        return EditionParser.edition(from: name) ?? EditionParser.edition(from: fileName)
+        return EditionParser.edition(from: MediaSourceDisplayName.name(from: name))
+            ?? EditionParser.edition(from: MediaSourceDisplayName.fileName(from: fileName))
     }
 
     /// The source-quality token parsed from `name` (Remux, BluRay, WEB-DL, …), or
     /// `nil` when the name names no recognised source. Distinguishes a lossless
     /// Remux from a re-encoded WEB-DL that would otherwise read identically.
     public var sourceQualityLabel: String? {  // l10n:content — parsed source/edition token (Remux, BluRay, WEB-DL, …), brand/format-like, never translated
-        EditionParser.sourceQuality(from: name)
+        EditionParser.sourceQuality(from: MediaSourceDisplayName.name(from: name))
     }
 
     /// The primary user-facing label for a picker row. Leads with the **edition**
@@ -355,8 +359,7 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
         if let sourceQualityLabel { parts.append(sourceQualityLabel) }
         if let sizeLabel { parts.append(sizeLabel) }
         if !parts.isEmpty { return parts.joined(separator: " · ") }
-        if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty { return name }
-        return nil
+        return MediaSourceDisplayName.name(from: name)
     }
 
     /// First line of a rich version row. The edition/cut is the strongest
@@ -366,11 +369,7 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
     public var menuTitle: String? {  // l10n:content — edition/resolution fact, or the provider's source name; nil means "no facts known", so the caller supplies the (copy) "Version" fallback itself
         if let editionLabel { return editionLabel }
         if let resolutionLabel { return resolutionLabel }
-        if let name {
-            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return nil
+        return MediaSourceDisplayName.name(from: name)
     }
 
     /// Technical facts that help distinguish files without claiming a playback
@@ -385,6 +384,133 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
         if let sizeLabel { facts.append(sizeLabel) }
         if let durationLabel { facts.append(durationLabel) }
         return facts
+    }
+
+    /// Shared detail/player picker content. These are source facts, never a
+    /// prediction of decoded output or a direct-play/transcode outcome.
+    public struct PickerPresentation: Equatable, Sendable {
+        public let title: String? // l10n:content — provider edition/name and technical facts
+        public let supplementalFacts: [String]
+        public let releaseName: String? // l10n:content — provider release name or file basename
+        public let formatBadges: [MediaBadge]
+        public let audioLanguages: [String]
+        public let supplementalFactsWithoutBadges: [String]
+
+        public var badges: [MediaBadge] {
+            formatBadges + audioLanguages.map { MediaBadge($0, style: .audio) }
+        }
+
+        public func prioritizedAudioLanguages(
+            preferredLanguage: String?, locale: Locale = .current
+        ) -> [String] {
+            guard let code = LanguageMatch.normalized(preferredLanguage),
+                  let name = TrackLabeling.languageName(forCode: code, in: locale),
+                  audioLanguages.contains(name) else { return audioLanguages }
+            return [name] + audioLanguages.filter { $0 != name }
+        }
+
+        public var titleWithoutBadges: String? {
+            guard let title else { return nil }
+            let facts = title.components(separatedBy: " · ").filter { !badgeLabels.contains($0) }
+            return facts.isEmpty ? nil : facts.joined(separator: " · ")
+        }
+
+        public var summaryWithoutBadges: String? {
+            let facts = [titleWithoutBadges].compactMap { $0 } + supplementalFactsWithoutBadges
+            return facts.isEmpty ? nil : facts.joined(separator: " · ")
+        }
+
+        private var badgeLabels: Set<String> {
+            Set(badges.flatMap { [$0.label, $0.accessibilityText] })
+        }
+
+        public init(_ version: MediaVersion, locale: Locale = .current) {
+            let fileName = MediaSourceDisplayName.fileName(from: version.fileName)
+                ?? MediaSourceDisplayName.fileName(from: version.sourceMetadata?.fileName)
+            title = version.displayLabel
+            let titleFacts = Set((title ?? "").components(separatedBy: " · "))
+            let video = version.sourceMetadata?.video
+            let codec = PlaybackDiagnostics.friendlyCodecName(video?.codec ?? version.videoCodec)
+            var formats = version.technicalBadges
+            for fact in version.audioFormatLabel?.components(separatedBy: " + ") ?? [] {
+                guard !formats.contains(where: {
+                    $0.label == fact || $0.accessibilityText == fact || $0.detail == fact
+                }) else { continue }
+                if let index = formats.firstIndex(where: { fact.hasPrefix($0.label + " ") }) {
+                    formats[index].detail = String(fact.dropFirst(formats[index].label.count + 1))
+                } else {
+                    let style: MediaBadge.Style = fact.hasPrefix("Dolby ") ? .dolby
+                        : fact.hasPrefix("DTS") ? .dts : .audio
+                    var badge = MediaBadge(fact, style: style)
+                    if let channels = version.audioChannelLabel, fact.hasSuffix(" " + channels) {
+                        badge.label = String(fact.dropLast(channels.count + 1))
+                        badge.detail = channels
+                    }
+                    formats.removeAll { $0.style == .audio && fact.hasSuffix(" " + $0.label) }
+                    formats.append(badge)
+                }
+            }
+            if let codec, !formats.contains(where: { $0.label == codec }) {
+                let audioStart = formats.firstIndex(where: \.isAudio) ?? formats.endIndex
+                formats.insert(MediaBadge(codec), at: audioStart)
+            }
+            let languages = version.audioLanguageNames(in: locale)
+            formatBadges = formats
+            audioLanguages = languages
+            let rangeFacts = version.sourceMetadata?.dynamicRangeBadges.map(\.label) ?? []
+            supplementalFacts = (rangeFacts + [
+                version.sourceQualityLabel ?? EditionParser.sourceQuality(from: fileName),
+                codec,
+                PlaybackDiagnostics.colorDescription(bitDepth: video?.bitDepth, transfer: nil, rangeType: nil),
+                languages.isEmpty ? nil : languages.joined(separator: ", "),
+                version.audioFormatLabel,
+                version.bitrateLabel,
+                version.durationLabel
+            ].compactMap { $0 }).filter { !titleFacts.contains($0) }
+            let representedFacts = Set(formats.flatMap {
+                [$0.label, $0.accessibilityText] + [$0.detail].compactMap { $0 }
+            } + languages)
+            supplementalFactsWithoutBadges = supplementalFacts
+                .filter { $0 != languages.joined(separator: ", ") }
+                .flatMap { $0.components(separatedBy: " + ") }
+                .filter { !representedFacts.contains($0) }
+            let release = fileName ?? MediaSourceDisplayName.name(from: version.name)
+            releaseName = release == title ? nil : release
+        }
+    }
+
+    public func audioLanguageNames(in locale: Locale = .current) -> [String] {
+        let codes = (sourceMetadata?.audioLanguages ?? [])
+            + [sourceMetadata?.audio?.language].compactMap { $0 }
+        var seen = Set<String>()
+        return codes.compactMap { code -> String? in
+            guard let language = LanguageMatch.normalized(code.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  language != "und", language != "zxx" else { return nil }
+            return TrackLabeling.languageName(forCode: language, in: locale)
+        }
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// Keeps lossless/spatial format and codec information that compact badges omit.
+    public var audioFormatLabel: String? { // l10n:content — audio codec/profile and channel-layout facts
+        let audio = sourceMetadata?.audio
+        let codec = audio?.codec ?? audioCodec
+        let format = PlaybackDiagnostics.friendlyAudioName(codec: codec, profile: audio?.profile ?? audioProfile)
+        let channels = audioChannelLabel
+        if format == "Dolby Atmos" || format == "DTS:X" {
+            let base = PlaybackDiagnostics.friendlyCodecName(codec)
+            return [base == format ? nil : base, format, channels].compactMap { $0 }.joined(separator: " + ")
+        }
+        let parts = [format, channels].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    private var audioChannelLabel: String? {
+        let audio = sourceMetadata?.audio
+        let layout = audio?.channelLayout?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return layout?.isEmpty == false ? layout : TrackLabeling.audioFormatHint(
+            codec: nil, channels: audio?.channels ?? audioChannels, isAtmos: false
+        )
     }
 
     /// A coarse quality score used to order versions and pick a default. Driven

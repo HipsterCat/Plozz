@@ -119,12 +119,18 @@ enum SeerMapper {
     /// simple request picker.
     static func requestAvailability(from details: SeerMediaDetails) -> MediaRequestAvailability {
         var titles: [Int: String] = [:]
+        var premiereDates: [Int: Date] = [:]
         for season in details.seasons where season.seasonNumber > 0 {
             let title = season.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
                 ?? "Season \(season.seasonNumber)"
             if titles[season.seasonNumber] == nil
                 || titles[season.seasonNumber] == "Season \(season.seasonNumber)" {
                 titles[season.seasonNumber] = title
+            }
+            if let date = MediaItem.calendarDayReleaseDate(from: season.airDate) {
+                premiereDates[season.seasonNumber] = min(
+                    premiereDates[season.seasonNumber] ?? date, date
+                )
             }
         }
 
@@ -196,7 +202,11 @@ enum SeerMapper {
                     title: titles[number] ?? "Season \(number)",
                     status: status,
                     requestFailed: workflow == .failed,
-                    requestStatus: workflow
+                    requestStatus: workflow,
+                    premiereDate: premiereDates[number],
+                    // The queue is title-wide. Without season attribution, do not
+                    // claim any requested season is only waiting for its release.
+                    hasDownloadActivity: details.mediaInfo?.downloadStatus?.isEmpty == false
                 )
             }
         return MediaRequestAvailability(

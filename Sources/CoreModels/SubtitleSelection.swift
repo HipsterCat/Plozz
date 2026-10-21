@@ -83,12 +83,17 @@ public struct SubtitleCandidate: Equatable, Sendable {
     public var languageCode: String?
     public var isForced: Bool
     public var isDefault: Bool
+    public var isHearingImpaired: Bool
 
-    public init(id: Int, languageCode: String?, isForced: Bool = false, isDefault: Bool = false) {
+    public init(
+        id: Int, languageCode: String?, isForced: Bool = false,
+        isDefault: Bool = false, isHearingImpaired: Bool = false
+    ) {
         self.id = id
         self.languageCode = languageCode
         self.isForced = isForced
         self.isDefault = isDefault
+        self.isHearingImpaired = isHearingImpaired
     }
 }
 
@@ -112,12 +117,22 @@ public enum SubtitleSelector {
     ///   track — the stream's default option, else nothing (a tagged
     ///   foreign-language default is never auto-enabled; auto-download, if
     ///   enabled, fetches a real match later).
+    /// Without an SDH preference, preserve stream order within each pool.
     public static func decide(
         candidates: [SubtitleCandidate],
         mode: SubtitleMode,
-        preferredLanguage: String?
+        preferredLanguage: String?,
+        hearingImpairedPreference: HearingImpairedPreference? = nil
     ) -> SubtitleDecision {
+        let candidates = candidates.filter {
+            hearingImpairedPreference?.allows(isHearingImpaired: $0.isHearingImpaired) ?? true
+        }
         guard !candidates.isEmpty else { return .none }
+
+        func preferred(in pool: [SubtitleCandidate]) -> SubtitleCandidate? {
+            pool.first { hearingImpairedPreference?.rank(isHearingImpaired: $0.isHearingImpaired) == 1 }
+                ?? pool.first
+        }
 
         func matchingLanguage(_ candidate: SubtitleCandidate) -> Bool {
             LanguageMatch.matches(candidate.languageCode, preferredLanguage)
@@ -129,20 +144,20 @@ public enum SubtitleSelector {
 
         case .forcedOnly:
             let forced = candidates.filter(\.isForced)
-            if let inLanguage = forced.first(where: matchingLanguage) {
+            if let inLanguage = preferred(in: forced.filter(matchingLanguage)) {
                 return .select(id: inLanguage.id)
             }
-            if let anyForced = forced.first {
+            if let anyForced = preferred(in: forced) {
                 return .select(id: anyForced.id)
             }
             return .none
 
         case .all:
             let inLanguage = candidates.filter(matchingLanguage)
-            if let full = inLanguage.first(where: { !$0.isForced }) {
+            if let full = preferred(in: inLanguage.filter { !$0.isForced }) {
                 return .select(id: full.id)
             }
-            if let forced = inLanguage.first {
+            if let forced = preferred(in: inLanguage) {
                 return .select(id: forced.id)
             }
             // No subtitle in the preferred language. Honor the container's default
@@ -152,7 +167,7 @@ public enum SubtitleSelector {
             // a *tagged* foreign-language subtitle the viewer didn't ask for (e.g. a
             // Chinese default for a Spanish speaker); leave subtitles off and let a
             // manual pick or background auto-download supply a real match instead.
-            if let preset = candidates.first(where: {
+            if let preset = preferred(in: candidates.filter {
                 $0.isDefault && !$0.isForced && LanguageMatch.normalized($0.languageCode) == nil
             }) {
                 return .select(id: preset.id)
@@ -168,8 +183,17 @@ public extension Array where Element == MediaTrack {
     /// Whether this list already contains a subtitle stream usable for
     /// `language` (any subtitle when `language` is `nil`). When `false` and
     /// auto-download is enabled, the player should fetch one in the background.
-    func hasSuitableSubtitle(forLanguage language: String?) -> Bool {
-        let subtitles = filter { $0.kind == .subtitle }
+    func hasSuitableSubtitle(
+        forLanguage language: String?,
+        mode: SubtitleMode = .all,
+        hearingImpairedPreference: HearingImpairedPreference = .preferNonSDH
+    ) -> Bool {
+        guard mode != .off else { return false }
+        let subtitles = filter {
+            $0.kind == .subtitle
+                && (mode != .forcedOnly || $0.isForced)
+                && hearingImpairedPreference.allows(isHearingImpaired: $0.isSDHSubtitle)
+        }
         guard !subtitles.isEmpty else { return false }
         guard let language, !language.isEmpty else { return true }
         return subtitles.contains { LanguageMatch.matches($0.language, language) }
@@ -182,16 +206,19 @@ public extension Array where Element == MediaTrack {
     /// reason about which subtitle the user will actually get.
     func defaultSubtitleSelection(
         mode: SubtitleMode,
-        preferredLanguage: String?
+        preferredLanguage: String?,
+        hearingImpairedPreference: HearingImpairedPreference? = nil
     ) -> MediaTrack? {
         let subtitles = filter { $0.kind == .subtitle }
         guard !subtitles.isEmpty else { return nil }
         let candidates = subtitles.map {
             SubtitleCandidate(id: $0.id, languageCode: $0.language,
-                              isForced: $0.isForced, isDefault: $0.isDefault)
+                              isForced: $0.isForced, isDefault: $0.isDefault,
+                              isHearingImpaired: $0.isSDHSubtitle)
         }
         guard case .select(let id) = SubtitleSelector.decide(
-            candidates: candidates, mode: mode, preferredLanguage: preferredLanguage
+            candidates: candidates, mode: mode, preferredLanguage: preferredLanguage,
+            hearingImpairedPreference: hearingImpairedPreference
         ) else { return nil }
         return subtitles.first { $0.id == id }
     }
@@ -207,13 +234,18 @@ public extension Array where Element == MediaTrack {
     /// Plozzigen-renderable) is never mistaken for a bitmap sub.
     func defaultSubtitleNeedsHybridEngine(
         mode: SubtitleMode,
-        preferredLanguage: String?
+        preferredLanguage: String?,
+        hearingImpairedPreference: HearingImpairedPreference? = nil
     ) -> Bool {
-        guard let chosen = defaultSubtitleSelection(mode: mode, preferredLanguage: preferredLanguage),
+        guard let chosen = defaultSubtitleSelection(
+            mode: mode, preferredLanguage: preferredLanguage,
+            hearingImpairedPreference: hearingImpairedPreference
+        ),
               chosen.isImageBasedSubtitle else { return false }
         let hasTextEquivalent = contains {
             $0.kind == .subtitle && !$0.isImageBasedSubtitle
                 && $0.isForced == chosen.isForced
+                && $0.isSDHSubtitle == chosen.isSDHSubtitle
                 && LanguageMatch.matches($0.language, chosen.language)
         }
         return !hasTextEquivalent
@@ -286,10 +318,8 @@ public extension RemoteSubtitle {
 public extension Array where Element == RemoteSubtitle {
     /// Filters + ranks the results for **display** in the manual picker, honouring
     /// the SDH/Forced preference. "Only-*" levels filter the pool, "Prefer-*" levels
-    /// sort. Graceful degrade: if an "Only-*" filter would empty the list, it is
-    /// treated as the matching "Prefer-*" (sort, don't filter) so the viewer still
-    /// sees candidates (common on Jellyfin where SDH is often unlabelled) rather
-    /// than a dead-end empty screen.
+    /// sort. SDH-only restrictions remain strict even when no result qualifies.
+    /// Forced search filters retain their existing fallback behavior.
     func applying(_ preference: SubtitleSearchPreference) -> [RemoteSubtitle] {
         guard !isEmpty else { return [] }
         let pool = Self.filtered(self, preference: preference)
@@ -337,13 +367,11 @@ public extension Array where Element == RemoteSubtitle {
 
     // MARK: - Preference application (shared)
 
-    /// Applies the "Only-*" exclusive filters, with graceful degrade: a filter that
-    /// would empty the pool is skipped so the caller still has candidates.
+    /// SDH restrictions are hard filters, not preferences that can be relaxed.
     private static func filtered(_ pool: [RemoteSubtitle], preference: SubtitleSearchPreference) -> [RemoteSubtitle] {
         var result = pool
         if preference.hearingImpaired.isExclusive {
-            let f = result.filter { preference.hearingImpaired.allows(isHearingImpaired: $0.isHearingImpaired) }
-            if !f.isEmpty { result = f }
+            result = result.filter { preference.hearingImpaired.allows(isHearingImpaired: $0.isHearingImpaired) }
         }
         if preference.forced.isExclusive {
             let f = result.filter { preference.forced.allows(isForced: $0.isForced) }

@@ -1,0 +1,75 @@
+name: TestFlight Discord announcements
+
+on:
+  push:
+    paths:
+      - .github/workflows/testflight-discord.yml
+      - tools/testflight-discord.py
+      - tools/testflight-discord-requirements.txt
+      - tools/discord-bridge.py
+      - tools/release-notes.py
+      - tools/tests/test_testflight_discord.py
+  release:
+    types: [published]
+  schedule:
+    - cron: "3,18,33,48 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Check connections and preview announcements, or synchronize available builds.
+        type: choice
+        options: [check, sync]
+        default: check
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight-discord-announcements
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Offline regression tests
+        run: python3 -m unittest discover -s tools/tests -p 'test_*discord*.py'
+
+  announce:
+    if: >-
+      github.repository == 'brandomoore/Plozz' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'check') ||
+       (vars.TESTFLIGHT_DISCORD_ENABLED == 'true' &&
+        (github.event_name == 'schedule' || github.event_name == 'release' ||
+         (github.event_name == 'workflow_dispatch' && inputs.mode == 'sync'))))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install JWT signing dependency
+        run: python3 -m pip install --disable-pip-version-check -r tools/testflight-discord-requirements.txt
+      - name: Regression tests
+        run: python3 -m unittest discover -s tools/tests -p 'test_*discord*.py'
+      - name: Verify actual TestFlight availability and announce
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ASC_KEY_ID: ${{ secrets.TESTFLIGHT_ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.TESTFLIGHT_ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.TESTFLIGHT_ASC_PRIVATE_KEY }}
+          TESTFLIGHT_DISCORD_ENABLED: ${{ vars.TESTFLIGHT_DISCORD_ENABLED }}
+          TESTFLIGHT_DISCORD_MIN_BUILD: ${{ vars.TESTFLIGHT_DISCORD_MIN_BUILD }}
+          ANNOUNCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'check' && 'check' || 'sync' }}
+        run: python3 tools/testflight-discord.py --mode "$ANNOUNCE_MODE"

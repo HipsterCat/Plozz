@@ -5,6 +5,7 @@ import SwiftUI
 
 struct LiveChannelSubtitleSurface: View {
     let model: LiveChannelPlayerModel
+    var viewport: VideoSubtitleViewport? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -12,12 +13,18 @@ struct LiveChannelSubtitleSurface: View {
                 primary: model.subtitles.primary,
                 style: SystemCaptionStyle.shared.resolved(model.subtitles.style),
                 isHDR: model.subtitles.isHDR,
-                videoRect: SubtitleOverlayGeometry.aspectFitRect(
+                videoRect: viewport != nil ? viewport?.videoRect : model.videoZoom.settings.videoRect(
                     in: CGRect(origin: .zero, size: geometry.size),
-                    aspectRatio: model.engine.videoAspectRatio.map { CGFloat($0) }
+                    aspectRatio: model.engine.videoAspectRatio
                 ),
+                sourceVideoAspectRatio: model.videoZoom.settings.mode == .stretch ? model.engine.videoAspectRatio : nil,
                 controlsFrames: model.subtitles.controlsLayout.frames
             )
+        }
+        .background {
+            if let viewport {
+                VideoSubtitleViewportReader(viewport: viewport)
+            }
         }
         .background(SubtitleDisplayClock(engine: model.engine, subtitles: model.subtitles))
     }

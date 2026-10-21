@@ -16,7 +16,7 @@ import Foundation
 /// separate toggle control.
 public enum OrderedVisibilityList {
     public enum Action: Equatable, Sendable {
-        case hide, show, moveUp, moveDown
+        case hide, show, moveUp, moveDown, moveToTop, moveToBottom
     }
 
     public struct Edit<Element: Hashable>: Equatable {
@@ -53,6 +53,18 @@ public enum OrderedVisibilityList {
                 next.enabled = moved(element, by: delta, in: next.enabled)
             } else {
                 next.disabled = moved(element, by: delta, in: next.disabled)
+            }
+        case .moveToTop, .moveToBottom:
+            func moveToEdge(_ order: [Element]) -> [Element] {
+                guard order.contains(element) else { return order }
+                var result = order.filter { $0 != element }
+                result.insert(element, at: action == .moveToTop ? 0 : result.count)
+                return result
+            }
+            if next.enabled.contains(element) {
+                next.enabled = moveToEdge(next.enabled)
+            } else {
+                next.disabled = moveToEdge(next.disabled)
             }
         }
         guard next != sections else { return nil }

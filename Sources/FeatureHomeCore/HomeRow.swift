@@ -155,6 +155,7 @@ public extension HomeRow {
     static func rows(
         for content: HomeViewModel.Content,
         isLibraryVisible: (String) -> Bool,
+        isLibraryTileVisible: (AggregatedLibrary) -> Bool = { HomeLibraryVisibility.default.isVisibleOnHome($0) },
         isGlobalRowEnabled: (HomeGlobalRow) -> Bool = { _ in true },
         includesEmptyWatchlist: Bool = false,
         loadingRows: Set<HomeRowKind> = [],
@@ -200,7 +201,7 @@ public extension HomeRow {
             }
         }
 
-        let visibleLibraries = content.libraries.filter { isLibraryVisible($0.key) }
+        let visibleLibraries = content.libraries.filter { isLibraryVisible($0.key) && isLibraryTileVisible($0) }
         if !visibleLibraries.isEmpty || isPending(.libraries) {
             rows.append(makeRow(.libraries, libraries: visibleLibraries))
         }

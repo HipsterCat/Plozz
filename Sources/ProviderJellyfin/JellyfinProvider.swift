@@ -7,7 +7,9 @@ import CoreNetworking
 /// Holds an authenticated `JellyfinClient` and maps Jellyfin DTOs onto the
 /// provider-agnostic `CoreModels` types. Feature modules depend only on
 /// `MediaProvider`; this is the single place Jellyfin specifics live.
-public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIdentityProviding {
+public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIdentityProviding, AuthenticatedHTTPOriginProviding, ServerAddressUpdating {
+    public var playbackInventoryRequiresEnrichment: Bool { true }
+
     public let kind: ProviderKind
     public let session: UserSession
     public let accountID: String
@@ -15,10 +17,22 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     let client: JellyfinClient
     let collectionLibraryCache = MediaBrowserCollectionLibraryCache()
     let videoPlaylistCache = VideoPlaylistSnapshotCache()
+    let watchHistoryScope = JellyfinWatchHistoryScope()
     let liveTVLeases = JellyfinLiveTVLeaseStore()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
     private let probeDescriptors: MediaBrowserProbeDescriptorStore
+    public var authenticatedHTTPOrigin: URL { client.baseURL }
+
+    private var connectionAddresses: [URL] { client.addressResolver?.addresses ?? [session.server.baseURL] }
+
+    public func updateServerAddresses(_ alternatives: [URL]) {
+        client.addressResolver?.updateAlternatives(alternatives)
+    }
+
+    public func resolveAuthenticatedHTTPOrigin() async throws -> URL {
+        try await client.addressResolver?.resolved() ?? client.baseURL
+    }
 
     public init(
         session: UserSession,
@@ -28,6 +42,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         interactiveHTTP: HTTPClient? = nil,
         hybridEngineEnabled: Bool = false,
         authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)? = nil,
+        addressProbe: any HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
         themeArchiveResolver: @escaping @Sendable (String?) async -> URL? = {
             await ThemeMusicArchive.resolvedURL(tvdbID: $0)
         }
@@ -48,26 +63,26 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             token: session.accessToken,
             http: http,
             interactiveHTTP: interactiveHTTP,
-            capabilityProfile: .detected(hybridEngineEnabled: hybridEngineEnabled)
+            capabilityProfile: .detected(hybridEngineEnabled: hybridEngineEnabled),
+            serverID: session.server.id,
+            alternateURLs: session.server.alternateConnectionURLs ?? [],
+            addressProbe: addressProbe
         )
     }
 
     // MARK: Browsing
 
-    /// Locality of this Jellyfin connection. Unlike Plex, Jellyfin uses a single
-    /// fixed `baseURL` (no connection resolver), so locality derives from that
-    /// host — but only once we've **confirmed the server is reachable**. A saved
-    /// server whose LAN address (`192.168.x`, `.local`, …) no longer answers must
-    /// not report `.local`, or best-source selection would route a merged title to
-    /// the dead local copy over a genuinely reachable remote twin. Until the first
-    /// successful request latches reachability, report `.unknown`. (r7-jf-locality)
+    /// Locality belongs to the reachable route, not the saved primary address.
     public var connectionLocality: SourceLocality {
+        if let resolver = client.addressResolver {
+            return resolver.confirmed.map { SourceLocalityClassifier.classify(url: $0) } ?? .unknown
+        }
         guard client.hasConfirmedReachableConnection else { return .unknown }
-        return SourceLocalityClassifier.classify(url: session.server.baseURL)
+        return SourceLocalityClassifier.classify(url: client.baseURL)
     }
 
     public func libraries() async throws -> [MediaLibrary] {
-        try await client.userViews(userID: session.userID).map { dto in
+        var libraries = try await client.userViews(userID: session.userID).map { dto in
             MediaLibrary(
                 id: dto.Id,
                 title: dto.Name ?? "Library",
@@ -78,6 +93,121 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 isMusic: dto.CollectionType == "music"
             )
         }
+        if !libraries.contains(where: { $0.kind == .collection }),
+           libraries.contains(where: { $0.kind == .movie || $0.kind == .series }) {
+            libraries.append(MediaLibrary(
+                id: collectionDirectoryID, title: "Collections", kind: .collection, synthesizedName: .collections
+            ))
+        }
+        for index in libraries.indices where libraries[index].kind == .collection {
+            do {
+                libraries[index].hasCollections = try await collectionDirectoryHasItems(
+                    in: libraries[index].id
+                )
+            } catch {
+                let failure = (error as? AppError) ?? .invalidResponse
+                if Task.isCancelled || error is CancellationError || failure == .cancelled {
+                    throw CancellationError()
+                }
+                PlozzLog.networking.error(
+                    "Collection availability failed provider=\(kind.rawValue) error=\(HandoffDiagnostics.errorCode(failure))"
+                )
+            }
+        }
+        return libraries
+    }
+
+    public func libraryHubs(libraryID: String, kind: MediaItemKind, limit: Int) async throws -> [LibrarySection] {
+        guard kind == .movie else { return [] }
+        let recommendations = try await client.movieRecommendations(
+            userID: session.userID, parentID: libraryID, limit: limit
+        )
+        return recommendationSections(recommendations, limit: limit, forHome: false)
+    }
+
+    private func recommendationSections(
+        _ recommendations: [MovieRecommendationDto], limit: Int, forHome: Bool
+    ) -> [LibrarySection] {
+        var slots: [String: Int] = [:]
+        return recommendations.compactMap { recommendation in
+            let slot = slots[recommendation.RecommendationType, default: 0]
+            slots[recommendation.RecommendationType] = slot + 1
+            let items = (recommendation.Items ?? []).map(map(item:))
+            guard !items.isEmpty else { return nil }
+            let subject = recommendation.BaselineItemName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title: String
+            let localizedTitle: LocalizedStringResource
+            switch (recommendation.RecommendationType, subject) {
+            case ("SimilarToRecentlyPlayed", let subject?) where !subject.isEmpty,
+                 ("SimilarToLikedItem", let subject?) where !subject.isEmpty:
+                title = "More like \(subject)"
+                localizedTitle = LocalizedStringResource(
+                    "More like \(subject)",
+                    comment: "Concise heading for movies similar to another movie. The placeholder is the server-provided movie title; do not translate the title."
+                )
+            case ("HasDirectorFromRecentlyPlayed", _), ("HasLikedDirector", _):
+                title = "More from directors you like"
+                localizedTitle = "More from directors you like"
+            case ("HasActorFromRecentlyPlayed", _), ("HasLikedActor", _):
+                title = "More with actors you like"
+                localizedTitle = "More with actors you like"
+            default:
+                title = "Suggested movies"
+                localizedTitle = "Suggested movies"
+            }
+            return LibrarySection(
+                id: forHome ? "recommendation:\(recommendation.RecommendationType):\(slot)"
+                    : (recommendation.CategoryId ?? "\(recommendation.RecommendationType):\(subject ?? "")"),
+                title: title,
+                localizedTitle: localizedTitle,
+                items: Array(items.prefix(limit)),
+                isHomeDefault: forHome ? false : nil
+            )
+        }
+    }
+
+    public func homeHubs(
+        libraryID: String, kind: MediaItemKind, limit: Int, includeUnpromoted: Bool
+    ) async throws -> [LibrarySection] {
+        guard kind == .movie else { return [] }
+        let recommendations = try await client.movieRecommendations(
+            userID: session.userID, parentID: libraryID, limit: limit
+        )
+        return recommendationSections(recommendations, limit: limit, forHome: true)
+    }
+
+    public func homeContinueWatching(
+        limit: Int, inLibraries libraryIDs: [String]?, separateNextUp: Bool
+    ) async throws -> [MediaItem] {
+        guard limit > 0 else { return [] }
+        guard separateNextUp else {
+            return try await continueWatching(limit: limit, inLibraries: libraryIDs)
+        }
+        let historyLibraries = try await watchHistoryLibraries(libraryIDs)
+        let parents: [String?] = historyLibraries.map {
+            $0.filter { $0 != collectionDirectoryID }.map(Optional.some)
+        } ?? [nil]
+        var items: [MediaItem] = []
+        var seen = Set<String>()
+        for parentID in parents {
+            try Task.checkCancellation()
+            let resume = try await client.resumeItems(
+                userID: session.userID, limit: limit, parentID: parentID
+            )
+            items += resume.filter { seen.insert($0.Id).inserted }.map { dto in
+                let item = map(item: dto)
+                return parentID.map { item.taggingLibrary($0) } ?? item
+            }
+        }
+        let ordered = orderedByEffectiveRecency(items)
+        return limit == .max ? ordered : Array(ordered.prefix(limit))
+    }
+
+    public func homeNextUp(libraryID: String, limit: Int) async throws -> [MediaItem] {
+        let items = try await client.nextUpItems(
+            userID: session.userID, limit: limit, parentID: libraryID
+        )
+        return items.map(map(item:))
     }
 
     /// Continue Watching = in-progress items (`/Items/Resume`) followed by the
@@ -424,9 +554,14 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     /// so the only reliable way to attribute — and therefore Home-filter — items
     /// is to fetch them **scoped to each visible library** via `ParentId` and
     /// stamp the result. `nil` keeps the fast unscoped feed (used when the user
-    /// has hidden nothing on this account).
+    /// has hidden nothing on this account). AIOStreams explicitly owns history
+    /// at account scope, independently of its virtual catalogs.
     public func continueWatching(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem] {
-        guard let libraryIDs else { return try await continueWatching(limit: limit) }
+        guard limit > 0 else { return [] }
+        guard let libraryIDs = try await watchHistoryLibraries(libraryIDs)?
+            .filter({ $0 != collectionDirectoryID }) else {
+            return try await continueWatching(limit: limit)
+        }
         guard !libraryIDs.isEmpty else { return [] }
 
         // Cap concurrent per-library requests: a user with many libraries would
@@ -493,10 +628,19 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         return limit == Int.max ? ordered : Array(ordered.prefix(limit))
     }
 
+    private func watchHistoryLibraries(_ libraryIDs: [String]?) async throws -> [String]? {
+        guard let libraryIDs else { return nil }
+        if !libraryIDs.isEmpty, libraryIDs.allSatisfy({ $0 == collectionDirectoryID }) { return [] }
+        return try await watchHistoryScope.isAccountWide(client: client, serverID: session.server.id)
+            ? nil : libraryIDs
+    }
+
     /// Library-scoped Recently Added — see ``continueWatching(limit:inLibraries:)``
     /// for why Jellyfin must scope the fetch to attribute each item's library.
     public func latest(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem] {
-        guard let libraryIDs else { return try await latest(limit: limit) }
+        guard let libraryIDs = libraryIDs?.filter({ $0 != collectionDirectoryID }) else {
+            return try await latest(limit: limit)
+        }
         guard !libraryIDs.isEmpty else { return [] }
 
         let userID = session.userID
@@ -528,9 +672,50 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     public func item(id: String) async throws -> MediaItem {
+        try await item(id: id, requiresSourceInventory: false)
+    }
+
+    public func playbackItem(id: String) async throws -> MediaItem {
+        try await item(id: id, requiresSourceInventory: true)
+    }
+
+    private func item(id: String, requiresSourceInventory: Bool) async throws -> MediaItem {
         let dto = try await client.item(userID: session.userID, id: id)
         await probeDescriptors.remember(itemID: id, sources: dto.MediaSources)
-        return map(item: dto)
+        var item = map(item: dto)
+        let remotePlaceholder = dto.MediaSources?.count == 1 && dto.MediaSources?.first?.IsRemote == true
+        // Add-on servers may resolve streams only through PlaybackInfo, even
+        // when item detail already contains sources or omits IsRemote.
+        if (item.kind == .movie || item.kind == .episode),
+           requiresSourceInventory || remotePlaceholder {
+            do {
+                let inventory = try await client.playbackSourceInventory(userID: session.userID, itemID: id)
+                try Task.checkCancellation()
+                try validateStreamingDecision(inventory)
+                let ids = inventory.MediaSources.compactMap(\.Id)
+                guard !ids.isEmpty, ids.count == inventory.MediaSources.count,
+                      ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                      Set(ids).count == ids.count else { throw AppError.invalidResponse }
+                // Placeholder item streams must not overwrite the real first
+                // source's language, codec, or quality facts.
+                let sources = inventory.MediaSources.filter { !Self.isUnavailablePlaceholder($0, itemID: id) }
+                guard !sources.isEmpty else {
+                    PlozzLog.playback.error("The server returned an unavailable-source placeholder.")
+                    throw StreamingQualityError.noStreams
+                }
+                item.versions = Self.versions(from: sources)
+                await probeDescriptors.remember(itemID: id, sources: sources)
+            } catch {
+                try Task.checkCancellation()
+                if requiresSourceInventory || (error as? AppError) == .cancelled || error is CancellationError {
+                    throw error
+                }
+                PlozzLog.networking.error(
+                    "Remote source inventory unavailable; retaining item metadata: \(String(describing: error))"
+                )
+            }
+        }
+        return item
     }
 
     public func trailers(for itemID: String) async throws -> [MediaItem] {
@@ -758,6 +943,10 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     public func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        if containerID == collectionDirectoryID {
+            guard kind == .collection, page.filters.isEmpty else { throw AppError.invalidResponse }
+            return try await collections(in: containerID, page: page)
+        }
         let (recursive, includeItemTypes) = Self.query(forContainerKind: kind)
         PlozzLog.networking.info(
             "Library browse: container=\(containerID) kind=\(kind.rawValue) recursive=\(recursive) types=\(includeItemTypes.joined(separator: ",")) start=\(page.startIndex) limit=\(page.limit) sort=\(page.sort.field.rawValue)/\(page.sort.direction.rawValue)"
@@ -770,7 +959,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 recursive: recursive,
                 startIndex: page.startIndex,
                 limit: page.limit,
-                sort: page.sort
+                sort: page.sort,
+                filters: page.filters
             )
             let items = response.Items.map(map(item:))
             PlozzLog.networking.info(
@@ -941,60 +1131,95 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     /// (digits/symbols) is the count before "A". Non-name sorts have no letter
     /// to jump to, so return empty and the rail stays hidden.
     ///
-    /// The A…Z counts fan out concurrently (bounded) and run once per browse
-    /// session — the view model caches the result until the sort changes.
+    /// The total first verifies count-only support, then two disjoint Z queries
+    /// detect ignored alphabet filters. Supported A…Y counts fan out concurrently
+    /// (bounded), once per browse session/sort.
     public func letterIndex(
         in containerID: String,
         kind: MediaItemKind,
         sort: CoreModels.SortDescriptor
     ) async throws -> [LibraryLetterIndexEntry] {
-        guard sort.field == .name else { return [] }
+        try await filteredLetterIndex(in: containerID, kind: kind, sort: sort, filters: .all)
+    }
+
+    func filteredLetterIndex(
+        in containerID: String, kind: MediaItemKind,
+        sort: CoreModels.SortDescriptor, filters: LibraryFilters
+    ) async throws -> [LibraryLetterIndexEntry] {
+        guard sort.field == .name, containerID != collectionDirectoryID else { return [] }
         let (recursive, includeItemTypes) = Self.query(forContainerKind: kind)
         let letters = LibraryLetterIndex.railLetters.filter { $0 != "#" }
         let userID = session.userID
         let client = client
+        guard let total = try await client.itemCount(
+            userID: userID, parentID: containerID,
+            includeItemTypes: includeItemTypes, recursive: recursive, filters: filters
+        ) else {
+            PlozzLog.networking.info(
+                "Library alphabet index unavailable: server returned items for a count-only request"
+            )
+            return []
+        }
+        async let beforeLastLetterTask = client.itemCount(
+            userID: userID, parentID: containerID,
+            includeItemTypes: includeItemTypes, recursive: recursive,
+            nameLessThan: "Z", filters: filters
+        )
+        async let lastLetterTask = client.itemCount(
+            userID: userID, parentID: containerID,
+            includeItemTypes: includeItemTypes, recursive: recursive,
+            nameStartsWith: "Z", filters: filters
+        )
+        let (beforeLastLetter, lastLetter) = try await (beforeLastLetterTask, lastLetterTask)
+        try Task.checkCancellation()
+        guard let beforeLastLetter, let lastLetterCount = lastLetter else {
+            PlozzLog.networking.error("Library alphabet count-only support changed during predicate probes")
+            throw AppError.invalidResponse
+        }
+        // A nonempty library cannot be entirely before Z and entirely under Z.
+        if total > 0, beforeLastLetter == total, lastLetterCount == total {
+            PlozzLog.networking.info(
+                "Library alphabet index unavailable: server returned the full count for disjoint alphabet filters"
+            )
+            return []
+        }
+
         let limiter = ConcurrencyLimiter(limit: 6)
-
-        async let totalTask: Int = limiter.run {
-            try await client.itemCount(
-                userID: userID, parentID: containerID,
-                includeItemTypes: includeItemTypes, recursive: recursive
-            )
-        }
-        async let lastLetterTask: Int = limiter.run {
-            try await client.itemCount(
-                userID: userID, parentID: containerID,
-                includeItemTypes: includeItemTypes, recursive: recursive,
-                nameStartsWith: "Z"
-            )
-        }
-
-        var offsets: [String: Int] = [:]
+        var offsets: [String: Int] = ["Z": beforeLastLetter]
         try await withThrowingTaskGroup(of: (String, Int).self) { group in
-            for letter in letters {
+            for letter in letters where letter != "Z" {
                 group.addTask {
-                    let count = try await limiter.run {
+                    guard let count = try await limiter.run({
                         try await client.itemCount(
                             userID: userID, parentID: containerID,
                             includeItemTypes: includeItemTypes, recursive: recursive,
-                            nameLessThan: letter
+                            nameLessThan: letter, filters: filters
                         )
+                    }) else {
+                        PlozzLog.networking.error("Library alphabet count-only support changed during letter requests")
+                        throw AppError.invalidResponse
                     }
                     return (letter, count)
                 }
             }
             for try await (letter, count) in group { offsets[letter] = count }
         }
-        let total = try await totalTask
-        let lastLetterCount = try await lastLetterTask
         var previous = 0
         for letter in letters {
             guard let offset = offsets[letter], offset >= previous, offset <= total else {
+                PlozzLog.networking.error(
+                    "Library alphabet offset rejected: letter=\(letter) offset=\(offsets[letter].map(String.init) ?? "missing") previous=\(previous) total=\(total)"
+                )
                 throw AppError.invalidResponse
             }
             previous = offset
         }
-        guard lastLetterCount <= total - previous else { throw AppError.invalidResponse }
+        guard lastLetterCount <= total - previous else {
+            PlozzLog.networking.error(
+                "Library alphabet final-letter count rejected: count=\(lastLetterCount) offset=\(previous) total=\(total)"
+            )
+            throw AppError.invalidResponse
+        }
 
         let entries = LibraryLetterIndex.entries(
             lessThanOffsetsByLetter: offsets, totalCount: total, lastLetterCount: lastLetterCount,
@@ -1009,10 +1234,11 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     /// Picks the Jellyfin query strategy for a container kind. Typed libraries
     /// use the fast recursive/indexed path; folders/collections list direct
     /// children.
-    private static func query(forContainerKind kind: MediaItemKind) -> (recursive: Bool, includeItemTypes: [String]) {
+    static func query(forContainerKind kind: MediaItemKind) -> (recursive: Bool, includeItemTypes: [String]) {
         switch kind {
         case .movie: return (true, ["Movie"])
         case .series: return (true, ["Series"])
+        case .episode: return (true, ["Episode"])
         default: return (false, [])
         }
     }
@@ -1042,7 +1268,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         guard !trimmed.isEmpty else { return [] }
 
         let disabled = Set(disabledLibraryIDs)
-        let enabled = (try await libraries().map(\.id)).filter { !disabled.contains($0) }
+        let enabled = try await libraries().filter { !$0.isServerCollectionDirectory }
+            .map(\.id).filter { !disabled.contains($0) }
         guard !enabled.isEmpty else { return [] }
 
         let userID = session.userID
@@ -1097,9 +1324,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         try await resolvePlayback(for: itemID, mediaSourceID: mediaSourceID, forceTranscode: forceTranscode)
     }
 
-    private func validateStreamingDecision(_ info: PlaybackInfoResponse) async throws {
+    private func validateStreamingDecision(_ info: PlaybackInfoResponse) throws {
         guard let error = info.streamingError else { return }
-        if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
         PlozzLog.playback.error("Server rejected streaming negotiation: \(error.diagnosticCode ?? "unspecified")")
         throw error
     }
@@ -1109,31 +1335,54 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         streaming: StreamingPlaybackOptions? = nil
     ) async throws -> PlaybackRequest {
         try streaming?.quality.validate()
+        try Task.checkCancellation()
         // Jellyfin needs two independent round-trips here — the item detail and
         // the playback decision (media sources). They don't depend on each other,
         // so issue them concurrently to halve the time-to-first-frame latency
         // versus awaiting them serially. (Plex resolves both in one `metadata`
         // call, so its provider has nothing to parallelize — see PlexProvider.)
         async let detailTask = client.item(userID: session.userID, id: itemID)
-        async let infoTask = client.playbackInfo(
+        let info = try await client.playbackInfo(
             userID: session.userID,
             itemID: itemID,
             mediaSourceID: mediaSourceID,
             mode: forceTranscode || streaming?.forceTranscoding == true ? .transcode : .auto,
             streaming: streaming
         )
-        let detail = try await detailTask
-        var info = try await infoTask
+        // Claim the decision before awaiting detail: detail failure must not
+        // discard a session that the concurrent PlaybackInfo request created.
+        var pendingSessionID = info.PlaySessionId
+        do {
+            try Task.checkCancellation()
+            let detail = try await detailTask
+            let request = try await makePlaybackRequest(
+                for: itemID, mediaSourceID: mediaSourceID, forceTranscode: forceTranscode,
+                streaming: streaming, detail: detail, info: info,
+                pendingSessionID: &pendingSessionID
+            )
+            try Task.checkCancellation()
+            return request
+        } catch {
+            if let pendingSessionID { await releaseStreamingEncoding(pendingSessionID) }
+            throw error
+        }
+    }
+
+    private func makePlaybackRequest(
+        for itemID: String, mediaSourceID: String?, forceTranscode: Bool,
+        streaming: StreamingPlaybackOptions?, detail: BaseItemDto,
+        info initialInfo: PlaybackInfoResponse, pendingSessionID: inout String?
+    ) async throws -> PlaybackRequest {
+        try Task.checkCancellation()
+        var info = initialInfo
         var streaming = streaming
-        if streaming != nil { try await validateStreamingDecision(info) }
+        try validateStreamingDecision(info)
         // Prefer the explicitly chosen source; fall back to the server default.
         guard var source = Self.selectSource(mediaSourceID, in: info.MediaSources) else {
-            if streaming != nil, let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
             if streaming != nil { throw StreamingQualityError.sourceUnavailable }
             throw AppError.notFound
         }
-        if streaming != nil, let mediaSourceID, source.Id != mediaSourceID {
-            if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
+        if let mediaSourceID, source.Id != mediaSourceID {
             PlozzLog.playback.error("Streaming quality negotiation returned a different media source.")
             throw StreamingQualityError.sourceUnavailable
         }
@@ -1145,9 +1394,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             streaming?.subtitleTrack = selected
             streaming?.subtitlesOff = selected == nil
         }
-        let mustConvert = streaming.map { $0.forceTranscoding || forceTranscode || !source.fits($0.quality) } ?? false
+        let mustConvert = forceTranscode || (streaming.map { $0.forceTranscoding || !source.fits($0.quality) } ?? false)
         if mustConvert, source.SupportsTranscoding == false {
-            if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
             PlozzLog.playback.error("Server marked this source as unavailable for transcoding.")
             throw StreamingQualityError.noCompatibleStream
         }
@@ -1156,31 +1404,32 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         }
         if let streaming, mustConvert, source.TranscodingUrl == nil {
             if let oldSession = info.PlaySessionId {
-                do { try await client.stopActiveEncoding(playSessionID: oldSession) }
-                catch { PlozzLog.playback.error("Unable to release a rejected streaming decision.") }
+                await releaseStreamingEncoding(oldSession)
+                pendingSessionID = nil
             }
+            try Task.checkCancellation()
             info = try await client.playbackInfo(
                 userID: session.userID, itemID: itemID, mediaSourceID: source.Id ?? mediaSourceID,
                 mode: .transcode, streaming: streaming
             )
-            try await validateStreamingDecision(info)
+            pendingSessionID = info.PlaySessionId
+            try Task.checkCancellation()
+            try validateStreamingDecision(info)
             guard let converted = Self.selectSource(source.Id ?? mediaSourceID, in: info.MediaSources),
                   converted.Id == source.Id, converted.TranscodingUrl != nil else {
-                if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
                 PlozzLog.playback.error("Server did not provide the requested bounded transcode.")
                 throw StreamingQualityError.unavailable
             }
 
             source = converted
         }
+        guard !mustConvert || source.TranscodingUrl != nil else {
+            throw StreamingQualityError.unavailable
+        }
         if let streaming, source.TranscodingUrl != nil {
-            do {
-                source.TranscodingUrl = try source.boundedTranscodingURL(streaming, supportsHEVC: client.canRequestHEVC)
-            }
-            catch {
-                if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
-                throw error
-            }
+            source.TranscodingUrl = try source.boundedTranscodingURL(
+                streaming, supportsHEVC: client.canRequestHEVC, forceVideoTranscode: mustConvert
+            )
         }
 
         // Surface the server's direct-play-vs-transcode decision and, when it
@@ -1229,16 +1478,38 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         // the remux fails or the server offers no stream URL, fall back to direct
         // play (the router then sends `hev1` to the on-device engine as a net).
         if streaming == nil, !forceTranscode, Self.shouldRequestDoViRemux(source) || Self.shouldRequestHvc1Remux(source) {
+            let selectedSourceID = source.Id ?? mediaSourceID
             if let remuxInfo = try? await client.playbackInfo(
                 userID: session.userID,
                 itemID: itemID,
-                mediaSourceID: mediaSourceID,
+                mediaSourceID: selectedSourceID,
                 mode: .remux
-            ), let remuxSource = Self.selectSource(mediaSourceID, in: remuxInfo.MediaSources),
-               remuxSource.TranscodingUrl != nil {
-                info = remuxInfo
-                source = remuxSource
-                didRemux = true
+            ) {
+                if remuxInfo.streamingError == nil,
+                   let remuxSource = Self.selectSource(selectedSourceID, in: remuxInfo.MediaSources),
+                   remuxSource.Id == source.Id, remuxSource.TranscodingUrl != nil {
+                    if let previousSession = pendingSessionID, previousSession != remuxInfo.PlaySessionId {
+                        await releaseStreamingEncoding(previousSession)
+                    }
+                    info = remuxInfo
+                    pendingSessionID = info.PlaySessionId
+                    source = remuxSource
+                    didRemux = true
+                } else if let rejectedSession = remuxInfo.PlaySessionId, rejectedSession != pendingSessionID {
+                    await releaseStreamingEncoding(rejectedSession)
+                }
+            }
+            try Task.checkCancellation()
+        }
+
+        if !didRemux {
+            do {
+                try source.requestSDRForH264Transcode(
+                    provider: kind, forceVideoTranscode: forceTranscode || mustConvert
+                )
+            } catch {
+                PlozzLog.playback.error("Unable to apply the H.264 transcode output range.")
+                throw error
             }
         }
 
@@ -1264,7 +1535,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             container: originalContainer,
             streams: originalStreams,
             sourceRevision: sourceRevision,
-            fileSizeBytes: originalSource.Size
+            fileSizeBytes: Self.fileSizeBytes(for: originalSource),
+            declaredAudioLanguages: Self.declaredAudioLanguages(for: originalSource)
         )
         if cachedProbe.completed, let facts = cachedProbe.facts {
             let selectedSourceID = originalSource.Id ?? itemID
@@ -1285,7 +1557,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                     version.width = selectedMetadata.video?.width
                     version.height = selectedMetadata.video?.height
                     version.bitrate = originalSource.Bitrate ?? selectedMetadata.video?.bitrate
-                    version.sizeBytes = originalSource.Size
+                    version.sizeBytes = Self.fileSizeBytes(for: originalSource)
                     version.duration = originalSource.RunTimeTicks.map { TimeInterval($0) / 10_000_000 }
                     version.videoCodec = selectedMetadata.video?.codec
                     version.videoRange = selectedMetadata.video?.videoRangeType ?? selectedMetadata.video?.videoRange
@@ -1354,6 +1626,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             sourceFileName: PlaybackRequest.sourceFileName(from: originalSource.Path)
                 ?? PlaybackRequest.sourceFileName(from: originalSource.Name)
         )
+        request.burnedInSubtitleTrackID = source.burnedInSubtitleTrackID
+        request.scrubStillSource = request.originalFileSource
         if let streaming {
             request.streamingOptions = streaming
             request.streamingSessionID = info.PlaySessionId
@@ -1633,7 +1907,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         streams: [MediaStreamDto],
         sourceRevision: String? = nil,
         fileSizeBytes: Int64? = nil,
-        fileName: String? = nil
+        fileName: String? = nil,
+        declaredAudioLanguages: [String] = []
     ) -> MediaSourceMetadata? {
         let video = streams.first { $0.`Type` == "Video" }
         let audio = streams.first { ($0.`Type` == "Audio") && ($0.IsDefault ?? false) }
@@ -1681,6 +1956,11 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             )
         }
 
+        var audioLanguages = streams.filter { $0.`Type` == "Audio" }.compactMap(\.Language)
+        for language in declaredAudioLanguages
+        where !audioLanguages.contains(where: { LanguageMatch.matches($0, language) }) {
+            audioLanguages.append(language)
+        }
         let metadata = MediaSourceMetadata(
             container: container,
             fileSizeBytes: fileSizeBytes,
@@ -1688,7 +1968,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             sourceRevision: sourceRevision,
             video: videoStream,
             audio: audioStream,
-            subtitle: subtitleStream
+            subtitle: subtitleStream,
+            audioLanguages: audioLanguages
         )
         return metadata.isEmpty ? nil : metadata
     }
@@ -1780,14 +2061,11 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         _ persistedURL: URL,
         maxWidth: Int?
     ) -> URL? {
-        guard let path = MediaProviderURLIdentity.relativeResourcePath(
-            of: persistedURL,
-            under: session.server.baseURL
-        ) else { return nil }
+        guard let path = artworkPath(persistedURL) else { return nil }
         guard MediaProviderURLIdentity.isJellyfinArtworkResourcePath(path)
         else { return nil }
         guard var components = URLComponents(
-            url: session.server.baseURL,
+            url: client.baseURL,
             resolvingAgainstBaseURL: false
         ) else { return nil }
         var basePath = components.path
@@ -1820,11 +2098,14 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     public func ownsPersistedImageURL(_ persistedURL: URL) -> Bool {
-        guard let path = MediaProviderURLIdentity.relativeResourcePath(
-            of: persistedURL,
-            under: session.server.baseURL
-        ) else { return false }
+        guard let path = artworkPath(persistedURL) else { return false }
         return MediaProviderURLIdentity.isJellyfinArtworkResourcePath(path)
+    }
+
+    private func artworkPath(_ url: URL) -> String? {
+        let addresses = connectionAddresses
+        guard let base = MediaProviderURLIdentity.matchingBaseURL(for: url, among: addresses) else { return nil }
+        return MediaProviderURLIdentity.relativeResourcePath(of: url, under: base)
     }
 
     // MARK: Subtitles
@@ -1853,6 +2134,13 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
 
     // MARK: - Mapping
 
+    private static func isUnavailablePlaceholder(_ source: MediaSourceInfo, itemID: String) -> Bool {
+        // Add-on bridges can encode a negative lookup as a nominal MKV source
+        // with invented tracks instead of returning PlaybackInfo.ErrorCode.
+        source.IsRemote == true && source.Id == itemID
+            && source.Name?.hasPrefix("No streams · ") == true
+    }
+
     func authenticatedPlaybackLocator(
         itemID: String,
         source: MediaSourceInfo,
@@ -1861,6 +2149,10 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         forceDirect: Bool = false,
         purpose: AuthenticatedHTTPResourcePurpose = .mediaStream
     ) throws -> AuthenticatedHTTPPlaybackLocator {
+        guard !Self.isUnavailablePlaceholder(source, itemID: itemID) else {
+            PlozzLog.playback.error("Refusing to open the server's unavailable-source placeholder.")
+            throw StreamingQualityError.sourceUnavailable
+        }
         let container = source.Container ?? "mp4"
         let sourceID = source.Id ?? itemID
         let deliveryMode: AuthenticatedHTTPDeliveryMode
@@ -1939,8 +2231,16 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         let pathBase: AuthenticatedHTTPResource.PathBase
         let path: String
         if components.scheme != nil {
-            pathBase = .serverRoot
-            path = components.percentEncodedPath
+            if let url = components.url,
+               let base = MediaProviderURLIdentity.matchingBaseURL(
+                for: url, among: connectionAddresses),
+               let relative = MediaProviderURLIdentity.relativeEncodedResourcePath(of: url, under: base) {
+                pathBase = .configuredBaseURL
+                path = relative
+            } else {
+                pathBase = .serverRoot
+                path = components.percentEncodedPath
+            }
         } else {
             pathBase = .configuredBaseURL
             path = String(
@@ -1968,6 +2268,19 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             path: path,
             queryItems: queryItems
         )
+    }
+
+    static func episodeOrdering(_ value: String?) -> EpisodeOrdering? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        switch value.lowercased().filter({ !" -_".contains($0) }) {
+        case "default", "defaultorder": return .tvdbDefault
+        case "aired", "airedorder", "official", "officialorder": return .aired
+        case "dvd", "dvdorder", "altdvd": return .dvd
+        case "absolute", "absoluteorder", "abso": return .absolute
+        case "alternate", "alternateorder", "alttwo", "streaming", "streamingorder": return .alternate
+        case "regional", "regionalorder", "production", "productionorder": return .regional
+        default: return .unknown
+        }
     }
 
     func map(item dto: BaseItemDto) -> MediaItem {
@@ -2039,6 +2352,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             seasonNumber: kind == .season ? dto.IndexNumber : dto.ParentIndexNumber,
             episodeNumber: dto.IndexNumber,
             episodeNumberEnd: kind == .episode ? dto.IndexNumberEnd : nil,
+            episodeOrdering: Self.episodeOrdering(dto.DisplayOrder),
             productionYear: dto.ProductionYear,
             // Snapped, not taken at face value: Jellyfin transmits a bare premiere
             // DAY as an instant already shifted by the server's own zone, so an
@@ -2058,6 +2372,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             runtime: runtime,
             resumePosition: resumePosition,
             playedPercentage: playedPercentage,
+            unwatchedEpisodeCount: isContainer
+                ? dto.UserData?.UnplayedItemCount.flatMap { $0 >= 0 ? $0 : nil } : nil,
             isPlayed: serverPlayed && !isRewatching,
             hasBeenPlayed: serverPlayed || hasContainerHistory,
             posterURL: Self.imageURL(for: dto, kind: .primary, maxWidth: 500, client: client),
@@ -2080,15 +2396,22 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 sourceRevision: dto.MediaSources?.first.map {
                     Self.sourceRevision(itemID: dto.Id, source: $0)
                 },
-                fileSizeBytes: dto.MediaSources?.first?.Size,
-                fileName: dto.MediaSources?.first?.Path.flatMap(Self.fileName(fromPath:))
+                fileSizeBytes: dto.MediaSources?.first.flatMap { Self.fileSizeBytes(for: $0) },
+                fileName: dto.MediaSources?.first?.Path.flatMap(Self.fileName(fromPath:)),
+                declaredAudioLanguages: Self.declaredAudioLanguages(for: dto.MediaSources?.first)
             ),
             versions: Self.versions(
                 from: dto.MediaSources,
                 defaultStreams: dto.MediaStreams
             ),
             isFavorite: dto.UserData?.IsFavorite ?? false,
-            lastPlayedAt: Self.parseDate(dto.UserData?.LastPlayedDate)
+            lastPlayedAt: Self.parseDate(dto.UserData?.LastPlayedDate),
+            librarySortValues: LibrarySortValues(
+                sortName: dto.SortName, dateAdded: Self.parseDate(dto.DateCreated),
+                audienceRating: dto.CommunityRating.map { $0 * 10 },
+                criticRating: dto.CriticRating, playCount: dto.UserData?.PlayCount ?? 0,
+                watched: dto.UserData?.Played ?? false
+            )
         )
     }
 
@@ -2140,7 +2463,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 ? defaultStreams ?? []
                 : source.MediaStreams ?? []
             let video = streams.first { $0.`Type` == "Video" }
-            let audio = streams.first { $0.`Type` == "Audio" }
+            let audio = streams.first { $0.`Type` == "Audio" && $0.IsDefault == true }
+                ?? streams.first { $0.`Type` == "Audio" }
             return MediaVersion(
                 id: source.Id ?? "\(index)",
                 name: source.Name,
@@ -2148,7 +2472,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 width: video?.Width,
                 height: video?.Height,
                 bitrate: source.Bitrate ?? video?.BitRate,
-                sizeBytes: source.Size,
+                sizeBytes: Self.fileSizeBytes(for: source),
                 duration: source.RunTimeTicks.map { TimeInterval($0) / 10_000_000 },
                 isDefault: index == 0,
                 videoCodec: video?.Codec,
@@ -2157,15 +2481,38 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 audioCodec: audio?.Codec,
                 audioChannels: audio?.Channels,
                 audioProfile: audio?.Profile,
-                container: source.Container
+                container: source.Container,
+                sourceMetadata: Self.sourceMetadata(
+                    container: source.Container,
+                    streams: streams,
+                    fileSizeBytes: Self.fileSizeBytes(for: source),
+                    fileName: source.Path.flatMap(Self.fileName(fromPath:)),
+                    declaredAudioLanguages: Self.declaredAudioLanguages(for: source)
+                )
             )
         }
     }
 
     private static func fileName(fromPath path: String) -> String? {
-        let base = (path as NSString).lastPathComponent
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return base.isEmpty ? nil : base
+        MediaSourceDisplayName.fileName(from: path)
+    }
+
+    private static func declaredAudioLanguages(for source: MediaSourceInfo?) -> [String] {
+        guard let source, source.IsRemote == true else { return [] }
+        return MediaSourceDisplayName.declaredAudioLanguages(from: source.Name)
+    }
+
+    static func fileSizeBytes(for source: MediaSourceInfo) -> Int64? {
+        guard source.IsRemote == true,
+              let declared = MediaSourceDisplayName.declaredFileSizeBytes(from: source.Name) else {
+            return source.Size
+        }
+        if source.Size != declared {
+            PlozzLog.networking.info(
+                "Remote source uses explicitly labeled file size: declaredBytes=\(declared) structuredBytes=\(source.Size ?? 0)"
+            )
+        }
+        return declared
     }
 
     private static func sourceRevision(
@@ -2388,6 +2735,9 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             isDefault: dto.IsDefault ?? false,
             isForced: dto.IsForced ?? false,
             channels: isSubtitle ? nil : dto.Channels,
+            isHearingImpaired: dto.IsHearingImpaired == true
+                || TrackLabeling.isHearingImpaired(dto.Title)
+                || TrackLabeling.isHearingImpaired(dto.DisplayTitle),
             isImageBasedSubtitle: isSubtitle
                 && !(dto.IsTextSubtitleStream ?? isTextSubtitleCodec(dto.Codec))
         )
@@ -2419,6 +2769,9 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             codec: dto.Codec,
             isDefault: dto.IsDefault ?? false,
             isForced: dto.IsForced ?? false,
+            isHearingImpaired: dto.IsHearingImpaired == true
+                || TrackLabeling.isHearingImpaired(dto.Title)
+                || TrackLabeling.isHearingImpaired(dto.DisplayTitle),
             deliverySource: deliverySource,
             isImageBasedSubtitle: !isText,
             isExternal: dto.IsExternal ?? false

@@ -3,6 +3,10 @@ import SwiftUI
 import CoreModels
 import PlozzCoreUI
 
+enum AppearanceSettingsSection {
+    case appearance, screensNavigation, artwork, navigation
+}
+
 struct AppearanceDetailView: View {
     /// The household's libraries + per-profile availability, needed by the
     /// navigation-arrangement pane. Passed in (rather than reached for) so this
@@ -10,14 +14,17 @@ struct AppearanceDetailView: View {
     let librariesScope: ProfileLibrariesScope
     /// Keeps the selected Appearance feature stable while navigation shell changes.
     let settingsNavigation: SettingsNavigationModel
+    var canManageProviders = false
     @Bindable var theme: ThemeSettingsModel
     /// Circadian Mode (night-warming) settings, folded in as sections here — it's
     /// a display concern, so it no longer earns its own top-level row.
     @Bindable var nightShift: NightShiftSettingsModel
-    /// Spoiler-protection (hide unwatched episode art/titles/ratings). It's a
-    /// content-protection concern that applies wherever you browse — not
-    /// Home-specific — so it lives here in Appearance rather than folded into Home.
+    /// Browsing protection belongs to this profile's Appearance preferences.
     @Bindable var spoilers: SpoilerSettingsModel
+    var section: AppearanceSettingsSection = .appearance
+    #if os(tvOS)
+    @Environment(\.settingsInWorkspace) private var inWorkspace
+    #endif
     @Environment(MusicPlayerSettingsModel.self) private var musicPlayer
     /// App-wide card presentation — scale + style — that applies across every row
     /// and grid in the app (not just Home), so it lives in Appearance rather than
@@ -34,11 +41,22 @@ struct AppearanceDetailView: View {
 
     var body: some View {
         @Bindable var settingsNavigation = settingsNavigation
-        SettingsSplitLayout(
-            title: "Appearance",
-            rows: rows,
-            selection: $settingsNavigation.appearanceRowID
-        )
+        Group {
+            #if os(tvOS)
+            if section == .artwork || section == .navigation,
+               let row = allRows.first(where: { $0.id == (section == .artwork ? "artwork" : "navigation") }) {
+                SettingsFormRowPage(row: row, route: section == .artwork ? .artwork : .navigationLayout)
+            } else {
+                SettingsSplitLayout(
+                    title: section == .screensNavigation ? "Screens & Navigation" : "Appearance",
+                    rows: rows,
+                    selection: $settingsNavigation.appearanceRowID
+                )
+            }
+            #else
+            SettingsSplitLayout(title: "Appearance", rows: allRows, selection: $settingsNavigation.appearanceRowID)
+            #endif
+        }
             // Circadian's day/night preview animates a model flag; make sure it
             // never keeps running once you leave Appearance or turn Circadian off.
             .onChange(of: nightShift.settings.isEnabled) { _, enabled in
@@ -48,6 +66,29 @@ struct AppearanceDetailView: View {
     }
 
     private var rows: [SettingsSplitRow] {
+        let availableRows = allRows
+        #if os(tvOS)
+        if inWorkspace {
+            if section == .screensNavigation {
+                return [
+                    SettingsSplitRow(id: "customize-home", title: "Customize Home") { EmptyView() }
+                        .destination(.customizeHome)
+                ] + availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
+                    SettingsSplitRow(id: "title-details", title: "Detail Page") { EmptyView() }
+                        .destination(.detailPage)
+                ] + availableRows.filter { $0.id == "music-player" }.map { $0.page() }
+            }
+            return ["theme", "cards", "artwork", "spoilers", "night-shift"].flatMap { id in
+                availableRows.filter { $0.id == id }.map { row in
+                    id == "artwork" ? row.destination(.artwork) : row.page()
+                }
+            }
+        }
+        #endif
+        return availableRows
+    }
+
+    private var allRows: [SettingsSplitRow] {
         @Bindable var musicPlayer = musicPlayer
         @Bindable var density = density
         @Bindable var navigation = navigation
@@ -55,31 +96,57 @@ struct AppearanceDetailView: View {
         return [
                 SettingsSplitRow(
                     id: "language",
-                    title: "Language",
-                    description: "The language Plozz uses for its own labels. Media titles keep the language your server provides."
+                    title: "Language"
                 ) {
                     AppLanguagePicker(model: appLanguage)
-                },
+                }.labeledControl(),
                 SettingsSplitRow(
                     id: "theme",
                     title: "Theme"
                 ) {
                     themeAndTransparency
-                },
+                }.groupedContent(),
                 SettingsSplitRow(
                     id: "display-size",
                     title: "Display Size",
                     description: "Scales card size, columns and spacing across the app.",
                 ) {
                     CompactDisplaySizePicker(selection: $density.density)
-                },
+                }.illustratedContent(),
+                SettingsSplitRow(
+                    id: "artwork",
+                    title: "Artwork",
+                    subpage: SettingsDetailSubpage {
+                        ArtworkCustomizationView(
+                            cards: cardStyle,
+                            continueWatchingShowsSeriesArtwork: librariesScope.homeVisibility.continueWatchingUsesSeriesArtwork,
+                            continueWatchingLayout: librariesScope.homeVisibility.continueWatchingLayout
+                        )
+                    }
+                ) {
+                    VStack(alignment: .leading, spacing: 32) {
+                        ArtworkSettingsControls(
+                            cards: cardStyle,
+                            continueWatchingShowsSeriesArtwork: librariesScope.homeVisibility.continueWatchingUsesSeriesArtwork,
+                            continueWatchingLayout: librariesScope.homeVisibility.continueWatchingLayout
+                        )
+                        if canManageProviders {
+                            #if os(tvOS)
+                            SettingsControlGroup { metadataProviderLink }
+                            #else
+                            metadataProviderLink
+                            #endif
+                        }
+                    }
+                }.groupedContent(),
                 SettingsSplitRow(
                     id: "cards",
                     title: "Cards",
                     description: "How media cards look across the app.",
+                    subpage: SettingsDetailSubpage { CardCaptionCustomizationView(cards: cardStyle) }
                 ) {
                     cardsControls
-                },
+                }.groupedContent(),
                 SettingsSplitRow(
                     id: "navigation",
                     title: "Navigation"
@@ -88,7 +155,7 @@ struct AppearanceDetailView: View {
                         navigation: navigation,
                         librariesScope: librariesScope
                     )
-                },
+                }.groupedContent(),
                 SettingsSplitRow(
                     id: "music-player",
                     title: "Music Player",
@@ -98,7 +165,7 @@ struct AppearanceDetailView: View {
                         appearance: $musicPlayer.appearance,
                         showTrackDetails: $musicPlayer.showTrackDetails
                     )
-                }
+                }.illustratedContent()
         ] + CircadianRowsBuilder(model: nightShift).rows
             + SpoilerRowsBuilder(spoilers: spoilers).rows
     }
@@ -111,7 +178,11 @@ struct AppearanceDetailView: View {
     @ViewBuilder private var themeAndTransparency: some View {
         @Bindable var transparency = transparency
         VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
-            CompactThemePicker(selection: $theme.theme)
+            #if os(tvOS)
+            SettingsControlGroup(illustrated: true) { themeControls }
+            #else
+            themeControls
+            #endif
             SettingsDetailGroup(title: "Liquid Glass") {
                 DescribedSegmentedPicker(
                     options: TransparencyPreference.allCases,
@@ -123,10 +194,21 @@ struct AppearanceDetailView: View {
         }
     }
 
-    /// The media-card controls in one pane — style (framed vs poster), the
-    /// watched indicator, and what focus does to a card — since all three are
-    /// "how a card looks". Shorter swatches so the preview rows sit together
-    /// without heavy scrolling; each headed by a shared uppercase section header.
+    @ViewBuilder private var themeControls: some View {
+        CompactThemePicker(selection: $theme.theme)
+        Toggle("Gradient Backgrounds", isOn: $theme.gradientEnabled)
+    }
+
+    private var metadataProviderLink: some View {
+        VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+            Button(action: settingsNavigation.openMetadataProviders) {
+                Label("Metadata Providers (TMDB, TheTVDB…)", systemImage: "globe")
+            }
+            .buttonStyle(SettingsFormButtonStyle())
+            .accessibilityIdentifier("artwork-metadata-providers")
+            Text("Shared by all profiles.").settingsHelperText()
+        }
+    }
 
     /// Everything controlled by the single Navigation master row.
     ///
@@ -137,14 +219,13 @@ struct AppearanceDetailView: View {
 
         var body: some View {
             VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
-                CompactNavigationPicker(selection: $navigation.style)
-
                 #if os(tvOS)
-                Toggle(
-                    "Prevent Accidental Exit",
-                    isOn: $navigation.preventsAccidentalExit
-                )
-                .toggleStyle(SettingsSwitchToggleStyle())
+                SettingsControlGroup(illustrated: true) {
+                    CompactNavigationPicker(selection: $navigation.style)
+                    Toggle("Prevent Accidental Exit", isOn: $navigation.preventsAccidentalExit)
+                }
+                #else
+                CompactNavigationPicker(selection: $navigation.style)
                 #endif
 
                 SettingsDetailGroup(
@@ -152,8 +233,7 @@ struct AppearanceDetailView: View {
                 ) {
                     NavigationLibrariesDetailView(
                         scope: librariesScope,
-                        navigation: navigation,
-                        includesIndividualLibraries: navigation.style != .tabBar
+                        navigation: navigation
                     )
                 }
             }
@@ -161,25 +241,7 @@ struct AppearanceDetailView: View {
     }
 
     @ViewBuilder private var cardsControls: some View {
-        @Bindable var cardStyle = cardStyle
-        @Bindable var watchStatusIndicator = watchStatusIndicator
-        VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
-            SettingsDetailGroup(title: "Style") {
-                CompactCardStylePicker(selection: $cardStyle.style, swatchHeight: 150)
-            }
-            SettingsDetailGroup(title: "Watched Indicator") {
-                CompactWatchIndicatorPicker(selection: $watchStatusIndicator.indicator, swatchHeight: 150)
-            }
-            SettingsDetailGroup(
-                title: LocalizedStringResource(
-                    "settings.cards.focus",
-                    defaultValue: "Focus",
-                    comment: "Section header in tvOS Settings > Appearance > Cards, above the picker that chooses what a media card does when the remote's focus lands on it. Not camera focus and not a concentration/Focus mode — this is the on-screen selection highlight."
-                )
-            ) {
-                CompactCardFocusStylePicker(selection: $cardStyle.focusStyle, swatchHeight: 150)
-            }
-        }
+        CardAppearanceControls(cards: cardStyle, watchIndicator: watchStatusIndicator, density: density)
     }
 }
 
@@ -191,10 +253,7 @@ struct SpoilersDetailView: View {
     }
 }
 
-/// Builds the Spoiler-protection settings rows. Extracted from
-/// ``SpoilersDetailView`` so the same controls can appear folded into the
-/// Appearance settings page (spoiler masking is a browsing concern that applies
-/// everywhere, so it lives in Appearance rather than Home or its own row).
+/// Shared spoiler controls for Appearance on tvOS and the legacy detail layout.
 @MainActor
 struct SpoilerRowsBuilder {
     let spoilers: SpoilerSettingsModel
@@ -204,19 +263,19 @@ struct SpoilerRowsBuilder {
         return [
             SettingsSplitRow(
                 id: "spoilers",
-                title: "Spoilers",
+                title: title,
                 description: LocalizedStringResource(
                     "settings.spoilers.description",
                     defaultValue: "Hide unwatched episodes and ratings until you've seen them. Blurred ratings reveal when you press them.",
                     comment: "Description under the Spoilers heading in tvOS Settings, explaining what the switches below it do. 'Press' is the Apple TV remote's Select button."
                 ),
             ) {
-                VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
+                SettingsControlRows(nonTVSpacing: SettingsMetrics.sectionSpacing) {
                     SettingsRevealSection(
                         isOn: $spoilers.settings.isEnabled,
                         masterLabel: "Hide spoilers for unwatched episodes"
                     ) {
-                        SettingsDetailGroup(title: "Mode") {
+                        SettingsDetailGroup(title: "Mode", illustrated: true) {
                             SpoilerModePicker(mode: $spoilers.settings.mode)
                         }
                     }
@@ -226,6 +285,14 @@ struct SpoilerRowsBuilder {
                 }
             }
         ]
+    }
+
+    private var title: LocalizedStringResource {
+        #if os(tvOS)
+        "Spoiler Protection"
+        #else
+        "Spoilers"
+        #endif
     }
 }
 /// Detail-page customization (a sibling to Customize Home): what plays behind the
@@ -248,7 +315,7 @@ struct DetailPageDetailView: View {
                 title: "Background",
                 description: "Choose what plays behind the hero on a title's detail page. Trailer and theme music never play together."
             ) {
-                VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
+                SettingsControlRows(nonTVSpacing: SettingsMetrics.sectionSpacing) {
                     DescribedSegmentedPicker(
                         options: HeroBackgroundMode.allCases,
                         selection: $heroBackground.settings.detailMode,
@@ -293,7 +360,7 @@ private struct DetailHeaderRatingsSettingsForm: View {
     @Bindable var model: DetailPageSettingsModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
+        SettingsControlRows(nonTVSpacing: SettingsMetrics.sectionSpacing) {
             Toggle("Show review scores", isOn: $model.settings.showsHeaderRatings)
             if model.settings.showsHeaderRatings {
                 HeaderReviewScoreCountPicker(settings: $model.settings)
@@ -310,8 +377,15 @@ private struct DetailHeaderAgeSettingsForm: View {
     }
 }
 
+enum PlaybackSettingsSection {
+    case playback, subtitles
+}
+
 struct PlaybackDetailView: View {
     @Environment(\.locale) private var locale
+    #if os(tvOS)
+    @Environment(\.settingsInWorkspace) private var inWorkspace
+    #endif
     @Bindable var playback: PlaybackSettingsModel
     /// The profile base subtitle mode/language now lives in `SubtitleBehavior`
     /// (behaviour half of the retired `CaptionSettings`).
@@ -324,10 +398,9 @@ struct PlaybackDetailView: View {
     /// device language for everything else").
     @Bindable var audioPolicy: AudioPolicyModel
     /// Whether the active profile has a server that can download subtitles
-    /// (Jellyfin or Plex). A share-only profile can't — so the whole "Downloading
-    /// subtitles" row (auto-download + SDH/Forced ranking, all of which only act on
-    /// a server search) is hidden rather than shown as a dead control.
+    /// (Jellyfin or Plex). SDH selection is independent of this capability.
     var canDownloadSubtitles: Bool = true
+    var section: PlaybackSettingsSection = .playback
 
     /// The three classifiable content types the per-type rules apply to, in the
     /// order shown in Settings (`.other` always follows the base, so it isn't
@@ -445,38 +518,128 @@ struct PlaybackDetailView: View {
     /// A native pop-up menu for choosing an audio-language preference (the
     /// common-language list is too long for the inline pill picker).
     @ViewBuilder
-    private func audioLanguageMenu(_ selection: Binding<AudioLanguagePreference>) -> some View {
-        Menu {
+    private func audioLanguageMenu(
+        _ selection: Binding<AudioLanguagePreference>,
+        title: LocalizedStringResource,
+        subtitle: LocalizedStringResource? = nil
+    ) -> some View {
+        SettingsMenuRow(
+            title: title, value: audioPreferenceName(selection.wrappedValue), subtitle: subtitle
+        ) {
             Picker("Audio language", selection: selection) {
                 ForEach(Self.audioPreferenceOptions, id: \.self) { preference in
                     audioPreferenceName(preference).tag(preference)
                 }
             }
-        } label: {
-            Label {
-                audioPreferenceName(selection.wrappedValue)
-            } icon: {
-                Image(systemName: "globe")
-            }
         }
-        .menuStyle(.button)
     }
 
     var body: some View {
-        SettingsSplitLayout(title: "Playback", rows: rows)
+        SettingsSplitLayout(title: section == .subtitles ? "Subtitles" : "Playback", rows: rows)
     }
 
     // MARK: - Split sections
 
+    private var versionSelectionRows: [SettingsSplitRow] {
+        [
+            SettingsSplitRow(
+                id: "version-selection", title: "Version selection",
+                description: "Ask before each multi-version video, including autoplay, or choose automatically without opening the version picker."
+            ) {
+                #if os(tvOS)
+                SettingsControlRows {
+                    if playback.settings.versionSelectionMode == nil {
+                        Text("Choose on first play")
+                            .settingsHelperText()
+                    }
+                    ForEach(PlaybackVersionSelectionMode.allCases, id: \.self) { mode in
+                        SettingsCheckableRow(
+                            title: Text(mode.title), titleLineLimit: nil,
+                            isChecked: playback.settings.versionSelectionMode == mode
+                        ) {
+                            playback.settings.versionSelectionMode = mode
+                        }
+                    }
+                }
+                #else
+                PlaybackVersionPreferencePicker(model: playback)
+                #endif
+            },
+            SettingsSplitRow(
+                id: "remember-series-version", title: "Remember series version choices",
+                description: "Reuse the version type you pick for later episodes. When choosing automatically, use the best available version if that type is missing."
+            ) {
+                Toggle("Remember per series", isOn: $playback.settings.rememberVersionPerSeries)
+                    .accessibilityIdentifier("playback-remember-series-version")
+            }
+        ]
+    }
+
     private var rows: [SettingsSplitRow] {
-        subtitleRows
+        #if os(tvOS)
+        if inWorkspace {
+            if section == .subtitles { return subtitleRows }
+            return [
+                SettingsSplitRow(id: "audio", title: "Audio") {
+                    SettingsControlRows {
+                        ForEach(audioRows) { row in
+                            VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+                                row.detail()
+                                if let description = row.description {
+                                    description.settingsHelperText().fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+                },
+                SettingsSplitRow(id: "autoplay-up-next", title: "Autoplay & Up Next") {
+                    SettingsControlRows {
+                        ForEach(upNextRows) { $0.detail() }
+                    }
+                }
+            ] + versionSelectionRows + readAheadRows + skipIntroRows + [
+                SettingsSplitRow(id: "seeking", title: "Seeking") {
+                    SettingsControlRows {
+                        ForEach(skipIntervalRows) { $0.detail() }
+                        ForEach(resumeRows) { $0.detail() }
+                        ForEach(scrubbingRows) { row in
+                            VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+                                row.detail()
+                                if let description = row.description {
+                                    description.settingsHelperText().fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+                }
+            ] + displayFadeRows + advancedRows
+        }
+        #endif
+        return subtitleRows
             + audioRows
+            + versionSelectionRows
             + skipIntroRows
             + skipIntervalRows
             + resumeRows
+            + readAheadRows
             + scrubbingRows
             + displayFadeRows
             + upNextRows
+            + advancedRows
+    }
+
+    private var advancedRows: [SettingsSplitRow] {
+        [.page(id: "playback-advanced", title: "Advanced") {
+            PlaybackAdvancedSettingsView.rows(playback: playback)
+        }]
+    }
+
+    private var readAheadRows: [SettingsSplitRow] {
+        [
+            SettingsSplitRow(id: "read-ahead", title: "Video buffer") {
+                PlaybackReadAheadControl()
+            }
+        ]
     }
 
     private var subtitleRows: [SettingsSplitRow] {
@@ -498,23 +661,33 @@ struct PlaybackDetailView: View {
                 title: "Subtitle language",
                 description: "The language Plozz prefers when choosing subtitles."
             ) {
-                Menu {
+                SettingsMenuRow(
+                    title: "Subtitle language",
+                    value: subtitleLanguageName(for: subtitleLanguageSelection.wrappedValue)
+                ) {
                     Picker("Subtitle language", selection: subtitleLanguageSelection) {
                         ForEach(subtitleLanguageOptions, id: \.self) { code in
                             subtitleLanguageName(for: code).tag(code)
                         }
                     }
-                } label: {
-                    Label {
-                        subtitleLanguageName(
-                            for: subtitleLanguageSelection.wrappedValue
-                        )
-                    } icon: {
-                        Image(systemName: "globe")
+                }
+            }.labeledControl(),
+            SettingsSplitRow(
+                id: "subtitle-sdh",
+                title: "SDH subtitles",
+                description: subtitleBehavior.settings.hearingImpairedPreference.detail
+            ) {
+                SettingsMenuRow(
+                    title: "SDH subtitles",
+                    value: Text(subtitleBehavior.settings.hearingImpairedPreference.displayName)
+                ) {
+                    Picker("SDH subtitles", selection: $subtitleBehavior.settings.hearingImpairedPreference) {
+                        ForEach(HearingImpairedPreference.allCases, id: \.self) { option in
+                            Text(option.displayName).tag(option)
+                        }
                     }
                 }
-                .menuStyle(.button)
-            }
+            }.labeledControl()
         ]
 
         // "Downloading subtitles" only makes sense with a server that can actually
@@ -527,31 +700,17 @@ struct PlaybackDetailView: View {
                 title: "Downloading subtitles",
                 description: "Download subtitles you don't already have."
             ) {
-                VStack(alignment: .leading, spacing: 28) {
+                SettingsControlRows(nonTVSpacing: 28) {
                     Toggle("Automatically download", isOn: $subtitleBehavior.settings.autoDownloadSubtitles)
-                    LabeledSettingRow("Hearing-Impaired (SDH)", trailingAlignment: .trailing) {
-                        Menu {
-                            Picker("Hearing-impaired subtitles", selection: $subtitleBehavior.settings.hearingImpairedPreference) {
-                                ForEach(HearingImpairedPreference.allCases, id: \.self) { option in
-                                    Text(option.displayName).tag(option)
-                                }
+                    SettingsMenuRow(
+                        title: "Forced",
+                        value: Text(subtitleBehavior.settings.forcedSearchPreference.displayName)
+                    ) {
+                        Picker("Forced subtitles", selection: $subtitleBehavior.settings.forcedSearchPreference) {
+                            ForEach(ForcedSubtitlePreference.allCases, id: \.self) { option in
+                                Text(option.displayName).tag(option)
                             }
-                        } label: {
-                            Label(subtitleBehavior.settings.hearingImpairedPreference.displayName, systemImage: "ear")
                         }
-                        .menuStyle(.button)
-                    }
-                    LabeledSettingRow("Forced", trailingAlignment: .trailing) {
-                        Menu {
-                            Picker("Forced subtitles", selection: $subtitleBehavior.settings.forcedSearchPreference) {
-                                ForEach(ForcedSubtitlePreference.allCases, id: \.self) { option in
-                                    Text(option.displayName).tag(option)
-                                }
-                            }
-                        } label: {
-                            Label(subtitleBehavior.settings.forcedSearchPreference.displayName, systemImage: "captions.bubble")
-                        }
-                        .menuStyle(.button)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -566,46 +725,52 @@ struct PlaybackDetailView: View {
             Toggle("Remember per series", isOn: $playback.settings.rememberSubtitleTrackPerSeries)
         })
 
-        rows.append(SettingsSplitRow(
-            id: "subtitle-style",
-            title: "Subtitle style",
-            description: "Use the full player controls to customize subtitles, with a live preview."
-        ) {
-            VStack(alignment: .leading, spacing: 24) {
-                NavigationLink("Customize subtitle style", value: SettingsRoute.subtitleStyle(liveTV: false))
-            }
-        })
-
-        rows.append(SettingsSplitRow(
-            id: "live-subtitle-style",
-            title: "Live TV subtitle style",
-            description: "Use the same subtitle appearance everywhere, or choose a separate look for Live TV."
-        ) {
-            VStack(alignment: .leading, spacing: 24) {
-                Toggle("Use a separate style for Live TV", isOn: $subtitleStyle.usesSeparateLiveTVStyle)
-                if subtitleStyle.usesSeparateLiveTVStyle {
-                    NavigationLink("Customize Live TV subtitles", value: SettingsRoute.subtitleStyle(liveTV: true))
-                }
-            }
-        })
-
+        #if os(tvOS)
+        rows.insert(contentsOf: subtitleStyleRows, at: 1)
+        #else
+        rows.append(contentsOf: subtitleStyleRows)
+        #endif
         return rows
     }
 
-    private var audioRows: [SettingsSplitRow] {
+    private var subtitleStyleRows: [SettingsSplitRow] {
         [
+            SettingsSplitRow(
+                id: "subtitle-style",
+                title: "Subtitle style",
+                description: "Use the full player controls to customize subtitles, with a live preview."
+            ) {
+                SettingsRouteLink("Customize subtitle style", value: SettingsRoute.subtitleStyle(liveTV: false))
+            },
+            SettingsSplitRow(
+                id: "live-subtitle-style",
+                title: "Live TV subtitle style",
+                description: "Use the same subtitle appearance everywhere, or choose a separate look for Live TV."
+            ) {
+                SettingsControlRows {
+                    Toggle("Use a separate style for Live TV", isOn: $subtitleStyle.usesSeparateLiveTVStyle)
+                    if subtitleStyle.usesSeparateLiveTVStyle {
+                        SettingsRouteLink("Customize Live TV subtitles", value: SettingsRoute.subtitleStyle(liveTV: true))
+                    }
+                }
+            }
+        ]
+    }
+
+    private var audioRows: [SettingsSplitRow] {
+        var rows = [
             SettingsSplitRow(
                 id: "audio-defaults",
                 title: "Audio defaults",
                 description: "How Plozz picks the audio language when a title offers more than one — with optional per-content-type rules and per-series memory.",
             ) {
-                VStack(alignment: .leading, spacing: 32) {
+                SettingsControlRows(nonTVSpacing: 32) {
                     // Set separately, "Everything else" takes over the one
                     // preference, so it isn't shown twice.
                     if !audioPerContentTypeEnabled {
-                        LabeledSettingRow("Preferred audio language", trailingAlignment: .trailing) {
-                            audioLanguageMenu($playback.settings.audioLanguagePreference)
-                        }
+                        audioLanguageMenu(
+                            $playback.settings.audioLanguagePreference, title: "Preferred audio language"
+                        )
                     }
 
                     SettingsRevealSection(
@@ -613,15 +778,12 @@ struct PlaybackDetailView: View {
                         masterLabel: "Set separately for movies, TV shows & anime"
                     ) {
                         ForEach(Self.policyCategories + [.other], id: \.self) { category in
-                            LabeledSettingRow(
-                                category.separateSettingTitle,
-                                subtitle: category.separateSettingHint,
-                                trailingAlignment: .trailing
-                            ) {
-                                audioLanguageMenu(category == .other
+                            audioLanguageMenu(
+                                category == .other
                                     ? $playback.settings.audioLanguagePreference
-                                    : audioPreferenceBinding(for: category))
-                            }
+                                    : audioPreferenceBinding(for: category),
+                                title: category.separateSettingTitle, subtitle: category.separateSettingHint
+                            )
                         }
                     }
 
@@ -630,6 +792,18 @@ struct PlaybackDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         ]
+        #if os(tvOS)
+        if #available(tvOS 26.0, *) {
+            rows.append(SettingsSplitRow(
+                id: "truehd-atmos",
+                title: "TrueHD Atmos and DTS:X",
+                description: "Hear overhead sound from supported TrueHD Atmos and DTS:X tracks on compatible equipment, using lossy conversion. If playback stutters or seeking is slow, try turning this off. Those tracks will still play, but without height positioning. Dolby Digital Plus Atmos is unaffected. Applies to new playback sessions."
+            ) {
+                Toggle("TrueHD Atmos and DTS:X", isOn: $playback.settings.trueHDAtmosEnabled)
+            })
+        }
+        #endif
+        return rows
     }
 
     private var skipIntroRows: [SettingsSplitRow] {
@@ -677,21 +851,19 @@ struct PlaybackDetailView: View {
                 title: "Skip Intervals",
                 description: "How far the remote's left and right buttons jump during playback.",
             ) {
-                VStack(alignment: .leading, spacing: 28) {
-                    LabeledSettingRow("Backward") {
-                        SettingsStepper(
-                            options: SkipInterval.allCases,
-                            selection: $playback.settings.skipBackwardInterval,
-                            verbatimTitle: { $0.title(locale: locale) }
-                        )
-                    }
-                    LabeledSettingRow("Forward") {
-                        SettingsStepper(
-                            options: SkipInterval.allCases,
-                            selection: $playback.settings.skipForwardInterval,
-                            verbatimTitle: { $0.title(locale: locale) }
-                        )
-                    }
+                SettingsControlRows(nonTVSpacing: 28) {
+                    SettingsStepper(
+                        options: SkipInterval.allCases,
+                        selection: $playback.settings.skipBackwardInterval,
+                        label: "Backward",
+                        verbatimTitle: { $0.title(locale: locale) }
+                    )
+                    SettingsStepper(
+                        options: SkipInterval.allCases,
+                        selection: $playback.settings.skipForwardInterval,
+                        label: "Forward",
+                        verbatimTitle: { $0.title(locale: locale) }
+                    )
                 }
             }
         ]
@@ -705,19 +877,31 @@ struct PlaybackDetailView: View {
                 description: "When you return to a partially-watched title, playback starts a little before where you left off. Set anywhere from 0 to 60 seconds.",
             ) {
                 VStack(alignment: .leading, spacing: 20) {
-                    SettingsStepper(
-                        options: ResumeRewindInterval.allCases,
-                        selection: $playback.settings.resumeRewindInterval,
-                        verbatimTitle: { $0.title(locale: locale) }
-                    )
+                    resumeRewindStepper
                     Text(playback.settings.resumeRewindInterval.effectDescription)
-                        .font(.callout)
-                        .plozzForeground(.secondary)
+                        .settingsHelperText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         ]
+    }
+
+    private var resumeRewindStepper: some View {
+        SettingsStepper(
+            options: ResumeRewindInterval.allCases,
+            selection: $playback.settings.resumeRewindInterval,
+            label: resumeRewindLabel,
+            verbatimTitle: { $0.title(locale: locale) }
+        )
+    }
+
+    private var resumeRewindLabel: LocalizedStringResource? {
+        #if os(tvOS)
+        inWorkspace ? "Rewind on resume" : nil
+        #else
+        nil
+        #endif
     }
 
     private var scrubbingRows: [SettingsSplitRow] {
@@ -746,7 +930,7 @@ struct PlaybackDetailView: View {
                 title: "Fade on display changes",
                 description: "If you don't match dynamic range or frame rate on your Apple TV, turn these off for faster transitions.",
             ) {
-                VStack(alignment: .leading, spacing: 24) {
+                SettingsControlRows {
                     // "HDR" and "Dolby Vision" are both `neverTranslate` brands, so
                     // this label must reach the UI verbatim rather than entering the
                     // catalog where a translator would have no way to know that.
@@ -770,15 +954,16 @@ struct PlaybackDetailView: View {
                 title: "Autoplay",
                 description: "Play the next episode automatically.",
             ) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Autoplay next episode", isOn: $playback.settings.autoPlayNextEpisode)
+                SettingsControlRows(nonTVSpacing: 8) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Autoplay next episode", isOn: $playback.settings.autoPlayNextEpisode)
+                        Text(playback.settings.autoPlayNextEpisode
+                             ? "The next episode starts when one finishes."
+                             : "The player closes when an episode finishes.")
+                            .settingsHelperText()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     Toggle("Autoplay next playlist item", isOn: $playback.settings.autoPlayNextPlaylistItem)
-                    Text(playback.settings.autoPlayNextEpisode
-                         ? "The next episode starts when one finishes."
-                         : "The player closes when an episode finishes.")
-                        .font(.callout)
-                        .plozzForeground(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             },
             SettingsSplitRow(
@@ -786,16 +971,15 @@ struct PlaybackDetailView: View {
                 title: "Show Up Next card",
                 description: "Jump straight to the next episode.",
             ) {
-                VStack(alignment: .leading, spacing: 24) {
+                SettingsControlRows {
                     Toggle("Show Up Next card", isOn: $playback.settings.showUpNextCard)
                     if playback.settings.showUpNextCard {
-                        LabeledSettingRow("Time before the end", subtitle: "When credits can't be detected") {
-                            SettingsStepper(
-                                options: PlaybackSettings.upNextLeadSecondsOptions,
-                                selection: $playback.settings.upNextLeadSeconds,
-                                verbatimTitle: { Duration.seconds($0).formatted(.units(allowed: [.seconds], width: .narrow)) }
-                            )
-                        }
+                        SettingsStepper(
+                            options: PlaybackSettings.upNextLeadSecondsOptions,
+                            selection: $playback.settings.upNextLeadSeconds,
+                            label: "Time before the end", subtitle: "When credits can't be detected",
+                            verbatimTitle: { Duration.seconds($0).formatted(.units(allowed: [.seconds], width: .narrow)) }
+                        )
                     }
                 }
             }
@@ -828,8 +1012,7 @@ private struct DescribedSegmentedPicker<Option: Hashable>: View {
                 onFocusedOptionChange: { focusedOption = $0 }
             )
             Text(detail(describedOption))
-                .font(.callout)
-                .plozzForeground(.secondary)
+                .settingsHelperText()
                 .fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -849,7 +1032,7 @@ private struct SkipModeControl: View {
     @Binding var useCommunityMarkers: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 32) {
+        SettingsControlRows(nonTVSpacing: 32) {
             if !perKindEnabled {
                 DescribedSegmentedPicker(
                     options: SkipIntrosMode.allCases,
@@ -878,8 +1061,7 @@ private struct SkipModeControl: View {
             VStack(alignment: .leading, spacing: 12) {
                 Toggle("Use community markers", isOn: $useCommunityMarkers)
                 Text("When your server has no intro or credits marker, Plozz looks one up on IntroDB and TheIntroDB, sending them the title’s IMDb or TMDB ID.")
-                    .font(.callout)
-                    .plozzForeground(.secondary)
+                    .settingsHelperText()
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -899,7 +1081,7 @@ private struct SubtitleModeControl: View {
     let categoryMode: (SubtitleContentCategory) -> Binding<SubtitleMode>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 32) {
+        SettingsControlRows(nonTVSpacing: 32) {
             if !perTypeEnabled {
                 DescribedSegmentedPicker(
                     options: SubtitleMode.allCases,
@@ -963,19 +1145,17 @@ private struct SeparateSettingRow<Option: Hashable>: View {
             case .above:
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(title)
-                        .font(.headline.weight(.semibold))
+                        .font(SettingsRowMetrics.titleFont)
                     if let hint {
                         Text(hint)
-                            .font(.callout)
-                            .plozzForeground(.secondary)
+                            .settingsHelperText()
                     }
                 }
                 picker
             }
             if let focusedOption {
                 Text(detail(focusedOption))
-                    .font(.callout)
-                    .plozzForeground(.secondary)
+                    .settingsHelperText()
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     // Under the picker, not the name.

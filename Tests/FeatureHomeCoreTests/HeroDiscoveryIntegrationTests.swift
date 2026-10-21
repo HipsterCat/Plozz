@@ -4,6 +4,57 @@ import XCTest
 @testable import FeatureHomeCore
 
 final class HeroDiscoveryIntegrationTests: XCTestCase {
+    func testKidsPolicyRejectsCachedDiscoveryButPreservesServerControlledLibraryContent() async {
+        var adult = HeroSettings.default
+        adult.hideWatched = false
+        adult.autoAdvance = false
+        adult.sources = [.featured, .recentlyAdded, .watchlist]
+        let kids = adult.applyingDiscoveryPolicy(allowed: false)
+        let external = ["R", "X", "Unrated", "G"].map { rating in
+            MediaItem(
+                id: rating, title: rating, kind: .movie, officialRating: rating,
+                backdropURL: URL(string: "https://images.example.test/\(rating).jpg"),
+                discoverySources: [.tmdb]
+            )
+        }
+        let library = MediaItem(
+            id: "library", title: "Server-controlled title", kind: .movie, officialRating: "Unrated",
+            backdropURL: URL(string: "https://images.example.test/library.jpg"),
+            sourceAccountID: "a"
+        )
+        let curator = HeroCurator()
+        XCTAssertEqual(curator.reconcile(
+            external + [library], settings: kids, watchMutations: []
+        ).map(\.id), [library.id])
+        XCTAssertEqual(curator.curateSync(
+            settings: kids, featured: external, continueWatching: [],
+            watchlist: external, recentlyAdded: external + [library]
+        ).map(\.id), [library.id])
+        let result = await curator.curateResult(
+            settings: kids, continueWatching: [],
+            watchlist: external, recentlyAdded: external + [library],
+            featuredProvider: { _ in
+                XCTFail("Kids curation must not load external Discovery")
+                return external
+            },
+            artworkValidator: { _ in true }
+        )
+        XCTAssertEqual(result.items.map(\.id), [library.id])
+        XCTAssertEqual(curator.reconcile(external, settings: adult, watchMutations: []).count, external.count)
+    }
+
+    func testKidsPolicyInvalidatesCachesEvenWhenDiscoveryWasAlreadyDisabled() throws {
+        var adult = HeroSettings.default
+        adult.sources = [.watchlist]
+        let kids = adult.applyingDiscoveryPolicy(allowed: false)
+        let adultKey = HeroConfigurationKey(settings: adult)
+        let kidsKey = HeroConfigurationKey(settings: kids)
+        XCTAssertNotEqual(adultKey, kidsKey)
+        XCTAssertEqual(try JSONDecoder().decode(HeroConfigurationKey.self, from: JSONEncoder().encode(kidsKey)), kidsKey)
+        let legacy = Data(#"{"sources":["watchlist"],"maxItems":8,"hideWatched":true}"#.utf8)
+        XCTAssertTrue(try JSONDecoder().decode(HeroConfigurationKey.self, from: legacy).allowsDiscovery)
+    }
+
     func testMixedCacheCannotReclassifyRemovedWatchlistItemAsFeatured() async {
         var settings = HeroSettings.default
         settings.sources = [.watchlist, .featured]

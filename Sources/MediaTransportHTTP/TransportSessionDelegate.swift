@@ -18,20 +18,33 @@ enum PasswordChallengeDecision {
 }
 
 final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private struct TaskState {
+    // Reference storage avoids copying the accumulated body on every callback.
+    private final class TaskState {
         var data = Data()
         var response: HTTPURLResponse?
         var policyError: TransportError?
         var redirectCount = 0
         var returnsErrorResponseOnCancellation = false
         let maxResponseBytes: Int
+        let followRedirects: Bool
         let completion: @Sendable (Result<TransportDataResponse, TransportError>) -> Void
+
+        init(
+            maxResponseBytes: Int,
+            followRedirects: Bool,
+            completion: @escaping @Sendable (Result<TransportDataResponse, TransportError>) -> Void
+        ) {
+            self.maxResponseBytes = maxResponseBytes
+            self.followRedirects = followRedirects
+            self.completion = completion
+        }
     }
 
     private let credential: WebDAVCredential
     private let trustPolicy: TrustPolicy
     private let origin: TransportOrigin
     private let maxRedirects: Int
+    private let isAnonymousMediaSession: Bool
     private let lock = NSLock()
     private var tasks: [Int: TaskState] = [:]
 
@@ -39,22 +52,26 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
         credential: WebDAVCredential,
         trustPolicy: TrustPolicy,
         origin: TransportOrigin,
-        maxRedirects: Int = 5
+        maxRedirects: Int = 5,
+        isAnonymousMediaSession: Bool = false
     ) {
         self.credential = credential
         self.trustPolicy = trustPolicy
         self.origin = origin
         self.maxRedirects = maxRedirects
+        self.isAnonymousMediaSession = isAnonymousMediaSession
     }
 
     func register(
         task: URLSessionDataTask,
         maxResponseBytes: Int,
+        followRedirects: Bool = true,
         completion: @escaping @Sendable (Result<TransportDataResponse, TransportError>) -> Void
     ) {
         lock.lock()
         tasks[task.taskIdentifier] = TaskState(
             maxResponseBytes: max(0, maxResponseBytes),
+            followRedirects: followRedirects,
             completion: completion
         )
         lock.unlock()
@@ -93,7 +110,7 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
         let space = challenge.protectionSpace
         #if canImport(Security)
         guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust else {
-            completionHandler(.performDefaultHandling, nil)
+            completionHandler(isAnonymousMediaSession ? .cancelAuthenticationChallenge : .performDefaultHandling, nil)
             return
         }
         guard challengeMatchesOrigin(space) else {
@@ -133,6 +150,12 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
             return
         }
         #endif
+
+        if isAnonymousMediaSession {
+            recordError(.authenticationFailed(reason: "delivery endpoint requested credentials"), for: task.taskIdentifier)
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
 
         if space.authenticationMethod == NSURLAuthenticationMethodHTTPBasic
             || space.authenticationMethod == NSURLAuthenticationMethodHTTPDigest {
@@ -205,6 +228,9 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
         space: URLProtectionSpace,
         previousFailureCount: Int
     ) -> PasswordChallengeDecision {
+        guard !isAnonymousMediaSession else {
+            return .reject(.authenticationFailed(reason: "delivery endpoint requested credentials"))
+        }
         // Same-origin is mandatory (never answer a credential to a different
         // host, e.g. after a redirect). HTTPS is NOT required: Plozz permits
         // credentials to a LAN media share over plain http (the onboarding UI
@@ -238,6 +264,14 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
         lock.lock()
+        if tasks[task.taskIdentifier]?.followRedirects == false {
+            tasks[task.taskIdentifier]?.response = response
+            tasks[task.taskIdentifier]?.returnsErrorResponseOnCancellation = true
+            lock.unlock()
+            completionHandler(nil)
+            task.cancel()
+            return
+        }
         tasks[task.taskIdentifier]?.redirectCount += 1
         let redirectCount = tasks[task.taskIdentifier]?.redirectCount
         lock.unlock()
@@ -286,17 +320,19 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
         let maximum = tasks[dataTask.taskIdentifier]?.maxResponseBytes
         if tasks[dataTask.taskIdentifier] != nil {
             tasks[dataTask.taskIdentifier]?.response = response
-            if response.statusCode >= 400 {
+            if response.statusCode >= 400
+                || (tasks[dataTask.taskIdentifier]?.followRedirects == false && (300..<400).contains(response.statusCode)) {
                 tasks[dataTask.taskIdentifier]?.returnsErrorResponseOnCancellation = true
             }
         }
+        let returnsHeadersOnly = tasks[dataTask.taskIdentifier]?.returnsErrorResponseOnCancellation == true
         lock.unlock()
 
         guard let maximum else {
             completionHandler(.cancel)
             return
         }
-        if response.statusCode >= 400 {
+        if returnsHeadersOnly {
             completionHandler(.cancel)
             return
         }
@@ -312,7 +348,7 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
         var shouldCancel = false
 
         lock.lock()
-        if var state = tasks[dataTask.taskIdentifier],
+        if let state = tasks[dataTask.taskIdentifier],
            state.policyError == nil,
            !state.returnsErrorResponseOnCancellation {
             if data.count > state.maxResponseBytes - state.data.count {
@@ -321,7 +357,6 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
             } else {
                 state.data.append(data)
             }
-            tasks[dataTask.taskIdentifier] = state
         }
         lock.unlock()
 

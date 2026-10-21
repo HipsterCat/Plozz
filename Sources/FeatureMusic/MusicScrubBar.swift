@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
 import UIKit
+import CoreUI
 
 /// Observable scrub state shared between the UIKit gesture surface (which writes
 /// it) and the SwiftUI bar (which only reads it). Keeping the gesture handling in
@@ -129,6 +130,9 @@ struct MusicScrubSurface: UIViewRepresentable {
                 if model.isScrubbing {
                     let target = model.scrubSeconds
                     model.onCommit?(target)
+                    if gesture.state == .ended, target != model.currentSeconds {
+                        TouchFeedback.shared.emit(.selection)
+                    }
                     model.currentSeconds = target
                     model.isScrubbing = false
                 }

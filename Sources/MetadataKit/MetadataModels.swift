@@ -222,6 +222,9 @@ public protocol ArtworkProvider: Sendable {
     /// Returns a URL for `kind` art matching `query`, or `nil` if this provider
     /// can't serve it. Must never throw — enrichment is always best-effort.
     func artworkURL(_ kind: ArtworkKind, for query: MetadataQuery) async -> URL?
+    /// Hero-only selection from the provider's usual artwork response, without
+    /// additional lookups: neutral portrait, neutral backdrop, then usable art.
+    func portraitHeroURL(for query: MetadataQuery) async -> URL?
     /// Ordered candidates for `kind`, best first, up to `limit`.
     ///
     /// A hero draws the show's logo over its backdrop, and the Home hero and the
@@ -236,6 +239,10 @@ public protocol ArtworkProvider: Sendable {
 }
 
 extension ArtworkProvider {
+    public func portraitHeroURL(for query: MetadataQuery) async -> URL? {
+        await artworkURL(.hero, for: query)
+    }
+
     public func artworkURLs(
         _ kind: ArtworkKind,
         for query: MetadataQuery,

@@ -9,7 +9,9 @@ import CoreNetworking
 /// a token) for browsing/playback. It deals only in DTOs; mapping to
 /// `CoreModels` happens in `JellyfinProvider`.
 public struct JellyfinClient: Sendable {
-    public let baseURL: URL
+    private let savedBaseURL: URL
+    public var baseURL: URL { addressResolver?.current ?? savedBaseURL }
+    let addressResolver: ServerAddressResolver?
     public let deviceProfile: JellyfinDeviceProfile
     public let providerKind: ProviderKind
     private let token: String?
@@ -31,16 +33,31 @@ public struct JellyfinClient: Sendable {
         token: String? = nil,
         http: HTTPClient = URLSessionHTTPClient(),
         interactiveHTTP: HTTPClient? = nil,
-        capabilityProfile: JellyfinCapabilityProfile = .detected()
+        capabilityProfile: JellyfinCapabilityProfile = .detected(),
+        serverID: String? = nil,
+        alternateURLs: [URL] = [],
+        addressProbe: any HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery)
     ) {
         let latch = ReachabilityLatch()
+        let resolver: ServerAddressResolver?
+        if let serverID {
+            resolver = ServerAddressResolver(baseURL: baseURL, alternatives: alternateURLs) { url in
+                try await Self.verifyAddress(url, serverID: serverID, http: addressProbe)
+            }
+        } else {
+            resolver = nil
+        }
+        addressResolver = resolver
+        let routedHTTP: any HTTPClient
+        if let resolver { routedHTTP = ServerAddressHTTPClient(wrapped: http, resolver: resolver) }
+        else { routedHTTP = http }
         // Wrap the transport(s) so the FIRST successful request against this
         // server latches reachability. `connectionLocality` reads that latch to
         // avoid reporting a saved-but-now-unreachable LAN server as `.local`
         // (which would wrongly win best-source selection over a reachable remote
         // twin). Mirrors Plex's resolver-confirmed reachability. (r7-jf-locality)
-        let observedHTTP = ReachabilityObservingHTTPClient(wrapped: http, latch: latch)
-        self.baseURL = baseURL
+        let observedHTTP = ReachabilityObservingHTTPClient(wrapped: routedHTTP, latch: latch)
+        self.savedBaseURL = baseURL
         self.deviceProfile = deviceProfile
         self.providerKind = providerKind
         self.token = token
@@ -52,8 +69,11 @@ public struct JellyfinClient: Sendable {
         // hitting a live session. The production foreground-pool isolation is
         // opted into explicitly by the provider (see AppState), which passes a
         // real `plozzInteractive` client.
-        self.interactiveHTTP = interactiveHTTP.map {
-            ReachabilityObservingHTTPClient(wrapped: $0, latch: latch)
+        self.interactiveHTTP = interactiveHTTP.map { transport in
+            let routed: any HTTPClient
+            if let resolver { routed = ServerAddressHTTPClient(wrapped: transport, resolver: resolver) }
+            else { routed = transport }
+            return ReachabilityObservingHTTPClient(wrapped: routed, latch: latch)
         } ?? observedHTTP
         self.capabilityProfile = capabilityProfile
     }
@@ -69,9 +89,11 @@ public struct JellyfinClient: Sendable {
         token: String?,
         http: HTTPClient,
         interactiveHTTP: HTTPClient,
-        capabilityProfile: JellyfinCapabilityProfile
+        capabilityProfile: JellyfinCapabilityProfile,
+        addressResolver: ServerAddressResolver?
     ) {
-        self.baseURL = baseURL
+        self.savedBaseURL = baseURL
+        self.addressResolver = addressResolver
         self.deviceProfile = deviceProfile
         self.providerKind = providerKind
         self.token = token
@@ -87,7 +109,22 @@ public struct JellyfinClient: Sendable {
     /// ``JellyfinProvider/connectionLocality`` reports `.unknown` rather than a
     /// misleading `.local`. Mirrors
     /// ``PlexConnectionResolver/hasConfirmedReachableConnection``.
-    public var hasConfirmedReachableConnection: Bool { reachability.isConfirmed }
+    public var hasConfirmedReachableConnection: Bool {
+        if let addressResolver { return addressResolver.confirmed != nil }
+        return reachability.isConfirmed
+    }
+
+    public static func verifyAddress(
+        _ url: URL, serverID: String,
+        http: any HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery)
+    ) async throws {
+        let info = try await http.decode(
+            PublicSystemInfo.self,
+            from: Endpoint(path: "/System/Info/Public", redirectPolicy: .sameOrigin),
+            baseURL: url
+        )
+        guard !serverID.isEmpty, info.Id == serverID else { throw AppError.conflict }
+    }
 
     /// Returns a copy of this client carrying an auth token.
     public func authenticated(token: String) -> JellyfinClient {
@@ -95,13 +132,14 @@ public struct JellyfinClient: Sendable {
         // client keeps any reachability we've already confirmed.
         JellyfinClient(
             preserving: reachability,
-            baseURL: baseURL,
+            baseURL: savedBaseURL,
             deviceProfile: deviceProfile,
             providerKind: providerKind,
             token: token,
             http: http,
             interactiveHTTP: interactiveHTTP,
-            capabilityProfile: capabilityProfile
+            capabilityProfile: capabilityProfile,
+            addressResolver: addressResolver
         )
     }
 
@@ -113,15 +151,28 @@ public struct JellyfinClient: Sendable {
 
     // MARK: System
 
+    func watchHistorySystemInfo() async throws -> JellyfinWatchHistoryInfo {
+        try await http.decode(
+            JellyfinWatchHistoryInfo.self,
+            from: Endpoint(path: "/System/Info/Public", redirectPolicy: .sameOrigin),
+            baseURL: baseURL
+        )
+    }
+
     /// `GET /System/Info/Public` — used to validate a manual URL and read the
     /// server's identity/name. No auth required.
     public func publicSystemInfo() async throws -> MediaServer {
-        let endpoint = Endpoint(path: "/System/Info/Public", headers: authHeaders)
-        let info = try await http.decode(PublicSystemInfo.self, from: endpoint, baseURL: baseURL)
+        let endpoint = Endpoint(path: "/System/Info/Public")
+        let (info, response) = try await http.decodeResponse(
+            PublicSystemInfo.self, from: endpoint, baseURL: baseURL
+        )
+        let resolvedURL = try ServerURLNormalizer.resolvedBaseURL(
+            requested: baseURL, responseURL: response.url, endpointPath: endpoint.path
+        )
         return MediaServer(
-            id: info.Id ?? baseURL.absoluteString,
-            name: info.ServerName ?? baseURL.host ?? "\(providerKind.displayName) Server",
-            baseURL: baseURL,
+            id: info.Id ?? resolvedURL.absoluteString,
+            name: info.ServerName ?? resolvedURL.host ?? "\(providerKind.displayName) Server",
+            baseURL: resolvedURL,
             provider: providerKind,
             version: info.Version
         )
@@ -192,6 +243,83 @@ public struct JellyfinClient: Sendable {
 
     // MARK: Items
 
+    func homeDisplayPreferences(userID: String) async throws -> HomeDisplayPreferencesDto {
+        let endpoint = Endpoint(
+            path: "/DisplayPreferences/usersettings",
+            queryItems: [
+                URLQueryItem(name: "userId", value: userID),
+                // Jellyfin Web still uses the legacy Emby client identifier.
+                URLQueryItem(name: "client", value: "emby")
+            ],
+            headers: authHeaders
+        )
+        return try await http.decode(HomeDisplayPreferencesDto.self, from: endpoint, baseURL: baseURL)
+    }
+
+    func nativeHomeSections(userID: String) async throws -> [EmbyHomeSectionDto] {
+        try await http.decode(
+            [EmbyHomeSectionDto].self,
+            from: Endpoint(path: "/Users/\(userID)/HomeSections", headers: authHeaders),
+            baseURL: baseURL
+        )
+    }
+
+    func nativeHomeItems(
+        userID: String, sectionID: String, limit: Int, parentID: String?
+    ) async throws -> [BaseItemDto] {
+        if limit == Int.max {
+            return try await exhaustiveContinueWatchingItems { startIndex, pageSize in
+                try await nativeHomeItemsPage(
+                    userID: userID, sectionID: sectionID, startIndex: startIndex,
+                    limit: pageSize, parentID: parentID
+                )
+            }
+        }
+        return try await nativeHomeItemsPage(
+            userID: userID, sectionID: sectionID, startIndex: 0, limit: limit, parentID: parentID
+        ).Items
+    }
+
+    private func nativeHomeItemsPage(
+        userID: String, sectionID: String, startIndex: Int, limit: Int, parentID: String?
+    ) async throws -> ItemsResponse {
+        // A section ID is a path component, never a server-provided URL/query.
+        guard !sectionID.isEmpty, !sectionID.contains("/"),
+              sectionID != ".", sectionID != ".." else { throw AppError.invalidResponse }
+        // Emby owns the section's media filters. Overriding them can turn an audio
+        // section into a duplicate video row; filter unsupported DTOs after loading.
+        var query = [
+            URLQueryItem(name: "Limit", value: String(limit)),
+            URLQueryItem(name: "StartIndex", value: String(startIndex)),
+            URLQueryItem(name: "EnableTotalRecordCount", value: "true"),
+            URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,PrimaryImageAspectRatio,ProviderIds")
+        ]
+        if let parentID { query.append(URLQueryItem(name: "ParentId", value: parentID)) }
+        return try await http.decode(
+            ItemsResponse.self,
+            from: Endpoint(
+                path: "/Users/\(userID)/Sections/\(sectionID)/Items",
+                queryItems: query, headers: authHeaders
+            ),
+            baseURL: baseURL
+        )
+    }
+
+    func activeHomeRecordings(userID: String, limit: Int) async throws -> [BaseItemDto] {
+        let endpoint = Endpoint(
+            path: "/LiveTv/Recordings",
+            queryItems: [
+                URLQueryItem(name: "UserId", value: userID),
+                URLQueryItem(name: "Limit", value: String(limit)),
+                URLQueryItem(name: "IsInProgress", value: "true"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "false"),
+                URLQueryItem(name: "Fields", value: "Overview,PrimaryImageAspectRatio,ProviderIds")
+            ],
+            headers: authHeaders
+        )
+        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
+    }
+
     func userViews(userID: String) async throws -> [BaseItemDto] {
         let endpoint = Endpoint(
             path: "/Users/\(userID)/Views",
@@ -256,7 +384,9 @@ public struct JellyfinClient: Sendable {
     /// `EnableResumable=false` keeps NextUp complementary rather than overlapping:
     /// in-progress episodes already come back from `/Items/Resume`, so NextUp is
     /// scoped to the next-after-completed episode. `EnableRewatching=false` avoids
-    /// resurfacing fully-watched series.
+    /// resurfacing fully-watched series. A series-specific resume lookup includes
+    /// resumable candidates because compatible servers may not scope Resume to a
+    /// series; the provider still prefers Resume when both return the same episode.
     func nextUpItems(
         userID: String, limit: Int, parentID: String? = nil, seriesID: String? = nil
     ) async throws -> [BaseItemDto] {
@@ -291,7 +421,7 @@ public struct JellyfinClient: Sendable {
             URLQueryItem(name: "UserId", value: userID),
             URLQueryItem(name: "Limit", value: String(limit)),
             URLQueryItem(name: "MediaTypes", value: "Video"),
-            URLQueryItem(name: "EnableResumable", value: "false"),
+            URLQueryItem(name: "EnableResumable", value: seriesID == nil ? "false" : "true"),
             URLQueryItem(name: "EnableRewatching", value: "false"),
             URLQueryItem(name: "Fields", value: "Overview,PrimaryImageAspectRatio,ProviderIds")
         ]
@@ -505,13 +635,18 @@ public struct JellyfinClient: Sendable {
         return try await http.decode(BaseItemDto.self, from: endpoint, baseURL: baseURL)
     }
 
-    func latestItems(userID: String, limit: Int, parentID: String? = nil) async throws -> [BaseItemDto] {
+    func latestItems(
+        userID: String, limit: Int, parentID: String? = nil, videoOnly: Bool = false
+    ) async throws -> [BaseItemDto] {
         var queryItems = [
             URLQueryItem(name: "Limit", value: String(limit)),
             URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,ProviderIds")
         ]
         if let parentID {
             queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
+        }
+        if videoOnly {
+            queryItems.append(URLQueryItem(name: "IncludeItemTypes", value: "Movie,Series,Season,Episode,Video"))
         }
         let endpoint = Endpoint(
             path: "/Users/\(userID)/Items/Latest",
@@ -521,6 +656,23 @@ public struct JellyfinClient: Sendable {
         // /Items/Latest returns a bare array, not an Items envelope.
         let items: [BaseItemDto] = try await http.decode([BaseItemDto].self, from: endpoint, baseURL: baseURL)
         return items
+    }
+
+    func movieRecommendations(userID: String, parentID: String, limit: Int) async throws -> [MovieRecommendationDto] {
+        let endpoint = Endpoint(
+            path: "/Movies/Recommendations",
+            queryItems: [
+                URLQueryItem(name: "userId", value: userID),
+                URLQueryItem(name: "parentId", value: parentID),
+                URLQueryItem(name: "categoryLimit", value: "5"),
+                URLQueryItem(name: "itemLimit", value: String(limit)),
+                URLQueryItem(name: "fields", value: "Overview,OriginalTitle,ProviderIds")
+            ],
+            headers: authHeaders
+        )
+        return try await HTTPResponseDiagnostics.$route.withValue(.movieRecommendations) {
+            try await http.decode(MovieRecommendationsResponse.self, from: endpoint, baseURL: baseURL).recommendations
+        }
     }
 
     func item(userID: String, id: String) async throws -> BaseItemDto {
@@ -616,7 +768,8 @@ public struct JellyfinClient: Sendable {
                 URLQueryItem(name: "StartIndex", value: String(page.startIndex)),
                 URLQueryItem(name: "Limit", value: String(page.limit)),
                 URLQueryItem(name: "EnableTotalRecordCount", value: "true"),
-                URLQueryItem(name: "Fields", value: "Overview,MediaStreams,MediaSources,Genres,ProviderIds")
+                URLQueryItem(name: "EnableUserData", value: "true"),
+                URLQueryItem(name: "Fields", value: "Overview,MediaStreams,MediaSources,Genres,ProviderIds,UserData")
             ],
             headers: authHeaders
         )
@@ -686,13 +839,15 @@ public struct JellyfinClient: Sendable {
         startIndex: Int,
         limit: Int,
         sort: CoreModels.SortDescriptor,
-        fields: String = "PrimaryImageAspectRatio,ProviderIds"
+        fields: String = "PrimaryImageAspectRatio,ProviderIds,SortName,DateCreated,Genres",
+        filters: LibraryFilters = .all
     ) async throws -> ItemsResponse {
         var queryItems = [
             URLQueryItem(name: "ParentId", value: parentID),
             URLQueryItem(name: "StartIndex", value: String(startIndex)),
             URLQueryItem(name: "Limit", value: String(limit)),
-            URLQueryItem(name: "SortBy", value: Self.sortBy(for: sort.field)),
+            URLQueryItem(name: "SortBy", value: try sort.field == .lastPlayed && includeItemTypes == ["Series"]
+                         ? "SeriesDatePlayed" : Self.sortBy(for: sort.field)),
             URLQueryItem(name: "SortOrder", value: Self.sortOrder(for: sort.direction)),
             // Minimal fields keep the first-page payload small for a fast grid;
             // ProviderIds is included so the aggregated cross-server library
@@ -707,14 +862,48 @@ public struct JellyfinClient: Sendable {
         if !includeItemTypes.isEmpty {
             queryItems.append(URLQueryItem(name: "IncludeItemTypes", value: includeItemTypes.joined(separator: ",")))
         }
+        queryItems += try Self.libraryFilterQuery(filters)
         let endpoint = Endpoint(path: "/Users/\(userID)/Items", queryItems: queryItems, headers: authHeaders)
         return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
     }
 
-    /// Global BoxSets are intentional here: released Jellyfin and Emby servers
-    /// discard ParentId when IncludeItemTypes=BoxSet. Membership is scoped by
-    /// the provider using separately fetched library/member IDs.
-    func collectionCandidates(userID: String, page: PageRequest) async throws -> ItemsResponse {
+    static func libraryFilterQuery(_ filters: LibraryFilters) throws -> [URLQueryItem] {
+        var query: [URLQueryItem] = []
+        switch filters.filter {
+        case .all: break
+        case .unwatched: query.append(.init(name: "IsPlayed", value: "false"))
+        case .inProgress: query.append(.init(name: "Filters", value: "IsResumable"))
+        case .hdr, .dolbyVision, .hdr10Plus, .atmos, .unmatched, .duplicates:
+            throw AppError.invalidResponse
+        }
+        if let genre = filters.genre { query.append(.init(name: "Genres", value: genre)) }
+        if let year = filters.year { query.append(.init(name: "Years", value: String(year))) }
+        return query
+    }
+
+    func libraryFacets(userID: String, parentID: String, includeItemTypes: [String]) async throws -> LibraryQueryFacets {
+        // Filters2 returns genre objects and omits years; Filters supplies both named facets.
+        struct Response: Decodable {
+            let Genres: [String]?
+            let Years: [Int]?
+        }
+        let response = try await http.decode(
+            Response.self,
+            from: Endpoint(
+                path: "/Items/Filters",
+                queryItems: [
+                    .init(name: "UserId", value: userID), .init(name: "ParentId", value: parentID),
+                    .init(name: "IncludeItemTypes", value: includeItemTypes.joined(separator: ","))
+                ],
+                headers: authHeaders
+            ),
+            baseURL: baseURL
+        )
+        return LibraryQueryFacets(genres: response.Genres ?? [], years: response.Years ?? [])
+    }
+
+    /// Match the native client: the server decides whether ParentId scopes BoxSets.
+    func collectionCandidates(userID: String, libraryID: String?, page: PageRequest) async throws -> ItemsResponse {
         let endpoint = Endpoint(
             path: "/Users/\(userID)/Items",
             queryItems: [
@@ -722,15 +911,17 @@ public struct JellyfinClient: Sendable {
                 URLQueryItem(name: "Recursive", value: "true"),
                 URLQueryItem(name: "StartIndex", value: String(page.startIndex)),
                 URLQueryItem(name: "Limit", value: String(page.limit)),
-                URLQueryItem(name: "SortBy", value: Self.sortBy(for: page.sort.field)),
+                URLQueryItem(name: "SortBy", value: try Self.sortBy(for: page.sort.field)),
                 URLQueryItem(name: "SortOrder", value: Self.sortOrder(for: page.sort.direction)),
                 URLQueryItem(name: "Fields", value: "PrimaryImageAspectRatio,ProviderIds"),
                 URLQueryItem(name: "ImageTypeLimit", value: "1"),
                 URLQueryItem(name: "EnableTotalRecordCount", value: "true")
-            ],
+            ] + (libraryID.map { [URLQueryItem(name: "ParentId", value: $0)] } ?? []),
             headers: authHeaders
         )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        return try await HTTPResponseDiagnostics.$route.withValue(.collectionCandidates) {
+            try await readCollectionPage(endpoint)
+        }
     }
 
     func videoPlaylistCandidates(userID: String, start: Int, limit: Int) async throws -> ItemsResponse {
@@ -772,7 +963,20 @@ public struct JellyfinClient: Sendable {
             ],
             headers: authHeaders
         )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        return try await HTTPResponseDiagnostics.$route.withValue(recursive ? .collectionLibraryScope : .collectionMembers) {
+            try await readCollectionPage(endpoint)
+        }
+    }
+
+    private func readCollectionPage(_ endpoint: Endpoint) async throws -> ItemsResponse {
+        do {
+            return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        } catch AppError.serverUnreachable {
+            try Task.checkCancellation()
+            PlozzLog.networking.info("Collection read lost its connection; retrying once")
+            try await Task.sleep(for: .milliseconds(250))
+            return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        }
     }
 
     /// Count of items in a container, matching the same recursive/type filters
@@ -782,14 +986,17 @@ public struct JellyfinClient: Sendable {
     /// `NameLessThan` compares against `SortName` (the same key the browse sorts
     /// by), so `count(SortName < "L")` is exactly the grid offset of the first
     /// item under letter "L", which is what the A–Z fast-scroll rail needs.
+    /// Nil means the endpoint returned rows despite `Limit=0`, so it does not
+    /// honor this count-only contract. Invalid counts and request failures throw.
     func itemCount(
         userID: String,
         parentID: String,
         includeItemTypes: [String],
         recursive: Bool,
         nameLessThan: String? = nil,
-        nameStartsWith: String? = nil
-    ) async throws -> Int {
+        nameStartsWith: String? = nil,
+        filters: LibraryFilters = .all
+    ) async throws -> Int? {
         var queryItems = [
             URLQueryItem(name: "ParentId", value: parentID),
             URLQueryItem(name: "StartIndex", value: "0"),
@@ -809,14 +1016,21 @@ public struct JellyfinClient: Sendable {
         if !includeItemTypes.isEmpty {
             queryItems.append(URLQueryItem(name: "IncludeItemTypes", value: includeItemTypes.joined(separator: ",")))
         }
+        queryItems += try Self.libraryFilterQuery(filters)
         let endpoint = Endpoint(path: "/Users/\(userID)/Items", queryItems: queryItems, headers: authHeaders)
         let response = try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
-        guard let count = response.TotalRecordCount, count >= 0 else { throw AppError.invalidResponse }
-        return count
+        try Task.checkCancellation()
+        guard let count = response.TotalRecordCount, count >= response.Items.count else {
+            PlozzLog.networking.error(
+                "Library alphabet count rejected: total=\(response.TotalRecordCount.map(String.init) ?? "missing") rows=\(response.Items.count)"
+            )
+            throw AppError.invalidResponse
+        }
+        return response.Items.isEmpty ? count : nil
     }
 
     /// Maps a provider-agnostic `SortField` onto Jellyfin's `SortBy` key.
-    static func sortBy(for field: SortField) -> String {
+    static func sortBy(for field: SortField) throws -> String {
         switch field {
         case .name: return "SortName"
         case .dateAdded: return "DateCreated"
@@ -824,6 +1038,12 @@ public struct JellyfinClient: Sendable {
         case .communityRating: return "CommunityRating"
         case .runtime: return "Runtime"
         case .random: return "Random"
+        case .year: return "ProductionYear"
+        case .criticRating: return "CriticRating"
+        case .contentRating: return "OfficialRating"
+        case .plays: return "PlayCount"
+        case .lastPlayed: return "DatePlayed"
+        case .progress, .userRating: throw AppError.invalidResponse
         }
     }
 
@@ -882,12 +1102,26 @@ public struct JellyfinClient: Sendable {
 
     var canRequestHEVC: Bool { capabilityProfile.canRequestHEVC }
 
+    /// GET enumerates sources without a device profile, stream opening, or
+    /// playback reporting. Its generated PlaySessionId is not an encoding lease.
+    func playbackSourceInventory(userID: String, itemID: String) async throws -> PlaybackInfoResponse {
+        try await interactiveHTTP.decode(
+            PlaybackInfoResponse.self,
+            from: Endpoint(
+                path: "/Items/\(itemID)/PlaybackInfo",
+                queryItems: [URLQueryItem(name: "UserId", value: userID)],
+                headers: authHeaders
+            ),
+            baseURL: baseURL
+        )
+    }
+
     func playbackInfo(
         userID: String, itemID: String, mediaSourceID: String? = nil,
         mode: PlaybackStreamMode = .auto, streaming: StreamingPlaybackOptions? = nil
     ) async throws -> PlaybackInfoResponse {
         try streaming?.quality.validate()
-        let capabilityProfile = streaming.map { self.capabilityProfile.applying($0) } ?? self.capabilityProfile
+        var capabilityProfile = streaming.map { self.capabilityProfile.applying($0) } ?? self.capabilityProfile
         var queryItems = [URLQueryItem(name: "UserId", value: userID)]
         if let streaming {
             if let track = streaming.audioTrack {
@@ -907,6 +1141,7 @@ public struct JellyfinClient: Sendable {
         }
         let enableDirectPlay: Bool?
         let enableDirectStream: Bool?
+        let allowStreamCopy: Bool?
         // Target a specific version when one was chosen; otherwise the server
         // returns every source and picks its default.
         if let mediaSourceID {
@@ -917,6 +1152,7 @@ public struct JellyfinClient: Sendable {
             // Let the server pick: DirectPlay > DirectStream > transcode.
             enableDirectPlay = nil
             enableDirectStream = nil
+            allowStreamCopy = nil
         case .remux:
             // Disable direct play but keep direct stream: the server remuxes the
             // container to seekable fMP4 HLS while **copying** the video/audio
@@ -926,13 +1162,20 @@ public struct JellyfinClient: Sendable {
             queryItems.append(URLQueryItem(name: "EnableDirectStream", value: "true"))
             enableDirectPlay = false
             enableDirectStream = true
+            allowStreamCopy = nil
         case .transcode:
             // Force a full transcode: neither direct play nor direct stream. Used
             // as the player's fallback when a direct stream fails to load.
             queryItems.append(URLQueryItem(name: "EnableDirectPlay", value: "false"))
             queryItems.append(URLQueryItem(name: "EnableDirectStream", value: "false"))
+            // HLS can still copy codecs with DirectStream disabled. A failed
+            // bitstream must not be reused by the full-transcode fallback.
+            queryItems.append(URLQueryItem(name: "AllowVideoStreamCopy", value: "false"))
+            queryItems.append(URLQueryItem(name: "AllowAudioStreamCopy", value: "false"))
             enableDirectPlay = false
             enableDirectStream = false
+            allowStreamCopy = false
+            capabilityProfile = capabilityProfile.applyingTranscodingRange(for: providerKind)
         }
         var endpoint = Endpoint(
             method: .post,
@@ -948,7 +1191,9 @@ public struct JellyfinClient: Sendable {
             EnableDirectPlay: enableDirectPlay,
             EnableDirectStream: enableDirectStream,
             EnableTranscoding: true,
-            DeviceProfile: capabilityProfile
+            DeviceProfile: capabilityProfile,
+            AllowVideoStreamCopy: allowStreamCopy,
+            AllowAudioStreamCopy: allowStreamCopy
         ))
         guard streaming != nil else {
             return try await http.decode(PlaybackInfoResponse.self, from: endpoint, baseURL: baseURL)
@@ -1333,6 +1578,8 @@ public struct JellyfinClient: Sendable {
 
     // MARK: Music
 
+    var musicMaxStreamingBitrate: Int { capabilityProfile.maxStreamingBitrate }
+
     /// One page of music items from a container, using an explicit Jellyfin
     /// `SortBy` (music needs multi-key sorts like `ParentIndexNumber,IndexNumber`
     /// for album track order that the video `SortField` enum can't express).
@@ -1345,7 +1592,7 @@ public struct JellyfinClient: Sendable {
         limit: Int,
         sortBy: String,
         sortOrder: String,
-        albumArtistID: String? = nil,
+        artistID: String? = nil,
         filters: [String] = []
     ) async throws -> ItemsResponse {
         var queryItems = [
@@ -1360,8 +1607,8 @@ public struct JellyfinClient: Sendable {
         if let parentID, !parentID.isEmpty {
             queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
         }
-        if let albumArtistID, !albumArtistID.isEmpty {
-            queryItems.append(URLQueryItem(name: "AlbumArtistIds", value: albumArtistID))
+        if let artistID, !artistID.isEmpty {
+            queryItems.append(URLQueryItem(name: "ArtistIds", value: artistID))
         }
         if !filters.isEmpty {
             queryItems.append(URLQueryItem(name: "Filters", value: filters.joined(separator: ",")))
@@ -1456,11 +1703,10 @@ public struct JellyfinClient: Sendable {
                 name: "MaxStreamingBitrate",
                 value: String(capabilityProfile.maxStreamingBitrate)
             ),
-            // Containers AVPlayer can direct-play; anything else the server
-            // transcodes down the HLS/AAC fallback below.
+            // Bare containers would allow unsupported codecs (such as DTS in WAV).
             AuthenticatedHTTPQueryItem(
                 name: "Container",
-                value: "mp3,aac,m4a,flac,alac,wav,m4b"
+                value: JellyfinMusicDirectPlayProfile.universalContainers
             ),
             AuthenticatedHTTPQueryItem(name: "TranscodingContainer", value: "ts"),
             AuthenticatedHTTPQueryItem(name: "TranscodingProtocol", value: "hls"),

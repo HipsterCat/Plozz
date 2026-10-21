@@ -35,7 +35,7 @@ struct ProfileDetailView: View {
             .padding(.vertical, 24)
         }
         .scrollClipDisabled()
-        .sheet(isPresented: $showingNewProfile) {
+        .plozzSheet(isPresented: $showingNewProfile) {
             ProfileEditorView(
                 canDelete: false,
                 photoSourceAccounts: context.accounts,
@@ -59,6 +59,7 @@ struct ProfileDetailView: View {
             VStack(alignment: .leading, spacing: 12) {
                 AutomaticSignInToggle(settings: context.automaticSignIn)
                     .toggleStyle(SettingsSwitchToggleStyle())
+                    .settingsWorkspaceEntry()
                 AutomaticSignInErrorMessage(settings: context.automaticSignIn)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -78,7 +79,7 @@ struct ProfileDetailView: View {
     }
 
     private func profileRow(_ profile: Profile) -> some View {
-        NavigationLink(value: SettingsRoute.profileSettings(profileID: profile.id)) {
+        SettingsRouteLink(value: SettingsRoute.profileSettings(profileID: profile.id)) {
             HStack(alignment: .center, spacing: 16) {
                 ProfileAvatarView(profile: profile, size: 40)
                 VStack(alignment: .leading, spacing: 4) {

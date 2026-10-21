@@ -1,3 +1,4 @@
+import CoreModels
 import Foundation
 
 /// Bounded, namespace-tolerant `PROPFIND` multistatus parser, built on
@@ -311,7 +312,7 @@ private final class MultistatusParserDelegate: NSObject, XMLParserDelegate {
                 pendingContentLength = nil
             }
         case "getlastmodified":
-            pendingLastModified = Self.parseHTTPDate(text)
+            pendingLastModified = HTTPDate.parse(text)
         case "getetag":
             pendingETag = ETag(headerValue: text)
         case "getcontenttype":
@@ -433,15 +434,4 @@ private final class MultistatusParserDelegate: NSObject, XMLParserDelegate {
         return (200..<300).contains(code)
     }
 
-    private static let httpDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "GMT")
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return formatter
-    }()
-
-    private static func parseHTTPDate(_ value: String) -> Date? {
-        httpDateFormatter.date(from: value)
-    }
 }

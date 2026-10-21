@@ -55,7 +55,7 @@ struct PlozziOSProfileSetupView: View {
         // import when it does, so a swipe-away is handled as an explicit cancel
         // rather than being allowed to strand the profile mid-flow.
         .interactiveDismissDisabled()
-        .sheet(
+        .plozzSheet(
             isPresented: $showingAddServer,
             onDismiss: {
                 appModel.finishManagedServerPresentation()
@@ -72,19 +72,19 @@ struct PlozziOSProfileSetupView: View {
         // These belong to the setup cover, not the app root. Keeping them here
         // prevents Home appearing between account/user selection, Plex PIN and
         // the libraries step.
-        .sheet(item: plexUserSelectionBinding) { selection in
+        .plozzSheet(item: plexUserSelectionBinding) { selection in
             PlozziOSPlexUserSelectionView(
                 selection: selection,
                 onSelect: appModel.selectPlexUserDuringOnboarding
             )
         }
-        .fullScreenCover(item: plexPINBinding) { request in
+        .plozzFullScreenCover(item: plexPINBinding) { request in
             PlozziOSPlexPINView(
                 model: appModel.plexHomeUsers,
                 request: request
             )
         }
-        .sheet(item: librarySelectionBinding) { selection in
+        .plozzSheet(item: librarySelectionBinding) { selection in
             PlozziOSLibrarySelectionView(
                 accounts: appModel.accountsProviders.resolvedAccounts(
                     withIDs: selection.accountIDs

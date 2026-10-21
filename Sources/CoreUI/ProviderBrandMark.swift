@@ -46,7 +46,7 @@ public struct ProviderBrandMark: View {
         case .plex: "PlexLogo"
         case .emby: "EmbyLogo"
         case .silo: "SiloLogo"
-        case .mediaShare: ""
+        case .mediaShare, .iptv: ""
         }
     }
 
@@ -66,13 +66,14 @@ public struct ProviderBrandMark: View {
     private var systemSymbolName: String? {
         switch provider {
         case .mediaShare: "externaldrive.connected.to.line.below.fill"
+        case .iptv: "antenna.radiowaves.left.and.right"
         case .jellyfin, .plex, .emby, .silo: nil
         }
     }
 
     /// The transport badge string (SMB / WebDAV / …), only for a media share that
     /// was given a transport. All file shares share ONE drive glyph and are told
-    /// apart by this knockout label; dedicated media servers never show one.
+    /// apart by this label; dedicated media servers never show one.
     private var badgeLabel: String? {
         guard provider == .mediaShare else { return nil }
         return mediaShareTransport?.badgeLabel
@@ -85,10 +86,6 @@ public struct ProviderBrandMark: View {
             }
             if let systemSymbolName {
                 glyph(systemSymbolName)
-                    // The band chop pulls the drive's visual weight downward;
-                    // lift the badged mark a touch so it sits optically centered
-                    // in its container. Visual only — layout footprint unchanged.
-                    .offset(y: badgeLabel != nil ? -size * 0.11 : 0)
             } else {
                 Image(assetName, bundle: .module)
                     .renderingMode(provider == .silo ? .original : .template)
@@ -101,48 +98,30 @@ public struct ProviderBrandMark: View {
         .frame(width: size, height: size)
     }
 
-    /// The drive glyph with the bottom band sliced off along a clean horizontal
-    /// line, and the transport label drawn (in the glyph's own color) into the
-    /// cleared band. The cut is a fixed fraction of the icon, so EVERY label gets
-    /// the identical clean cutoff regardless of what it says. Falls back to the
-    /// plain glyph when there's no badge.
     @ViewBuilder
     private func glyph(_ symbol: String) -> some View {
-        let base = Image(systemName: symbol)
-            .resizable()
-            .scaledToFit()
-            .padding(size * (showsBackground ? 0.33 : 0.23))
-            .foregroundStyle(tint)
-
         if let badgeLabel {
-            // Fraction of the icon height chopped off the bottom. Constant, so the
-            // cutoff line sits in the same place for SMB, WebDAV, NFS, … — the
-            // label never shifts it.
-            let chop = size * 0.43
-            ZStack(alignment: .bottom) {
-                base
-                    // Slice the lower band cleanly off the glyph (a straight
-                    // horizontal cut) so the top of the drive stays intact and the
-                    // bottom becomes a consistent, empty band for the label.
-                    .mask(alignment: .top) {
-                        Rectangle()
-                            .frame(height: size - chop)
-                    }
-                // The label sits in the cleared band, same color as the glyph,
-                // nudged up so it reads more centered under the smaller drive.
+            VStack(spacing: size * 0.035) {
+                Image(systemName: "externaldrive.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size * 0.64, height: size * 0.38)
                 badgeText(badgeLabel)
-                    .foregroundStyle(tint)
-                    .frame(height: chop, alignment: .center)
-                    .offset(y: -size * 0.05)
+                    .frame(height: size * 0.25)
             }
+            .foregroundStyle(tint)
+            // Center visible ink rather than the label's unused descender space.
+            .offset(y: size * 0.025)
+            .frame(width: size, height: size)
         } else {
-            base
+            Image(systemName: symbol)
+                .resizable()
+                .scaledToFit()
+                .padding(size * (showsBackground ? 0.33 : 0.23))
+                .foregroundStyle(tint)
         }
     }
 
-    /// The transport label, width-constrained to the icon so any label length
-    /// fits, and lifted slightly off the very bottom edge. Rendered into the
-    /// cleared band by `glyph`.
     @ViewBuilder
     private func badgeText(_ label: String) -> some View {   // l10n:content — transport/provider badge identifier
         Text(label)
@@ -168,6 +147,8 @@ public struct ProviderBrandMark: View {
             // Neutral teal — reads as "storage/network", clearly not a Plex/
             // Jellyfin brand color, matching its second-class standing.
             return Color(red: 0x2A / 255, green: 0xA8 / 255, blue: 0x9E / 255)
+        case .iptv:
+            return Color(red: 0xF0 / 255, green: 0x63 / 255, blue: 0x74 / 255)
         }
     }
 
@@ -186,6 +167,8 @@ public struct ProviderBrandMark: View {
                 return brandTint(.silo)
             case .mediaShare:
                 return Color(red: 0.08, green: 0.46, blue: 0.43)
+            case .iptv:
+                return Color(red: 0xB8 / 255, green: 0x31 / 255, blue: 0x47 / 255)
             }
         }
 
@@ -202,6 +185,8 @@ public struct ProviderBrandMark: View {
             return Color(red: 0.4, green: 0.6, blue: 1)
         case .mediaShare:
             return Color(red: 0.36, green: 0.82, blue: 0.77)
+        case .iptv:
+            return Color(red: 0xFF / 255, green: 0x8F / 255, blue: 0x9F / 255)
         }
     }
 }

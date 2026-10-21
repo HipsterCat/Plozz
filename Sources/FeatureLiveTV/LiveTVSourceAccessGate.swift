@@ -42,7 +42,7 @@ private struct LiveTVProfileSourceAccessGate<Content: View>: View {
     let model: LiveTVSourceManagementModel?
     @State private var access: LiveTVSourceManagementAccess
     @ViewBuilder let content: (@escaping @MainActor () -> Bool) -> Content
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     init(
         model: LiveTVSourceManagementModel?,

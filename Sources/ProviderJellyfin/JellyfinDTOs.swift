@@ -66,6 +66,69 @@ struct ItemsResponse: Decodable {
     let TotalRecordCount: Int?
 }
 
+struct MovieRecommendationsResponse: Decodable {
+    let recommendations: [MovieRecommendationDto]
+
+    private struct EnvelopeKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+
+        static let items = EnvelopeKey(stringValue: "Items")!
+        static let total = EnvelopeKey(stringValue: "TotalRecordCount")!
+        static let start = EnvelopeKey(stringValue: "StartIndex")!
+    }
+
+    init(from decoder: Decoder) throws {
+        if (try? decoder.unkeyedContainer()) != nil {
+            recommendations = try [MovieRecommendationDto](from: decoder)
+            return
+        }
+        // The compatible bridge returns this exact empty query-result envelope.
+        // A populated query result has no established recommendation-category contract.
+        let values = try decoder.container(keyedBy: EnvelopeKey.self)
+        guard Set(values.allKeys.map(\.stringValue)) == ["Items", "TotalRecordCount", "StartIndex"] else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath, debugDescription: "Unrecognized movie recommendation envelope."
+            ))
+        }
+        let items = try values.nestedUnkeyedContainer(forKey: .items)
+        let total = try values.decode(Int.self, forKey: .total)
+        let start = try values.decode(Int.self, forKey: .start)
+        guard items.isAtEnd, total == 0, start == 0 else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath, debugDescription: "Expected a complete empty movie recommendation result."
+            ))
+        }
+        recommendations = []
+    }
+}
+
+struct MovieRecommendationDto: Decodable {
+    let Items: [BaseItemDto]?
+    let RecommendationType: String
+    let BaselineItemName: String?
+    let CategoryId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case Items, RecommendationType, BaselineItemName, CategoryId
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        Items = try values.decodeIfPresent([BaseItemDto].self, forKey: .Items)
+        RecommendationType = try values.decode(String.self, forKey: .RecommendationType)
+        BaselineItemName = try values.decodeIfPresent(String.self, forKey: .BaselineItemName)
+        do {
+            CategoryId = try values.decodeIfPresent(String.self, forKey: .CategoryId)
+        } catch DecodingError.typeMismatch {
+            // Emby uses Int64 IDs; Jellyfin uses strings. Preserve exact row identity.
+            CategoryId = String(try values.decode(Int64.self, forKey: .CategoryId))
+        }
+    }
+}
+
 struct ThemeMediaResponse: Decodable {
     let ThemeSongsResult: ItemsResponse?
 }
@@ -102,11 +165,14 @@ struct BaseItemDto: Decodable {
     let IndexNumber: Int?
     let IndexNumberEnd: Int?
     let ParentIndexNumber: Int?
+    let DisplayOrder: String?
     let ProductionYear: Int?
     /// Original release / first-air timestamp (ISO-8601, UTC). Jellyfin returns
     /// it by default — it is not one of the optional `Fields` — so every item
     /// fetch carries it when the server has a date.
     let PremiereDate: String?
+    let DateCreated: String?
+    let SortName: String?
     let RunTimeTicks: Int64?
     let OfficialRating: String?
     let CommunityRating: Double?
@@ -199,6 +265,7 @@ struct BaseItemPersonDto: Decodable {
 
 struct UserItemDataDto: Decodable {
     let PlaybackPositionTicks: Int64?
+    let PlayCount: Int?
     let PlayedPercentage: Double?
     let Played: Bool?
     /// Episodes in this container the user has not watched. Jellyfin reports
@@ -256,6 +323,7 @@ struct MediaSourceInfo: Decodable {
     let SupportsTranscoding: Bool?
     let RequiresOpening: Bool?
     let RequiresClosing: Bool?
+    let IsRemote: Bool?
     let VideoType: String?
     let IsInfiniteStream: Bool?
     let Container: String?
@@ -290,6 +358,8 @@ struct PlaybackInfoBody: Encodable {
     let EnableDirectStream: Bool?
     let EnableTranscoding: Bool
     let DeviceProfile: JellyfinCapabilityProfile
+    var AllowVideoStreamCopy: Bool? = nil
+    var AllowAudioStreamCopy: Bool? = nil
 }
 
 struct MediaStreamDto: Decodable {
@@ -304,6 +374,8 @@ struct MediaStreamDto: Decodable {
     let DisplayTitle: String?
     let IsDefault: Bool?
     let IsForced: Bool?
+    let IsHearingImpaired: Bool?
+    let Title: String? // l10n:content — container track title
     /// Whether this subtitle stream is text-based (SRT/ASS/embedded text) and so
     /// can be delivered/converted to WebVTT for the player. Image-based subs
     /// (PGS/VOBSUB) report `false` and need server burn-in instead.

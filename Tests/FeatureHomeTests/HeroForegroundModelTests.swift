@@ -1,5 +1,7 @@
 import XCTest
 import CoreModels
+import CoreUI
+import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -126,6 +128,63 @@ final class HeroForegroundModelTests: XCTestCase {
     }
 
 #if canImport(UIKit)
+    @MainActor
+    func testUnreleasedSeasonRequestFitsNativeTVPillAndDetailActionRow() throws {
+        let presentation = SeasonRequestPresentation(availability: .init(status: .processing, seasons: [
+            .init(number: 1, title: "Season 1", status: .processing,
+                  premiereDate: MediaItem.calendarDayReleaseDate(from: "2099-10-20"))
+        ]))
+        let inputs: [PillInput] = [
+            .init(kind: .request, requestTitle: presentation.title, requestSystemImage: presentation.systemImage),
+            .init(kind: .moreInfo),
+            .init(kind: .watchlist)
+        ]
+        let container = UIView()
+        var x: CGFloat = 0
+        for input in inputs {
+            let pill = HeroForegroundPillView(frame: .zero)
+            pill.configure(Builder.pill(for: input), selected: input.kind == .request, locale: Locale(identifier: "en"))
+            let size = pill.preferredSize()
+            pill.frame = CGRect(origin: CGPoint(x: x, y: 12), size: size)
+            container.addSubview(pill)
+            pill.layoutIfNeeded()
+            for label in pill.subviews.compactMap({ $0 as? UILabel }) where !label.isHidden {
+                XCTAssertGreaterThanOrEqual(label.bounds.width, ceil(label.intrinsicContentSize.width))
+                XCTAssertGreaterThanOrEqual(label.bounds.height, label.font.lineHeight)
+            }
+            x += size.width + 24
+        }
+        XCTAssertLessThan(x, 1_280)
+        container.frame = CGRect(x: 0, y: 0, width: x, height: 130)
+        container.backgroundColor = .black
+        let image = UIGraphicsImageRenderer(bounds: container.bounds).image { context in
+            container.layer.render(in: context.cgContext)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "tv-native-unreleased-request-info-watchlist"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let detailRow = HStack(spacing: 24) {
+            SeasonRequestMenu(
+                availability: .init(status: .processing),
+                requestAllTitle: "Request All Seasons", onRequest: { _ in }
+            ) { Label(presentation.title, systemImage: presentation.systemImage) }
+                .menuStyle(.button)
+                .modifier(HeroActionButtonStyle(prominent: false))
+            Button {} label: { Label("Trailer", systemImage: "film.fill") }
+                .modifier(HeroActionButtonStyle(prominent: false))
+            Button {} label: { Image(systemName: "bookmark") }
+                .modifier(HeroActionButtonStyle(prominent: false, circular: true))
+        }
+        .environment(\.locale, Locale(identifier: "en"))
+        let host = UIHostingController(rootView: detailRow)
+        let ideal = host.sizeThatFits(in: CGSize(width: 2_000, height: 500))
+        XCTAssertLessThan(ideal.width, 1_280, "The full label must fit beside Trailer and Watchlist without compression.")
+        let fitted = host.sizeThatFits(in: CGSize(width: 1_280, height: 500))
+        XCTAssertEqual(fitted.height, ideal.height, accuracy: 1)
+    }
+
     @MainActor
     func testStartWatchingPillResolvesCopyAtTheUIKitBoundary() {
         let pill = Builder.pill(for: .init(

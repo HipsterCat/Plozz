@@ -9,7 +9,7 @@ import Foundation
 /// Provider-agnostic and engine-agnostic: it operates only on plain
 /// `TimeInterval`s the caller reads off whichever engine (native AVPlayer or
 /// Plozzigen) and item is live, so it behaves identically for Plex and Jellyfin.
-enum WatchProgressMath {
+public enum WatchProgressMath {
     /// The best-known playback duration: the first finite, positive value among
     /// the engine's reported duration, the controls' duration, and the item's
     /// declared runtime (in that order). `nil` when none is known.
@@ -35,7 +35,7 @@ enum WatchProgressMath {
     /// scrobble percent is computed straight off the authoritative engine
     /// duration or the catalog runtime, matching the original
     /// `PlayerViewModel.watchedPercent(at:)`.
-    static func watchedPercent(
+    public static func watchedPercent(
         position: TimeInterval,
         engineDuration: TimeInterval,
         itemRuntime: TimeInterval?

@@ -15,7 +15,7 @@ struct LiveTVGuideMappingView: View {
                 TextField("Find channel", text: $query)
                     .autocorrectionDisabled()
                 ForEach(imports.mappingChannels(playlistSourceID: sourceID, query: query)) { channel in
-                    NavigationLink {
+                    SettingsPageLink {
                         LiveTVChannelGuideMappingView(
                             imports: imports, channelID: channel.id, channelName: channel.name,
                             sourceID: sourceID, authorize: authorize
@@ -66,7 +66,7 @@ private struct LiveTVChannelGuideMappingView: View {
                 ForEach(imports.guideSources.filter {
                     $0.playlistSourceID == sourceID && imports.enabledSourceIDs.contains($0.id)
                 }) { guide in
-                    NavigationLink {
+                    SettingsPageLink {
                         LiveTVGuideStationPicker(
                             imports: imports, channelID: channelID, guideSourceID: guide.id, authorize: authorize
                         )
@@ -86,7 +86,7 @@ private struct LiveTVGuideStationPicker: View {
     let channelID: String
     let guideSourceID: String
     let authorize: () throws -> Void
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
     @State private var query = ""
     @State private var channels: [LiveTVGuideChannelOption] = []
     @State private var failed = false

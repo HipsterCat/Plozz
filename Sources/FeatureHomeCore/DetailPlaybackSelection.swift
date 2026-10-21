@@ -37,6 +37,7 @@ public enum DetailPlaybackSelection {
         var copy = item
         copy.resumePosition = resume.resumePosition
         copy.playedPercentage = resume.playedPercentage
+        copy.unwatchedEpisodeCount = resume.unwatchedEpisodeCount
         copy.isPlayed = resume.isPlayed
         copy.hasBeenPlayed = resume.hasBeenPlayed
         copy.lastPlayedAt = resume.lastPlayedAt
@@ -147,7 +148,8 @@ public enum DetailPlaybackSelection {
         //
         // A file id cannot express "play this show like that", so for a series it
         // is not consulted at all; the descriptor is the only honest answer.
-        if item.seriesID == nil {
+        let remembersChoice = preferences.shouldRememberVersion(for: item)
+        if remembersChoice, item.seriesID == nil {
             let remembered = preferences.preferredVersionID(forTitle: key)
             if let remembered, let selected = matchingVersion(remembered, in: candidates, for: item) {
                 return selected.id
@@ -160,8 +162,10 @@ public enum DetailPlaybackSelection {
         // forcing a bad match is worse than the device-recommended pick.
         // Legacy unqualified ids cannot prove ownership across servers that reuse
         // numeric ids. Their portable descriptors remain useful during migration.
-        let descriptor = preferences.preferredVersionDescriptor(forTitle: key)
-            ?? preferences.preferredVersionDescriptor(forTitle: item.seriesID ?? item.id)
+        let descriptor = remembersChoice
+            ? preferences.preferredVersionDescriptor(forTitle: key)
+                ?? preferences.preferredVersionDescriptor(forTitle: item.seriesID ?? item.id)
+            : nil
         if let descriptor,
            let match = candidates.bestMatch(for: descriptor) {
             return match.id

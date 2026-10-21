@@ -1,5 +1,8 @@
 import CoreModels
 import Foundation
+#if canImport(OSLog)
+import OSLog
+#endif
 
 public struct WatchlistDestinationStatus: Equatable, Sendable {
     public let queuedCount: Int
@@ -116,6 +119,7 @@ public actor WatchlistReconciler {
     private let retryPolicy: WatchlistRetryPolicy
     private var activeProfileIDs: Set<String> = []
     private var inFlightKeys: Set<DestinationTitleKey> = []
+    private var inFlightWriteCount = 0
     private var nativeReadTask:
         Task<WatchlistNativeReadReport, Never>?
 
@@ -153,7 +157,8 @@ public actor WatchlistReconciler {
                 confirmationIdentity: confirmationIdentity(
                     target: target,
                     destination: destination
-                )
+                ),
+                writePolicyVersion: destination.writePolicyVersion
             ))
         }
         FanoutDiagnostics.emit(
@@ -187,7 +192,8 @@ public actor WatchlistReconciler {
                 confirmationIdentity: confirmationIdentity(
                     target: target,
                     destination: destination
-                )
+                ),
+                writePolicyVersion: destination.writePolicyVersion
             )
         }
         try await mutationStore.replacePendingRemovalsWithPresentFanOut(
@@ -221,6 +227,7 @@ public actor WatchlistReconciler {
                 target: target,
                 destination: destination
             ),
+            writePolicyVersion: destination.writePolicyVersion,
             now: now
         )
     }
@@ -249,7 +256,8 @@ public actor WatchlistReconciler {
                 confirmationIdentity: confirmationIdentity(
                     target: target,
                     destination: destination
-                )
+                ),
+                writePolicyVersion: destination.writePolicyVersion
             )
         }
         try await mutationStore.enqueueBatch(requests, now: now)
@@ -335,7 +343,8 @@ public actor WatchlistReconciler {
                     confirmationIdentity: confirmationIdentity(
                         target: change.target,
                         destination: destination
-                    )
+                    ),
+                    writePolicyVersion: destination.writePolicyVersion
                 ))
             }
         }
@@ -349,8 +358,8 @@ public actor WatchlistReconciler {
         try await mutationStore.enqueueBatch(requests, now: now)
     }
 
-    /// Drains at most three writes. Calls are serialized per profile, and the
-    /// durable composite key prevents duplicate destination/title work.
+    /// Drains at most three transport operations, with bounded batches only for
+    /// destinations that opt in. Composite keys still serialize each title.
     /// Per-destination rate-limit backoff, escalating while a destination keeps
     /// refusing and cleared as soon as it accepts a write. In memory on purpose:
     /// a relaunch is a reasonable moment to try a service again.
@@ -387,7 +396,7 @@ public actor WatchlistReconciler {
         defer { activeProfileIDs.remove(profileID) }
         let availableWriteSlots = max(
             0,
-            Self.maximumConcurrentWrites - inFlightKeys.count
+            Self.maximumConcurrentWrites - inFlightWriteCount
         )
         guard availableWriteSlots > 0 else { return .processed(0) }
         let ready = await mutationStore.ready(
@@ -397,12 +406,38 @@ public actor WatchlistReconciler {
         )
         var processed = 0
         for mutation in ready {
+            guard await mutationStore.isReady(mutation, now: now) else { continue }
+            guard inFlightWriteCount < Self.maximumConcurrentWrites else { break }
+            if let destination = registry[mutation.key.destinationID] as? any WatchlistBatchApplying {
+                let candidates = await mutationStore.ready(
+                    profileID: profileID, now: now,
+                    limit: min(100, max(1, destination.maximumBatchSize)),
+                    destinationID: destination.id, desiredState: mutation.desiredState
+                )
+                let batch = candidates.filter {
+                    !inFlightKeys.contains(.init(destinationID: $0.key.destinationID, aliasID: $0.key.aliasID))
+                }
+                guard inFlightWriteCount < Self.maximumConcurrentWrites else { break }
+                guard !batch.isEmpty else { continue }
+                let keys = batch.map {
+                    DestinationTitleKey(destinationID: $0.key.destinationID, aliasID: $0.key.aliasID)
+                }
+                inFlightKeys.formUnion(keys)
+                inFlightWriteCount += 1
+                await processBatch(batch, destination: destination, now: now)
+                inFlightWriteCount -= 1
+                inFlightKeys.subtract(keys)
+                processed += batch.count
+                continue
+            }
             let inFlightKey = DestinationTitleKey(
                 destinationID: mutation.key.destinationID,
                 aliasID: mutation.key.aliasID
             )
             guard inFlightKeys.insert(inFlightKey).inserted else { continue }
+            inFlightWriteCount += 1
             await process(mutation, now: now)
+            inFlightWriteCount -= 1
             inFlightKeys.remove(inFlightKey)
             processed += 1
         }
@@ -747,25 +782,27 @@ public actor WatchlistReconciler {
                 + "state=\(mutation.desiredState) outcome=OK"
             )
         } catch {
-            FanoutDiagnostics.emit(
-                "watchlist.apply dest=\(destination.id.rawValue) "
-                + "state=\(mutation.desiredState) outcome=\(error)"
-            )
-            let decision = retryPolicy.decision(
-                for: error,
-                attempt: mutation.attemptCount
-            )
-            try? await mutationStore.markFailed(
+            await recordFailure(error, mutation: mutation, destination: destination, now: now)
+        }
+    }
+
+    private func recordFailure(
+        _ error: Error, mutation: WatchlistMutation, destination: any WatchlistDestination,
+        now: Date, defersDestination: Bool = true
+    ) async {
+        let decision = retryPolicy.decision(for: error, attempt: mutation.attemptCount)
+        FanoutDiagnostics.emit(
+            "watchlist.apply dest=\(destination.id.rawValue) "
+            + "state=\(mutation.desiredState) outcome=\(decision.classification)"
+        )
+        do {
+            try await mutationStore.markFailed(
                 mutation,
                 classification: decision.classification,
                 retryAt: decision.retryDelay.map { now.addingTimeInterval($0) }
             )
-            // A rate limit is the destination talking about itself, not about
-            // this title. Hold the whole queue for that destination back, or the
-            // titles behind it walk straight into the same limit.
-            if decision.classification == .authentication {
-                let parked = (try? await mutationStore
-                    .parkDestinationForAuthentication(destination.id)) ?? 0
+            if defersDestination, decision.classification == .authentication {
+                let parked = try await mutationStore.parkDestinationForAuthentication(destination.id)
                 if parked > 0 {
                     FanoutDiagnostics.emit(
                         "watchlist.parked dest=\(destination.id.rawValue) "
@@ -773,12 +810,9 @@ public actor WatchlistReconciler {
                     )
                 }
             }
-            if case .rateLimited = error as? WatchlistDestinationError,
+            if defersDestination, case .rateLimited = error as? WatchlistDestinationError,
                let retryDelay = decision.retryDelay {
-                // Each queued title is a fresh mutation on attempt zero, so the
-                // per-mutation backoff never grows no matter how often the
-                // destination refuses. Escalate per destination instead, or a
-                // service that wants a long pause is asked again immediately.
+                // Escalate per destination, not per title at attempt zero.
                 let escalated = max(
                     retryDelay,
                     min(
@@ -788,13 +822,94 @@ public actor WatchlistReconciler {
                 )
                 let cooldown = max(escalated, Self.minimumRateLimitCooldown)
                 rateLimitCooldowns[destination.id] = cooldown
-                let deferred = (try? await mutationStore.deferDestination(
+                let deferred = try await mutationStore.deferDestination(
                     destination.id,
                     until: now.addingTimeInterval(cooldown)
-                )) ?? 0
+                )
                 FanoutDiagnostics.emit(
                     "watchlist.cooldown dest=\(destination.id.rawValue) "
                     + "seconds=\(Int(cooldown)) deferred=\(deferred)"
+                )
+            }
+        } catch {
+            #if canImport(OSLog)
+            Logger(subsystem: "com.plozz.app", category: "watchlist")
+                .error("Watchlist retry state could not be persisted; pending work was retained")
+            #endif
+        }
+    }
+
+    private func processBatch(
+        _ mutations: [WatchlistMutation], destination: any WatchlistBatchApplying, now: Date
+    ) async {
+        let scope = destination.reconciliationScope
+        var prepared: [(WatchlistMutation, WatchlistDestinationBinding)] = []
+        for mutation in mutations {
+            guard await mutationStore.isReady(mutation, now: now) else { continue }
+            guard mutation.confirmationIdentity == confirmationIdentity(
+                target: mutation.target, destination: destination
+            ), destination.reconciliationScope == scope else {
+                do { try await mutationStore.discard(mutation) }
+                catch { await recordFailure(error, mutation: mutation, destination: destination, now: now) }
+                continue
+            }
+            do {
+                try Task.checkCancellation()
+                guard destination.capabilities.accepts(mutation.target.kind),
+                      destination.capabilities.write.isWritable,
+                      mutation.desiredState != .absent || destination.capabilities.write.isRemovable else {
+                    throw WatchlistDestinationError.permanent
+                }
+                guard let binding = try await destination.resolve(mutation.target) else {
+                    throw WatchlistDestinationError.unsupportedIdentity
+                }
+                prepared.append((mutation, binding))
+            } catch {
+                await recordFailure(error, mutation: mutation, destination: destination, now: now)
+            }
+        }
+        var current: [(WatchlistMutation, WatchlistDestinationBinding)] = []
+        for entry in prepared {
+            if await mutationStore.isReady(entry.0, now: now) { current.append(entry) }
+        }
+        guard let first = current.first else { return }
+        do {
+            try Task.checkCancellation()
+            guard destination.reconciliationScope == scope else {
+                throw WatchlistDestinationError.authenticationRequired
+            }
+            let identities = try current.map { entry -> String in
+                guard let id = entry.0.deliveryID else { throw AppError.invalidResponse }
+                return id.uuidString
+            }.sorted()
+            let key = WatchlistReconciliationIdentity.credential(
+                scope + "\u{0}" + first.0.desiredState.rawValue + "\u{0}" + identities.joined(separator: ",")
+            )
+            let outcomes = try await destination.apply(
+                first.0.desiredState, to: current.map(\.1),
+                idempotencyKey: key, expectedReconciliationScope: scope
+            )
+            guard outcomes.count == current.count else { throw AppError.invalidResponse }
+            guard destination.reconciliationScope == scope else {
+                throw WatchlistDestinationError.authenticationRequired
+            }
+            for (entry, outcome) in zip(current, outcomes) {
+                switch outcome {
+                case .success:
+                    try await mutationStore.markSucceeded(entry.0, now: Date())
+                case .failure(let error):
+                    await recordFailure(error, mutation: entry.0, destination: destination, now: now)
+                }
+            }
+            if outcomes.allSatisfy({ if case .success = $0 { return true }; return false }) {
+                rateLimitCooldowns[destination.id] = nil
+            }
+        } catch {
+            // Apply a destination-wide pause once, not once per title in a batch.
+            for (index, entry) in current.enumerated() {
+                await recordFailure(
+                    error, mutation: entry.0, destination: destination, now: now,
+                    defersDestination: index == current.count - 1
                 )
             }
         }

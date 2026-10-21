@@ -51,6 +51,8 @@ public struct PlayerEngineCapabilities: OptionSet, Sendable {
     /// URL required. Engines without this fall back to the sidecar overlay, which
     /// needs a provider-supplied delivery source on the secondary track.
     public static let dualSubtitleDecode = PlayerEngineCapabilities(rawValue: 1 << 4)
+    /// The shared host can proportionally resize the video-only surface.
+    public static let videoZoom = PlayerEngineCapabilities(rawValue: 1 << 5)
 }
 
 /// Engine-agnostic abstraction over a single playback session.
@@ -216,6 +218,8 @@ public protocol VideoEngine: AnyObject {
     /// Clock on the emitted subtitle cues' axis, following the presented picture
     /// rather than a transport position advanced to a pending seek target.
     var subtitlePresentationTime: TimeInterval { get }
+    /// Advances authored animated subtitles on the same clock as ordinary cues.
+    func renderSubtitles(at time: TimeInterval, style: SubtitleStyle)
 
     /// Whether position is settled enough for corrective seeks. A decoder can
     /// report ready before its initial frame/seek or a retained reload settles.
@@ -356,6 +360,7 @@ public protocol VideoEngine: AnyObject {
 
 public extension VideoEngine {
     var subtitlePresentationTime: TimeInterval { currentTime }
+    func renderSubtitles(at time: TimeInterval, style: SubtitleStyle) {}
     func supportsSubtitleTimingAdjustments(for track: MediaTrack) -> Bool { true }
     var streamingFailure: StreamingPlaybackFailure? { nil }
     var streamingOutputDynamicRange: SourceDynamicRange? { nil }

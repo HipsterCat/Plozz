@@ -196,10 +196,56 @@ extension SiloProviderTests {
     do {
       _ = try await provider.playbackInfo(for: "movie:1")
       XCTFail("A shifted timeline must not report incorrect progress")
-    } catch { XCTAssertEqual(error as? AppError, .invalidResponse) }
+    } catch {
+      XCTAssertEqual(error as? StreamingQualityError, .serverRefusal(
+        "Silo returned a playback timeline offset that Plozz does not support.", reason: .unsupportedTimeline
+      ))
+    }
     let requests = await http.requests
     XCTAssertTrue(
       requests.contains { $0.method == .delete && $0.path == "/api/v2/playback/session1" })
+  }
+
+  func testNonseekableFallbackExplainsRefusalAndReleasesSessionExactlyOnce() async throws {
+    let raw = try credential().encoded()
+    var responses = playbackResponses()
+    responses["/api/v2/playback/start"] = responses["/api/v2/playback/start"]?
+      .replacingOccurrences(of: "\"can_seek_anywhere\":true", with: "\"can_seek_anywhere\":false")
+      .replacingOccurrences(of: "\"delivery\":\"original_http\"", with: "\"delivery\":\"server_transcode_hls\"")
+    let http = SiloHTTPStub(responses)
+    let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+    do {
+      _ = try await provider.playbackInfo(for: "movie:1", forceTranscode: true)
+      XCTFail("A nonseekable plan must not bypass timeline validation")
+    } catch {
+      XCTAssertEqual(error as? StreamingQualityError, .serverRefusal(
+        "Silo returned a stream without seeking support. Plozz requires a seekable stream for this playback path.", reason: .nonSeekable
+      ))
+    }
+    let requests = await http.requests
+    XCTAssertEqual(requests.filter {
+      $0.method == .delete && $0.path == "/api/v2/playback/session1"
+    }.count, 1)
+  }
+
+  func testOrdinaryPlaybackPreservesTerminalRefusalWithoutQualityOptions() async throws {
+    let raw = try credential().encoded()
+    for reason in ["transcoding_disabled", "session_expired", "private server detail"] {
+      var responses = playbackResponses()
+      responses["/api/v2/playback/start"] = """
+        {"protocol_version":3,"outcome":"adaptation_unavailable","terminal":{"reason":"\(reason)","retryable":false}}
+        """
+      let http = SiloHTTPStub(responses)
+      let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+      do {
+        _ = try await provider.playbackInfo(for: "movie:1")
+        XCTFail("The server refused playback")
+      } catch {
+        let failure = try XCTUnwrap(error as? StreamingQualityError)
+        XCTAssertEqual(failure, SiloStreamingSelection.refusal(reason))
+        XCTAssertFalse(String(localized: failure.userMessage).contains("private"))
+      }
+    }
   }
 
   func testUncertainRefreshIsNotReplayedAfterRecreatingProvider() async throws {
@@ -364,6 +410,62 @@ final class SiloCredentialStub: RotatingCredentialStoring, @unchecked Sendable {
 
 final class SiloProviderTests: XCTestCase {
   private let base = URL(string: "https://silo.test/base")!
+
+  func testDetailRatingsUseOnlyServerSelectedFormattedList() async throws {
+    let raw = try credential().encoded()
+    let http = SiloHTTPStub([
+      "/api/v2/catalog/items/movie:1": """
+      {"content_id":"movie:1","type":"movie","title":"Title",
+       "rating_rt_critic":99,"rating_imdb":7.35,
+       "ratings":[
+        {"source":"imdb","name":"IMDb","score":73.5,"display":"7.4"},
+        {"source":"tmdb","name":"TMDB","score":81,"display":"8.1"},
+        {"source":"kinopoisk","name":"Kinopoisk","score":85,"display":"8.5"}]}
+      """
+    ])
+    let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+    let item = try await provider.item(id: "movie:1")
+    XCTAssertTrue(item.usesProviderRatings)
+    XCTAssertEqual(item.ratings.map(\.id), ["imdb", "tmdb", "kinopoisk"])
+    XCTAssertEqual(item.ratings.map(\.displayValue), ["7.4", "8.1", "8.5"])
+    XCTAssertEqual(item.ratings.map(\.displayName), ["IMDb", "TMDB", "Kinopoisk"])
+    XCTAssertEqual(item.ratings.first?.normalized ?? 0, 0.735, accuracy: 0.001)
+    XCTAssertFalse(item.ratings.contains { $0.source == .rottenTomatoes })
+    let restored = try JSONDecoder().decode(MediaItem.self, from: JSONEncoder().encode(item))
+    XCTAssertEqual(restored.ratings, item.ratings)
+    XCTAssertTrue(restored.usesProviderRatings)
+  }
+
+  func testExplicitEmptyRatingsDifferFromLegacyAbsentRatings() async throws {
+    for (field, expected) in [(",\"ratings\":[]", true), ("", false)] {
+      let raw = try credential().encoded()
+      let http = SiloHTTPStub([
+        "/api/v2/catalog/items/movie:1":
+          "{\"content_id\":\"movie:1\",\"type\":\"movie\",\"title\":\"Title\",\"rating_imdb\":9\(field)}"
+      ])
+      let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+      let item = try await provider.item(id: "movie:1")
+      XCTAssertEqual(item.usesProviderRatings, expected)
+      XCTAssertTrue(item.ratings.isEmpty, "Raw metadata is not the display list")
+    }
+  }
+
+  func testInvalidAndDuplicateRatingsDoNotHideValidEntries() async throws {
+    let raw = try credential().encoded()
+    let http = SiloHTTPStub([
+      "/api/v2/catalog/items/movie:1": """
+      {"content_id":"movie:1","type":"movie","title":"Title",
+       "ratings":[
+         {"source":"imdb","name":"IMDb","score":101,"display":"10.1"},
+         {"source":"tmdb","name":"TMDB","score":0,"display":"0.0"},
+         {"source":"tmdb","name":"TMDB","score":90,"display":"9.0"}]}
+      """
+    ])
+    let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+    let item = try await provider.item(id: "movie:1")
+    XCTAssertEqual(item.ratings.map(\.id), ["tmdb"])
+    XCTAssertEqual(item.ratings.first?.displayValue, "0.0")
+  }
 
   func credential() throws -> SiloCredential {
     let tokens = try JSONDecoder().decode(
@@ -578,7 +680,11 @@ final class SiloProviderTests: XCTestCase {
     do {
       _ = try await provider.playbackInfo(for: "movie:1")
       XCTFail("A different returned file must not play")
-    } catch { XCTAssertEqual(error as? AppError, .invalidResponse) }
+    } catch {
+      XCTAssertEqual(error as? StreamingQualityError, .serverRefusal(
+        "Silo returned a different file than the selected version. Plozz stopped playback to avoid playing the wrong file.", reason: .sourceMismatch
+      ))
+    }
     let requests = await http.requests
     XCTAssertTrue(
       requests.contains { $0.method == .delete && $0.path == "/api/v2/playback/session1" })
@@ -768,11 +874,12 @@ final class SiloProviderTests: XCTestCase {
     let http = SiloHTTPStub([
       "/api/v2/catalog/items/episode-tvdb-353367-1-1": """
       {"content_id":"episode-tvdb-353367-1-1","type":"episode","title":"Episode",
-       "versions":[{"file_id":"hdr-file","resolution":"1080p","hdr":true,
+       "versions":[{"file_id":"hdr-file","file_name":"Episode.WEB-DL.mkv","resolution":"1080p","hdr":true,
        "codec_video":"hevc","codec_audio":"eac3","container":"mkv",
        "file_size":100,"duration":2100,"bitrate":12000,
        "video_tracks":[{"width":3840,"height":2160,"video_range_type":"HDR10"}],
-       "audio_tracks":[{"codec":"eac3","channels":6,"layout":"5.1","default":true}]}]}
+       "audio_tracks":[{"codec":"eac3","channels":6,"layout":"5.1","language":"eng","default":true},
+                       {"codec":"aac","channels":2,"language":"fra","default":false}]}]}
       """
     ])
     let provider = try SiloProvider(
@@ -784,6 +891,12 @@ final class SiloProviderTests: XCTestCase {
     XCTAssertTrue(item.technicalBadges.map(\.label).contains("4K"))
     XCTAssertTrue(item.technicalBadges.map(\.accessibilityText).contains("Dolby Digital+ 5.1"))
     XCTAssertEqual(item.versions.first?.technicalBadges, item.technicalBadges)
+    let version = try XCTUnwrap(item.versions.first)
+    XCTAssertEqual(version.audioLanguageNames(in: Locale(identifier: "en_US")), ["English", "French"])
+    XCTAssertEqual(version.audioFormatLabel, "Dolby Digital+ 5.1")
+    XCTAssertEqual(version.sourceMetadata?.audio?.language, "eng")
+    XCTAssertEqual(version.sourceMetadata?.fileName, "Episode.WEB-DL.mkv")
+    XCTAssertTrue(MediaVersion.PickerPresentation(version).supplementalFacts.contains("WEB-DL"))
   }
 
   func testPlaybackClaimsDoNotInventHeaderRefreshOrHDR10PlusOutput() throws {

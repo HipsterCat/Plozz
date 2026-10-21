@@ -14,7 +14,30 @@ private struct SiloLibraryCollections: Decodable, Sendable {
     let collections: [SiloCollectionCard]
 }
 
+private struct SiloPersonalCollection: Decodable, Sendable {
+    let id: String
+    let name: String
+    let description: String?
+    let poster_url: String?
+}
+
 extension SiloProvider {
+    public func personalCollections(page: PageRequest) async throws -> MediaPage {
+        guard page.startIndex >= 0, page.limit > 0 else { throw AppError.invalidResponse }
+        let response: SiloCollection<SiloPersonalCollection> = try await client.request("/collections")
+        var seen = Set<String>()
+        guard response.items.allSatisfy({ !$0.id.isEmpty && seen.insert($0.id).inserted }) else {
+            throw AppError.invalidResponse
+        }
+        // The native endpoint is an unpaginated, viewer-ordered list.
+        let items = response.items.dropFirst(page.startIndex).prefix(page.limit).map { card in
+            MediaItem(id: Self.personalCollectionID(card.id), title: card.name,
+                      kind: .collection, overview: card.description,
+                      posterURL: resourceURL(card.poster_url), sourceAccountID: accountID)
+        }
+        return MediaPage(items: Array(items), startIndex: page.startIndex, totalCount: response.items.count)
+    }
+
     public func collections(in libraryID: String, page: PageRequest) async throws -> MediaPage {
         guard page.startIndex >= 0, page.limit > 0 else { throw AppError.invalidResponse }
         let response: SiloLibraryCollections = try await client.request(
@@ -39,13 +62,17 @@ extension SiloProvider {
     public func collectionMembers(of collectionID: String, page: PageRequest) async throws -> MediaPage {
         guard page.startIndex >= 0, page.limit > 0,
               let identity = Self.collectionIdentity(collectionID) else { throw AppError.notFound }
-        let response: SiloCatalogPage = try await client.request("/catalog", query: [
-            URLQueryItem(name: "source", value: "library_collection"),
+        var query = [
+            URLQueryItem(name: "source", value: identity.libraryID == nil ? "user_collection" : "library_collection"),
             URLQueryItem(name: "collection_id", value: identity.id),
-            URLQueryItem(name: "library_id", value: identity.libraryID),
             URLQueryItem(name: "seek", value: String(page.startIndex)),
             URLQueryItem(name: "limit", value: String(min(page.limit, 200)))
-        ])
+        ]
+        if let libraryID = identity.libraryID {
+            query.append(URLQueryItem(name: "library_id", value: libraryID))
+        }
+        let response: SiloCatalogPage = try await client.request("/catalog", query: query)
+        guard response.total >= 0 else { throw AppError.invalidResponse }
         return MediaPage(items: response.items.map { map($0, libraryID: identity.libraryID) },
                          startIndex: page.startIndex, totalCount: response.total)
     }
@@ -54,8 +81,17 @@ extension SiloProvider {
         "silo-collection:\(Data(libraryID.utf8).base64EncodedString()):\(Data(id.utf8).base64EncodedString())"
     }
 
-    static func collectionIdentity(_ value: String) -> (libraryID: String, id: String)? {
+    static func personalCollectionID(_ id: String) -> String {
+        "silo-user-collection:\(Data(id.utf8).base64EncodedString())"
+    }
+
+    static func collectionIdentity(_ value: String) -> (libraryID: String?, id: String)? {
         let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 2, parts[0] == "silo-user-collection",
+           let idData = Data(base64Encoded: String(parts[1])),
+           let id = String(data: idData, encoding: .utf8), !id.isEmpty {
+            return (nil, id)
+        }
         guard parts.count == 3, parts[0] == "silo-collection",
               let libraryData = Data(base64Encoded: String(parts[1])),
               let idData = Data(base64Encoded: String(parts[2])),

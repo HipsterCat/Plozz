@@ -73,21 +73,16 @@ final class MediaBadgesTests: XCTestCase {
         )
         // The video codec (HEVC) is intentionally excluded from the headline badge
         // row; it remains available via `videoCodecBadge` for the diagnostics overlay.
-        // Dolby badges group together: Dolby Atmos sits before the HDR10 pill so
-        // the two visually-similar Dolby logos aren't separated by HDR.
-        XCTAssertEqual(meta.technicalBadges.map(\.label), ["1080p", "Dolby Atmos", "HDR10"])
+        XCTAssertEqual(meta.technicalBadges.map(\.label), ["1080p", "HDR10", "Dolby Digital+", "Dolby Atmos"])
     }
 
-    func testTechnicalBadgeOrderGroupsDolbyTogether() {
-        // The canonical Fallout-on-Plex shape: DoVi profile 8 + HDR10 base + Atmos.
-        // Desired order is resolution · Dolby Vision · Dolby Atmos · HDR10 — the
-        // two Dolby logos must be adjacent.
+    func testTechnicalBadgeOrderSeparatesPictureAndAudio() {
         let meta = MediaSourceMetadata(
             video: .init(width: 3840, height: 2160, videoRangeType: "DOVIWithHDR10"),
             audio: .init(codec: "eac3", profile: "Dolby Digital+ Atmos", channels: 6, channelLayout: "5.1")
         )
         XCTAssertEqual(meta.technicalBadges.map(\.label),
-                       ["4K", "Dolby Vision", "Dolby Atmos", "HDR10"])
+                       ["4K", "Dolby Vision", "HDR10", "Dolby Digital+", "Dolby Atmos"])
     }
 
     // MARK: Dynamic range
@@ -152,15 +147,18 @@ final class MediaBadgesTests: XCTestCase {
 
     // MARK: Audio
 
-    func testDolbyAtmosSuppressesChannelBadge() {
+    func testAtmosKeepsItsCodecAndAttachesKnownChannelsToThatCodec() {
         let meta = MediaSourceMetadata(audio: .init(codec: "eac3", profile: "Dolby Atmos", channels: 8, channelLayout: "7.1"))
-        XCTAssertEqual(meta.audioBadges.map(\.label), ["Dolby Atmos"])
+        XCTAssertEqual(meta.audioBadges.map(\.label), ["Dolby Digital+", "Dolby Atmos"])
         XCTAssertEqual(meta.audioBadges.first?.style, .dolby)
+        XCTAssertEqual(meta.audioBadges.first?.detail, "7.1")
+        XCTAssertNil(meta.audioBadges.last?.detail)
     }
 
     func testDTSXHeadline() {
         let meta = MediaSourceMetadata(audio: .init(codec: "dts", profile: "DTS:X", channels: 8))
-        XCTAssertEqual(meta.audioBadges.map(\.label), ["DTS:X"])
+        XCTAssertEqual(meta.audioBadges.map(\.label), ["DTS", "DTS:X"])
+        XCTAssertEqual(meta.audioBadges.first?.detail, "7.1")
     }
 
     func testDolbyDigitalPlusWithSurroundChannel() {
@@ -186,7 +184,7 @@ final class MediaBadgesTests: XCTestCase {
             video: .init(width: 3840, height: 2160, videoRangeType: "DOVI"),
             audio: .init(codec: "eac3", profile: "Dolby Atmos")
         )
-        XCTAssertEqual(meta.technicalBadges.map(\.label), ["4K", "Dolby Vision", "Dolby Atmos"])
+        XCTAssertEqual(meta.technicalBadges.map(\.label), ["4K", "Dolby Vision", "Dolby Digital+", "Dolby Atmos"])
     }
 
     func testTechnicalBadgesGatedToPlayableKinds() {
@@ -215,10 +213,9 @@ final class MediaBadgesTests: XCTestCase {
                       mediaInfo: .init(video: .init(width: 1920, height: 1080, videoRange: "HDR", videoRangeType: "HDR10"),
                                        audio: .init(codec: "eac3", profile: "Dolby Atmos", channels: 8))),
         ]
-        // 4K (best resolution), Dolby Vision (best range), Dolby Atmos (best
-        // audio, which implies surround so no channel badge).
         XCTAssertEqual(episodes.representativeTechnicalBadges.map(\.label),
-                       ["4K", "Dolby Vision", "Dolby Atmos"])
+                       ["4K", "Dolby Vision", "Dolby Digital+", "Dolby Atmos"])
+        XCTAssertEqual(episodes.representativeTechnicalBadges.first(where: { $0.label == "Dolby Digital+" })?.detail, "7.1")
     }
 
     func testRepresentativeBadgesAddSurroundWhenFormatDoesNotImplyIt() {
@@ -229,18 +226,12 @@ final class MediaBadgesTests: XCTestCase {
             MediaItem(id: "2", title: "E2", kind: .episode,
                       mediaInfo: .init(audio: .init(codec: "eac3", channels: 8, channelLayout: "7.1"))),
         ]
-        // Dolby Digital+ doesn't imply surround, so the best channel layout (7.1)
-        // is attached to it as a trailing detail. E1 carries an explicit SDR
-        // token so the range summary reads SDR. Dolby badges still group first:
-        // order is resolution → Dolby audio → SDR pill.
         let badges = episodes.representativeTechnicalBadges
-        XCTAssertEqual(badges.map(\.label), ["1080p", "Dolby Digital+", "SDR"])
+        XCTAssertEqual(badges.map(\.label), ["1080p", "SDR", "Dolby Digital+"])
         XCTAssertEqual(badges.first(where: { $0.label == "Dolby Digital+" })?.detail, "7.1")
     }
 
-    func testRepresentativeBadgesGroupDolbyBeforeHDR() {
-        // Series with a 4K DoVi/HDR10 + Atmos episode should summarise as
-        // "4K · Dolby Vision · Dolby Atmos · HDR10" — Dolby logos adjacent.
+    func testRepresentativeBadgesGroupPictureBeforeAudio() {
         let episodes = [
             MediaItem(id: "1", title: "E1", kind: .episode,
                       mediaInfo: .init(video: .init(width: 1920, height: 1080),
@@ -250,7 +241,46 @@ final class MediaBadgesTests: XCTestCase {
                                        audio: .init(codec: "eac3", profile: "Dolby Digital+ Atmos", channels: 6))),
         ]
         XCTAssertEqual(episodes.representativeTechnicalBadges.map(\.label),
-                       ["4K", "Dolby Vision", "Dolby Atmos", "HDR10"])
+                       ["4K", "Dolby Vision", "HDR10", "Dolby Digital+", "Dolby Atmos"])
+    }
+
+    func testRepresentativeAudioDoesNotBorrowAnotherSourcesChannelsOrCodec() {
+        let sources = [
+            MediaSourceMetadata(audio: .init(codec: "truehd", profile: "Atmos", channels: 6)),
+            MediaSourceMetadata(audio: .init(codec: "dts", profile: "DTS-HD MA", channels: 8))
+        ]
+        let audio = MediaSourceMetadata.representativeTechnicalBadges(from: sources).filter(\.isAudio)
+        XCTAssertEqual(audio, [
+            MediaBadge("Dolby TrueHD", style: .dolby, detail: "5.1"),
+            MediaBadge("Dolby Atmos", style: .dolby)
+        ])
+    }
+
+    func testUnknownCodecAndChannelsDoNotInventAnAtmosCarrier() {
+        let badges = MediaSourceMetadata(audio: .init(profile: "Atmos")).audioBadges
+        XCTAssertEqual(badges, [MediaBadge("Dolby Atmos", style: .dolby)])
+    }
+
+    func testTrueHDChannelsRemainAttachedWithoutSpatialMetadata() {
+        let badges = MediaSourceMetadata(audio: .init(codec: "truehd", channels: 8)).audioBadges
+        XCTAssertEqual(badges, [MediaBadge("Dolby TrueHD", style: .dolby, detail: "7.1")])
+    }
+
+    func testPictureAndAudioTreatmentsAreIndependentOfBrand() {
+        XCTAssertFalse(MediaBadge("Dolby Vision", style: .dolby).isAudio)
+        XCTAssertTrue(MediaBadge("Dolby Atmos", style: .dolby).isAudio)
+        XCTAssertTrue(MediaBadge("DTS:X", style: .dts).isAudio)
+        XCTAssertTrue(MediaBadge("5.1", style: .audio).isAudio)
+        XCTAssertFalse(MediaBadge("HDR10+", style: .hdr).isAudio)
+    }
+
+    func testFilenameClaimsDoNotInventFormats() {
+        let metadata = MediaSourceMetadata(
+            fileName: "Movie.DV.HDR10+.DTS-X.mkv",
+            video: .init(videoRangeType: "HDR10"),
+            audio: .init(codec: "eac3", channels: 6)
+        )
+        XCTAssertEqual(metadata.technicalBadges.map(\.label), ["HDR10", "Dolby Digital+"])
     }
 
     func testRepresentativeBadgesEmptyWhenNoMediaInfo() {

@@ -2,21 +2,15 @@
 import SwiftUI
 import UIKit
 
-/// Forces the host `UIWindow`'s `overrideUserInterfaceStyle` to match the app's
-/// chosen theme.
-///
-/// SwiftUI's `.preferredColorScheme` styles the SwiftUI view tree, but UIKit
-/// *system-presented* chrome — `Menu` popovers, `.contextMenu`, alerts, action
-/// sheets — is rendered by UIKit against the **window/system** appearance, not the
-/// SwiftUI environment. So when the app is forced to Dark/OLED while the device is
-/// in Light mode, those menus come up light (white background, black text) over
-/// the dark app. Pinning the window's `overrideUserInterfaceStyle` makes every
-/// system-presented surface follow the app theme too.
+/// Explicit themes also style UIKit menus and sheets. System must leave the
+/// window unspecified so the root can keep observing real device changes.
 private struct WindowInterfaceStyleModifier: ViewModifier {
-    let isLight: Bool
+    let colorScheme: ColorScheme?
 
     func body(content: Content) -> some View {
-        content.background(WindowInterfaceStyleApplier(style: isLight ? .light : .dark))
+        content.background(WindowInterfaceStyleApplier(style: colorScheme.map {
+            $0 == .light ? .light : .dark
+        } ?? .unspecified))
     }
 }
 
@@ -45,7 +39,9 @@ private struct WindowInterfaceStyleApplier: UIViewRepresentable {
 
         func apply(_ style: UIUserInterfaceStyle) {
             self.style = style
-            window?.overrideUserInterfaceStyle = style
+            if window?.overrideUserInterfaceStyle != style {
+                window?.overrideUserInterfaceStyle = style
+            }
         }
 
         override func didMoveToWindow() {
@@ -56,10 +52,9 @@ private struct WindowInterfaceStyleApplier: UIViewRepresentable {
 }
 
 extension View {
-    /// Pins the host window's interface style to the app theme so UIKit-presented
-    /// menus/alerts/popovers match it. Pass `isLight` from the resolved palette.
-    func syncsWindowInterfaceStyle(isLight: Bool) -> some View {
-        modifier(WindowInterfaceStyleModifier(isLight: isLight))
+    /// Pass the selected theme's preference, never the resolved device scheme.
+    func syncsWindowInterfaceStyle(_ colorScheme: ColorScheme?) -> some View {
+        modifier(WindowInterfaceStyleModifier(colorScheme: colorScheme))
     }
 }
 #endif

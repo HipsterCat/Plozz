@@ -19,14 +19,97 @@ final class PrototypeGuideScrollController {
     }
 }
 
+/// Guide rows have explicit heights. Compute only the requested frames instead
+/// of asking a self-sizing compositional layout to prepare the entire catalog.
+@MainActor
+final class PrototypeGuideCollectionLayout: UICollectionViewLayout {
+    private var rowCount = 0
+    private var rowHeight: CGFloat = PrototypeLayout.rowHeight + PrototypeLayout.rowGap
+    private var sectionHeight: CGFloat = 0
+    private var sectionStarts: [Int] = []
+
+    func update(rowCount: Int, rowHeight: CGFloat, sectionHeight: CGFloat, sectionStarts: [Int]) {
+        guard self.rowCount != rowCount || self.rowHeight != rowHeight
+                || self.sectionHeight != sectionHeight || self.sectionStarts != sectionStarts else { return }
+        self.rowCount = rowCount
+        self.rowHeight = rowHeight
+        self.sectionHeight = sectionHeight
+        self.sectionStarts = sectionStarts
+        invalidateLayout()
+    }
+
+    override var collectionViewContentSize: CGSize {
+        CGSize(
+            width: collectionView?.bounds.width ?? 0,
+            height: PrototypeLayout.smallGap + CGFloat(rowCount) * rowHeight
+                + CGFloat(sectionStarts.count) * sectionHeight
+        )
+    }
+
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
+        guard indexPath.section == 0, (0..<rowCount).contains(indexPath.item) else { return nil }
+        let attributes = UICollectionViewLayoutAttributes(forCellWith: indexPath)
+        attributes.frame = frame(at: indexPath.item)
+        return attributes
+    }
+
+    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        guard rowCount > 0, !rect.isEmpty else { return [] }
+        var lower = 0
+        var upper = rowCount
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if frame(at: middle).maxY <= rect.minY { lower = middle + 1 }
+            else { upper = middle }
+        }
+        var result: [UICollectionViewLayoutAttributes] = []
+        var index = lower
+        while index < rowCount {
+            let frame = frame(at: index)
+            guard frame.minY < rect.maxY else { break }
+            if frame.intersects(rect) {
+                let attributes = UICollectionViewLayoutAttributes(forCellWith: IndexPath(item: index, section: 0))
+                attributes.frame = frame
+                result.append(attributes)
+            }
+            index += 1
+        }
+        return result
+    }
+
+    override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
+        newBounds.width != collectionView?.bounds.width
+    }
+
+    private func frame(at index: Int) -> CGRect {
+        var lower = 0
+        var upper = sectionStarts.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if sectionStarts[middle] < index { lower = middle + 1 }
+            else { upper = middle }
+        }
+        let isSectionStart = lower < sectionStarts.count && sectionStarts[lower] == index
+        return CGRect(
+            x: 0, y: PrototypeLayout.smallGap + CGFloat(index) * rowHeight + CGFloat(lower) * sectionHeight,
+            width: collectionView?.bounds.width ?? 0,
+            height: rowHeight + (isSectionStart ? sectionHeight : 0)
+        )
+    }
+}
+
 /// UIKit recycles real visible rows instead of creating SwiftUI's catalog-wide
 /// virtual focus fillers. The guide's existing row content still owns its controls.
 struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewControllerRepresentable {
     let rows: [LiveTVGuideRowID]
+    var rowHeight: CGFloat = PrototypeLayout.rowHeight + PrototypeLayout.rowGap
+    var sectionHeight: CGFloat = PrototypeLayout.guideSectionLabelHeight(fontSize: PrototypeLayout.sectionFontSize)
+        + PrototypeLayout.smallGap + PrototypeLayout.sectionLabelGap
     let scrollController: PrototypeGuideScrollController
     let scrolled: (LiveTVGuideRowID?, CGFloat) -> Void
     let revision: (LiveTVGuideRowID) -> Revision
     var horizontalNavigation: () -> Void = {}
+    var leadingExit: (() -> Void)?
     @ViewBuilder let content: (LiveTVGuideRowID) -> Content
 
     struct RowEnvironment: Equatable {
@@ -78,6 +161,8 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
             // Preserve presentation values without copying another hosting
             // controller's private focus/scroll environment into this row.
             state.content.id(state.id)
+                // Explicit timeline widths must not recenter while UIKit animates the host's bounds.
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .environment(\.themePalette, state.environment.palette)
                 .environment(\.plozzReduceTransparency, state.environment.reduceTransparency)
                 .environment(\.colorScheme, state.environment.colorScheme)
@@ -118,20 +203,15 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
         var parentView: PrototypeNativeGuideList?
         var swiftUIEnvironment: EnvironmentValues?
         private var rowIDs: [LiveTVGuideRowID] = []
+        private var sectionStarts: [Int] = []
         private var scrollReportScheduled = false
+        private var isRequestingLeadingExit = false
+        private let guideLayout: PrototypeGuideCollectionLayout
 
         init() {
-            let size = NSCollectionLayoutSize(
-                widthDimension: .fractionalWidth(1),
-                heightDimension: .estimated(PrototypeLayout.rowHeight + PrototypeLayout.rowGap))
-            let group = NSCollectionLayoutGroup.horizontal(
-                layoutSize: size, subitems: [NSCollectionLayoutItem(layoutSize: size)])
-            let section = NSCollectionLayoutSection(group: group)
-            section.contentInsets.top = PrototypeLayout.smallGap
-            let configuration = UICollectionViewCompositionalLayoutConfiguration()
-            configuration.contentInsetsReference = .none
-            super.init(collectionViewLayout: UICollectionViewCompositionalLayout(
-                section: section, configuration: configuration))
+            let layout = PrototypeGuideCollectionLayout()
+            guideLayout = layout
+            super.init(collectionViewLayout: layout)
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -147,18 +227,40 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
             collectionView.remembersLastFocusedIndexPath = false
             collectionView.contentInsetAdjustmentBehavior = .never
             collectionView.register(Cell.self, forCellWithReuseIdentifier: "guide-row")
-            collectionView.addGestureRecognizer(HorizontalPressObserver { [weak self] in
-                self?.parentView?.horizontalNavigation()
-            })
+            collectionView.addGestureRecognizer(GuideHorizontalPressRecognizer(
+                onHorizontal: { [weak self] in self?.parentView?.horizontalNavigation() },
+                leadingExit: { [weak self] type in
+                    guard let self, let parentView, isLeadingColumnFocused,
+                          type == (swiftUIEnvironment?.layoutDirection == .rightToLeft ? .rightArrow : .leftArrow)
+                    else { return nil }
+                    return parentView.leadingExit
+                }
+            ))
             if let parentView, let swiftUIEnvironment { update(parentView, environment: swiftUIEnvironment) }
+        }
+
+        private var isLeadingColumnFocused: Bool {
+            guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
+                  focused.isDescendant(of: collectionView) else { return false }
+            // Rapid remote presses can arrive before SwiftUI's FocusState catches up.
+            let center = focused.convert(
+                CGPoint(x: focused.bounds.midX, y: focused.bounds.midY), to: collectionView
+            )
+            let distance = swiftUIEnvironment?.layoutDirection == .rightToLeft
+                ? collectionView.bounds.maxX - center.x : center.x - collectionView.bounds.minX
+            return distance >= 0 && distance < PrototypeLayout.stationWidth(for: collectionView.bounds.width)
         }
 
         func update(_ parent: PrototypeNativeGuideList, environment: EnvironmentValues) {
             parentView = parent
+            if parent.leadingExit == nil { isRequestingLeadingExit = false }
             swiftUIEnvironment = environment
             parent.scrollController.collection = collectionView
             if rowIDs != parent.rows {
                 rowIDs = parent.rows
+                sectionStarts = rowIDs.indices.filter {
+                    $0 > 0 && rowIDs[$0].section != rowIDs[$0 - 1].section
+                }
                 parent.scrollController.indices = Dictionary(uniqueKeysWithValues: rowIDs.enumerated().map { ($0.element, $0.offset) })
                 collectionView.reloadData()
             } else {
@@ -167,6 +269,10 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
                     configure(cell, row: rowIDs[path.item])
                 }
             }
+            guideLayout.update(
+                rowCount: rowIDs.count, rowHeight: parent.rowHeight,
+                sectionHeight: parent.sectionHeight, sectionStarts: sectionStarts
+            )
             reportScroll()
         }
 
@@ -198,6 +304,21 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
 
         override func scrollViewDidScroll(_ scrollView: UIScrollView) { reportScroll() }
 
+        override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+            let leading: UIFocusHeading = swiftUIEnvironment?.layoutDirection == .rightToLeft ? .right : .left
+            if context.focusHeading == leading,
+               context.previouslyFocusedView?.isDescendant(of: collectionView) == true,
+               context.nextFocusedView?.isDescendant(of: collectionView) != true,
+               parentView?.leadingExit != nil {
+                if !isRequestingLeadingExit {
+                    isRequestingLeadingExit = true
+                    DispatchQueue.main.async { [weak self] in self?.parentView?.leadingExit?() }
+                }
+                return false
+            }
+            return super.shouldUpdateFocus(in: context)
+        }
+
         override func collectionView(
             _ collectionView: UICollectionView, didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
             with coordinator: UIFocusAnimationCoordinator
@@ -216,9 +337,7 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
                 if state.revision != revision {
                     state.revision = revision
                     state.content = parentView.content(row)
-                    cell.measuredSize = nil
                 }
-                if state.environment != environment { cell.measuredSize = nil }
                 state.environment = environment
             } else {
                 let state = RowState(
@@ -243,7 +362,6 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
                     cell.host = host
                 }
                 cell.rowState = state
-                cell.measuredSize = nil
             }
         }
 
@@ -264,21 +382,10 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
     final class Cell: UICollectionViewCell {
         var host: UIHostingController<HostedRow>?
         var rowState: RowState?
-        var measuredSize: CGSize?
         override var canBecomeFocused: Bool { false }
 
         override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
-            if let measuredSize, measuredSize.width == layoutAttributes.size.width {
-                layoutAttributes.size = measuredSize
-                return layoutAttributes
-            }
-            let attributes = super.preferredLayoutAttributesFitting(layoutAttributes)
-            if let host {
-                attributes.size.height = ceil(host.sizeThatFits(in: CGSize(
-                    width: layoutAttributes.size.width, height: .greatestFiniteMagnitude)).height)
-                measuredSize = attributes.size
-            }
-            return attributes
+            layoutAttributes
         }
 
         override init(frame: CGRect) {
@@ -296,31 +403,75 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
     }
 }
 
-private final class HorizontalPressObserver: UIGestureRecognizer {
+private final class GuideHorizontalPressRecognizer: UIGestureRecognizer {
     private let onHorizontal: () -> Void
+    private let leadingExit: (UIPress.PressType) -> (() -> Void)?
+    private var consumedPress: UIPress?
+    private var exitAction: (() -> Void)?
 
-    init(onHorizontal: @escaping () -> Void) {
+    init(
+        onHorizontal: @escaping () -> Void,
+        leadingExit: @escaping (UIPress.PressType) -> (() -> Void)?
+    ) {
         self.onHorizontal = onHorizontal
+        self.leadingExit = leadingExit
         super.init(target: nil, action: nil)
         allowedPressTypes = [
             NSNumber(value: UIPress.PressType.leftArrow.rawValue),
             NSNumber(value: UIPress.PressType.rightArrow.rawValue)
         ]
         allowedTouchTypes = []
-        cancelsTouchesInView = false
+        cancelsTouchesInView = true
         delaysTouchesBegan = false
         delaysTouchesEnded = false
     }
 
-    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { consumedPress != nil }
     override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent) {
-        if presses.contains(where: { $0.type == .leftArrow || $0.type == .rightArrow }),
-           DetailTransitionNavigation.navigationInputEpoch(in: view) != nil {
-            onHorizontal()
+    override func shouldBeRequiredToFail(by otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Ancestor navigation can begin before descendant press delivery.
+        // It must wait for our boundary decision, not just canPrevent.
+        guard let view, let ancestor = otherGestureRecognizer.view,
+              view !== ancestor, view.isDescendant(of: ancestor) else { return false }
+        return otherGestureRecognizer.allowedPressTypes.contains {
+            $0.intValue == UIPress.PressType.leftArrow.rawValue
+                || $0.intValue == UIPress.PressType.rightArrow.rawValue
         }
-        state = .failed
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent) {
+        guard let press = presses.first(where: { $0.type == .leftArrow || $0.type == .rightArrow }),
+              DetailTransitionNavigation.navigationInputEpoch(in: view) != nil else {
+            state = .failed
+            return
+        }
+        onHorizontal()
+        guard let action = leadingExit(press.type) else {
+            state = .failed
+            return
+        }
+        // Own this press through release so the native tab sidebar cannot also open.
+        consumedPress = press
+        exitAction = action
+        state = .began
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent) {
+        guard let consumedPress, presses.contains(where: { $0 === consumedPress }) else { return }
+        let action = exitAction
+        state = .ended
+        action?()
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent) {
+        state = .cancelled
+    }
+
+    override func reset() {
+        consumedPress = nil
+        exitAction = nil
+        super.reset()
     }
 }
 #endif

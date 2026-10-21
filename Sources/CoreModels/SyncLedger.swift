@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - SyncLedger — the V3 sync core (pure, CloudKit-free)
@@ -32,7 +33,7 @@ import Foundation
 //   • `reconcileLocal` refuses to synthesize a mass deletion from a partial/empty
 //     capture (a hydrating-store foot-gun that would wipe every peer).
 //
-// NO secrets ever pass through here.
+// Credential channels must protect both their transport and persisted ledgers.
 
 public typealias SyncRecordID = String
 
@@ -51,6 +52,8 @@ public struct SyncLedgerEntry: Codable, Hashable, Sendable {
     public var systemFields: Data?
     /// This device's current canonical value.
     public var localValue: Data
+    /// Last locally reconciled intent, retained when a remote value wins.
+    public var localCaptureDigest: Data?
     /// Mutation-boundary edit clock. Bumped ONLY on a genuine local edit.
     public var editedAt: Int64
     /// Local value differs from the server and must be uploaded.
@@ -65,12 +68,14 @@ public struct SyncLedgerEntry: Codable, Hashable, Sendable {
     public init(
         syncedValue: Data?, syncedEditedAt: Int64, systemFields: Data?,
         localValue: Data, editedAt: Int64, dirty: Bool,
-        pendingDelete: Bool = false, wasSynced: Bool = false, resyncSeen: Bool = false
+        pendingDelete: Bool = false, wasSynced: Bool = false, resyncSeen: Bool = false,
+        localCaptureDigest: Data? = nil
     ) {
         self.syncedValue = syncedValue
         self.syncedEditedAt = syncedEditedAt
         self.systemFields = systemFields
         self.localValue = localValue
+        self.localCaptureDigest = localCaptureDigest
         self.editedAt = editedAt
         self.dirty = dirty
         self.pendingDelete = pendingDelete
@@ -138,6 +143,19 @@ public struct SyncLedger: Codable, Hashable, Sendable {
 
     public init() { self.entries = [:]; self.clock = 0; self.resyncing = false }
 
+    /// A small atomic index can reference separately sealed entry files.
+    public struct Checkpoint: Codable, Sendable {
+        fileprivate let clock: Int64
+    }
+
+    public var checkpoint: Checkpoint { Checkpoint(clock: clock) }
+
+    public init(checkpoint: Checkpoint, entries: [SyncRecordID: SyncLedgerEntry]) {
+        self.entries = entries
+        clock = checkpoint.clock
+        resyncing = false
+    }
+
     private mutating func bumpRemoteRevision() { remoteRevision &+= 1 }
 
     enum CodingKeys: String, CodingKey { case entries, clock }
@@ -170,6 +188,38 @@ public struct SyncLedger: Codable, Hashable, Sendable {
     /// state file), publishing would stamp fresh edits that could clobber peers.
     public var hasServerBaseline: Bool {
         entries.values.contains { $0.syncedValue != nil }
+    }
+
+    /// Inventory absence is only a candidate. Never use unsent local intent as
+    /// evidence of a missed remote deletion.
+    public func inventoryDeletionCandidates(
+        serverNames: Set<SyncRecordID>
+    ) -> [SyncRecordID: SyncLedgerEntry] {
+        guard !resyncing else { return [:] }
+        return entries.filter { name, entry in
+            !serverNames.contains(name) && entry.syncedValue != nil
+                && entry.syncedValue == entry.localValue && !entry.dirty && !entry.pendingDelete
+        }
+    }
+
+    /// Call after refreshing local capture. Only explicit per-record server
+    /// deletions whose baseline and intent stayed unchanged may repair the mirror.
+    public mutating func applyInventoryDeletions(
+        confirmedDeleted: Set<SyncRecordID>,
+        candidates: [SyncRecordID: SyncLedgerEntry],
+        now: Int64
+    ) -> SyncLocalChanges {
+        guard !resyncing else { return [:] }
+        let deleted = confirmedDeleted.filter { name in
+            guard let current = entries[name], var original = candidates[name],
+                  !current.dirty, !current.pendingDelete,
+                  current.syncedValue != nil, current.syncedValue == current.localValue else { return false }
+            // A first unchanged capture can add a receipt without changing intent.
+            original.localCaptureDigest = current.localCaptureDigest
+            return current == original
+        }
+        guard !deleted.isEmpty else { return [:] }
+        return applyFetched(saved: [], deleted: deleted.sorted(), now: now)
     }
 
     /// The last-known canonical bytes per record — server baseline where we have one,
@@ -210,6 +260,7 @@ public struct SyncLedger: Codable, Hashable, Sendable {
 
         for (name, value) in desired {
             if var entry = entries[name] {
+                entry.localCaptureDigest = Data(SHA256.hash(data: value))
                 if entry.pendingDelete {
                     // The entity reappeared locally after we queued its delete → revive
                     // as a genuine edit.
@@ -217,7 +268,6 @@ public struct SyncLedger: Codable, Hashable, Sendable {
                     entry.localValue = value
                     entry.editedAt = tick(now)
                     entry.dirty = true
-                    entries[name] = entry
                     plan.uploads.append(SyncUpload(recordName: name, value: value,
                                                    editedAt: entry.editedAt, systemFields: entry.systemFields))
                 } else if entry.syncedValue != value {
@@ -226,19 +276,19 @@ public struct SyncLedger: Codable, Hashable, Sendable {
                     if entry.localValue != value { entry.editedAt = tick(now) }
                     entry.localValue = value
                     entry.dirty = true
-                    entries[name] = entry
                     plan.uploads.append(SyncUpload(recordName: name, value: value,
                                                    editedAt: entry.editedAt, systemFields: entry.systemFields))
                 } else if entry.localValue != value || entry.dirty {
                     // Server already has this value; heal stale local bookkeeping.
                     entry.localValue = value; entry.dirty = false
-                    entries[name] = entry
                 }
+                entries[name] = entry
             } else {
                 let stamp = tick(now)
                 entries[name] = SyncLedgerEntry(
                     syncedValue: nil, syncedEditedAt: 0, systemFields: nil,
-                    localValue: value, editedAt: stamp, dirty: true)
+                    localValue: value, editedAt: stamp, dirty: true,
+                    localCaptureDigest: Data(SHA256.hash(data: value)))
                 plan.uploads.append(SyncUpload(recordName: name, value: value, editedAt: stamp, systemFields: nil))
             }
         }

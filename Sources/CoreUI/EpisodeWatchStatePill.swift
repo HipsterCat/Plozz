@@ -24,6 +24,7 @@ public struct EpisodeWatchStatePill: View {
     private let playGlyphHeight: CGFloat?
     private let detailText: String?
     private let showsPlayGlyphWhenIdle: Bool
+    private let spacing: CGFloat
 
     @Environment(\.plozzChromeIsFocused) private var isFocused
 
@@ -43,7 +44,8 @@ public struct EpisodeWatchStatePill: View {
         barHeight: CGFloat = 5,
         playGlyphHeight: CGFloat? = nil,
         detailText: String? = nil,
-        showsPlayGlyphWhenIdle: Bool = false
+        showsPlayGlyphWhenIdle: Bool = false,
+        spacing: CGFloat = 8
     ) {
         self.item = item
         self.showsRuntimeWhenIdle = showsRuntimeWhenIdle
@@ -54,6 +56,7 @@ public struct EpisodeWatchStatePill: View {
         self.playGlyphHeight = playGlyphHeight
         self.detailText = detailText
         self.showsPlayGlyphWhenIdle = showsPlayGlyphWhenIdle
+        self.spacing = spacing
     }
 
     private enum State {
@@ -109,7 +112,7 @@ public struct EpisodeWatchStatePill: View {
                 .fontWeight(.bold)
                 .accessibilityLabel("Watched")
         case let .inProgress(fraction, remaining):
-            HStack(spacing: 8) {
+            HStack(spacing: spacing) {
                 playGlyph
                 ResumeProgressCapsule(
                     progress: fraction,
@@ -145,7 +148,7 @@ public struct EpisodeWatchStatePill: View {
             // unstarted episode showing a 0% bar reads as a stalled download.
             if let label = joined(text) {
                 if showsPlayGlyphWhenIdle {
-                    HStack(spacing: 8) {
+                    HStack(spacing: spacing) {
                         playGlyph
                         Text(verbatim: label)
                     }
@@ -209,6 +212,8 @@ public struct ResumeChipOverlay: View {
     private let showsPlayGlyphWhenIdle: Bool
     private let bottomScrimStart: CGFloat?
     private let bottomScrimDepth: CGFloat?
+    private let compactHorizontalLayout: Bool
+    private var rendersScrim = true
 
     @Environment(\.plozzMetrics) private var metrics
 
@@ -233,7 +238,8 @@ public struct ResumeChipOverlay: View {
         detailText: String? = nil,
         showsPlayGlyphWhenIdle: Bool = false,
         bottomScrimStart: CGFloat? = nil,
-        bottomScrimDepth: CGFloat? = nil
+        bottomScrimDepth: CGFloat? = nil,
+        compactHorizontalLayout: Bool = false
     ) {
         self.item = item
         self.downloadState = downloadState
@@ -242,6 +248,7 @@ public struct ResumeChipOverlay: View {
         self.showsPlayGlyphWhenIdle = showsPlayGlyphWhenIdle
         self.bottomScrimStart = bottomScrimStart
         self.bottomScrimDepth = bottomScrimDepth
+        self.compactHorizontalLayout = compactHorizontalLayout
     }
 
     public var body: some View {
@@ -250,12 +257,7 @@ public struct ResumeChipOverlay: View {
         if hasBottomChrome || showsMenu {
             Color.clear
                 .overlay {
-                    MediaArtworkChromeScrim(
-                        top: showsMenu,
-                        bottom: hasBottomChrome,
-                        bottomStart: bottomScrimStart ?? 0.52,
-                        bottomDepth: bottomScrimDepth ?? 0.78
-                    )
+                    if rendersScrim, let artworkScrim { artworkScrim }
                 }
                 .overlay(alignment: .topLeading) {
                     if showsMenu {
@@ -277,11 +279,13 @@ public struct ResumeChipOverlay: View {
                 // was tried instead and gave a gauge that ran most of the way
                 // across a wide tvOS card.
                 GeometryReader { geometry in
+                    let spacingInset = compactHorizontalLayout
+                        ? min(metrics.resumeChipInset, geometry.size.width * 0.05) : metrics.resumeChipInset
                     let barWidth = min(
                         metrics.resumeChipBarWidth,
                         max(20, geometry.size.width * 0.42)
                     )
-                    HStack(alignment: .center, spacing: metrics.resumeChipInset * 0.5) {
+                    HStack(alignment: .center, spacing: spacingInset * 0.5) {
                         if item.cardRuntimeText != nil
                             || item.resumeProgressFraction != nil
                             || (showsPlayGlyphWhenIdle && detailText?.isEmpty == false) {
@@ -293,7 +297,8 @@ public struct ResumeChipOverlay: View {
                                 barWidth: barWidth,
                                 barHeight: metrics.resumeChipBarHeight,
                                 detailText: detailText,
-                                showsPlayGlyphWhenIdle: showsPlayGlyphWhenIdle
+                                showsPlayGlyphWhenIdle: showsPlayGlyphWhenIdle,
+                                spacing: compactHorizontalLayout ? spacingInset * 0.5 : 8
                             )
                             .font(.system(size: metrics.resumeChipFontSize, weight: .semibold))
                             // The card grows with Dynamic Type to keep this label
@@ -307,7 +312,7 @@ public struct ResumeChipOverlay: View {
                         }
                         // Keeps the download badge pinned trailing whether or not
                         // the pill is present, so it never drifts to the leading edge.
-                        Spacer(minLength: metrics.resumeChipInset * 0.5)
+                        Spacer(minLength: spacingInset * 0.5)
                         if let downloadState {
                             MediaDownloadBadge(
                                 state: downloadState,
@@ -325,6 +330,21 @@ public struct ResumeChipOverlay: View {
                 .allowsHitTesting(false)
             }
         }
+    }
+
+    var withoutScrim: Self {
+        var result = self
+        result.rendersScrim = false
+        return result
+    }
+
+    var artworkScrim: MediaArtworkChromeScrim? {
+        guard hasBottomChrome || showsMenu else { return nil }
+        return MediaArtworkChromeScrim(
+            top: showsMenu, bottom: hasBottomChrome,
+            bottomStart: bottomScrimStart ?? 0.52,
+            bottomDepth: bottomScrimDepth ?? 0.78
+        )
     }
 
     /// Anything to draw along the bottom edge. Resume progress counts even with no

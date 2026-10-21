@@ -53,6 +53,15 @@ final class HomeRuntimeScopeTests: XCTestCase {
         )
     }
 
+    func testApprovedAddressChangesRebuildRetainedProvidersWithoutChangingIdentity() {
+        let before = account(id: "a")
+        var after = before
+        after.server.alternateConnectionURLs = [URL(string: "http://192.168.1.50")!]
+        XCTAssertNotEqual(HomeRuntimeScope.accountScopeKey([before]), HomeRuntimeScope.accountScopeKey([after]))
+        XCTAssertEqual(before.id, after.id)
+        XCTAssertEqual(before.credentialRevision, after.credentialRevision)
+    }
+
     func testAccountScopeIsOrderIndependentAndRevisionSensitive() {
         let first = account(id: "a")
         var rotated = first

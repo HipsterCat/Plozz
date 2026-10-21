@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import CoreModels
+import CoreNetworking
 
 /// Drives the server picker: runs LAN discovery, validates manual entries, and
 /// remembers the last successful server.
@@ -242,6 +243,7 @@ public final class ServerPickerViewModel {
         stopScan()
         let generation = validationGeneration
         phase = .validating
+        let reportFailure = provider == .silo ? SiloSetupDiagnostics.shared.begin() : nil
         defer {
             if generation == validationGeneration, phase == .validating { phase = .idle }
         }
@@ -250,6 +252,12 @@ public final class ServerPickerViewModel {
             guard !Task.isCancelled, generation == validationGeneration else { return nil }
             select(server)
             return server
+        } catch let failure as SiloSetupFailure {
+            guard !Task.isCancelled, generation == validationGeneration else { return nil }
+            PlozzLog.auth.error("Silo address validation failed: stage=\(failure.diagnostic.stage.rawValue) reason=\(failure.diagnostic.reason.rawValue) status=\(failure.diagnostic.httpStatus ?? 0)")
+            reportFailure?(failure.diagnostic)
+            phase = .error(failure.userMessage)
+            return nil
         } catch let error as AppError {
             guard !Task.isCancelled, generation == validationGeneration else { return nil }
             phase = .error(error.userMessage)

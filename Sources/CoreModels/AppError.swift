@@ -12,6 +12,8 @@ public enum AppError: Error, Equatable, Sendable {
     case invalidResponse
     /// Credentials/token rejected (HTTP 401/403). Triggers re-auth.
     case unauthorized
+    /// The provider explicitly restricted access (HTTP 451), not evidence of a bad password.
+    case accessRestricted
     /// Username/password sign-in was rejected by the server.
     case invalidCredentials
     /// The requested resource does not exist (HTTP 404).
@@ -54,7 +56,7 @@ public enum AppError: Error, Equatable, Sendable {
         switch self {
         case .serverUnreachable, .cancelled, .unauthorized, .rateLimited:
             return true
-        case .invalidResponse, .invalidCredentials, .notFound, .conflict,
+        case .invalidResponse, .invalidCredentials, .accessRestricted, .notFound, .conflict,
              .quickConnectUnavailable, .quickConnectExpired, .decoding, .unknown:
             return false
         }
@@ -92,6 +94,12 @@ public enum AppError: Error, Equatable, Sendable {
                 "error.unauthorized",
                 defaultValue: "Your session has expired. Please sign in again.",
                 comment: "Shown when the saved credentials are no longer accepted."
+            )
+        case .accessRestricted:
+            return LocalizedStringResource(
+                "error.accessRestricted",
+                defaultValue: "The provider has blocked access. Check your subscription or contact the provider.",
+                comment: "Shown when a stream provider explicitly blocks access, without rejecting the saved password."
             )
         case .invalidCredentials:
             return LocalizedStringResource(
@@ -159,7 +167,7 @@ public enum CredentialRejection {
             switch error {
             case .unauthorized, .invalidCredentials:
                 return true
-            case .serverUnreachable, .invalidResponse, .notFound, .conflict,
+            case .serverUnreachable, .invalidResponse, .accessRestricted, .notFound, .conflict,
                  .quickConnectUnavailable, .quickConnectExpired, .cancelled,
                  .decoding, .unknown, .rateLimited:
                 return false

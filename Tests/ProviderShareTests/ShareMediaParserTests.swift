@@ -5,6 +5,21 @@ import XCTest
 /// bare-numbered anime/TV must read as episodes when the folder tree says "series",
 /// while movies whose title ends in a number must stay movies in a movie context.
 final class ShareMediaParserTests: XCTestCase {
+    func testISODiscImagesArePlayableAndKeepFilenameClassification() {
+        for name in ["Film (2024).iso", "Film (2024).ISO", "Film (2024).Iso"] {
+            XCTAssertTrue(ShareMediaParser.isVideoFile(name))
+            XCTAssertEqual(movie("Movies/\(name)")?.title, "Film")
+            XCTAssertEqual(movie("Movies/\(name)")?.year, 2024)
+        }
+        XCTAssertEqual(episode("TV/Show/Season 1/Show.S01E02.iso")?.episode, 2)
+        for name in ["Film.iso.zip", "Film.iso.nfo", "poster.jpg", "checksum.md5"] {
+            XCTAssertFalse(ShareMediaParser.isVideoFile(name))
+        }
+        for name in ["Film.mkv", "Film.mp4", "Film.m2ts"] {
+            XCTAssertTrue(ShareMediaParser.isVideoFile(name))
+        }
+    }
+
     private func classify(_ relPath: String) -> ShareMediaParser.Kind {
         ShareMediaParser.classify(relPath: relPath)
     }

@@ -1,5 +1,20 @@
 import CoreModels
+import Foundation
 import Observation
+
+@MainActor
+@Observable
+final class DetailPlaybackInventoryState {
+    var noStreamItemIDs: Set<String> = []
+    var retryingItemIDs: Set<String> = []
+    var retryError: LocalizedStringResource?
+
+    func reset() {
+        noStreamItemIDs.removeAll()
+        retryingItemIDs.removeAll()
+        retryError = nil
+    }
+}
 
 @MainActor
 @Observable

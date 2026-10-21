@@ -27,7 +27,16 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         XCTAssertEqual(Screen.styleDual.parent, .style)
         XCTAssertEqual(PlayerOptionsPanel.width(for: .subtitles, subtitleScreen: .download), 860)
         XCTAssertEqual(PlayerOptionsPanel.width(for: .version, subtitleScreen: .tracks), 860)
-        XCTAssertEqual(PlayerOptionsPanel.width(for: .speed, subtitleScreen: .tracks), 260)
+        XCTAssertEqual(PlayerOptionsPanel.width(for: .playback, subtitleScreen: .tracks), 520)
+        #if os(tvOS)
+        XCTAssertEqual(PlayerOptionsPanel.width(for: .audio, subtitleScreen: .tracks), 580)
+        #else
+        XCTAssertEqual(PlayerOptionsPanel.width(for: .audio, subtitleScreen: .tracks), 520)
+        #endif
+        XCTAssertEqual(
+            String(localized: PlayerOptionsPanel.headerTitle(for: .playback, subtitleScreen: .tracks, playbackScreen: .zoom)),
+            String(localized: LocalizedStringResource("Zoom Mode"))
+        )
         XCTAssertFalse(Screen.sync.isStyleFamily)
         XCTAssertEqual(
             String(localized: PlayerOptionsPanel.headerTitle(for: .subtitles, subtitleScreen: .styleSystemFont)),
@@ -82,8 +91,28 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         )
     }
 
-    func testTrackRowsAndFocusRemainCapabilityDrivenForBothHosts() {
+    func testTrackMenuFocusDoesNotResolveOrObserveSubtitleAppearance() async {
         let model = PlayerControlsModel()
+        model.subtitleOptions = [
+            .init(id: PlayerTrackOption.offID, title: Text("Off"), isSelected: false),
+            .init(id: 12, title: Text("English"), isSelected: true)
+        ]
+        let appearanceInvalidatedTrackFocus = expectation(description: "Track focus must not observe subtitle styling")
+        appearanceInvalidatedTrackFocus.isInverted = true
+        withObservationTracking {
+            XCTAssertEqual(
+                PlayerOptionsPanel.preferredFocus(for: .subtitles, subtitleScreen: .tracks, model: model),
+                .row(1)
+            )
+        } onChange: {
+            appearanceInvalidatedTrackFocus.fulfill()
+        }
+        model.subtitleStyle.fontScale += 0.01
+        await fulfillment(of: [appearanceInvalidatedTrackFocus], timeout: 0.05)
+    }
+
+    func testTrackRowsAndFocusRemainCapabilityDrivenForBothHosts() {
+        let model = controlsWithoutSystemAudio()
         var pickedAudio: [Int] = []
         var pickedSubtitle: [Int] = []
         var dialogEnhance: [Bool] = []
@@ -130,6 +159,37 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         XCTAssertEqual(PlayerOptionsPanel.preferredFocus(for: .subtitles, subtitleScreen: .download, model: model), .row(0))
     }
 
+    func testBurnInHidesStyleScreensWithoutRemovingDualTrackSelection() {
+        let model = PlayerControlsModel()
+        model.primarySubtitleIsBurnedIn = true
+        model.subtitleOptions = [.init(id: 3, title: Text("ASS"), isSelected: true)]
+        for screen in [Screen.style, .styleFont, .styleOutline, .styleBackground, .styleFileFormatting] {
+            XCTAssertEqual(PlayerOptionsPanel.availableSubtitleScreen(
+                screen, model: model, offersDualSubtitles: true
+            ), .tracks)
+            XCTAssertEqual(PlayerOptionsPanel.preferredFocus(
+                for: .subtitles, subtitleScreen: screen, model: model
+            ), .row(0))
+        }
+        XCTAssertEqual(PlayerOptionsPanel.availableSubtitleScreen(
+            .styleDual, model: model, offersDualSubtitles: true
+        ), .styleDual)
+        XCTAssertEqual(PlayerOptionsPanel.availableSubtitleScreen(
+            .styleDual, model: model, offersDualSubtitles: false
+        ), .tracks)
+        model.secondarySubtitleOptions = [.init(id: 4, title: Text("Second Track"), isSelected: true)]
+        XCTAssertEqual(PlayerOptionsPanel.availableSubtitleScreen(
+            .style, model: model, offersDualSubtitles: true
+        ), .style)
+        model.secondarySubtitleOptions = []
+        model.subtitleOptions = []
+        XCTAssertEqual(model.subtitleTrackListFocus, .button(.subtitles),
+                       "Never focus a hidden Style entry")
+        model.primarySubtitleIsBurnedIn = false
+        XCTAssertEqual(model.subtitleTrackListFocus, .edit)
+        XCTAssertTrue(model.subtitleStyleAdjustable, "Ordinary local ASS and global style editors remain editable")
+    }
+
     func testVersionsSpeedAndSyncKeepTheirOriginalActionsAndFocus() {
         let model = PlayerControlsModel()
         model.versions.options = [
@@ -143,8 +203,10 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         XCTAssertEqual(events, ["close", "alternate"])
         XCTAssertEqual(PlayerOptionsPanel.preferredFocus(for: .version, subtitleScreen: .tracks, model: model), .row(0))
         model.playbackSpeed = 1.5
-        XCTAssertEqual(PlayerOptionsPanel.preferredFocus(for: .speed, subtitleScreen: .tracks, model: model),
-                       .row(PlayerControls.speedPresets.firstIndex(of: 1.5)!))
+        model.engineCapabilities = [.playbackSpeed]
+        XCTAssertEqual(PlayerOptionsPanel.preferredFocus(
+            for: .playback, subtitleScreen: .tracks, model: model),
+                       .row(PlaybackOptionsPane.speedSlot))
         model.engineCapabilities = []
         XCTAssertNil(PlayerOptionsPanel.preferredFocus(for: .sync, subtitleScreen: .tracks, model: model))
         model.engineCapabilities = [.subtitleDelay]

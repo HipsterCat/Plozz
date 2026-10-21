@@ -298,10 +298,34 @@ final class SeekScrubCoordinator {
             // when actually stalled, so an engine that's genuinely recovering is
             // observed, not disrupted.
             var advancingStreak = 0
-            // ~4s of coverage: 12 attempts × ~300ms (plus 60ms per kick).
-            for attempt in 0..<12 {
+            // ~4s of coverage: 12 attempts × ~300ms (plus 60ms per kick), not
+            // counting checks spent buffering (below), within an overall cap.
+            var attempt = 0
+            var checks = 0
+            while attempt < 12, checks < Self.resumeConfirmMaximumChecks {
                 if Task.isCancelled { return }
+                checks += 1
                 let stalled = (advancingStreak == 0)
+                // Only a player that actually stopped (rate 0) is the frozen
+                // landing this kicks. One that reports playing or waiting is
+                // bringing its output back, and on a buffered AirPlay route
+                // (HomePods: ~2 s of latency) the clock sits still for seconds
+                // while it does. Measured on device: a kick every ~350 ms made
+                // AirPlay resync each time (the stutter, position stepping
+                // backwards), the clock never got going, and the give-up below
+                // left playback paused after every seek. Wait instead, without
+                // spending an attempt; the overall cap still ends a real stall.
+                let recovering = attempt > 0 && stalled
+                    && (engine.nowPlayingPlayer.map { $0.timeControlStatus != .paused } ?? false)
+                if recovering {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    if Task.isCancelled { return }
+                    let now = engine.currentTime
+                    if now > lastTime + 0.05 { advancingStreak += 1 }
+                    lastTime = now
+                    continue
+                }
+                defer { attempt += 1 }
                 if attempt == 0 {
                     // Cheap, blip-free first try — handles the common healthy
                     // landing where play() just needs re-asserting.
@@ -355,6 +379,10 @@ final class SeekScrubCoordinator {
     /// touch `isResumeConfirming` on its cancellation path, so a brand-new
     /// confirmation started right after a cancel can't be clobbered by the old
     /// task waking up.
+    /// Overall bound on the post-seek resume check (~15 s at 300 ms), so a
+    /// player that reports buffering forever still ends in the give-up path.
+    static let resumeConfirmMaximumChecks = 50
+
     func cancelResumeConfirm() {
         resumeConfirmTask?.cancel()
         resumeConfirmTask = nil

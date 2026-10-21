@@ -124,6 +124,17 @@ final class MediaRowEpisodeEntryPolicyTests: XCTestCase {
         ))
     }
 
+    func testReentryDoesNotReplaceTheBrowsedCardWhileGeometryRemounts() {
+        XCTAssertFalse(MediaRowEpisodeEntryPolicy.showsPlaceholder(
+            phase: .ready, targetReady: false, focusEngaged: false, hasBrowsedTarget: true
+        ))
+        for phase in [MediaRowEpisodeEntry.Phase.loading, .empty, .failed] {
+            XCTAssertTrue(MediaRowEpisodeEntryPolicy.showsPlaceholder(
+                phase: phase, targetReady: false, focusEngaged: false, hasBrowsedTarget: true
+            ))
+        }
+    }
+
     func testFirstEntryUsesResumeAndLaterEntryRemembersTheBrowsedEpisode() {
         let ids = Set((0..<1000).map { "episode-\($0)" })
         XCTAssertEqual(MediaRowEpisodeEntryPolicy.target(

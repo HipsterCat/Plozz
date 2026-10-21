@@ -2,8 +2,15 @@ import Foundation
 
 public protocol MediaTransportByteSource: AnyObject, Sendable {
     var byteSize: Int64 { get }
+    /// Efficient bounded request size. Larger values opt readers into adaptive
+    /// sequential read-ahead; the source still enforces its own protocol limits.
+    var preferredReadSize: Int { get }
     func read(at offset: Int64, length: Int) async throws -> Data
     func shutdown() async
+}
+
+public extension MediaTransportByteSource {
+    var preferredReadSize: Int { 1024 * 1024 }
 }
 
 /// Optional specialization for transports that require a distinct underlying
@@ -60,6 +67,7 @@ public final class MediaTransportSourceLease: @unchecked Sendable {
     }
 
     public var byteSize: Int64 { source.byteSize }
+    public var preferredReadSize: Int { source.preferredReadSize }
 
     public func makeCursor() -> MediaTransportSourceCursor? {
         let id = UUID()

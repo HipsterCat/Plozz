@@ -47,7 +47,7 @@ struct PlozzigenLiveAttemptGate {
     }
 }
 
-/// `VideoEngine` implementation backed by AetherEngine (branded "Plozzigen").
+/// `VideoEngine` implementation backed by AetherEngine.
 ///
 /// AetherEngine handles the full native pipeline internally:
 /// FFmpeg demux → on-device copy-remux → localhost HLS-fMP4 → AVPlayer.
@@ -85,6 +85,17 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         if usesNativeSubtitleCues, let time = engine.currentAVPlayer?.currentTime().seconds, time.isFinite {
             return time
         }
+        if assDocument != nil, engine.hasFirstFrameReadyForDisplay, !engine.isSeeking {
+            if let timebase = engine.softwarePresentationTimebase {
+                let time = CMTimebaseGetTime(timebase).seconds
+                if time.isFinite { return time }
+            } else if let player = engine.currentAVPlayer,
+                      player.timeControlStatus != .waitingToPlayAtSpecifiedRate,
+                      let time = engine.presentationAxisMap.sourceSeconds(forItemSeconds: player.currentTime().seconds),
+                      time.isFinite {
+                return time
+            }
+        }
         return engine.sourceTime
     }
     private var nativeSubtitleOutput: NativeSubtitleCueOutput?
@@ -104,6 +115,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     public var duration: TimeInterval { engine.duration }
 
     public var videoAspectRatio: Double? {
+        if let size = engine.softwareDisplaySize ?? engine.currentAVPlayer?.currentItem?.presentationSize,
+           size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 {
+            return Double(size.width / size.height)
+        }
         let width = Double(engine.sourceVideoWidth)
         let height = Double(engine.sourceVideoHeight)
         guard width > 0, height > 0 else { return nil }
@@ -116,10 +131,16 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     /// honors the viewer's audio-language preference at load. `TrackInfo.id`,
     /// `selectAudioTrack(index:)`, and `activeAudioTrackIndex` all share the
     /// FFmpeg AVStream-index space, so this maps directly onto `MediaTrack.id`.
-    public var currentAudioTrackID: Int? { engine.activeAudioTrackIndex }
+    public var currentAudioTrackID: Int? {
+        bypassAudio.tracks.isEmpty ? engine.activeAudioTrackIndex : bypassAudio.selectedID
+    }
     public var bufferedPosition: TimeInterval { engine.clock.bufferedPosition }
 
     public var liveSnapshot: LiveChannelEngineSnapshot {
+        let phase: LiveChannelEnginePhase
+        if case .failed = status { phase = .failed }
+        else if liveSourceProbe != nil { phase = .loading }
+        else { phase = Self.livePhase(engine.playbackPhase) }
         let range: ClosedRange<TimeInterval>?
         if engine.videoRoute == .remoteBypass {
             // Aether 6.66 reports 0...edge on the bypass, not the sliding
@@ -134,7 +155,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             range = engine.clock.seekableLiveRange
         }
         return LiveChannelEngineSnapshot(
-            phase: Self.livePhase(engine.playbackPhase),
+            phase: phase,
             firstFrameReady: engine.hasFirstFrameReadyForDisplay,
             position: engine.clock.currentTime,
             bufferedPosition: engine.clock.bufferedPosition,
@@ -154,12 +175,14 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         let position = engine.currentTime
         let bufferAhead: TimeInterval? = engine.isSessionReady && buffered.isFinite && position.isFinite
             ? max(0, buffered - position) : nil
-        guard t != nil || bufferAhead != nil else { return nil }
+        let audioPipeline = engine.activeAudioDecoder
+        guard t != nil || bufferAhead != nil || audioPipeline != nil else { return nil }
         return EngineLiveTelemetry(
             droppedFrameCount: t?.droppedFrameCount,
             observedFps: t?.observedFps,
             observedBitrate: t?.instantBitrateMbps.map { $0 * 1_000_000 },
-            bufferedSecondsAhead: bufferAhead
+            bufferedSecondsAhead: bufferAhead,
+            audioPipelineDescription: audioPipeline
         )
     }
 
@@ -233,10 +256,12 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         engine.state == .playing
     }
 
-    public var displayName: String { "Plozzigen" }
+    public var displayName: String { "AetherEngine v\(AEEngine.version)" } // l10n:content — engine brand and runtime version
 
     public var capabilities: PlayerEngineCapabilities {
-        engine.videoRoute == .remoteBypass ? [.playbackSpeed] : [.playbackSpeed, .dualSubtitleDecode]
+        engine.videoRoute == .remoteBypass
+            ? [.playbackSpeed, .videoZoom]
+            : [.playbackSpeed, .dualSubtitleDecode, .videoZoom]
     }
 
     deinit {
@@ -259,6 +284,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     /// Plozz's cue model, so the owned overlay draws them. This is the decoded
     /// read-ahead buffer — the host time-filters it against the playhead.
     public var onSubtitleCues: (@MainActor ([CoreModels.SubtitleCue]) -> Void)?
+    private let assRenderer = ASSSubtitleRenderer()
+    private var assDocument: ASSSubtitleDocument?
+    private var assEvents: [ASSSubtitleEvent] = []
+    private var rendersAuthoredASS = true
     /// Fired with AetherEngine's decoded *secondary* (dual-line) subtitle cues,
     /// mapped to Plozz's cue model, so the owned overlay draws a second line from
     /// the container itself — no fetchable sidecar URL needed. This is what makes
@@ -270,6 +299,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     private let engine: AEEngine
     private let networkFileResolver: (any MediaTransportNetworkFileResolving)?
     private let authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
+    private let readAheadPreference: @MainActor () -> PlaybackReadAhead
     private var liveOutputPolicy = LiveChannelOutputPolicy()
     private var outputPolicyReload: Task<Void, Never>?
     private var outputLoadGeneration = UUID()
@@ -288,6 +318,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     /// release it asynchronously and racing the fresh open. `nil` for URL-backed
     /// loads.
     private var activeResolvedSource: MediaTransportResolvedSource?
+    private var activeTransportReader: TransportIOReader?
+    private let scrubStillExtractors = NSHashTable<PlozzigenScrubStillExtractor>.weakObjects()
     #if canImport(UIKit)
     private let videoView: UIView
     #endif
@@ -296,7 +328,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
 
     public init(
         networkFileResolver: (any MediaTransportNetworkFileResolving)? = nil,
-        authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil
+        authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil,
+        readAheadPreference: @escaping @MainActor () -> PlaybackReadAhead = { .default }
     ) throws {
         self.engine = try AEEngine()
         // Plozz owns its audio session, and on an E-AC-3/Atmos bitstream-passthrough route the HDMI sink
@@ -306,6 +339,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         engine.deactivatesAudioSessionOnStop = true
         self.networkFileResolver = networkFileResolver
         self.authenticatedHTTPResolver = authenticatedHTTPResolver
+        self.readAheadPreference = readAheadPreference
         #if canImport(UIKit)
         let surface = AetherPlayerView()
         engine.bind(view: surface)
@@ -352,10 +386,40 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         }
     }
 
+    // MARK: - Scrub stills
+
+    func registerScrubStillExtractor(_ extractor: PlozzigenScrubStillExtractor) {
+        scrubStillExtractors.add(extractor)
+    }
+
+    private func invalidateScrubStills() {
+        for extractor in scrubStillExtractors.allObjects { extractor.invalidate() }
+        scrubStillExtractors.removeAllObjects()
+    }
+
+    /// Still extractor over a host-chosen URL, coupled to this engine's session so
+    /// thumbnail decodes yield while the playback pipeline is starved.
+    func makeScrubFrameExtractor(url: URL) -> FrameExtractor {
+        engine.makeFrameExtractor(url: url)
+    }
+
+    /// Still extractor over an independent clone of the loaded source's reader
+    /// (network shares), or `nil` before load or when the reader can't clone.
+    func makeLoadedSourceFrameExtractor() -> FrameExtractor? {
+        engine.makeFrameExtractor()
+    }
+
     // MARK: - VideoEngine Lifecycle
+
+    public private(set) var streamingFailure: StreamingPlaybackFailure?
 
     public func load(request: PlaybackRequest, startPosition: TimeInterval) async {
         guard let outputGeneration = await beginOutputLoad() else { return }
+        streamingFailure = nil
+        invalidateScrubStills()
+        activeTransportReader?.closeAllReaders()
+        activeTransportReader = nil
+        clearASS()
         let outputPolicy = liveOutputPolicy
         defer { finishOutputLoad(outputGeneration, policy: outputPolicy) }
         endLiveAttempt()
@@ -368,17 +432,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         intendsPause = false
         furthestObservedPosition = startPosition
 
-        // For >6-channel sources (7.1), prefer the lossless FLAC bridge so the
-        // full 7.1 layout survives — the default `.surroundCompat` EAC3 bridge caps
-        // at 5.1. Multichannel-LPCM AVRs get true 7.1; stereo-only routes downmix
-        // gracefully. Either way it's an on-device bridge, never a server transcode.
-        let channels = request.localRemuxSource?.sourceMetadata.audio?.channels
-            ?? request.sourceMetadata?.audio?.channels ?? 0
-        var options = LoadOptions(
-            matchContentEnabled: true,
-            audioBridgeMode: channels > 6 ? .lossless : .surroundCompat
-        )
-        Self.applyLiveOutputPolicy(outputPolicy, to: &options)
+        var options = onDemandLoadOptions(for: request, outputPolicy: outputPolicy)
         // Build the native WebVTT renditions so subtitles can travel into a
         // Picture in Picture window, where our own overlay cannot follow: it is a
         // view in this app's hierarchy and the window only carries what is in the
@@ -387,6 +441,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         // ASS/SSA keeps the overlay for normal playback; the native copy is plain
         // text, which is the trade for being visible in the window at all.
         options.prepareNativeSubtitles = true
+        options.preserveASSMarkup = true
         // Populate the readers at load, so a window opened mid-playback has cues
         // immediately instead of starting with a gap.
         options.eagerNativeSubtitleReaders = true
@@ -407,8 +462,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                 let resolvedSource = try await networkFileResolver.resolve(locator)
                 activeResolvedSource = resolvedSource
                 stage = "engine.load"
+                let reader = TransportIOReader(resolvedSource: resolvedSource)
+                activeTransportReader = reader
                 let source = MediaSource.custom(
-                    TransportIOReader(resolvedSource: resolvedSource),
+                    reader,
                     formatHint: Self.networkFileFormatHint(for: locator)
                 )
                 try await engine.load(
@@ -439,13 +496,31 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                     for: request,
                     sourceURL: url
                 )
+                let boundedProbe = PlozzigenRemoteProbePolicy.apply(to: &options, request: request, url: url)
+                if boundedProbe {
+                    HandoffDiagnostics.emit("aether PROBE_POLICY kind=bounded-remote-av1")
+                }
                 stage = "engine.load"
-                try await engine.load(
+                let probe = try await engine.load(
                     url: url,
                     startPosition: startPosition > 0 ? startPosition : nil,
                     options: options,
                     audioSourceStreamIndex: request.preferredAudioTrackID.map(Int32.init)
                 )
+                if boundedProbe, !PlozzigenRemoteProbePolicy.isComplete(probe, for: request) {
+                    guard probePublicationGate.accepts(probeGeneration), !Task.isCancelled else { return }
+                    HandoffDiagnostics.emit("aether PROBE_RETRY reason=incomplete-remote-matroska")
+                    PlozzLog.playback.info("Bounded remote MKV probe missed required media facts; retrying the full probe.")
+                    options.probesize = nil
+                    options.maxAnalyzeDuration = nil
+                    stage = "engine.fullProbeRetry"
+                    try await engine.load(
+                        url: url,
+                        startPosition: startPosition > 0 ? startPosition : nil,
+                        options: options,
+                        audioSourceStreamIndex: request.preferredAudioTrackID.map(Int32.init)
+                    )
+                }
             }
             // Engine state can already be `.playing` by the time load returns,
             // which advances the adapter status to `.ready`. Generation truth,
@@ -482,7 +557,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                 "Plozzigen load failed at \(stage): "
                     + HandoffDiagnostics.redactedDetail(detail)
             )
-            let err: AppError = .unknown(detail)
+            streamingFailure = PlozzigenPlaybackFailure.classify(
+                stage == "resolve" ? nil : engine.errorInfo, fallbackError: error
+            )
+            let err: AppError = error as? AppError ?? .unknown(detail)
             status = .failed(err)
             onFailure?(err)
         }
@@ -490,9 +568,14 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
 
     public func loadLive(url: URL, httpHeaders: [String: String]) async {
         guard let outputGeneration = await beginOutputLoad() else { return }
+        streamingFailure = nil
+        liveScrubThumbnails = LiveHLSScrubThumbnails(playlistURL: url, headers: httpHeaders) { [weak self] in
+            (self?.engine.currentAVPlayer?.currentItem?.accessLog()?.events.last?.uri).flatMap(URL.init(string:))
+        }
         let outputPolicy = liveOutputPolicy
         defer { finishOutputLoad(outputGeneration, policy: outputPolicy) }
         let liveGeneration = beginLiveAttempt()
+        liveDeliveryFailure = PlaybackDeliveryFailure.state(for: url)
         _ = probePublicationGate.beginLoad()
         sourceFormatCancellable?.cancel()
         sourceFormatCancellable = nil
@@ -504,9 +587,23 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         intendsPause = false
         furthestObservedPosition = 0
 
-        var stage = "engine.load"
+        var stage: PlaybackFailureDiagnostic.Stage = .load
         do {
-            var options = Self.liveLoadOptions(httpHeaders: httpHeaders)
+            var sourceFormat: PlozzigenLiveSourceProbe.Format?
+            if PlozzigenLiveSourceProbe.isRequired(for: url) {
+                engine.stop(resetDisplayCriteria: false)
+                stage = .response
+                let probe = PlozzigenLiveSourceProbe()
+                liveSourceProbe = probe
+                defer {
+                    probe.cancel()
+                    if liveAttemptGate.accepts(liveGeneration) { liveSourceProbe = nil }
+                }
+                sourceFormat = try await probe.format(url: url, headers: httpHeaders)
+                guard liveAttemptGate.accepts(liveGeneration), !Task.isCancelled else { return }
+                stage = .load
+            }
+            var options = Self.liveLoadOptions(httpHeaders: httpHeaders, url: url, sourceFormat: sourceFormat)
             Self.applyLiveOutputPolicy(outputPolicy, to: &options)
             try await engine.load(url: url, options: options)
             guard liveAttemptGate.accepts(liveGeneration) else { return }
@@ -514,11 +611,11 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                 reportLiveFailure(
                     message,
                     generation: liveGeneration,
-                    stage: "completion"
+                    stage: .load
                 )
                 return
             }
-            stage = "audio-session"
+            stage = .audioSession
             // Aether's load prologue awaits its detached category/multichannel
             // declaration. Activate only after that boundary: the bare
             // AetherPlayerView has no AVPlayerViewController to do it for us,
@@ -535,9 +632,9 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         } catch is CancellationError {
             // A stop or replacement load owns the session now.
         } catch {
-            guard liveAttemptGate.accepts(liveGeneration) else { return }
+            guard liveAttemptGate.accepts(liveGeneration), !Task.isCancelled else { return }
             let detail: String
-            if stage == "engine.load",
+            if stage == .load,
                case .error(let message) = engine.state {
                 detail = message
             } else {
@@ -546,9 +643,19 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             reportLiveFailure(
                 detail,
                 generation: liveGeneration,
-                stage: stage
+                stage: stage,
+                fallbackError: error
             )
         }
+    }
+
+    /// Scrub previews for the native HLS route, built for the source `loadLive`
+    /// was given (the playlist AVPlayer plays, with its headers).
+    private var liveScrubThumbnails: LiveHLSScrubThumbnails?
+
+    public func liveScrubThumbnail(secondsIntoWindow seconds: TimeInterval, maxWidth: Int) async -> CGImage? {
+        guard engine.videoRoute == .remoteBypass, let liveScrubThumbnails else { return nil }
+        return await liveScrubThumbnails.thumbnail(secondsIntoWindow: seconds, maxWidth: maxWidth)
     }
 
     public func seekToLiveEdge() async {
@@ -628,18 +735,84 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         #endif
     }
 
-    nonisolated static func liveLoadOptions(
-        httpHeaders: [String: String]
+    func onDemandLoadOptions(
+        for request: PlaybackRequest, outputPolicy: LiveChannelOutputPolicy = .init()
     ) -> LoadOptions {
+        let source = request.localRemuxSource?.originalSource ?? request.playbackSource
+        let isLocalFile: Bool
+        if case .networkFile = request.playbackSource {
+            isLocalFile = false
+        } else if case .authenticatedHTTP = source {
+            isLocalFile = false
+        } else {
+            isLocalFile = (request.streamURL ?? source?.publicURL)?.isFileURL == true
+        }
+        return Self.onDemandLoadOptions(
+            audioChannels: request.localRemuxSource?.sourceMetadata.audio?.channels
+                ?? request.sourceMetadata?.audio?.channels ?? 0,
+            trueHDAtmosEnabled: request.trueHDAtmosEnabled,
+            dolbyVisionFELEnabled: request.dolbyVisionFELEnabled,
+            outputPolicy: outputPolicy,
+            readAhead: isLocalFile || request.suppressOrdinaryWatchReporting
+                ? .default : readAheadPreference()
+        )
+    }
+
+    nonisolated static func onDemandLoadOptions(
+        audioChannels: Int,
+        trueHDAtmosEnabled: Bool = PlaybackSettings.default.trueHDAtmosEnabled,
+        dolbyVisionFELEnabled: Bool = PlaybackSettings.default.dolbyVisionFELEnabled,
+        outputPolicy: LiveChannelOutputPolicy = .init(),
+        readAhead: PlaybackReadAhead = .default
+    ) -> LoadOptions {
+        // Keep the full 7.1 fallback: the compatibility EAC3 bridge caps at 5.1.
+        var options = LoadOptions(
+            matchContentEnabled: true,
+            audioBridgeMode: audioChannels > 6 ? .lossless : .surroundCompat
+        )
+        options.preferDualLayerDolbyVision = dolbyVisionFELEnabled
+            && outputPolicy.isAudible && !outputPolicy.sharesAudioSession
+            && !outputPolicy.suppressesDisplayMatching
+        // Aether uses approximately four-second segments and clamps the maximum
+        // to 2,700, retaining its free-space budget and producer backpressure.
+        switch readAhead {
+        case .automatic: options.forwardBufferSegments = nil
+        case .oneMinute: options.forwardBufferSegments = 15
+        case .fiveMinutes: options.forwardBufferSegments = 75
+        case .tenMinutes: options.forwardBufferSegments = 150
+        case .maximumAvailable: options.forwardBufferSegments = 2_700
+        }
+        #if os(tvOS)
+        if #available(tvOS 26.0, *), trueHDAtmosEnabled,
+           outputPolicy.isAudible, !outputPolicy.sharesAudioSession {
+            // This is an intermediate spatial bed, not a detected speaker inventory.
+            // Aether verifies 48 kHz TrueHD Atmos/DTS:X on native VOD, with a channel fallback.
+            // Shared live players and muted previews must not add spatial encoding work.
+            options.objectAudioRendering = .apac(.l714)
+        }
+        #endif
+        applyLiveOutputPolicy(outputPolicy, to: &options)
+        return options
+    }
+
+    nonisolated static func liveLoadOptions(
+        httpHeaders: [String: String], url: URL? = nil,
+        sourceFormat: PlozzigenLiveSourceProbe.Format? = nil
+    ) -> LoadOptions {
+        let suffix = url?.pathExtension.lowercased() ?? ""
+        let format = sourceFormat ?? (["ts", "m2ts", "mts"].contains(suffix)
+            ? .transportStream : suffix == "m3u8" ? .hls : .other)
         // Aether 6.66 gives nativeRemoteHLS its AVPlayer-backed live window
         // without a host-selected DVR duration. Keep nil so an ingest reroute
         // does not silently opt the app into an arbitrary disk timeshift policy.
-        LoadOptions(
+        return LoadOptions(
             httpHeaders: httpHeaders,
             isLive: true,
             dvrWindowSeconds: nil,
-            liveJoinProfile: .standard,
-            nativeRemoteHLS: true,
+            // Raw live sources have no existing HLS window to fill the initial
+            // holdback; long GOPs can otherwise outlast AVPlayer's playlist timeout.
+            liveJoinProfile: format == .transportStream ? .fastZap : .standard,
+            nativeRemoteHLS: format == .hls,
             nativeRemoteHLSIngestFallback: true
         )
     }
@@ -683,8 +856,31 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         }
     }
 
+    private var liveFailureDiagnostic: PlaybackFailureAttempt?
+    private var liveDeliveryFailure: PlaybackDeliveryFailure?
+    private var liveFailureCaptureTask: Task<Void, Never>?
+    private var liveSourceProbe: PlozzigenLiveSourceProbe?
+
+    public var livePlaybackFailureDiagnostic: PlaybackFailureDiagnostic? {
+        liveFailureDiagnostic?.diagnostic ?? liveDeliveryFailure?.diagnostic
+    }
+
+    public var isCapturingLiveFailureDiagnostic: Bool {
+        guard liveAttemptGate.activeGeneration != nil, liveFailureDiagnostic?.diagnostic == nil else { return false }
+        // The phase can reach the guide before Combine delivers the error callback.
+        if case .error = engine.state { return true }
+        return liveFailureCaptureTask != nil
+    }
+
     private func beginLiveAttempt() -> UInt64 {
+        liveSourceProbe?.cancel()
+        liveSourceProbe = nil
+        liveFailureCaptureTask?.cancel()
+        liveFailureCaptureTask = nil
         let generation = liveAttemptGate.begin()
+        liveFailureDiagnostic = PlaybackFailureDiagnostics.shared.begin(
+            layer: .liveEngine, content: .live, captureForPresentation: true
+        )
         liveSourceResetCancellable?.cancel()
         liveSourceResetCancellable = engine.liveSourceReset
             .receive(on: DispatchQueue.main)
@@ -699,7 +895,13 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     private func endLiveAttempt() {
+        liveSourceProbe?.cancel()
+        liveSourceProbe = nil
+        liveFailureCaptureTask?.cancel()
+        liveFailureCaptureTask = nil
         liveAttemptGate.invalidate()
+        liveFailureDiagnostic = nil
+        liveDeliveryFailure = nil
         liveSourceResetCancellable?.cancel()
         liveSourceResetCancellable = nil
     }
@@ -707,12 +909,13 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     private func reportLiveFailure(
         _ detail: String,
         generation: UInt64,
-        stage: String
+        stage: PlaybackFailureDiagnostic.Stage,
+        fallbackError: Error? = nil
     ) {
         guard liveAttemptGate.consumeFailure(for: generation) else { return }
         // A queued state publication may outlive its errorInfo. Never classify
         // an older message using a replacement session's failure.
-        let info = engine.errorInfo.flatMap { $0.message == detail ? $0 : nil }
+        let info = stage == .response ? nil : engine.errorInfo.flatMap { $0.message == detail ? $0 : nil }
         let classification = PlozzigenLiveFailure.diagnostic(info)
         let redacted = HandoffDiagnostics.redactedDetail(detail)
         HandoffDiagnostics.emit(
@@ -721,9 +924,29 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         PlozzLog.playback.error(
             "Plozzigen live playback failed at \(stage): \(classification) \(redacted)"
         )
-        let error = PlozzigenLiveFailure.appError(info)
-        status = .failed(error)
-        onFailure?(error)
+        let item = stage == .response ? nil : engine.currentAVPlayerItem
+        let route = stage == .response ? nil
+            : PlaybackFailureEvidence.Route(rawValue: Self.liveRoute(engine.videoRoute).rawValue)
+        let firstFrameReady = stage != .response && engine.hasFirstFrameReadyForDisplay
+        let delivery = liveDeliveryFailure
+        liveFailureCaptureTask = Task { [weak self] in
+            var evidence = await PlozzigenNativeFailureCapture.shared.capture(
+                item: item, fallbackError: fallbackError as NSError?
+            )
+            guard let self, !Task.isCancelled, self.liveAttemptGate.accepts(generation) else { return }
+            evidence.route = route
+            evidence.firstFrameReady = firstFrameReady
+            evidence.delivery = delivery?.evidence
+            PlozzigenLiveFailure.record(
+                info, attempt: self.liveFailureDiagnostic, stage: stage, fallbackError: fallbackError,
+                evidence: evidence, deliveryDiagnostic: delivery?.diagnostic
+            )
+            let error = PlozzigenLiveFailure.appError(
+                info, deliveryFailure: delivery?.error, fallbackError: fallbackError
+            )
+            self.status = .failed(error)
+            self.onFailure?(error)
+        }
     }
 
     /// Optional container short-name hint for the demuxer probe, derived from the
@@ -844,10 +1067,12 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     public func seek(to seconds: TimeInterval) async {
+        resetASSFrameForSeek()
         await engine.seek(to: seconds)
     }
 
     public func seek(to seconds: TimeInterval, kind: VideoSeekKind) async {
+        resetASSFrameForSeek()
         PlaybackTrace.note("engine.seek BEGIN target=\(String(format: "%.2f", seconds)) kind=\(kind) state=\(engine.state) curr=\(String(format: "%.2f", currentTime)) dur=\(String(format: "%.2f", duration))")
         await engine.seek(to: seconds)
         PlaybackTrace.note("engine.seek END   target=\(String(format: "%.2f", seconds)) state=\(engine.state) curr=\(String(format: "%.2f", currentTime))")
@@ -866,6 +1091,14 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     private func stopEngine(resetDisplayCriteria: Bool) {
+        liveScrubThumbnails = nil
+        bypassAudioTask?.cancel()
+        bypassAudioTask = nil
+        bypassAudio = BypassAudio()
+        invalidateScrubStills()
+        activeTransportReader?.closeAllReaders()
+        activeTransportReader = nil
+        clearASS()
         nativeSubtitleOutput?.detach()
         nativeSubtitleOutput = nil
         nativeSubtitleItem = nil
@@ -915,10 +1148,104 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
 
     public func selectAudioTrack(_ track: MediaTrack?) {
         guard let track else { return }
+        if bypassAudio.tracks.contains(where: { $0.id == track.id }) {
+            selectBypassAudio(track.id)
+            return
+        }
         engine.selectAudioTrack(index: track.id)
     }
 
+    // MARK: - Native HLS audio
+
+    /// Audio choices on the native HLS route, where AVPlayer plays the remote
+    /// playlist and Aether cannot switch its tracks (`selectableAudioTracks`).
+    /// AVPlayer can: alternate renditions through the item's audible media
+    /// selection group, and as a fallback, several audio tracks muxed into the
+    /// segments by enabling one.
+    private struct BypassAudio {
+        enum Source { case selectionGroup(AVMediaSelectionGroup, [AVMediaSelectionOption]), muxed([AVPlayerItemTrack]) }
+        var item: AVPlayerItem?
+        var source: Source?
+        var tracks: [MediaTrack] = []
+        var selectedID: Int?
+    }
+    private var bypassAudio = BypassAudio()
+    private var bypassAudioTask: Task<Void, Never>?
+    /// Clear of Aether's AVStream indices, so a choice is never misrouted.
+    nonisolated static let bypassAudioIDBase = 900_000
+
+    private func refreshBypassAudio() {
+        guard engine.videoRoute == .remoteBypass, let item = engine.currentAVPlayer?.currentItem,
+              item.status == .readyToPlay else {
+            if !bypassAudio.tracks.isEmpty || bypassAudio.item != nil { bypassAudio = BypassAudio() }
+            return
+        }
+        bypassAudioTask?.cancel()
+        bypassAudioTask = Task { @MainActor [weak self] in
+            let group = try? await item.asset.loadMediaSelectionGroup(for: .audible)
+            guard let self, !Task.isCancelled, self.engine.currentAVPlayer?.currentItem === item else { return }
+            var next = BypassAudio(item: item)
+            let options = group?.options.filter(\.isPlayable) ?? []
+            let muxed = item.tracks.filter { $0.assetTrack?.mediaType == .audio }
+            if let group, options.count > 1 {
+                next.source = .selectionGroup(group, options)
+                next.tracks = options.enumerated().map { index, option in
+                    Self.bypassAudioTrack(id: Self.bypassAudioIDBase + index, title: option.displayName,
+                                          language: option.extendedLanguageTag ?? option.locale?.identifier,
+                                          isDefault: group.defaultOption == option)
+                }
+                let selected = item.currentMediaSelection.selectedMediaOption(in: group)
+                next.selectedID = options.firstIndex { $0 == selected }.map { Self.bypassAudioIDBase + $0 }
+            } else if muxed.count > 1 {
+                next.source = .muxed(muxed)
+                var tracks: [MediaTrack] = []
+                for (index, track) in muxed.enumerated() {
+                    let language = try? await track.assetTrack?.load(.extendedLanguageTag)
+                    tracks.append(Self.bypassAudioTrack(
+                        id: Self.bypassAudioIDBase + index,
+                        title: language.flatMap { $0 } ?? "Track \(index + 1)", // l10n:content — fallback track label
+                        language: language ?? nil, isDefault: index == 0
+                    ))
+                }
+                guard self.engine.currentAVPlayer?.currentItem === item else { return }
+                next.tracks = tracks
+                next.selectedID = muxed.firstIndex(where: \.isEnabled).map { Self.bypassAudioIDBase + $0 }
+            }
+            HandoffDiagnostics.emit(
+                "audio BYPASS options=\(options.count) muxed=\(muxed.count) offered=\(next.tracks.count)"
+            )
+            let changed = next.tracks != self.bypassAudio.tracks || next.selectedID != self.bypassAudio.selectedID
+            self.bypassAudio = next
+            if changed {
+                self.audioTracks = next.tracks
+                self.onTracksChanged?()
+            }
+        }
+    }
+
+    private func selectBypassAudio(_ id: Int) {
+        guard let item = bypassAudio.item, engine.currentAVPlayer?.currentItem === item,
+              let source = bypassAudio.source else { return }
+        let index = id - Self.bypassAudioIDBase
+        switch source {
+        case .selectionGroup(let group, let options):
+            guard options.indices.contains(index) else { return }
+            item.select(options[index], in: group)
+        case .muxed(let tracks):
+            guard tracks.indices.contains(index) else { return }
+            for (offset, track) in tracks.enumerated() { track.isEnabled = offset == index }
+        }
+        bypassAudio.selectedID = id
+        HandoffDiagnostics.emit("audio BYPASS selected index=\(index)")
+        onTracksChanged?()
+    }
+
+    nonisolated static func bypassAudioTrack(id: Int, title: String, language: String?, isDefault: Bool) -> MediaTrack {
+        MediaTrack(id: id, kind: .audio, displayTitle: title, language: language, isDefault: isDefault)
+    }
+
     public func selectSubtitleTrack(_ track: MediaTrack?) {
+        clearASS()
         synchronizeNativeSubtitleOutput()
         if nativeSubtitleOutput != nil {
             nativeSubtitleSelectionID = track?.id
@@ -1016,6 +1343,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     /// the way out and then double-draws with the overlay on the way back.
     public func setNativeSubtitlesActive(_ active: Bool) {
         wantsNativeSubtitles = active
+        if active { assRenderer.clear() }
+        else if let assDocument { assRenderer.update(document: assDocument, events: assEvents) }
         nativeSubtitleOutput?.setSystemPresentation(active)
         applyNativeSubtitleSelection()
     }
@@ -1036,6 +1365,63 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     public func updateSubtitleStyle(_ style: SubtitleStyle) {
         avPlayerSubtitleStyle = style
         applyAVPlayerSubtitleStyle(to: engine.currentAVPlayer)
+    }
+
+    public func renderSubtitles(at time: TimeInterval, style: SubtitleStyle) {
+        guard let assDocument, !wantsNativeSubtitles else { return }
+        let authored = !style.followsSystemStyle && style.usesSourcePosition
+            && style.usesSourceColors && style.usesSourceEmphasis
+        if authored != rendersAuthoredASS {
+            rendersAuthoredASS = authored
+            if authored { assRenderer.update(document: assDocument, events: assEvents) }
+            else { assRenderer.clear(); publishPlainASS() }
+        }
+        if authored { assRenderer.tick(time, frameRate: engine.sourceVideoFrameRate) }
+    }
+
+    private func clearASS() {
+        assDocument = nil
+        assEvents = []
+        assRenderer.clear()
+    }
+
+    private func resetASSFrameForSeek() {
+        assRenderer.clear()
+        if let assDocument { assRenderer.update(document: assDocument, events: assEvents) }
+    }
+
+    private func publishPlainASS() {
+        guard let assDocument else { return }
+        var events: [ASSSubtitleEvent] = []
+        for event in assEvents {
+            ASSSubtitleEvent.appendPackets(event.packet, start: event.start, end: event.end, to: &events)
+        }
+        let cues = events.enumerated().compactMap { index, event -> CoreModels.SubtitleCue? in
+            let text = SubtitleCueParser.textFromASSPacket(event.packet, header: assDocument.header)
+            guard !text.string.isEmpty else { return nil }
+            return CoreModels.SubtitleCue(id: index, start: event.start, end: event.end, body: .text(text))
+        }
+        onSubtitleCues?(cues)
+    }
+
+    private func updateASS(events: [ASSSubtitleEvent], header: String, trackID: Int?) {
+        let width = max(1, Double(engine.sourceVideoWidth))
+        let height = max(1, Double(engine.sourceVideoHeight))
+        let scale = min(1, 1_920 / width, 1_080 / height)
+        let document = ASSSubtitleDocument(
+            identity: "\(outputLoadGeneration):\(trackID ?? -1):\(header)",
+            header: header,
+            fonts: engine.fontAttachments.map { ASSSubtitleFont(name: $0.filename, data: $0.data) },
+            size: CGSize(width: (width * scale).rounded(), height: (height * scale).rounded())
+        )
+        assDocument = document
+        assEvents = events
+        assRenderer.onFrame = { [weak self] cues in
+            guard let self, self.assDocument != nil, !self.wantsNativeSubtitles, self.rendersAuthoredASS else { return }
+            self.onSubtitleCues?(cues)
+        }
+        if rendersAuthoredASS { assRenderer.update(document: document, events: events) }
+        else { publishPlainASS() }
     }
 
     /// Re-applied whenever the engine rebuilds its player or session, since the
@@ -1299,7 +1685,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                         self.reportLiveFailure(
                             msg,
                             generation: generation,
-                            stage: "state"
+                            stage: .playback
                         )
                         return
                     }
@@ -1311,6 +1697,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                         "Plozzigen playback failed: "
                             + HandoffDiagnostics.redactedDetail(msg)
                     )
+                    let info = self.engine.errorInfo.flatMap { $0.message == msg ? $0 : nil }
+                    self.streamingFailure = PlozzigenPlaybackFailure.classify(info)
                     let err: AppError = .unknown(msg)
                     self.status = .failed(err)
                     if !self.suppressFailureCallbackForForegroundReload {
@@ -1380,6 +1768,18 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] cues in
                 guard let self, !self.usesNativeSubtitleCues else { return }
+                let selected = self.engine.subtitleTracks.first { $0.id == self.engine.activeSubtitleTrackIndex }
+                if let header = self.engine.sidecarASSHeader ?? selected?.assHeader {
+                    var events: [ASSSubtitleEvent] = []
+                    events.reserveCapacity(cues.count)
+                    for cue in cues {
+                        guard case .text(let packet) = cue.body, !packet.isEmpty else { continue }
+                        events.append(.init(packet: packet, start: cue.startTime, end: cue.endTime))
+                    }
+                    self.updateASS(events: events, header: header, trackID: selected?.id)
+                    return
+                }
+                if self.assDocument != nil { self.clearASS() }
                 // Map AetherEngine cues → Plozz's cue model inline so the
                 // element type is inferred (the module and the engine class share
                 // the name `AetherEngine`, so naming `AetherEngine.SubtitleCue`
@@ -1501,6 +1901,17 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
 
     private func syncTracks() {
         audioTracks = Self.selectableAudioTracks(from: engine.audioTracks, route: engine.videoRoute)
+        if engine.videoRoute == .remoteBypass {
+            // Aether publishes the item's tracks once it is ready: the moment
+            // AVPlayer's own audio choices can be read.
+            if bypassAudio.item === engine.currentAVPlayer?.currentItem, !bypassAudio.tracks.isEmpty {
+                audioTracks = bypassAudio.tracks
+            }
+            refreshBypassAudio()
+        } else if bypassAudio.item != nil {
+            bypassAudioTask?.cancel()
+            bypassAudio = BypassAudio()
+        }
         subtitleTracks = engine.subtitleTracks.map { track in
             MediaTrack(
                 id: track.id,
@@ -1537,7 +1948,8 @@ public enum PlozzigenVideoEngineFactory {
     ) -> (any VideoEngine)? {
         try? PlozzigenVideoEngine(
             networkFileResolver: networkFileResolver,
-            authenticatedHTTPResolver: authenticatedHTTPResolver
+            authenticatedHTTPResolver: authenticatedHTTPResolver,
+            readAheadPreference: { PlaybackReadAheadStore().load() }
         )
     }
 }

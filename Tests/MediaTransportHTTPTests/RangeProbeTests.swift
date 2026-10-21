@@ -1,3 +1,4 @@
+import CoreModels
 import XCTest
 @testable import MediaTransportHTTP
 
@@ -53,8 +54,8 @@ final class RangeProbeTests: XCTestCase {
             bodyLength: 1,
             resourceURL: url
         )
-        guard case .failure(.seekableRequiresStrongETag) = result else {
-            return XCTFail("expected seekableRequiresStrongETag for a weak probe ETag")
+        guard case .failure(.seekableRequiresValidator) = result else {
+            return XCTFail("expected a usable validator for a weak probe ETag")
         }
     }
 
@@ -65,9 +66,98 @@ final class RangeProbeTests: XCTestCase {
             bodyLength: 1,
             resourceURL: url
         )
-        guard case .failure(.seekableRequiresStrongETag) = result else {
-            return XCTFail("expected seekableRequiresStrongETag when ETag header is absent")
+        guard case .failure(.seekableRequiresValidator) = result else {
+            return XCTFail("expected a usable validator when ETag header is absent")
         }
+    }
+
+    func testProbeUsesLastModifiedWhenETagIsMissingOrWeak() throws {
+        let date = try XCTUnwrap(HTTPDate.parse("Wed, 14 Oct 2026 12:00:00 GMT"))
+        for etag in [nil, "W/\"weak\""] {
+            var headers = [
+                "Last-Modified": "Wed, 14 Oct 2026 12:00:00 GMT",
+                "Content-Range": "bytes 0-0/1000"
+            ]
+            headers["ETag"] = etag
+            let probe = try RangeProbe.validateProbe(
+                status: 206, headers: headers, bodyLength: 1, resourceURL: url
+            ).get()
+            XCTAssertEqual(probe.validator, .lastModified(date))
+            XCTAssertNil(probe.etag)
+            XCTAssertEqual(probe.totalLength, 1000)
+        }
+    }
+
+    func testProbePrefersStrongETagOverLastModified() throws {
+        let probe = try RangeProbe.validateProbe(
+            status: 206,
+            headers: [
+                "ETag": strongETag.rawValue, "Last-Modified": "Wed, 14 Oct 2026 12:00:00 GMT",
+                "Content-Range": "bytes 0-0/1000"
+            ],
+            bodyLength: 1, resourceURL: url
+        ).get()
+        XCTAssertEqual(probe.validator, .strongETag(strongETag))
+        XCTAssertEqual(probe.lastModified, HTTPDate.parse("Wed, 14 Oct 2026 12:00:00 GMT"))
+    }
+
+    func testProbeRejectsInvalidLastModified() {
+        for date in ["", "not a date", "Wed, 99 Oct 2026 12:00:00 GMT"] {
+            let result = RangeProbe.validateProbe(
+                status: 206, headers: ["Last-Modified": date, "Content-Range": "bytes 0-0/1000"],
+                bodyLength: 1, resourceURL: url
+            )
+            guard case .failure(.seekableRequiresValidator) = result else {
+                return XCTFail("invalid date must not enable unvalidated playback")
+            }
+        }
+    }
+
+    func testDateBasedReadSendsOnlyIfUnmodifiedSince() throws {
+        let date = try XCTUnwrap(HTTPDate.parse("Wed, 14 Oct 2026 12:00:00 GMT"))
+        let request = try RangeProbe.readRequest(
+            url: url, start: 100, end: 199, validator: .lastModified(date)
+        ).get()
+        XCTAssertEqual(request.value(forHTTPHeaderField: "If-Unmodified-Since"), "Wed, 14 Oct 2026 12:00:00 GMT")
+        XCTAssertNil(request.value(forHTTPHeaderField: "If-Match"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=100-199")
+    }
+
+    func testDateBasedReadRequiresUnchangedDateAndExactRange() throws {
+        let date = try XCTUnwrap(HTTPDate.parse("Wed, 14 Oct 2026 12:00:00 GMT"))
+        func validate(_ headers: [String: String], count: Int = 100, status: Int = 206) -> Result<Void, TransportError> {
+            RangeProbe.validateRead(
+                status: status, headers: headers, bodyLength: count,
+                expectedStart: 100, expectedEnd: 199, expectedTotal: 1000,
+                expectedValidator: .lastModified(date)
+            )
+        }
+        let valid = ["Last-Modified": HTTPDate.string(from: date), "Content-Range": "bytes 100-199/1000"]
+        XCTAssertNoThrow(try validate(valid).get())
+        for changed in [nil, "Thu, 15 Oct 2026 12:00:00 GMT", "invalid"] {
+            var headers = valid
+            headers["Last-Modified"] = changed
+            guard case .failure(.sourceChanged) = validate(headers) else {
+                return XCTFail("changed or missing date must fail")
+            }
+        }
+        for range in ["bytes 0-99/1000", "bytes 100-150/1000", "bytes 100-199/2000"] {
+            var headers = valid
+            headers["Content-Range"] = range
+            XCTAssertThrowsError(try validate(headers).get())
+        }
+        XCTAssertThrowsError(try validate(valid, count: 99).get())
+        XCTAssertThrowsError(try validate(valid, status: 200).get())
+        guard case .failure(.sourceChanged) = validate([:], count: 0, status: 412) else {
+            return XCTFail("date precondition failure must report a source change")
+        }
+    }
+
+    func testHTTPDateAcceptsLegacyFormatsAndFormatsCanonicalHeader() throws {
+        let date = try XCTUnwrap(HTTPDate.parse("Sun, 06 Nov 1994 08:49:37 GMT"))
+        XCTAssertEqual(HTTPDate.parse("Sunday, 06-Nov-94 08:49:37 GMT"), date)
+        XCTAssertEqual(HTTPDate.parse("Sun Nov  6 08:49:37 1994"), date)
+        XCTAssertEqual(HTTPDate.string(from: date), "Sun, 06 Nov 1994 08:49:37 GMT")
     }
 
     func testValidateProbeRejectsMismatchedContentRange() {

@@ -56,7 +56,7 @@ final class StubHTTPClient: HTTPClient, @unchecked Sendable {
             (
                 Data(response.json.utf8),
                 HTTPURLResponse(
-                    url: baseURL,
+                    url: baseURL.appendingPathComponent(endpoint.path),
                     statusCode: response.status,
                     httpVersion: nil,
                     headerFields: response.headers

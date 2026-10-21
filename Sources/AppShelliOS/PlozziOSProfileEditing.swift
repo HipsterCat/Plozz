@@ -17,15 +17,10 @@ struct PlozziOSSettingsAvatarButton: View {
     var body: some View {
         let profile = appModel.profiles.activeProfile
         Button(action: action) {
-            // Minimal label: the avatar already frames + circle-clips itself, so
-            // hand the toolbar a plain circular button and let IT own the glass
-            // pill and its full hit target — exactly like the sibling mute
-            // button, whose whole pill is tappable. Every extra modifier we tried
-            // here (`.buttonStyle(.plain)`, a second `.frame`/`.clipShape`, an
-            // explicit `.contentShape`) opted out of that system treatment and
-            // clamped taps to just the avatar. `.buttonBorderShape(.circle)`
-            // keeps the pill round.
-            ProfileAvatarView(profile: profile, size: size)
+            // Native toolbars can extract the Image without its view modifiers,
+            // especially on Mac. Bake the crop, size and original colors into
+            // the image while leaving the native button and hit target intact.
+            ProfileAvatarView(profile: profile, size: size, rendersAsImage: true)
         }
         .buttonBorderShape(.circle)
         .accessibilityLabel(Text("Settings for \(profile.name)"))

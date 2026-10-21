@@ -103,6 +103,7 @@ public struct KeychainStore: SecureStore {
                 query as CFDictionary,
                 [kSecValueData as String: data] as CFDictionary
             )
+            defer { recordSourceStatus(.keychainWrite, key: key, status: status, shared: useUserIndependent) }
             guard status == errSecItemNotFound else { return status }
 
             var addQuery = query
@@ -152,6 +153,7 @@ public struct KeychainStore: SecureStore {
             query[kSecMatchLimit as String] = kSecMatchLimitOne
             var result: AnyObject?
             let status = SecItemCopyMatching(query as CFDictionary, &result)
+            recordSourceStatus(.keychainRead, key: key, status: status, shared: useUserIndependent)
             return (status, result)
         }
 
@@ -202,10 +204,12 @@ public struct KeychainStore: SecureStore {
         let status = SecItemDelete(
             baseQuery(for: key, userIndependent: userIndependent) as CFDictionary
         )
+        recordSourceStatus(.keychainRemove, key: key, status: status, shared: userIndependent)
         if userIndependent, fallbackToPerUser {
             // Also clear any legacy per-user copy so a removed secret can't be
             // resurrected by the read-time recovery path in `string(for:)`.
             let perUser = SecItemDelete(baseQuery(for: key, userIndependent: false) as CFDictionary)
+            recordSourceStatus(.keychainRemove, key: key, status: perUser, shared: false)
             let sharedSucceeded = status == errSecSuccess
                 || status == errSecItemNotFound
                 || status == errSecMissingEntitlement
@@ -245,15 +249,37 @@ public struct KeychainStore: SecureStore {
             return query
         }
         let status = SecItemDelete(serviceQuery(useUserIndependent: userIndependent) as CFDictionary)
+        recordSourceStatus(.sourceErase, status: status, shared: userIndependent)
         let sharedOK = status == errSecSuccess || status == errSecItemNotFound
             || status == errSecMissingEntitlement || status == errSecParam
         guard sharedOK else { throw KeychainError.unexpectedStatus(status) }
         if userIndependent, fallbackToPerUser {
             let perUser = SecItemDelete(serviceQuery(useUserIndependent: false) as CFDictionary)
+            recordSourceStatus(.sourceErase, status: perUser, shared: false)
             guard perUser == errSecSuccess || perUser == errSecItemNotFound else {
                 throw KeychainError.unexpectedStatus(perUser)
             }
         }
+
+    }
+
+    private func recordSourceStatus(
+        _ event: LiveTVSourceDiagnostics.Event, key: String? = nil, status: OSStatus, shared: Bool
+    ) {
+        guard service == LiveTVSourcesStore.baseKey else { return }
+        #if os(tvOS)
+        let sharedPartition = shared
+        #else
+        let sharedPartition = false
+        #endif
+        var identities: [LiveTVSourceDiagnostics.Identity: String] = [:]
+        identities[.storageKey] = key
+        LiveTVSourceDiagnostics.shared.record(
+            event, identities: identities,
+            flags: [.sharedPartition: sharedPartition, .present: status == errSecSuccess],
+            stage: .completed, error: NSError(domain: NSOSStatusErrorDomain, code: Int(status)),
+            deduplicate: event == .keychainRead
+        )
     }
 }
 #endif

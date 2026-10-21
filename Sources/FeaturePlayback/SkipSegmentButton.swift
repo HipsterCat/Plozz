@@ -50,6 +50,7 @@ struct SkipSegmentButton: View {
         .animation(.spring(response: 0.32, dampingFraction: 0.82), value: model.skipSegments.isPresentingButton)
         .animation(.spring(response: 0.32, dampingFraction: 0.82), value: model.autoSkipNotice)
         .onAppear { focused = true }
+        .playerPlatformAppearance()
     }
 
     @ViewBuilder
@@ -102,7 +103,7 @@ struct SkipSegmentButton: View {
             Image(systemName: "forward.fill")
             Text(notice.label)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(Color.primary)
         .padding(.horizontal, 28)
         .padding(.vertical, 14)
 
@@ -111,7 +112,7 @@ struct SkipSegmentButton: View {
                 .plozzFrostedBackground(Capsule(style: .continuous))
                 .plozzFrostedBorder(Capsule(style: .continuous))
         } else if #available(iOS 26.0, tvOS 26.0, *) {
-            label.glassEffect(.regular, in: Capsule(style: .continuous))
+            label.background { PlayerNativeGlassSurface(Capsule(style: .continuous)) }
         } else {
             label.background(
                 Capsule(style: .continuous).fill(.ultraThinMaterial)

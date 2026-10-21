@@ -1457,6 +1457,9 @@ final class WatchlistReconcilerTests: XCTestCase {
 
     func testRateLimitedStatusIsClassifiedAsRetryableNotPermanent() {
         let policy = WatchlistRetryPolicy()
+        let restricted = policy.decision(for: AppError.accessRestricted, attempt: 0)
+        XCTAssertEqual(restricted.classification, .permanent)
+        XCTAssertNil(restricted.retryDelay)
         let decision = policy.decision(
             for: WatchlistDestinationError.rateLimited(retryAfter: 42),
             attempt: 0

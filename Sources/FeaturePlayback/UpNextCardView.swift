@@ -84,6 +84,7 @@ struct UpNextCardView: View {
         .ignoresSafeArea()
         .animation(.spring(response: 0.32, dampingFraction: 0.82), value: model.upNextCard.isPresenting)
         .onAppear { focused = true }
+        .playerPlatformAppearance()
     }
 
     @ViewBuilder
@@ -97,20 +98,20 @@ struct UpNextCardView: View {
                         .font(.system(size: metrics.cardSubtitleFontSize * 0.78, weight: .heavy))
                         .tracking(1.2)
                         .textCase(.uppercase)
-                        .foregroundStyle(Color.white.opacity(0.65))
+                        .foregroundStyle(Color.primary.opacity(0.65))
                     // Show name leads. It's highly variable (short sitcoms →
                     // very long anime titles), so it shrinks a step, then wraps to
                     // two lines, then truncates — always staying readable.
                     info.showName
                         .font(.system(size: metrics.cardSubtitleFontSize * 1.2, weight: .semibold))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(Color.primary)
                         .lineLimit(2)
                         .minimumScaleFactor(0.7)
                         .truncationMode(.tail)
                     if let meta = info.metaLine {
                         Text(meta)
                             .font(.system(size: metrics.cardSubtitleFontSize * 0.9, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.75))
+                            .foregroundStyle(Color.primary.opacity(0.75))
                             .lineLimit(1)
                     }
                 }
@@ -165,6 +166,9 @@ struct UpNextCardView: View {
 
     @ViewBuilder
     private func thumbnail(for info: UpNextInfo) -> some View {
+        let source = EpisodeArtworkSource(
+            item: info.episode, spoilerSettings: info.spoilerSettings, policy: model.artworkPolicy
+        )
         // Sized to the measured text-column height at 16:9, so the artwork spans
         // exactly the same vertical extent as the eyebrow/title/subtitle block —
         // top and bottom edges aligned — instead of a fixed height that the larger
@@ -172,7 +176,11 @@ struct UpNextCardView: View {
         Color.clear
             .frame(width: mediaHeight * 16.0 / 9.0, height: mediaHeight)
             .overlay {
-                FallbackAsyncImage(urls: info.thumbnailURLs, variant: .landscapeCard) {
+                FallbackAsyncImage(
+                    references: source.references, variant: .landscapeCard,
+                    artworkPolicy: source.policy,
+                    asyncFallbackURL: source.fallbackURL, pinIdentity: source.pinIdentity
+                ) {
                     ZStack {
                         // Fixed white, NOT palette.fill: over the player's variable
                         // video backdrop (scrim-relative), so it must not track theme.
@@ -200,7 +208,7 @@ struct UpNextCardView: View {
         ZStack {
             // Subtle circular backing so it reads as a tappable play button.
             Circle()
-                .fill(Color.white.opacity(0.15))
+                .fill(Color.primary.opacity(0.15))
 
             if model.skipMode == .autoDelay, let deadline = model.upNextCard.advanceAtSeconds {
                 let remaining = deadline - model.currentSeconds
@@ -210,7 +218,7 @@ struct UpNextCardView: View {
 
             Image(systemName: "play.fill")
                 .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(Color.primary)
                 // Optical centering — a play triangle reads slightly left of centre.
                 .offset(x: 2)
         }
@@ -224,7 +232,7 @@ private struct CountdownRing: View {
     let fraction: Double
 
     var body: some View {
-        let foreground = Color.white
+        let foreground = Color.primary
         ZStack {
             Circle()
                 .stroke(foreground.opacity(0.22), lineWidth: UpNextCardView.ringStroke)
@@ -238,35 +246,8 @@ private struct CountdownRing: View {
     }
 }
 
-/// The card's surface: a dark scrim-relative panel that indicates focus with a
-/// **bright ring and a lift**, never by flooding to white.
-///
-/// This is the app's existing "bright ring" focus treatment — the one
-/// `PlozzFocusableCardModifier` uses on its Reduce Transparency path (same 4pt
-/// stroke at 0.9 opacity over the card's own surface, plus a focus shadow), applied
-/// here unconditionally.
-///
-/// Why not `PlozzCardButtonStyle`: its glass path falls back to `palette.liftSurface`
-/// — a solid white lift — whenever Reduce Transparency is on, which is exactly the
-/// heavy white flood this card is trying to avoid, and it would make the card's own
-/// light text illegible.
-///
-/// Why white rather than `palette.primaryText`: the shared version sits on a themed
-/// page, where primary text contrasts with the surface. This card floats over
-/// arbitrary video on a fixed dark panel, so a light theme's dark primary text would
-/// vanish into it. Fixed white matches the rest of this card's scrim-relative
-/// palette.
-/// The focus treatment for a card floating over live video.
-///
-/// Shared by the Up Next card and the Cast tab's people, because they are the
-/// same problem: a surface with arbitrary footage behind it. The app's ordinary
-/// glass card fills with a light lift, which over video reads as the card
-/// changing colour and inverts its labels — so this keeps the card's own dark
-/// scrim and marks focus with a bright ring and a lift instead, leaving the
-/// content legible whatever is playing underneath.
-///
-/// Deliberately fixed white rather than the theme's primary text: a light theme's
-/// near-black would vanish into this dark panel.
+/// Shared Up Next/Cast focus treatment: keep the surface and mark focus with
+/// a contrasting ring and lift. The fallback follows the app's appearance.
 struct PlayerOverVideoCardStyle: ButtonStyle {
     let focused: Bool
     let cornerRadius: CGFloat
@@ -283,18 +264,21 @@ struct PlayerOverVideoCardStyle: ButtonStyle {
     /// to animate out of is measuring a position the viewer is actively
     /// changing.
     var pressScale: CGFloat = 0.94
+    var mediaGlass = false
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         return configuration.label
-            .background { PlayerOverVideoSurface(focused: focused, cornerRadius: cornerRadius) }
+            .background {
+                PlayerOverVideoSurface(focused: focused, cornerRadius: cornerRadius, mediaGlass: mediaGlass)
+            }
             .overlay {
                 // Focus only. A resting hairline reads as an outline rather than
                 // an edge — tolerable on one floating card, busy repeated across a
                 // row of them — and the scrim already separates the card from the
                 // footage behind it.
                 shape.strokeBorder(
-                    Color.white.opacity(focused ? 0.9 : 0),
+                    Color.primary.opacity(focused ? 0.9 : 0),
                     lineWidth: focused ? 4 : 0
                 )
             }
@@ -313,6 +297,7 @@ struct PlayerOverVideoCardStyle: ButtonStyle {
 struct PlayerOverVideoSurface: View {
     var focused: Bool = false
     let cornerRadius: CGFloat
+    var mediaGlass = false
 
     /// Accessibility and user intent. Takes the flat scrim, because a viewer who
     /// asked for less transparency wants exactly that.
@@ -321,40 +306,20 @@ struct PlayerOverVideoSurface: View {
     /// paying for live refraction, NOT to stop being translucent, and the two
     /// wants are different enough to deserve different surfaces.
     @Environment(\.plozzReducePanelGlass) private var reducePanelGlass
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         surface(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
-    /// Real Liquid Glass on focus, a plain scrim otherwise.
-    ///
-    /// Focus is where glass earns its keep — one card at a time, refracting the
-    /// footage behind it, which is exactly the material's purpose. At rest a scrim
-    /// keeps the label legible over arbitrary video without paying for a live
-    /// backdrop blur on every card in the row.
-    ///
-    /// Reduce Transparency takes the scrim in both states. Deliberately NOT the
-    /// shared card's `liftSurface`, which is a solid white lift: over video that
-    /// floods the card and inverts its labels, which is the reason this style
-    /// exists rather than `PlozzCardButtonStyle`.
     @ViewBuilder
     private func surface(_ shape: RoundedRectangle) -> some View {
-        let scrim = shape.fill(Color.black.opacity(focused ? 0.72 : 0.55))
+        let scrim = shape.fill(colorScheme == .light
+            ? PlozzFrostedSurface.fill(colorScheme: .light, raised: focused)
+            : .black.opacity(focused ? 0.72 : 0.55))
         if reduceTransparency {
-            // Never lean on translucency. Deliberately the scrim rather than the
-            // shared card's `liftSurface`, which is a solid white lift: over video
-            // that floods the card and inverts its labels.
             scrim
         } else if reducePanelGlass {
-            // Frosted, not flat. A static system blur still separates the card
-            // from the footage and still reads as a floating surface; it simply
-            // does not resample the video every frame. Focus keeps its lighter
-            // fill so the affordance survives.
-            //
-            // The edge is the same one every other frosted surface wears. These
-            // cards sit in a row over footage that is often dark at the bottom
-            // of the frame, where frost alone leaves them without a boundary.
-            // Dropped on focus, which already has a white ring of its own.
             shape
                 .fill(.clear)
                 .plozzFrostedBackground(shape, raised: focused)
@@ -365,10 +330,11 @@ struct PlayerOverVideoSurface: View {
             // as a flat scrim. Drawn as a background underlay rather than wrapped
             // around the content: wrapping `.glassEffect` hangs tvOS 27's focus
             // engine (see PlozzGlassCardModifier).
-            Color.clear.glassEffect(
-                focused ? .regular.tint(.white.opacity(0.18)) : .regular,
-                in: .rect(cornerRadius: cornerRadius)
-            )
+            #if os(iOS)
+            PlayerNativeGlassSurface(shape, glass: mediaGlass ? .clear : .regular)
+            #else
+            PlayerNativeGlassSurface(shape)
+            #endif
         } else {
             scrim
         }

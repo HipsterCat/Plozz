@@ -1,7 +1,293 @@
 import XCTest
+import UIKit
 
 @MainActor
 final class LibraryHeldScrollTests: XCTestCase {
+    func testVisibleCardsAndNavigationAlignInEveryLibraryMode() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        defer { app.terminate() }
+        for pinnedSidebar in [true, false] {
+            for customFocus in [false, true] {
+                for borderless in [true, false] {
+                    app.launchArguments = [
+                        "--library-held-scroll-fixture", "--library-interaction-fixture"
+                    ]
+                    if pinnedSidebar { app.launchArguments.append("--library-alignment-pinned-sidebar") }
+                    if customFocus { app.launchArguments.append("--library-mode-custom-focus-fixture") }
+                    if borderless { app.launchArguments.append("--borderless") }
+                    app.launch()
+                    let bar = app.descendants(matching: .any)
+                        .matching(identifier: "library-content-mode").firstMatch
+                    XCTAssertTrue(bar.waitForExistence(timeout: 15), app.debugDescription)
+                    let originalFrame = bar.frame
+                    for (mode, title) in [
+                        ("recommended", "A: Library item 000"), ("titles", "A: Library item 000"),
+                        ("collections", "Collection item 0"), ("playlists", "Playlist item 0")
+                    ] {
+                        try selectMode(mode, in: app)
+                        let cards = !customFocus && mode != "recommended" ? app.cells : app.buttons
+                        let card = cards.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+                        XCTAssertTrue(card.waitForExistence(timeout: 15), app.debugDescription)
+                        XCTAssertFalse(card.hasFocus, "Measure resting artwork with focus on navigation.")
+                        XCTAssertEqual(bar.frame, originalFrame, "Changing pages must not move or resize navigation.")
+                        let screenshot = app.screenshot()
+                        let image = try XCTUnwrap(screenshot.image.cgImage)
+                        let scale = CGFloat(image.width) / app.frame.width
+                        let artworkLeft = try blueArtworkLeadingEdge(in: image, y: Int(card.frame.midY * scale)) / scale
+                        let visibleLeft = artworkLeft - (borderless ? 0 : 12)
+                        let context = "\(mode)-pinned-\(pinnedSidebar)-custom-\(customFocus)-borderless-\(borderless)"
+                        let attachment = XCTAttachment(screenshot: screenshot)
+                        attachment.name = "library-visible-keyline-\(context)"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+                        print("LIBRARY_VISIBLE_KEYLINE \(context) navigation=\(bar.frame.minX) card=\(visibleLeft)")
+                        XCTAssertEqual(visibleLeft, bar.frame.minX, accuracy: 1,
+                                       "Align the rendered card surface, not its invisible padded slot: \(context)")
+                    }
+                    app.terminate()
+                }
+            }
+        }
+    }
+
+    private func blueArtworkLeadingEdge(in image: CGImage, y: Int) throws -> CGFloat {
+        XCTAssertTrue((0..<image.height).contains(y), "The sampled artwork must be on screen.")
+        let row = try XCTUnwrap(image.cropping(to: CGRect(x: 0, y: y, width: image.width, height: 1)))
+        var pixels = [UInt8](repeating: 0, count: image.width * 4)
+        try pixels.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(
+                data: buffer.baseAddress, width: image.width, height: 1, bitsPerComponent: 8,
+                bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(row, in: CGRect(x: 0, y: 0, width: image.width, height: 1))
+        }
+        let edge = try XCTUnwrap((0..<image.width).first { x in
+            pixels[x * 4] < 25 && (110...150).contains(pixels[x * 4 + 1]) && pixels[x * 4 + 2] > 240
+        }, "The fixture's blue artwork must actually render before its alignment can pass.")
+        return CGFloat(edge)
+    }
+
+    func testLibraryHeaderStaysFixedAcrossModesAndFocusedTabsKeepEvenInsets() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        defer { app.terminate() }
+        for pinnedSidebar in [true, false] {
+            for opaque in [false, true] {
+                app.launchArguments = ["--library-showcase-fixture"]
+                if pinnedSidebar { app.launchArguments.append("--library-showcase-pinned-sidebar") }
+                if opaque { app.launchArguments.append("--library-showcase-opaque-controls") }
+                app.launch()
+                let bar = app.descendants(matching: .any)
+                    .matching(identifier: "library-content-mode").firstMatch
+                let heading = app.staticTexts["media-row-title"].firstMatch
+                let recommended = app.buttons["library-content-mode-recommended"]
+                XCTAssertTrue(heading.waitForExistence(timeout: 15), app.debugDescription)
+                XCTAssertTrue(bar.waitForExistence(timeout: 5), app.debugDescription)
+                for _ in 0..<8 where !recommended.hasFocus { XCUIRemote.shared.press(.up) }
+                XCTAssertTrue(recommended.hasFocus, app.debugDescription)
+                Thread.sleep(forTimeInterval: 0.3)
+                let screenshot = XCTAttachment(screenshot: app.screenshot())
+                screenshot.name = "library-tabs-pinned-\(pinnedSidebar)-opaque-\(opaque)"
+                screenshot.lifetime = .keepAlways
+                add(screenshot)
+
+                XCTAssertEqual(bar.frame.minX, heading.frame.minX, accuracy: 1,
+                               "Align the mode container to Showcase without moving the shared content.")
+                let description = app.staticTexts["showcase-description"]
+                XCTAssertTrue(description.waitForExistence(timeout: 5), app.debugDescription)
+                XCTAssertEqual(description.frame.minX, heading.frame.minX, accuracy: 1,
+                               "Showcase details, row headings, and navigation must share one keyline.")
+                let expectedFrame = bar.frame
+                for mode in ["recommended", "titles", "collections", "playlists"] {
+                    let tab = app.buttons["library-content-mode-\(mode)"]
+                    if mode != "recommended" { XCUIRemote.shared.press(.right) }
+                    XCTAssertTrue(tab.hasFocus, app.debugDescription)
+                    Thread.sleep(forTimeInterval: 0.2)
+                    let top = tab.frame.minY - bar.frame.minY
+                    let bottom = bar.frame.maxY - tab.frame.maxY
+                    XCTAssertEqual(top, 6, accuracy: 1, "Focus must preserve the capsule's inner padding.")
+                    XCTAssertEqual(bottom, top, accuracy: 1)
+                    if mode == "recommended" {
+                        XCTAssertEqual(tab.frame.minX - bar.frame.minX, top, accuracy: 1,
+                                       "The first focused pill must remain concentric with its container.")
+                    } else if mode == "playlists" {
+                        XCTAssertEqual(bar.frame.maxX - tab.frame.maxX, top, accuracy: 1,
+                                       "The last focused pill must retain the same trailing clearance.")
+                    }
+                }
+                for mode in ["titles", "collections", "playlists", "recommended"] {
+                    try selectMode(mode, in: app)
+                    XCTAssertEqual(bar.frame.minX, expectedFrame.minX, accuracy: 1,
+                                   "Switching to \(mode) must not move the navigation horizontally.")
+                    XCTAssertEqual(bar.frame.minY, expectedFrame.minY, accuracy: 1,
+                                   "Switching to \(mode) must not move the navigation vertically.")
+                    XCTAssertEqual(bar.frame.width, expectedFrame.width, accuracy: 1)
+                    XCTAssertEqual(bar.frame.height, expectedFrame.height, accuracy: 1)
+                }
+                app.terminate()
+            }
+        }
+    }
+
+    func testLibraryShowcaseKeepsHomesMetadataToRowHeadingSpacing() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        defer { app.terminate() }
+        var gaps: [CGFloat] = []
+        for homeComparison in [true, false] {
+            app.launchArguments = ["--library-showcase-fixture"]
+            if homeComparison { app.launchArguments.append("--library-showcase-home-comparison") }
+            app.launch()
+            let description = app.staticTexts["showcase-description"]
+            XCTAssertTrue(description.waitForExistence(timeout: 15), app.debugDescription)
+            let heading = app.staticTexts["Continue Watching"].firstMatch
+            XCTAssertTrue(heading.waitForExistence(timeout: 5))
+            Thread.sleep(forTimeInterval: 0.4)
+            gaps.append(heading.frame.minY - description.frame.maxY)
+            let image = XCTAttachment(screenshot: app.screenshot())
+            image.name = homeComparison ? "home-showcase-clearance" : "library-showcase-clearance"
+            image.lifetime = .keepAlways
+            add(image)
+            app.terminate()
+        }
+        print("SHOWCASE_CLEARANCE home=\(gaps[0]) library=\(gaps[1])")
+        XCTAssertEqual(gaps[0], 40, accuracy: 1, "Home's existing breathing room must not change.")
+        XCTAssertEqual(gaps[1], gaps[0], accuracy: 1,
+                       "The library header must not compress the hidden details footprint.")
+    }
+
+    func testSelectingEveryLibraryModeKeepsRemoteFocusOnThatTab() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--library-held-scroll-fixture", "--library-interaction-fixture",
+            "--library-mode-loading-fixture", "--borderless",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        let modes = ["recommended", "titles", "collections", "playlists"]
+        XCTAssertTrue(app.buttons["library-content-mode-recommended"].waitForExistence(timeout: 15))
+        for source in modes {
+            try selectMode(source, in: app)
+            for destination in modes where destination != source {
+                try selectMode(destination, in: app)
+                try selectMode(source, in: app)
+            }
+        }
+    }
+
+    func testLibraryModeFocusSurvivesEmptyAndFailedPages() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        defer { app.terminate() }
+        for state in ["empty", "failed"] {
+            app.launchArguments = [
+                "--library-held-scroll-fixture", "--library-interaction-fixture",
+                "--library-mode-loading-fixture", "--library-mode-\(state)-fixture",
+            ]
+            app.launch()
+            XCTAssertTrue(app.buttons["library-content-mode-recommended"].waitForExistence(timeout: 15))
+            for mode in ["collections", "playlists", "titles", "recommended"] {
+                try selectMode(mode, in: app)
+            }
+            app.terminate()
+        }
+    }
+
+    func testCustomLibraryGridKeepsRemoteModeFocus() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--library-held-scroll-fixture", "--library-interaction-fixture",
+            "--library-mode-loading-fixture", "--library-mode-custom-focus-fixture",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["library-content-mode-recommended"].waitForExistence(timeout: 15))
+        for mode in ["collections", "playlists", "titles", "recommended"] {
+            try selectMode(mode, in: app)
+        }
+    }
+
+    func testHeaderLetterMenuSelectsAndFocusesItsNativeDestination() throws {
+        try checkHeaderLetterJump(customFocus: false)
+    }
+
+    func testHeaderLetterMenuSelectsAndFocusesItsCustomDestination() throws {
+        try checkHeaderLetterJump(customFocus: true)
+    }
+
+    private func checkHeaderLetterJump(customFocus: Bool) throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = ["--library-held-scroll-fixture", "--library-interaction-fixture"]
+        if customFocus { app.launchArguments.append("--library-mode-custom-focus-fixture") }
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["library-content-mode-recommended"].waitForExistence(timeout: 15))
+        try selectMode("titles", in: app)
+        let alphabet = app.buttons["library-alphabet-menu"]
+        XCTAssertTrue(alphabet.waitForExistence(timeout: 5))
+        for _ in 0..<8 where !(try focusIsWithin(alphabet, in: app)) {
+            XCUIRemote.shared.press(.right)
+        }
+        XCTAssertTrue(try focusIsWithin(alphabet, in: app), app.debugDescription)
+        XCUIRemote.shared.press(.select)
+        let letter = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'Jump to M' OR label == 'M'")).firstMatch
+        XCTAssertTrue(letter.waitForExistence(timeout: 5), app.debugDescription)
+        for _ in 0..<4 where !(try focusIsWithin(letter, in: app)) { XCUIRemote.shared.press(.down) }
+        XCTAssertTrue(try focusIsWithin(letter, in: app), app.debugDescription)
+        XCUIRemote.shared.press(.select)
+        let landed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.focusedIndex(in: app) == 250 }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [landed], timeout: 8), .completed,
+                       "A real menu selection must hand focus to its destination, not just scroll.")
+        XCUIRemote.shared.press(.select)
+        let detail = app.staticTexts["library-detail-identity"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertEqual(detail.label, "held-250|fixture")
+    }
+
+    private func focusIsWithin(_ element: XCUIElement, in app: XCUIApplication) throws -> Bool {
+        guard let frame = focusedFrame(in: try app.snapshot()) else { return false }
+        return element.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
+    }
+
+    private func selectMode(_ mode: String, in app: XCUIApplication) throws {
+        let tab = app.buttons["library-content-mode-\(mode)"]
+        for _ in 0..<8 where !tab.hasFocus {
+            if let current = focusedFrame(in: try app.snapshot()) {
+                XCUIRemote.shared.press(current.midY > tab.frame.maxY ? .up :
+                    (current.midX > tab.frame.midX ? .left : .right))
+            } else {
+                XCUIRemote.shared.press(.up)
+            }
+        }
+        XCTAssertTrue(tab.hasFocus, "\(mode) must receive focus before selection. \(app.debugDescription)")
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(tab.hasFocus, "\(mode) must retain focus during loading. \(app.debugDescription)")
+        Thread.sleep(forTimeInterval: 0.7)
+        XCTAssertEqual(tab.value as? String, "Selected", app.debugDescription)
+        XCTAssertTrue(tab.hasFocus, "\(mode) must retain focus after loading. \(app.debugDescription)")
+        if mode != "recommended" {
+            let sort = app.buttons["library-sort-menu"]
+            XCTAssertTrue(sort.exists, app.debugDescription)
+            XCTAssertEqual(sort.frame.midY, tab.frame.midY, accuracy: 4,
+                           "Sort must share the navigation row in \(mode).")
+            let alphabet = app.buttons["library-alphabet-menu"]
+            if alphabet.exists {
+                XCTAssertEqual(alphabet.frame.midY, tab.frame.midY, accuracy: 4,
+                               "Jump to letter must share the navigation row in \(mode).")
+                XCTAssertLessThanOrEqual(alphabet.frame.maxX, sort.frame.minX,
+                                         "Header menus must not overlap.")
+            }
+        }
+    }
+
     func testNativeContextMenuNavigationRestoresTheSameScrolledCell() throws {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
@@ -9,6 +295,7 @@ final class LibraryHeldScrollTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["library-hold-status"].waitForExistence(timeout: 15))
+        try selectMode("titles", in: app)
         for _ in 0..<4 where focusedIndex(in: app) == nil { XCUIRemote.shared.press(.down) }
         for _ in 0..<6 { XCUIRemote.shared.press(.down) }
         let selected = try XCTUnwrap(focusedIndex(in: app))

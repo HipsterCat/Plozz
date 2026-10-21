@@ -21,7 +21,7 @@ public struct TouchHeroActionButtonStyle: ButtonStyle {
 
     public func makeBody(configuration: Configuration) -> some View {
         styledLabel(configuration)
-            .contentShape(circular ? AnyShape(Circle()) : AnyShape(Capsule()))
+            .contentShape(circular ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 24)))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
@@ -31,6 +31,7 @@ public struct TouchHeroActionButtonStyle: ButtonStyle {
     private func styledLabel(_ configuration: Configuration) -> some View {
         if circular {
             configuration.label
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                 .foregroundStyle(kind == .primary ? palette.backgroundBase : palette.primaryText)
                 .frame(width: 48, height: 48)
                 .background {
@@ -52,15 +53,18 @@ public struct TouchHeroActionButtonStyle: ButtonStyle {
                 .padding(.vertical, 12)
                 .frame(minWidth: minimumWidth, minHeight: 48)
                 .background {
-                    Capsule()
+                    // Bounded corners keep multiline and accessibility-size text
+                    // inside the surface instead of turning tall buttons into ovals.
+                    RoundedRectangle(cornerRadius: 24)
                         .fill(backgroundColor)
                         .overlay {
                             if kind == .secondary {
-                                Capsule().strokeBorder(palette.primaryText.opacity(0.2), lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 24)
+                                    .strokeBorder(palette.primaryText.opacity(0.2), lineWidth: 1)
                             }
                         }
                 }
-                .contentShape(Capsule())
+                .contentShape(RoundedRectangle(cornerRadius: 24))
         }
     }
 

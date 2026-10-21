@@ -98,22 +98,13 @@ final class SeriesDetailBrowserPolicyTests: XCTestCase {
 
     func testWholeSeriesEntryClaimsHeroPlay() {
         XCTAssertTrue(SeriesDetailEntryPolicy.claimsHeroPlay(
-            hasOpenedOnce: false,
-            hasInitialEpisode: false
-        ))
-    }
-
-    func testIndividualEpisodeEntryLeavesInitialFocusToRail() {
-        XCTAssertFalse(SeriesDetailEntryPolicy.claimsHeroPlay(
-            hasOpenedOnce: false,
-            hasInitialEpisode: true
+            hasOpenedOnce: false
         ))
     }
 
     func testReturningPageDoesNotReclaimHeroPlay() {
         XCTAssertFalse(SeriesDetailEntryPolicy.claimsHeroPlay(
-            hasOpenedOnce: true,
-            hasInitialEpisode: false
+            hasOpenedOnce: true
         ))
     }
 

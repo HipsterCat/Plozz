@@ -40,10 +40,11 @@ final class MetadataSourceAttributionTests: XCTestCase {
         }
     }
 
-    func testAppLegalCreditsCoverFeaturedDiscoveryCatalogs() throws {
+    func testAppLegalCreditsCoverDiscoveryCatalogs() throws {
         for title in ["TMDB", "TheTVDB", "OMDb & AniList", "TVmaze"] {
             let entry = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == title })
-            XCTAssertTrue(entry.detail.contains("Featured discovery"), title)
+            XCTAssertTrue(entry.detail.contains("Discovery"), title)
+            XCTAssertFalse(entry.detail.contains("Featured"), title)
         }
     }
 

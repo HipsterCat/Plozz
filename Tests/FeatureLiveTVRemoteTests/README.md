@@ -46,11 +46,52 @@ Use a new result-bundle path for each run. Existing DerivedData can be reused; d
 not clear shared caches. The generated `.xcodeproj` is ignored by Git. This command
 does not regenerate the shipping app project or install the app on an Apple TV.
 
+### Mobile Sources navigation
+
+The `LiveTVMobileSourcesFixture` scheme hosts the same Sources content on iOS.
+After generating the fixture project above, select an iOS 26-or-newer iPhone or
+iPad simulator and run:
+
+```bash
+export IOS_SIMULATOR_ID='REPLACE_WITH_IOS_SIMULATOR_UDID'
+export GIT_CONFIG_PARAMETERS="'safe.bareRepository=all'"
+tools/with-apple-build-lease.sh plozz-mobile-sources-fixture -- bash -c '
+  set -e
+  source tools/lib/swift-package-storage.sh
+  configure_plozz_package_resolution "$PWD/.build/package-workspaces/mobile-source-navigation"
+  xcodebuild \
+    -project Tests/FeatureLiveTVRemoteTests/LiveTVSearchFixture.xcodeproj \
+    -scheme LiveTVMobileSourcesFixture \
+    -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+    -derivedDataPath .build/mobile-source-navigation \
+    -resultBundlePath ".build/mobile-source-results-$(date +%Y%m%d-%H%M%S).xcresult" \
+    "${PACKAGE_RESOLUTION_ARGS[@]}" \
+    -parallel-testing-enabled NO \
+    -collect-test-diagnostics never \
+    test
+'
+```
+
+The touch tests cover both the typed Sources entry and Live TV Settings. Saved
+sources appear as compact rows, with editing, scans, guide settings and diagnostics
+on the selected source's page. Every action must push only its intended page and
+Back must return one level. Subpage titles must use the same compact, centered
+native navigation-bar geometry on iPhone and iPad. Read-only navigation requires zero writes/requests;
+confirmed removal writes once and returns to the source list. Empty playlist
+forms have Close rather than Done and reveal guide fields only after Add guide.
+Onboarding checks whole-row actions, phone-sized bounds, large text and RTL/light
+appearance, with screenshot attachments for visual review.
+
 ## Coverage and isolation
 
 - Actual `PrototypeBrowser` inside native `PrototypeNativeSearch`: keyboard entry,
   every row in a 30-channel guide, reverse traversal, keyboard reentry, right-to-left
   programme rows, and Back from empty and filtered searches.
+- Playback and multiview controls: actual remote focus, dark labels inside the
+  bright focused fill, transport-matched height, visible multiview action titles,
+  accessible transport titles, and working native Layout menus in glass and reduced-transparency
+  modes. The fixture uses the guide's native color-scheme environment and a
+  zoom-capable engine with audio/subtitle choices.
 - Existing package Search focus, dismissal, retained-state, and row-boundary tests
   run in a scene-backed unit-test host.
 - Existing native fullscreen tests verify output-surface identity, pending startup,
@@ -62,6 +103,13 @@ does not regenerate the shipping app project or install the app on an Apple TV.
   return, inspect the no-server state, and navigate a
   typed Sources destination into its child editor and back. They assert zero
   configured sources, writes, and HTTP(S) requests, and no free-channel offers.
+  A typed Settings entry also pushes the actual Live TV split page before opening
+  the playlist editor and returning through both pages. Form coverage measures
+  native field/action bounds, adds and removes guides with the remote, and checks
+  that invalid input stays on the form without persistence or network requests.
+  Rendered-text checks verify that native source actions remain readable both
+  focused and unfocused in Dark and Light appearances without requiring the
+  retired custom style's solid fill.
 - Setup-card coverage checks matching dimensions, all three remote actions,
   stacked narrow/accessibility layouts, and right-to-left Light appearance.
   Screenshot attachments preserve each layout for visual review.

@@ -9,6 +9,369 @@ import CoreModels
 
 @MainActor
 final class NativeFocusRequestHostedTests: XCTestCase {
+    func testNavigationCallbackRefreshKeepsIdentityAndUsesLatestRoute() async throws {
+        let fixture = try await makeFixture()
+        let state = NavigatorRefreshState()
+        defer {
+            state.navigator = nil
+            fixture.close()
+        }
+        let menus = CountingMenuHandler()
+        fixture.window.rootViewController = UIHostingController(
+            rootView: NavigatorRefreshFixture(
+                state: state,
+                content: Button("Menu") {}
+                    .mediaItemContextMenu(for: state.item)
+                    .background(NavigatorProbe(state: state))
+            ).mediaItemActionHandler(menus)
+        )
+        fixture.window.layoutIfNeeded()
+        try await waitUntil { menus.builds.count == 1 && state.navigator != nil }
+        try await Task.sleep(for: .milliseconds(300))
+        let before = state.navigator
+        state.revision = 1
+        try await Task.sleep(for: .milliseconds(100))
+        let item = MediaItem(id: "menu", title: "Menu", kind: .movie)
+        state.navigator?(item)
+        XCTAssertEqual(state.receivedRevision, 1, "The stable router must dispatch the latest callback, not a stale capture.")
+        XCTAssertEqual(state.navigator, before, "Callback updates must not invalidate the navigator environment value.")
+        state.enabled = false
+        try await waitUntil { state.navigator == nil }
+        state.receivedRevision = nil
+        before?(item)
+        XCTAssertNil(state.receivedRevision, "A retained router must not dispatch after navigation is disabled.")
+        state.enabled = true
+        state.revision = 2
+        try await waitUntil { state.navigator != nil }
+        state.navigator?(item)
+        XCTAssertEqual(state.receivedRevision, 2)
+    }
+
+    @Observable final class NavigatorRefreshState {
+        let item = MediaItem(id: "menu", title: "Menu", kind: .movie)
+        var revision = 0
+        var enabled = true
+        @ObservationIgnored var navigator: MediaItemNavigator?
+        @ObservationIgnored var receivedRevision: Int?
+    }
+
+    private struct NavigatorRefreshFixture<Content: View>: View {
+        let state: NavigatorRefreshState
+        let content: Content
+        var body: some View {
+            content
+                .mediaItemNavigator(state.enabled ? { [revision = state.revision] _ in
+                    state.receivedRevision = revision
+                } : nil)
+        }
+    }
+
+    private struct NavigatorProbe: View {
+        let state: NavigatorRefreshState
+        @Environment(\.mediaItemNavigator) private var navigator
+        var body: some View {
+            state.navigator = navigator
+            return Color.clear
+        }
+    }
+
+    func testNavigatorReleasesReplacedCallbacksAndRemovedScope() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let state = NavigatorLifetimeState()
+        var first: NavigatorLifetimeToken? = NavigatorLifetimeToken()
+        weak var firstReference = first
+        state.route = { [token = first!] _ in token.calls += 1 }
+        first = nil
+        fixture.window.rootViewController = UIHostingController(rootView: NavigatorLifetimeFixture(state: state))
+        fixture.window.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        var second: NavigatorLifetimeToken? = NavigatorLifetimeToken()
+        weak var secondReference = second
+        state.route = { [token = second!] _ in token.calls += 1 }
+        second = nil
+        try await waitUntil { firstReference == nil }
+        fixture.close()
+        state.route = nil
+        try await waitUntil { secondReference == nil }
+    }
+
+    @Observable final class NavigatorLifetimeState {
+        var route: ((MediaItem) -> Void)?
+    }
+
+    private final class NavigatorLifetimeToken {
+        var calls = 0
+    }
+
+    private struct NavigatorLifetimeFixture: View {
+        let state: NavigatorLifetimeState
+        var body: some View {
+            Color.clear.mediaItemNavigator(state.route)
+        }
+    }
+
+    func testCallbackOnlyRowFocusDoesNotRebuildItsCardInputs() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        var builds: [String: Int] = [:]
+        var selected: [String] = []
+        let menus = CountingMenuHandler()
+        let host = PreferredPosterHost(rootView: AnyView(
+            VStack(spacing: 60) {
+                ForEach(0..<2) { row in
+                    MediaRowView(
+                        title: Text("Row \(row)"),
+                        items: (0..<3).map {
+                            MediaItem(id: "r\(row)-\($0)", title: "Item \(row)-\($0)", kind: .movie)
+                        },
+                        style: .landscape,
+                        onFocusChange: { if let item = $0 { selected.append(item.id) } },
+                        onCardFocused: { _ in },
+                        statusCue: {
+                            builds[$0.id, default: 0] += 1
+                            return nil
+                        },
+                        onSelect: { _ in }
+                    )
+                }
+            }
+            .environment(\.plozzCardStyle, .borderless)
+            .environment(\.plozzCardFocusStyle, .system)
+            .mediaItemActionHandler(menus)
+        ))
+        fixture.window.rootViewController = host
+        fixture.window.layoutIfNeeded()
+        try await waitUntil { self.lockups(in: host.view).count == 6 }
+        let posters = lockups(in: host.view)
+        let first = try XCTUnwrap(posters.first { $0.accessibilityLabel == "Item 0-0" })
+        let second = try XCTUnwrap(posters.first { $0.accessibilityLabel == "Item 1-0" })
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: fixture.window))
+        host.target = first
+        system.requestFocusUpdate(to: host)
+        system.updateFocusIfNeeded()
+        try await waitUntil { first.isFocused && selected.contains("r0-0") }
+        try await Task.sleep(for: .milliseconds(200))
+        let before = builds
+        let menusBefore = menus.builds
+        host.target = second
+        system.requestFocusUpdate(to: host)
+        system.updateFocusIfNeeded()
+        try await waitUntil { second.isFocused && selected.contains("r1-0") }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(builds, before, "Focus callbacks and prefetch bookkeeping must not rebuild all card inputs.")
+        XCTAssertEqual(menus.builds, menusBefore, "Focus alone must not rebuild card actions.")
+    }
+
+    private final class CountingMenuHandler: MediaItemActionHandling {
+        var builds: [String: Int] = [:]
+        func actions(for item: MediaItem, context: MediaItemActionContext) -> [MediaItemAction] {
+            builds[item.id, default: 0] += 1
+            return [.markWatched, .addToWatchlist]
+        }
+        func perform(_ action: MediaItemAction, on item: MediaItem, context: MediaItemActionContext) {}
+    }
+
+    private final class PreferredPosterHost: UIHostingController<AnyView> {
+        weak var target: UIView?
+        override var preferredFocusEnvironments: [any UIFocusEnvironment] {
+            target.map { [$0] } ?? super.preferredFocusEnvironments
+        }
+    }
+
+    func testNativeFocusMovementDoesNotRebuildUnfocusedPosterOwners() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let counts = (0..<3).map { _ in FocusReadCounts() }
+        let host = UIHostingController(rootView:
+            HStack(spacing: 100) {
+                ForEach(0..<3) { index in
+                    NativeFocusReadOwner(counts: counts[index], title: "\(index)")
+                }
+            }
+            .environment(\.plozzCardFocusStyle, .system)
+        )
+        fixture.window.rootViewController = host
+        fixture.window.layoutIfNeeded()
+        let posters = lockups(in: host.view)
+        XCTAssertEqual(posters.count, 3)
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: fixture.window))
+        system.requestFocusUpdate(to: posters[0])
+        system.updateFocusIfNeeded()
+        try await waitUntil { posters[0].isFocused }
+        try await Task.sleep(for: .milliseconds(100))
+        let before = counts.map(\.ownerEvaluations)
+        try XCTUnwrap(counts[1].focus).focusState.wrappedValue = true
+        try await waitUntil { posters[1].isFocused }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(counts[2].ownerEvaluations, before[2], "An unrelated card must not rebuild.")
+        XCTAssertEqual(counts[0].ownerEvaluations, before[0], "Only the old card's focus reader must update.")
+        XCTAssertEqual(counts[1].ownerEvaluations, before[1], "Only the new card's focus reader must update.")
+    }
+
+    private struct NativeFocusReadOwner: View {
+        let counts: FocusReadCounts
+        let title: String
+        @PlozzCardFocus private var focused
+
+        var body: some View {
+            counts.ownerEvaluations += 1
+            return NativeTVPoster(
+                image: nil, treatment: .original, aspectRatio: 2,
+                fallbackWidth: 300, title: .content(title), subtitle: nil,
+                overlay: FocusReadChild(counts: counts, focus: $focused),
+                focus: $focused, action: {}
+            )
+            .focused($focused.focusState)
+            .frame(width: 300, height: 150)
+            .onAppear { counts.focus = $focused }
+        }
+    }
+
+    func testNativeFocusObservationInvalidatesOnlyItsReader() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let counts = FocusReadCounts()
+        fixture.window.rootViewController = UIHostingController(rootView: FocusReadOwner(counts: counts))
+        fixture.window.layoutIfNeeded()
+        try await waitUntil { counts.focus != nil }
+        let initial = counts.ownerEvaluations
+        let focus = try XCTUnwrap(counts.focus)
+        focus.observation.isFocused = true
+        try await waitUntil { counts.observedFocus }
+        focus.observation.isFocused = false
+        try await waitUntil { !counts.observedFocus }
+        XCTAssertEqual(
+            counts.ownerEvaluations, initial,
+            "Native focus must not rebuild the artwork/menu owner when only a child reads focus."
+        )
+    }
+
+    final class FocusReadCounts {
+        var ownerEvaluations = 0
+        var observedFocus = false
+        var focus: PlozzCardFocus.Binding?
+    }
+
+    private struct FocusReadOwner: View {
+        let counts: FocusReadCounts
+        @PlozzCardFocus private var focused
+
+        var body: some View {
+            counts.ownerEvaluations += 1
+            return FocusReadChild(counts: counts, focus: $focused)
+                .onAppear { counts.focus = $focused }
+                .environment(\.plozzCardFocusStyle, .system)
+        }
+    }
+
+    private struct FocusReadChild: View {
+        let counts: FocusReadCounts
+        let focus: PlozzCardFocus.Binding
+
+        var body: some View {
+            Color.clear
+                .onChange(of: focus.isFocused, initial: true) { _, value in
+                    counts.observedFocus = value
+                }
+        }
+    }
+
+    func testPosterOverlayCacheKeepsLiveContentAndDisplayScale() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let model = RasterOverlayModel()
+        let host = UIHostingController(rootView: RasterOverlayFixture(model: model))
+        fixture.window.rootViewController = host
+        fixture.window.layoutIfNeeded()
+        let poster = try XCTUnwrap(lockups(in: host.view).compactMap { $0 as? NativePosterButton }.first)
+        let overlay = try XCTUnwrap(poster.hostedOverlay)
+        try await waitUntil { !overlay.bounds.isEmpty }
+        XCTAssertTrue(overlay.layer.shouldRasterize)
+        XCTAssertEqual(overlay.layer.rasterizationScale, 1)
+        func pixels() throws -> Data {
+            let image = UIGraphicsImageRenderer(bounds: overlay.bounds).image { _ in
+                XCTAssertTrue(overlay.drawHierarchy(in: overlay.bounds, afterScreenUpdates: true))
+            }
+            return try XCTUnwrap(image.pngData())
+        }
+        let before = try pixels()
+        model.updated = true
+        model.scale = 2
+        try await waitUntil { overlay.layer.rasterizationScale == 2 }
+        fixture.window.layoutIfNeeded()
+        XCTAssertTrue(poster.hostedOverlay === overlay)
+        XCTAssertNotEqual(try pixels(), before, "Cached overlays must repaint updated watch/progress content.")
+    }
+
+    @Observable
+    final class RasterOverlayModel {
+        var updated = false
+        var scale: CGFloat = 1
+    }
+
+    private struct RasterOverlayFixture: View {
+        let model: RasterOverlayModel
+        @PlozzCardFocus private var focused
+
+        var body: some View {
+            NativeTVPoster(
+                image: nil, treatment: .original, aspectRatio: 2,
+                fallbackWidth: 400, title: .content("Overlay"), subtitle: nil,
+                overlay: model.updated ? Color.green : Color.red,
+                focus: $focused, action: {}
+            )
+            .frame(width: 400, height: 200)
+            .environment(\.displayScale, model.scale)
+        }
+    }
+
+    func testNativeLoadingCardHasNoSecondBackgroundOnTheFloatingOverlay() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let model = SkeletonFocusMatrixModel()
+        defer { model.focus = nil; model.focusAnchor = nil }
+        let host = UIHostingController(rootView: SkeletonFocusMatrixView(
+            model: model, style: .landscape, seriesArtwork: true, caption: false
+        )
+        .environment(\.plozzCardStyle, .borderless)
+        .environment(\.plozzCardFocusStyle, .system)
+        .environment(\.themePalette, .dark))
+        host.overrideUserInterfaceStyle = .dark
+        fixture.window.rootViewController = host
+        fixture.window.layoutIfNeeded()
+        try await waitUntil { model.focus != nil && model.frame.width > 0 }
+        model.focusAnchor?()
+        try await waitUntil { model.anchorFocused }
+        model.focus?.requestFocus(animated: false)
+        try await waitUntil { model.isFocused }
+        try await Task.sleep(for: .milliseconds(300))
+        let poster = try XCTUnwrap(lockups(in: host.view).first(where: \.isFocused) as? NativePosterButton)
+        let overlay = try XCTUnwrap(poster.hostedOverlay)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: overlay.bounds.size, format: format).image { context in
+            overlay.layer.render(in: context.cgContext)
+        }
+        let crop = try XCTUnwrap(image.cgImage?.cropping(to: CGRect(
+            x: overlay.bounds.width * 0.2, y: overlay.bounds.height * 0.2, width: 1, height: 1
+        )))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        try pixel.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(
+                data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        XCTAssertEqual(pixel[3], 0, "Only the spinner belongs on the floating plane; a second fill exposes the base as a border.")
+        let attachment = XCTAttachment(image: DetailTransitionSnapshot.image(of: fixture.window))
+        attachment.name = "native-loading-card-single-surface"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testLoadingCardFocusStyleAndPresentationMatrix() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -17,6 +380,7 @@ final class NativeFocusRequestHostedTests: XCTestCase {
             for cardStyle in CardStyle.allCases {
                 for (name, style, seriesArtwork, caption) in [
                     ("series", SkeletonCardView.Style.landscape, true, false),
+                    ("series-caption", .landscape, true, true),
                     ("episode-caption", .landscape, false, true),
                     ("episode-no-caption", .landscape, false, false),
                     ("poster-caption", .poster, false, true),
@@ -59,17 +423,17 @@ final class NativeFocusRequestHostedTests: XCTestCase {
                         XCTAssertTrue(control.isFocused, label)
                         XCTAssertEqual(controls.filter(\.isEnabled).count, 1, label)
                         if cardStyle == .borderless {
-                            let poster = try XCTUnwrap(control as? TVPosterView, label)
+                            let poster = try XCTUnwrap(control as? NativePosterButton, label)
                             let aspect: CGFloat = style == .poster ? 2 / 3
                                 : seriesArtwork ? ContinueWatchingCardShape.aspectRatio : 16 / 9
-                            XCTAssertEqual(poster.imageView.bounds.width / poster.imageView.bounds.height,
+                            XCTAssertEqual(poster.artworkView.bounds.width / poster.artworkView.bounds.height,
                                            aspect, accuracy: 0.01, label)
-                            let surface = poster.imageView.overlayContentView
-                            let hosted = try XCTUnwrap(surface.subviews.first, label)
-                            let projected = hosted.convert(hosted.bounds, to: poster.imageView)
-                            XCTAssertEqual(projected, surface.convert(surface.bounds, to: poster.imageView), label)
-                            XCTAssertEqual(projected.midX, poster.imageView.bounds.midX, accuracy: 0.5, label)
-                            XCTAssertEqual(projected.midY, poster.imageView.bounds.midY, accuracy: 0.5, label)
+                            let surface = poster.overlayView
+                            let hosted = try XCTUnwrap(poster.hostedOverlay, label)
+                            let projected = hosted.convert(hosted.bounds, to: poster.artworkView)
+                            XCTAssertEqual(projected, surface.convert(surface.bounds, to: poster.artworkView), label)
+                            XCTAssertEqual(projected.midX, poster.artworkView.bounds.midX, accuracy: 0.5, label)
+                            XCTAssertEqual(projected.midY, poster.artworkView.bounds.midY, accuracy: 0.5, label)
                         } else {
                             XCTAssertTrue(control is TVCardView, label)
                         }
@@ -93,15 +457,19 @@ final class NativeFocusRequestHostedTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(count, CardFocusStyle.allCases.count * CardStyle.allCases.count * 5)
+        XCTAssertEqual(count, CardFocusStyle.allCases.count * CardStyle.allCases.count * 6)
     }
 
-    private func lockups(in view: UIView) -> [TVLockupView] {
-        (view as? TVLockupView).map { [$0] } ?? view.subviews.flatMap(lockups(in:))
+    private func lockups(in view: UIView) -> [UIControl] {
+        if let control = view as? UIControl,
+           control is NativePosterButton || (control is TVLockupView && control.canBecomeFocused) {
+            return [control]
+        }
+        return view.subviews.flatMap(lockups(in:))
     }
 
     func testFractionalPosterHeightCannotRoundDownIntoItsCaption() {
-        let poster = NativeTVPoster<EmptyView>.Poster(image: nil)
+        let poster = NativePosterButton(image: NativePosterArtworkBitmap.placeholder)
         let size = CGSize(width: 388, height: 218.25)
         poster.contentSize = size
         let container = NativeTVPoster<EmptyView>.Container(poster: poster)
@@ -117,9 +485,8 @@ final class NativeFocusRequestHostedTests: XCTestCase {
             UIColor.blue.setFill()
             $0.fill(CGRect(origin: .zero, size: size))
         }
-        let poster = NativeTVPoster<EmptyView>.Poster(image: image)
+        let poster = NativePosterButton(image: image)
         poster.contentSize = size
-        _ = poster.imageView.overlayContentView
         let container = NativeTVPoster<EmptyView>.Container(poster: poster)
         let initial = container.intrinsicContentSize
         container.frame = CGRect(origin: CGPoint(x: 200, y: 200), size: initial)
@@ -133,10 +500,10 @@ final class NativeFocusRequestHostedTests: XCTestCase {
                        "Native focus clearance must not change the lazy row's height after realization.")
         XCTAssertEqual(container.intrinsicContentSize, size,
                        "Both axes of the layout slot describe artwork, not native focus margins.")
-        let artwork = poster.imageView.convert(poster.imageView.bounds, to: container)
+        let artwork = poster.artworkView.convert(poster.artworkView.bounds, to: container)
         XCTAssertEqual(artwork.midX, container.bounds.midX, accuracy: 0.5)
         XCTAssertEqual(artwork.midY, container.bounds.midY, accuracy: 0.5)
-        XCTAssertEqual(poster.imageView.bounds.height, size.height, accuracy: 0.5)
+        XCTAssertEqual(poster.artworkView.bounds.height, size.height, accuracy: 0.5)
     }
 
     private final class BitmapProbe {
@@ -200,7 +567,10 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         )
         defer { cache.removeCachedResponse(for: request) }
         let references = [ArtworkReference.remote(url)]
-        let key = HeroLogoMemo.key(for: references)
+        let key = HeroLogoMemo.key(
+            for: references,
+            providerPolicyIdentity: ArtworkPresentationPolicy().forPlacement(.logo).identity
+        )
         XCTAssertNil(HeroLogoMemo.value(for: key))
         let probe = LogoHostProbe()
         let host = UIHostingController(rootView: LogoHostFixture(
@@ -240,11 +610,12 @@ final class NativeFocusRequestHostedTests: XCTestCase {
 
     private struct BitmapFixture: View {
         let model: BitmapFixtureModel
+        let artworkPolicy: ArtworkPresentationPolicy
         @PlozzCardFocus private var focused
 
         var body: some View {
             FallbackAsyncImage(
-                references: model.references, variant: .posterCard,
+                references: model.references, variant: .posterCard, artworkPolicy: artworkPolicy,
                 pinIdentity: "native-bitmap-fixture",
                 content: { _ in EmptyView() }, placeholder: { EmptyView() }
             )
@@ -312,7 +683,7 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         ))
         let model = BitmapFixtureModel()
         model.references = [reference]
-        let host = UIHostingController(rootView: BitmapFixture(model: model)
+        let host = UIHostingController(rootView: BitmapFixture(model: model, artworkPolicy: .init())
             .environment(\.plozzCardFocusStyle, .system))
         fixture.window.rootViewController = host
         fixture.window.layoutIfNeeded()
@@ -325,8 +696,8 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         try await waitUntil { original.isFocused }
         XCTAssertNil(cache.cachedImage(for: reference, variant: .posterCard))
         try await waitUntil(timeout: .seconds(45)) {
-            guard let resolved = cache.cachedImage(for: reference, variant: .posterCard) else { return false }
-            return original.image?.cgImage === resolved.cgImage
+            cache.cachedImage(for: reference, variant: .posterCard) != nil
+                && self.hasBlueArtwork(original.image)
         }
         XCTAssertTrue(nativePoster(in: host.view) === original)
         XCTAssertTrue(original.isFocused)
@@ -342,15 +713,16 @@ final class NativeFocusRequestHostedTests: XCTestCase {
             $0.fill(CGRect(x: 0, y: 0, width: 200, height: 300))
         }
         let identity = UUID().uuidString
+        let policy = ArtworkPresentationPolicy()
         let key = ArtworkResolveKey.make(
             references: [reference], variant: .posterCard, maxAspectRatio: nil,
             pinIdentity: identity,
-            providerPolicyIdentity: ArtworkResolveKey.policyIdentity(MetadataProviderSettingsStore().load())
+            providerPolicyIdentity: policy.identity
         )
         ArtworkSeedMemo.store(image, reference: reference, for: key)
         let probe = BitmapProbe()
         let host = UIHostingController(rootView: FallbackAsyncImage(
-            references: [reference], variant: .posterCard, pinIdentity: identity,
+            references: [reference], variant: .posterCard, artworkPolicy: policy, pinIdentity: identity,
             content: { _ in EmptyView() }, placeholder: { EmptyView() }
         ).resolvedBitmap { value in
             BitmapCreationProbe(image: value, probe: probe)
@@ -364,8 +736,9 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         let fixture = try await makeFixture()
         defer { fixture.close() }
         let model = BitmapFixtureModel()
+        let policy = ArtworkPresentationPolicy()
         let outerResolution = ArtworkResolutionState()
-        let host = UIHostingController(rootView: BitmapFixture(model: model)
+        let host = UIHostingController(rootView: BitmapFixture(model: model, artworkPolicy: policy)
             .environment(\.plozzCardFocusStyle, .system)
             .environment(\.artworkResolutionState, outerResolution))
         fixture.window.rootViewController = host
@@ -382,15 +755,30 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         let key = ArtworkResolveKey.make(
             references: [reference], variant: .posterCard, maxAspectRatio: nil,
             pinIdentity: "native-bitmap-fixture",
-            providerPolicyIdentity: ArtworkResolveKey.policyIdentity(MetadataProviderSettingsStore().load())
+            providerPolicyIdentity: policy.identity
         )
         ArtworkSeedMemo.store(image, reference: reference, for: key)
         model.references = [reference]
-        try await waitUntil { original.image?.cgImage === image.cgImage }
+        try await waitUntil { self.hasBlueArtwork(original.image) }
         XCTAssertTrue(nativePoster(in: host.view) === original)
         XCTAssertTrue(original.isFocused)
         XCTAssertNil(outerResolution.image, "Native cards must not publish into an ancestor artwork bridge.")
         XCTAssertFalse(outerResolution.isResolved)
+    }
+
+    private func hasBlueArtwork(_ image: UIImage?) -> Bool {
+        guard let image = image?.cgImage else { return false }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let rendered = pixel.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(
+                data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        return rendered && pixel[2] > 180 && pixel[0] < 50 && pixel[1] < 50
     }
 
     private struct SurfaceProbe: View {
@@ -480,6 +868,83 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         XCTAssertEqual(caption.intrinsicContentSize.height, initialSize.height + 4)
     }
 
+    func testMediaPostersKeepLibraryCaptionClearanceAtRestAndFocus() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        func descendants<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+            if let match = view as? T { return [match] }
+            return view.subviews.flatMap { descendants(type, in: $0) }
+        }
+        for density in UIDensity.allCases {
+            let metrics = PlozzMetrics(density: density)
+            for style in [PosterCardView.Style.poster, .landscape] {
+                let width = metrics.cardSlotWidth(for: style, cardStyle: .borderless)
+                let host = PreferredPosterHost(rootView: AnyView(
+                    HStack(alignment: .top, spacing: 100) {
+                        ForEach(0..<2) { index in
+                            PosterCardView(
+                                item: MediaItem(
+                                    id: "caption-\(index)", title: "Media title", kind: .movie,
+                                    productionYear: 2020, allowsTitleBasedMetadataMatching: false
+                                ),
+                                style: style, enablesAsyncArtworkFallback: false,
+                                action: {}
+                            )
+                            .frame(width: width)
+                        }
+                    }
+                    .environment(\.plozzMetrics, metrics)
+                    .environment(\.plozzCardStyle, .borderless)
+                    .environment(\.plozzCardFocusStyle, .system)
+                    .environment(\.plozzCardCaptionsHidden, false)
+                ))
+                fixture.window.rootViewController = host
+                fixture.window.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(100))
+                let posters = descendants(NativePosterButton.self, in: host.view)
+                let captions = descendants(SystemPosterCaption.CaptionView.self, in: host.view)
+                XCTAssertEqual(posters.count, 2)
+                XCTAssertEqual(captions.count, 2)
+                guard posters.count == 2, captions.count == 2 else { continue }
+                let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: fixture.window))
+                host.target = posters[0]
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                try await waitUntil { posters[0].isFocused }
+                try await Task.sleep(for: .milliseconds(600))
+                let poster = posters[1]
+                let caption = captions[1]
+                let slot = caption.convert(caption.bounds, to: fixture.window)
+                let bitmap = poster.image
+                let title = try XCTUnwrap(descendants(UILabel.self, in: caption.title).first)
+                let context = "\(density), \(style)"
+                for focused in [false, true, false] {
+                    host.target = posters[focused ? 1 : 0]
+                    system.requestFocusUpdate(to: host)
+                    system.updateFocusIfNeeded()
+                    try await waitUntil { poster.isFocused == focused }
+                    // TVCardView's spring outlasts the focus-state callback.
+                    try await Task.sleep(for: .milliseconds(600))
+                    let artwork = try XCTUnwrap(
+                        NativeFocusProjection.artworkFrame(of: poster.artworkView, in: fixture.window)
+                    )
+                    let text = try XCTUnwrap(
+                        NativeFocusProjection.artworkFrame(of: title, in: fixture.window)
+                    )
+                    XCTAssertEqual(caption.convert(caption.bounds, to: fixture.window), slot,
+                                   "Focus must not move the caption's layout slot: \(context)")
+                    XCTAssertTrue(poster.image === bitmap, "Spacing must not regenerate artwork: \(context)")
+                    if !focused {
+                        XCTAssertEqual(slot.minY - artwork.maxY, metrics.landscapeCaptionTopSpacing, accuracy: 1,
+                                       "Media captions need the same resting gap as libraries: \(context)")
+                    }
+                    XCTAssertGreaterThanOrEqual(text.minY - artwork.maxY, metrics.landscapeCaptionTopSpacing - 1,
+                                                "Focused artwork must stay clear of its title: \(context)")
+                }
+            }
+        }
+    }
+
     func testNativePosterArtworkKeepsPreCaptionSeparationSizing() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -500,8 +965,17 @@ final class NativeFocusRequestHostedTests: XCTestCase {
                             .frame(width: width)
                     }
                 }
-                MediaRowView(title: nil, items: items, style: style,
-                             showsSeriesArtwork: series, onSelect: { _ in })
+                // Compare the same proposed slots, independently of the row's
+                // responsive 6.25-card density covered by Home tests.
+                HStack(spacing: metrics.cardSpacing) {
+                    ForEach(items) { item in
+                        PosterCardView(
+                            item: item, style: style, showsSeriesArtwork: series,
+                            enablesAsyncArtworkFallback: false, action: {}
+                        )
+                        .frame(width: width)
+                    }
+                }
             }
             .environment(\.plozzMetrics, metrics)
             .environment(\.plozzCardStyle, .borderless)
@@ -509,29 +983,25 @@ final class NativeFocusRequestHostedTests: XCTestCase {
             fixture.window.rootViewController = host
             fixture.window.layoutIfNeeded()
             try await Task.sleep(for: .milliseconds(200))
-            func posters(in view: UIView) -> [TVPosterView] {
-                if let poster = view as? TVPosterView { return [poster] }
-                return view.subviews.flatMap { posters(in: $0) }
-            }
-            let views = posters(in: host.view)
-            XCTAssertEqual(views.count, 6)
-            guard views.count == 6 else { continue }
-            let old = views[1], current = views[4]
-            let description = "\(style), series \(series): slot=\(width), old bounds=\(old.bounds) content=\(old.contentSize) image=\(old.imageView.frame) intrinsic=\(old.intrinsicContentSize); current bounds=\(current.bounds) content=\(current.contentSize) image=\(current.imageView.frame) intrinsic=\(current.intrinsicContentSize)"
+            let oldViews = descendants(TVPosterView.self, in: host.view)
+            let currentViews = descendants(NativePosterButton.self, in: host.view)
+            XCTAssertEqual(oldViews.count, 3)
+            XCTAssertEqual(currentViews.count, 3)
+            guard oldViews.count == 3, currentViews.count == 3 else { continue }
+            let old = oldViews[1], current = currentViews[1]
+            let description = "\(style), series \(series): slot=\(width), old bounds=\(old.bounds) content=\(old.contentSize) image=\(old.imageView.frame) intrinsic=\(old.intrinsicContentSize); current bounds=\(current.bounds) content=\(current.contentSize) image=\(current.artworkView.frame) intrinsic=\(current.intrinsicContentSize)"
             let evidence = XCTAttachment(string: description)
             evidence.name = "poster-layout-\(style)-series-\(series)"
             evidence.lifetime = .keepAlways
             add(evidence)
-            XCTAssertEqual(current.imageView.bounds.width, old.imageView.bounds.width, accuracy: 0.5, description)
+            XCTAssertEqual(current.artworkView.bounds.width, old.imageView.bounds.width, accuracy: 0.5, description)
             XCTAssertEqual(current.contentSize.height, old.contentSize.height, accuracy: 0.5, description)
-            // Separated-caption production posters ceil intrinsic height; on tvOS 27
-            // imageView bounds can land 1.5pt under the legacy footer layout.
-            XCTAssertEqual(current.imageView.bounds.height, old.imageView.bounds.height, accuracy: 2, description)
-            func artworkFrame(_ index: Int) -> CGRect {
-                views[index].imageView.convert(views[index].imageView.bounds, to: fixture.window)
+            XCTAssertEqual(current.artworkView.bounds.height, old.imageView.bounds.height, accuracy: 1, description)
+            func artworkFrame(_ view: UIImageView) -> CGRect {
+                view.convert(view.bounds, to: fixture.window)
             }
-            let oldGap = artworkFrame(2).minX - artworkFrame(1).maxX
-            let currentGap = artworkFrame(5).minX - artworkFrame(4).maxX
+            let oldGap = artworkFrame(oldViews[2].imageView).minX - artworkFrame(oldViews[1].imageView).maxX
+            let currentGap = artworkFrame(currentViews[2].artworkView).minX - artworkFrame(currentViews[1].artworkView).maxX
             XCTAssertEqual(currentGap, oldGap, accuracy: 0.5, "Production row gap must match the original layout.")
             XCTAssertGreaterThanOrEqual(currentGap, metrics.cardSpacing, "Native margins must not consume the row gap.")
         }
@@ -627,13 +1097,13 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         defer { fixture.close() }
         let poster = try XCTUnwrap(nativePoster(in: fixture.window))
         let restingSize = poster.intrinsicContentSize
-        XCTAssertNil(poster.footerView)
+        XCTAssertNil(poster.currentTitle)
         XCTAssertEqual(poster.accessibilityLabel, "Target poster")
         XCTAssertTrue(poster.isAccessibilityElement)
         fixture.model.cardFocus?.requestFocus(animated: false)
         try await waitUntil { fixture.model.cardFocused }
         try await Task.sleep(for: .milliseconds(200))
-        XCTAssertNil(poster.footerView)
+        XCTAssertNil(poster.currentTitle)
         XCTAssertEqual(poster.intrinsicContentSize, restingSize)
     }
 
@@ -666,7 +1136,7 @@ final class NativeFocusRequestHostedTests: XCTestCase {
             XCTAssertTrue(poster.isAccessibilityElement)
             XCTAssertEqual(poster.accessibilityLabel, title)
             XCTAssertTrue(poster.accessibilityTraits.contains(.button))
-            XCTAssertNil(poster.footerView)
+            XCTAssertNil(poster.currentTitle)
         }
     }
 
@@ -712,8 +1182,12 @@ final class NativeFocusRequestHostedTests: XCTestCase {
         caption.removeFromSuperview()
     }
 
-    private func nativePoster(in view: UIView) -> TVPosterView? {
-        if let poster = view as? TVPosterView { return poster }
+    private func descendants<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+        (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+    }
+
+    private func nativePoster(in view: UIView) -> NativePosterButton? {
+        if let poster = view as? NativePosterButton { return poster }
         return view.subviews.lazy.compactMap { self.nativePoster(in: $0) }.first
     }
 
@@ -812,7 +1286,7 @@ final class NativeFocusRequestHostedTests: XCTestCase {
                 lines.append("focused frame=\(String(describing: NavigationRowFocusRequester.frame(of: focused, relativeTo: window)))")
             }
             while let view = views.popLast() {
-                if let card = view as? TVLockupView {
+                if let card = view as? UIControl, card is TVLockupView || card is NativePosterButton {
                     lines.append("native frame=\(card.convert(card.bounds, to: window)) enabled=\(card.isEnabled) eligible=\(card.canBecomeFocused) focused=\(card.isFocused) window=\(card.window != nil)")
                 }
                 views.append(contentsOf: view.subviews)

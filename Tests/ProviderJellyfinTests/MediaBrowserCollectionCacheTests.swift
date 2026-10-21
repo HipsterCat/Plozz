@@ -3,6 +3,43 @@ import XCTest
 @testable import ProviderJellyfin
 
 final class MediaBrowserCollectionCacheTests: XCTestCase {
+    func testProgressReachesActiveConsumersOnly() async throws {
+        for cancelFirst in [false, true] {
+            let cache = MediaBrowserCollectionLibraryCache()
+            let gate = CollectionCacheLoadGate(itemID: "shared")
+            let observed = CollectionCacheCompletions()
+            let first = Task {
+                try await cache.snapshot(key: "scope", refresh: true, progress: { _ in
+                    await observed.mark("first")
+                }) { publish in
+                    let items = try await gate.load()
+                    await publish(.init(items: items, checked: 1, total: 2))
+                    return items
+                }
+            }
+            let started = await collectionCacheWait { await gate.loadCount == 1 }
+            XCTAssertTrue(started)
+            let second = Task {
+                try await cache.snapshot(key: "scope", refresh: true, progress: { _ in
+                    await observed.mark("second")
+                }) { _ in throw AppError.invalidResponse }
+            }
+            let joined = await collectionCacheWait { await cache.activeConsumerCount(for: "scope") == 2 }
+            XCTAssertTrue(joined)
+            if cancelFirst {
+                first.cancel()
+                await assertCollectionCacheCancelled(first)
+            }
+            await gate.release()
+            _ = try await second.value
+            if !cancelFirst { _ = try await first.value }
+            let firstObserved = await observed.contains("first")
+            let secondObserved = await observed.contains("second")
+            XCTAssertEqual(firstObserved, !cancelFirst)
+            XCTAssertTrue(secondObserved)
+        }
+    }
+
     func testCancellingOneConsumerIsPromptAndDoesNotCancelRemainingConsumer() async throws {
         let cache = MediaBrowserCollectionLibraryCache()
         let gate = CollectionCacheLoadGate(itemID: "shared")

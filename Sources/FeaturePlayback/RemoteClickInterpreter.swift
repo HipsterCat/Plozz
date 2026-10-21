@@ -1,3 +1,6 @@
+import CoreGraphics
+import Foundation
+
 /// Keeps a physical touchpad click distinct from the finger movement around it.
 struct RemoteClickInterpreter {
     enum Action: Equatable {
@@ -46,5 +49,36 @@ struct RemoteClickInterpreter {
     mutating func takeAction() -> Action {
         defer { pendingAction = .select }
         return pendingAction
+    }
+}
+
+struct RemoteTapInterpreter {
+    private var origin: CGPoint?
+    private var beganAt: TimeInterval = 0
+
+    mutating func began(at point: CGPoint, timestamp: TimeInterval) {
+        origin = point
+        beganAt = timestamp
+        moved(to: point)
+    }
+
+    mutating func moved(to point: CGPoint) {
+        guard let origin else { return }
+        if !point.x.isFinite || !point.y.isFinite
+            || !origin.x.isFinite || !origin.y.isFinite
+            || hypot(point.x - origin.x, point.y - origin.y) >= 10 {
+            cancel()
+        }
+    }
+
+    mutating func cancel() {
+        origin = nil
+    }
+
+    mutating func ended(at point: CGPoint, timestamp: TimeInterval) -> Bool {
+        moved(to: point)
+        defer { cancel() }
+        let elapsed = timestamp - beganAt
+        return origin != nil && elapsed.isFinite && elapsed >= 0 && elapsed <= 0.35
     }
 }

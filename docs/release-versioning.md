@@ -6,12 +6,19 @@ Plozz has three distinct version values:
 | --- | --- | --- |
 | Public release `version` | `2026.9.29` | Release date shown in About and update history |
 | Apple `marketingVersion` | `2026.9.25` | `CFBundleShortVersionString` and App Store Connect's version series |
-| `build` | `45` | `CFBundleVersion`, assigned above the highest TestFlight build on either platform |
+| `build` | `51` or `"51.1"` | `CFBundleVersion`, selected above existing TestFlight builds on either platform |
 
 Keep the familiar date-and-build identity: **2026.9.29 (45)**. About retains
 its separate Version and Build fields; tester notes and GitHub release titles
 combine them. Never append a daily revision such as `.1` to the date.
 Multiple releases on the same day share the date and have different build numbers.
+
+Hotfix builds may append one or two numeric components, such as **51.1** or
+**51.1.1**. Store dotted builds as JSON strings; historical whole-number builds
+remain integers. Components sort numerically: `51 < 51.1 < 51.2 < 51.10 < 52`.
+Use no leading zeros in build values. The first component is 1–9999 and later
+components are 0–99. Trailing zero components are numerically equivalent, so
+`51.1` and `51.1.0` cannot identify separate releases.
 
 Keep Apple's existing version series unless deliberately starting a new one.
 Apple says later external-testing builds of the same version **might not** need
@@ -44,10 +51,13 @@ python3 tools/release-notes.py render --release-id release/045 --platform iOS
 ```
 
 The example ID/build above is illustrative, not an existing approved release.
-Establish the actual assigned build from App Store Connect before preparing it.
+Check existing builds in App Store Connect before selecting the next build.
 Each intended distribution gets its own entry, notes, and build number. Retries
 reuse that exact identity; Git pushes and local builds do not allocate releases.
 Do not add a new entry merely to compile or merge code.
+The distribution lane uses the selected catalog build verbatim and rejects
+collisions or older values on either platform within the Apple version series.
+An archive without a selected release defaults to the next whole-number build.
 
 Platform-specific notes use `{"text": "...", "platforms": ["tvOS"]}` or `["iOS"]`;
 plain strings apply to both. New-format rendered notes begin with the public
@@ -59,10 +69,24 @@ python3 tools/release-notes.py render --release-id release/045 --platform iOS \
   --empty-text "No changes for this platform in this build."
 ```
 
+A release can opt into an in-app update-dialog card with
+`"featuredContent": "discord"`. It reuses the Settings community artwork, with a
+scannable QR card on TV and a join button without a QR code on mobile. The card appears
+above the notes only when that exact release is the current unseen update; it
+does not recur on later releases, even when the user skipped the featured build.
+Dismissal and the startup preference retain their existing behavior. Historical
+notes and TestFlight text remain text-only. Omit the field for ordinary releases;
+future card types need an explicit typed model case and renderer, not arbitrary
+catalog markup or URLs.
+
 ## Build and distribute
 
 Use the documented local signing/API configuration; never commit credentials.
 Builds retain a shared Apple build lease and platform-private package workspaces.
+Follow the risk-based TestFlight procedure in [testing-policy.md](testing-policy.md):
+freeze the candidate, reuse relevant evidence, and run only justified additional
+tests. Distribution archives provide build/signing evidence; a full test sweep
+and separate Debug builds are not automatic release prerequisites.
 
 ```sh
 # Local archive only; not upload permission.
@@ -88,9 +112,24 @@ the latest catalog entry's Apple version. Local builds continue to use the Git
 commit count and dirty-tree suffix and display that Apple version/build, rather
 than claiming to be a newly distributed release.
 
+Local Debug builds can show a short feature name after the number, such as
+**4776.4 wetrakr**, in About and Device & Build. Set it once per worktree in the
+gitignored `.plozz-dev-feature` file (one line), or override it for an invocation
+with `PLOZZ_DEV_FEATURE`. An explicitly empty environment value disables it.
+Use at most 32 ASCII letters, digits, spaces, dots, underscores or hyphens.
+Update the file when switching the worktree to a different task.
+
+The generator bakes this display-only value as `PlozzDevelopmentFeature`.
+Release configurations and selected distribution identities always suppress it.
+`CFBundleVersion`, Top Shelf parity, crash/protocol identifiers and release
+number allocation remain numeric and unchanged.
+
 Before uploading, both distribution lanes check both exported IPAs' platform, identifier,
 Apple version/build, and public release version/ID. A mismatch stops both uploads.
-After delivery, tags remain `release/<zero-padded-build>`; GitHub release titles
+After delivery, tags pad the first build component and preserve hotfix suffixes:
+`release/051`, `release/051.1`, or `release/051.1.1`. Existing tags are never
+overwritten; changelogs compare with the preceding numeric release tag.
+GitHub release titles
 use the public date and build. Inspect `.build/testflight-uploads/` and both platforms'
 actual App Store Connect availability before reporting success. After partial
 success, never blindly rerun `beta`, increment the build, or reupload: reconcile

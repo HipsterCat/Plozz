@@ -3,11 +3,13 @@ import AniListService
 import CoreModels
 import MALService
 import SimklService
+import WetrakrService
 import TraktService
 
 struct PlozziOSTrackerScrobbler: TraktScrobbling {
     let trakt: any TraktScrobbling
     let simkl: any SimklScrobbling
+    let wetrakr: WetrakrScrobbler
     let anilist: any AniListScrobbling
     let mal: any MALScrobbling
 
@@ -36,7 +38,8 @@ struct PlozziOSTrackerScrobbler: TraktScrobbling {
             progress: progress,
             event: event
         )
-        _ = await (traktResult, simklResult, anilistResult, malResult)
+        async let wetrakrResult: Void = wetrakr.scrobble(item: item, progress: progress, event: event)
+        _ = await (traktResult, simklResult, anilistResult, malResult, wetrakrResult)
     }
 }
 #endif

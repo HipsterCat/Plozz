@@ -1,6 +1,7 @@
 import Foundation
 import CoreModels
 import CoreSecureStore
+import TraktService
 
 /// Mirrors tracker sign-ins between devices through the app's existing
 /// end-to-end encrypted CloudKit channel.
@@ -18,6 +19,35 @@ import CoreSecureStore
 /// iCloud account — not by Apple, and not by anything inspecting the container.
 /// The Keychain remains the store of record on each device; this is transport.
 public enum TrackerTokenSyncBridge {
+    public static func erasureStores(profileNamespaces: [String?]) -> [any TraktTokenStoring] {
+        // Register inactive profiles as well as the currently constructed services.
+        var stores: [any TraktTokenStoring] = Set(profileNamespaces + [nil]).flatMap { namespace in
+            ["trakt.oauth", "wetrakr.oauth"].map {
+                KeychainTraktTokenStore(account: $0, namespace: namespace)
+            }
+        }
+        let existing = Set(stores.map(\.coordinationID))
+        stores += SyncedTokenRegistry.shared.knownAccounts().filter {
+            TraktSharedRefreshBootstrap.manages($0)
+                && !existing.contains($0.service + "\0" + $0.account)
+        }.map { KeychainTraktTokenStore(service: $0.service, account: $0.account) }
+        return stores
+    }
+
+    public static func eraseLocalTokens() throws {
+        for account in SyncedTokenRegistry.shared.knownAccounts() {
+            // clear() never decodes the generic payload and also removes legacy copies.
+            try SyncedTokenBox<String>(service: account.service, account: account.account).clear()
+        }
+        for synchronizable in [true, false] {
+            try KeychainStore(
+                service: "com.plozz.app.tokens", userIndependent: false,
+                fallbackToPerUser: false, synchronizable: synchronizable
+            ).removeAll()
+        }
+        NotificationCenter.default.post(name: .plozzTrackerTokensDidChangeRemotely, object: nil)
+    }
+
     /// `<service>|<account>`, both of which are already stable, non-secret
     /// identifiers. The record name must not be derived from the token.
     static func recordName(for account: SyncedTokenRegistry.Account) -> SyncRecordID {
@@ -48,6 +78,7 @@ public enum TrackerTokenSyncBridge {
         var records: [SyncRecordID: Data] = [:]
         var signedOut: Set<SyncRecordID> = []
         for account in SyncedTokenRegistry.shared.knownAccounts() {
+            guard !TraktSharedRefreshBootstrap.manages(account) else { continue }
             let name = recordName(for: account)
             if SyncedTokenRegistry.shared.isSignedOut(account) {
                 // Omitted below, which is how the ledger expresses a deletion.
@@ -61,6 +92,7 @@ public enum TrackerTokenSyncBridge {
         }
         for (name, value) in fallback where records[name] == nil {
             guard let account = account(fromRecordName: name) else { continue }
+            guard !TraktSharedRefreshBootstrap.manages(account) else { continue }
             // A real sign-out must not be resurrected by its own ledger entry.
             guard !signedOut.contains(name) else { continue }
             // Otherwise this device simply doesn't have the token: either it has
@@ -89,7 +121,14 @@ public enum TrackerTokenSyncBridge {
     @discardableResult
     public static func apply(_ changes: SyncLocalChanges) -> [SyncedTokenRegistry.Account] {
         var touched: [SyncedTokenRegistry.Account] = []
+        var sharedTrakt: Set<SyncedTokenRegistry.Account> = []
         for (name, value) in changes {
+            if let account = TraktSharedRefreshBootstrap.account(forRecordName: name),
+               TraktSharedRefreshBootstrap.manages(account) {
+                SyncedTokenRegistry.shared.register(service: account.service, account: account.account)
+                sharedTrakt.insert(account)
+                continue
+            }
             guard let account = account(fromRecordName: name) else { continue }
             let store = SyncedTokenRegistry.store(for: account)
             guard let value else {
@@ -114,6 +153,10 @@ public enum TrackerTokenSyncBridge {
                 account: account.account
             )
             touched.append(account)
+        }
+        if !sharedTrakt.isEmpty {
+            let accounts = Array(sharedTrakt)
+            Task { await TraktSharedRefreshBootstrap.synchronize(accounts) }
         }
         if !touched.isEmpty {
             // The services hold their connection phase in memory, so a token

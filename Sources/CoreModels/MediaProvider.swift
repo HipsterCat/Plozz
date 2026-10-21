@@ -22,6 +22,10 @@ public protocol MediaProvider: Sendable {
     /// before publishing those cards as complete identity-index/search evidence.
     var catalogIdentityRequiresEnrichment: Bool { get }
 
+    /// Browsing metadata may omit lazily resolved files. Detail pages should
+    /// refresh `playbackItem` after first paint, without opening a stream.
+    var playbackInventoryRequiresEnrichment: Bool { get }
+
     // MARK: Library browsing
 
     /// Top-level libraries/views available to the user.
@@ -47,12 +51,21 @@ public protocol MediaProvider: Sendable {
     /// ignores the restriction and lets the row-level filter do the work.
     func continueWatching(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem]
 
+    /// Validates library provenance, including account-qualified sources when
+    /// one logical library spans multiple servers.
+    func contains(_ item: MediaItem, inLibrary libraryID: String) -> Bool
+
     /// Recently added items restricted to the given libraries. See
     /// ``continueWatching(limit:inLibraries:)`` for the scoping/tagging contract.
     func latest(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem]
 
     /// Full detail for a single item.
     func item(id: String) async throws -> MediaItem
+
+    /// Authoritative file inventory before playback, without opening a stream.
+    /// Unlike browsing detail, unresolved source discovery must throw rather than
+    /// return a placeholder that could bypass the version picker.
+    func playbackItem(id: String) async throws -> MediaItem
 
     /// Trailers / preview clips for an item (movie or series).
     ///
@@ -94,11 +107,23 @@ public protocol MediaProvider: Sendable {
     /// the sort means restarting paging from `startIndex` 0.
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage
 
-    /// Server-defined collections belonging to this library, ordered/paged as a
-    /// collection list. This is distinct from browsing a collection's members.
+    /// The server's collection list for this library context, ordered/paged as
+    /// collections. Servers may return their user-visible global list instead
+    /// of library-specific groups. Do not reconstruct membership client-side.
+    /// This is distinct from browsing a collection's members.
     /// Providers advertise support with `ProviderCapability.libraryCollections`.
     /// Unsupported providers throw `.notFound`, never a misleading empty page.
     func collections(in libraryID: String, page: PageRequest) async throws -> MediaPage
+
+    /// Optional, incomplete discovery updates. Only the returned page is authoritative.
+    func collections(
+        in libraryID: String, page: PageRequest,
+        progress: @escaping @Sendable (LibraryCollectionProgress) async -> Void
+    ) async throws -> MediaPage
+
+    /// Collections owned by or shared with the current server viewer, including
+    /// ones not published in a library. Advertise `.personalCollections`.
+    func personalCollections(page: PageRequest) async throws -> MediaPage
 
     /// Members of a server-defined collection, not a library's collection list.
     /// Preserve the server's collection order (including smart/custom ordering);
@@ -128,20 +153,38 @@ public protocol MediaProvider: Sendable {
     func letterPosition(in containerID: String, kind: MediaItemKind, letter: String,
                         sort: SortDescriptor) async throws -> Int?
 
-    /// Provider-native "hubs" for a single library — the promoted discovery rows a
-    /// backend defines at the library level (Plex `/hubs/sections/{id}`: "More in
-    /// Drama", "Because you watched…", "Top Rated", …).
-    ///
-    /// These are surfaced **in unmerged Home mode only**, and are *additional* to
-    /// the uniform base rows (Recently Added / Continue Watching) the Home
-    /// aggregator synthesises for every provider from the existing scoped feeds. So
-    /// a conformer must return ONLY its extra discovery rows and omit any hub that
-    /// duplicates the base (a recently-added or on-deck/continue-watching hub), plus
-    /// drop empty hubs. `limit` caps the cards per returned row.
-    ///
-    /// Default: none — Jellyfin and other backends without a native hub concept
-    /// inherit this and show just the uniform base rows.
+    /// Library Recommended shelves from Plex hubs or MediaBrowser movie
+    /// recommendations. Omit empty shelves and duplicates of canonical Resume
+    /// and Latest feeds. `limit` caps cards per row; Home uses `homeHubs` to
+    /// distinguish native defaults from optional recommendations.
     func libraryHubs(libraryID: String, kind: MediaItemKind, limit: Int) async throws -> [LibrarySection]
+
+    /// Home-specific recommendations. The arranger may additionally enumerate
+    /// optional library recommendations; normal Home loads need only its selected rows.
+    func homeHubs(
+        libraryID: String, kind: MediaItemKind, limit: Int, includeUnpromoted: Bool
+    ) async throws -> [LibrarySection]
+
+    /// Provider-style Home can separate MediaBrowser's Resume and Next Up feeds
+    /// without changing Continue Watching used by details and other clients.
+    func homeContinueWatching(
+        limit: Int, inLibraries libraryIDs: [String]?, separateNextUp: Bool
+    ) async throws -> [MediaItem]
+
+    func homeNextUp(libraryID: String, limit: Int) async throws -> [MediaItem]
+
+    /// Nil explicitly means this provider does not expose a Home layout.
+    /// Transport, permission and decoding failures must throw instead.
+    func serverHomeLayout() async throws -> ServerHomeLayout?
+
+    func serverHomeItems(
+        section: ServerHomeSection, limit: Int, excludingLibraryIDs: Set<String>
+    ) async throws -> [MediaItem]
+
+    /// One refresh-scoped batch lets providers share a library's hub payload.
+    func serverHomeItems(
+        sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>
+    ) async -> [String: Result<[MediaItem], AppError>]
 
     // MARK: Search
 
@@ -340,6 +383,23 @@ public protocol InteractiveBrowseActivityReporting: Sendable {
 /// host, and effective port must all match, so a path that merely resembles a
 /// provider endpoint on Plex Discover or a CDN is never adopted as local art.
 public enum MediaProviderURLIdentity {
+    /// Prefer the specific proxy prefix when approved bases share an origin.
+    public static func matchingBaseURL(for url: URL, among bases: [URL]) -> URL? {
+        bases.filter { relativeResourcePath(of: url, under: $0) != nil }
+            .max { $0.path.count < $1.path.count }
+    }
+
+    public static func relativeEncodedResourcePath(of url: URL, under baseURL: URL) -> String? {
+        guard relativeResourcePath(of: url, under: baseURL) != nil,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let base = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
+        let basePath = base.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let prefix = basePath.isEmpty ? "" : "/" + basePath
+        guard components.percentEncodedPath == prefix
+            || components.percentEncodedPath.hasPrefix(prefix + "/") else { return nil }
+        return String(components.percentEncodedPath.dropFirst(prefix.count).drop(while: { $0 == "/" }))
+    }
+
     public static func relativeResourcePath(
         of url: URL,
         under baseURL: URL
@@ -419,8 +479,24 @@ public enum MediaProviderURLIdentity {
 // conformer to implement it.
 public extension MediaProvider {
     var catalogIdentityRequiresEnrichment: Bool { false }
+    var playbackInventoryRequiresEnrichment: Bool { false }
+
+    func playbackItem(id: String) async throws -> MediaItem {
+        try await item(id: id)
+    }
 
     func collections(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
+    }
+
+    func collections(
+        in libraryID: String, page: PageRequest,
+        progress: @escaping @Sendable (LibraryCollectionProgress) async -> Void
+    ) async throws -> MediaPage {
+        try await collections(in: libraryID, page: page)
+    }
+
+    func personalCollections(page: PageRequest) async throws -> MediaPage {
         throw AppError.notFound
     }
 
@@ -466,10 +542,49 @@ public extension MediaProvider {
             .first { $0.letter == letter }?.startIndex
     }
 
-    /// Default: no native hubs. Only Plex (via `/hubs/sections/{id}`) overrides
-    /// this; Jellyfin and test doubles inherit the safe empty result, so unmerged
-    /// Home falls back to the uniform base rows for them.
+    /// Providers without library recommendations inherit an empty inventory.
     func libraryHubs(libraryID: String, kind: MediaItemKind, limit: Int) async throws -> [LibrarySection] { [] }
+
+    func homeHubs(
+        libraryID: String, kind: MediaItemKind, limit: Int, includeUnpromoted: Bool
+    ) async throws -> [LibrarySection] {
+        try await libraryHubs(libraryID: libraryID, kind: kind, limit: limit)
+    }
+
+    func homeContinueWatching(
+        limit: Int, inLibraries libraryIDs: [String]?, separateNextUp: Bool
+    ) async throws -> [MediaItem] {
+        try await continueWatching(limit: limit, inLibraries: libraryIDs)
+    }
+
+    func homeNextUp(libraryID: String, limit: Int) async throws -> [MediaItem] { [] }
+
+    func serverHomeLayout() async throws -> ServerHomeLayout? { nil }
+
+    func serverHomeItems(
+        section: ServerHomeSection, limit: Int, excludingLibraryIDs: Set<String>
+    ) async throws -> [MediaItem] {
+        throw AppError.notFound
+    }
+
+    func serverHomeItems(
+        sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>
+    ) async -> [String: Result<[MediaItem], AppError>] {
+        var results: [String: Result<[MediaItem], AppError>] = [:]
+        for section in sections {
+            do {
+                try Task.checkCancellation()
+                results[section.id] = .success(try await serverHomeItems(
+                    section: section, limit: limit, excludingLibraryIDs: excludingLibraryIDs
+                ))
+            } catch is CancellationError {
+                results[section.id] = .failure(.cancelled)
+            } catch {
+                results[section.id] = .failure((error as? AppError) ?? .unknown(""))
+            }
+        }
+        return results
+    }
 
     /// Default: cannot query by person, so a person page shows no library credits
     /// for this source rather than failing. Jellyfin/Emby (`PersonIds`), Plex
@@ -533,6 +648,10 @@ public extension MediaProvider {
         try await continueWatching(limit: limit)
     }
 
+    func contains(_ item: MediaItem, inLibrary libraryID: String) -> Bool {
+        item.libraryID == libraryID
+    }
+
     /// Default: ignore the library restriction. See
     /// ``continueWatching(limit:inLibraries:)``.
     func latest(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem] {
@@ -583,15 +702,18 @@ public struct PageRequest: Equatable, Sendable {
     /// How the container's children should be ordered. All pages of a browse
     /// session share one descriptor; changing it restarts paging from index 0.
     public var sort: SortDescriptor
+    public var filters: LibraryFilters
 
     public init(
         startIndex: Int = 0,
         limit: Int = PageRequest.defaultLimit,
-        sort: SortDescriptor = .default
+        sort: SortDescriptor = .default,
+        filters: LibraryFilters = .all
     ) {
         self.startIndex = startIndex
         self.limit = limit
         self.sort = sort
+        self.filters = filters
     }
 
     /// Default page size tuned for a tvOS 10-foot grid: large enough to fill the
@@ -600,7 +722,7 @@ public struct PageRequest: Equatable, Sendable {
 
     /// The request for the page that follows this one, preserving the sort order.
     public func next() -> PageRequest {
-        PageRequest(startIndex: startIndex + limit, limit: limit, sort: sort)
+        PageRequest(startIndex: startIndex + limit, limit: limit, sort: sort, filters: filters)
     }
 }
 
@@ -619,6 +741,19 @@ public enum SortField: String, CaseIterable, Codable, Sendable {
     case runtime
     /// Server-shuffled random order.
     case random
+    case year
+    case criticRating
+    case userRating
+    case contentRating
+    case progress
+    case plays
+    case lastPlayed
+
+    /// Providers without an explicit capability contract retain their original
+    /// options, rather than accidentally advertising newly added server keys.
+    public static let legacyFields: [Self] = [
+        .name, .dateAdded, .releaseDate, .communityRating, .runtime, .random
+    ]
 
     /// A short, human-readable label for a sort menu.
     public var displayName: LocalizedStringResource {
@@ -639,8 +774,8 @@ public enum SortField: String, CaseIterable, Codable, Sendable {
             )
         case .communityRating:
             return LocalizedStringResource(
-                "sortField.communityRating",
-                defaultValue: "Rating",
+                "sortField.audienceRating",
+                defaultValue: "Audience Rating",
                 comment: "Library sort menu option."
             )
         case .runtime:
@@ -655,6 +790,13 @@ public enum SortField: String, CaseIterable, Codable, Sendable {
                 defaultValue: "Random",
                 comment: "Library sort menu option."
             )
+        case .year: return "Year"
+        case .criticRating: return "Critic Rating"
+        case .userRating: return "Your Rating"
+        case .contentRating: return "Content Rating"
+        case .progress: return "Progress"
+        case .plays: return "Most Played"
+        case .lastPlayed: return "Last Watched"
         }
     }
 
@@ -662,7 +804,7 @@ public enum SortField: String, CaseIterable, Codable, Sendable {
     /// start A→Z; dates, ratings, runtime, and random order put the newest/highest
     /// values first.
     public var defaultDirection: SortDirection {
-        self == .name ? .ascending : .descending
+        self == .name || self == .contentRating ? .ascending : .descending
     }
 }
 
@@ -702,6 +844,20 @@ public struct SortDescriptor: Equatable, Codable, Sendable {
 
     /// The default order for a freshly opened library: name, ascending.
     public static let `default` = SortDescriptor(field: .name, direction: .ascending)
+}
+
+/// Incomplete discovery, with candidate-check counts distinct from the collection count.
+public struct LibraryCollectionProgress: Equatable, Sendable {
+    /// Confirmed members of the library in an append-only prefix of the final sort order.
+    public let items: [MediaItem]
+    public let checked: Int
+    public let total: Int
+
+    public init(items: [MediaItem], checked: Int, total: Int) {
+        self.items = items
+        self.checked = checked
+        self.total = total
+    }
 }
 
 /// One page of a container's children plus the total available, so callers can

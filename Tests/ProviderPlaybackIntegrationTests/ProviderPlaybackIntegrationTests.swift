@@ -178,6 +178,11 @@ final class ProviderPlaybackIntegrationTests: XCTestCase {
             let pausedAt = engine.currentTime
             try await Task.sleep(for: .milliseconds(500))
             guard abs(engine.currentTime - pausedAt) < 0.25 else { throw PlaybackTestFailure.pauseFailed }
+            var maintenanceEvidence = "not-required"
+            if request.isTranscoding, let maintainer = provider as? any StreamingSessionMaintaining {
+                try await maintainer.maintainStreamingSession(request)
+                maintenanceEvidence = "acknowledged"
+            }
             engine.play()
             let seek = Task { await engine.seek(to: configuration.seekSeconds) }
             defer { seek.cancel() }
@@ -211,7 +216,8 @@ final class ProviderPlaybackIntegrationTests: XCTestCase {
                 "case": name, "firstFrameSeconds": firstFrame, "decodedVideoFrames": sustained.frames,
                 "playbackProgressSeconds": sustained.progress, "width": actual.width, "height": actual.height,
                 "videoCodec": actual.codec, "decodedAudioSamples": decodedAudioSamples,
-                "seekPositionSeconds": configuration.seekSeconds, "cleanup": "acknowledged"
+                "seekPositionSeconds": configuration.seekSeconds, "cleanup": "acknowledged",
+                "sessionMaintenance": maintenanceEvidence
             ]
         } catch {
             let position = engine.currentTime

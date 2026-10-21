@@ -1,7 +1,111 @@
 import XCTest
 import UIKit
+import Vision
 
 final class LiveTVMultiviewRemoteTests: XCTestCase {
+    @MainActor
+    func testGlassPlaybackAndMultiviewControlsHaveFocusedContrastAndNativeHeight() throws {
+        try assertPlaybackControlAppearance(reduceGlass: false)
+    }
+
+    @MainActor
+    func testReducedTransparencyPlaybackAndMultiviewControlsHaveFocusedContrastAndNativeHeight() throws {
+        try assertPlaybackControlAppearance(reduceGlass: true)
+    }
+
+    @MainActor
+    func testProductionGuideDoesNotOverrideNativePlaybackAndMultiviewContrast() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--live-root-fixture", "--visual-focus-fixture"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["live-tv-channel-channels-1"].waitForExistence(timeout: 10))
+        startProductionChannel(in: app)
+        select(app.buttons["live-channel-timeline"], in: app)
+        let playback = app.buttons["live-channel-playback"]
+        select(playback, in: app, activate: false)
+        try assertFocusedControl(playback, name: "production-playback", in: app)
+        select(playback, in: app)
+        XCUIRemote.shared.press(.menu)
+        select(playback, in: app, activate: false)
+        try assertFocusedControl(playback, name: "production-playback-menu-return", in: app)
+        select(app.buttons["live-channel-multiview"], in: app)
+        for name in ["favorite", "watch", "done", "layout"] {
+            let button = app.buttons["live-multiview-\(name)"]
+            select(button, in: app, activate: false)
+            try assertFocusedControl(button, name: "production-multiview-\(name)", showsTitle: true, in: app)
+        }
+    }
+
+    @MainActor
+    private func assertPlaybackControlAppearance(reduceGlass: Bool) throws {
+        continueAfterFailure = true
+        let app = launchVisualFixture(reduceGlass: reduceGlass)
+        defer { app.terminate() }
+        select(app.buttons["live-channel-timeline"], in: app)
+        let reference = app.buttons["live-channel-multiview"].frame.size
+        for name in ["playback", "audio", "subtitles", "multiview"] {
+            let button = app.buttons["live-channel-\(name)"]
+            select(button, in: app, activate: false)
+            try assertFocusedControl(button, name: "transport-\(name)-\(reduceGlass)", in: app)
+        }
+        select(app.buttons["live-channel-multiview"], in: app)
+        for name in ["watch", "done", "add", "layout", "replace"] {
+            let button = app.buttons["live-multiview-\(name)"]
+            select(button, in: app, activate: false)
+            XCTAssertLessThanOrEqual(button.frame.height, reference.height * 1.2,
+                                    "Multiview must use the transport button height.")
+            XCTAssertFalse(button.label.isEmpty, "\(name) must retain its accessible title.")
+            try assertFocusedControl(button, name: "multiview-\(name)-\(reduceGlass)", showsTitle: true, in: app)
+        }
+        select(app.buttons["live-multiview-layout"], in: app)
+        selectMenuItem("Corner", in: app)
+        XCTAssertTrue(app.buttons["live-multiview-add"].exists, "The native Layout menu must still work.")
+        assertMetrics("Engines 1 loads 1 stops 0 audible 1", in: app)
+    }
+
+    @MainActor
+    private func assertFocusedControl(
+        _ button: XCUIElement, name: String, showsTitle: Bool = false, in app: XCUIApplication
+    ) throws {
+        assertNativeFocus(button, in: app)
+        let image = try XCTUnwrap(capture(name, in: app).cgImage)
+        let scale = CGFloat(image.width) / app.frame.width
+        let region = showsTitle ? button.frame.insetBy(dx: 8, dy: 8)
+            : CGRect(x: button.frame.midX - 16, y: button.frame.midY - 16, width: 32, height: 32)
+        let crop = try XCTUnwrap(image.cropping(to: region
+            .applying(CGAffineTransform(scaleX: scale, y: scale))))
+        if showsTitle {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: crop).perform([request])
+            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: " ")
+            XCTAssertTrue(text.localizedCaseInsensitiveContains(button.label),
+                          "Multiview must visibly name the action: expected \(button.label), rendered \(text)")
+        }
+        var pixels = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+        try pixels.withUnsafeMutableBytes { storage in
+            let context = try XCTUnwrap(CGContext(
+                data: storage.baseAddress, width: crop.width, height: crop.height, bitsPerComponent: 8,
+                bytesPerRow: crop.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+        }
+        let colors = stride(from: 0, to: pixels.count, by: 4).map { offset in
+            (0..<3).map { Int(pixels[offset + $0]) }
+        }
+        let dark = colors.filter { $0.allSatisfy { $0 < 90 } }.count
+        let bright = colors.filter {
+            Double($0[0]) * 0.2126 + Double($0[1]) * 0.7152 + Double($0[2]) * 0.0722 > 170
+        }.count
+        XCTAssertGreaterThan(Double(dark) / Double(colors.count), 0.025,
+                             "\(name) must show a dark label inside its focused fill.")
+        XCTAssertGreaterThan(Double(bright) / Double(colors.count), 0.2,
+                             "\(name) must retain its bright native focus fill.")
+    }
+
     @MainActor
     func testNativePlayerFocusIsRenderedAcrossControlsAndHUDReturn() {
         continueAfterFailure = true
@@ -838,7 +942,8 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
         let candidates = diagnostic.contains("focused=_UIContextMenuCell |")
             ? app.cells.allElementsBoundByIndex
             : app.descendants(matching: .any).matching(NSPredicate(
-                format: "identifier BEGINSWITH %@", "live-multiview-"
+                format: "identifier BEGINSWITH %@ OR identifier BEGINSWITH %@",
+                "live-multiview-", "live-channel-"
             )).allElementsBoundByIndex
         return candidates.first {
             let candidate = $0.frame
@@ -877,9 +982,10 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
     }
 
     @MainActor
-    private func launchVisualFixture() -> XCUIApplication {
+    private func launchVisualFixture(reduceGlass: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--multiview-fixture", "--visual-focus-fixture"]
+        if reduceGlass { app.launchArguments.append("--reduce-panel-glass") }
         app.launch()
         XCTAssertTrue(app.staticTexts["multiview-fixture-player-1"].waitForExistence(timeout: 10))
         capture("visual-fixture-launched", in: app)

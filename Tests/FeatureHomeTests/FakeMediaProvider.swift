@@ -19,6 +19,8 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     SupplementalStreamFactsProviding, @unchecked Sendable {
     let kind: ProviderKind
     let session: UserSession
+    var playbackInventoryRequiresEnrichment = false
+    var playbackItemHandler: (@Sendable (String) async throws -> MediaItem)?
 
     /// Serializes mutation/reads of the call-counter state touched concurrently by
     /// `item(id:)`, `children(of:)`, `libraries()`, and `items(in:page:)`.
@@ -121,18 +123,20 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     init(
         allItems: [MediaItem],
         kind: ProviderKind = .jellyfin,
-        accountID: String = "s"
+        accountID: String = "s",
+        serverName: String = "Home",
+        userName: String = "Alice"
     ) {
         self.allItems = allItems
         self.kind = kind
         self.session = UserSession(
             server: MediaServer(
                 id: accountID,
-                name: "Home",
+                name: serverName,
                 baseURL: URL(string: "http://host:8096")!,
                 provider: kind
             ),
-            userID: "u1", userName: "Alice", deviceID: "d1", accessToken: "TOKEN"
+            userID: "u1", userName: userName, deviceID: "d1", accessToken: "TOKEN"
         )
     }
 
@@ -148,10 +152,29 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     /// Items returned by `continueWatching(limit:)` — empty by default so existing
     /// tests are unaffected; a test that exercises the Continue Watching row sets it.
     var continueWatchingItems: [MediaItem] = []
+    var nextUpItems: [MediaItem] = []
+    var separatesHomeResume = false
+    func homeContinueWatching(
+        limit: Int, inLibraries libraryIDs: [String]?, separateNextUp: Bool
+    ) async throws -> [MediaItem] {
+        let items = try await continueWatching(limit: limit, inLibraries: libraryIDs)
+        return separatesHomeResume && separateNextUp ? items.filter { ($0.resumePosition ?? 0) > 0 } : items
+    }
+    func homeNextUp(libraryID: String, limit: Int) async throws -> [MediaItem] {
+        Array(nextUpItems.prefix(limit))
+    }
     var continueWatchingGate: (@Sendable () async -> Void)?
+    var continueWatchingError: AppError?
     func continueWatching(limit: Int) async throws -> [MediaItem] {
         await continueWatchingGate?()
+        if let continueWatchingError { throw continueWatchingError }
         return Array(continueWatchingItems.prefix(limit))
+    }
+    var recommendationHubs: [LibrarySection] = []
+    var recommendationHubError: AppError?
+    func libraryHubs(libraryID: String, kind: MediaItemKind, limit: Int) async throws -> [LibrarySection] {
+        if let recommendationHubError { throw recommendationHubError }
+        return recommendationHubs
     }
     var latestGate: (@Sendable () async -> Void)?
     func latest(limit: Int) async throws -> [MediaItem] {
@@ -166,6 +189,10 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
         }
         guard let item = allItems.first(where: { $0.id == id }) else { throw AppError.notFound }
         return item
+    }
+    func playbackItem(id: String) async throws -> MediaItem {
+        if let playbackItemHandler { return try await playbackItemHandler(id) }
+        return try await item(id: id)
     }
     /// Optional gate that, when present for a given parent id, suspends the
     /// `children(of:)` call until released. Lets tests observe state published

@@ -71,13 +71,14 @@ enum MetadataHTTP {
         url: URL,
         accept: String = "application/json",
         headers: [String: String] = [:],
-        decoder: JSONDecoder = JSONDecoder()
+        decoder: JSONDecoder = JSONDecoder(),
+        session: URLSession = MetadataHTTP.session
     ) async -> (value: T?, reachable: Bool) {
         var request = URLRequest(url: url)
         request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
-        return await performWithStatus(type, request: request, decoder: decoder)
+        return await performWithStatus(type, request: request, decoder: decoder, session: session)
     }
 
     /// The classified outcome of a metadata HTTP call, so a provider can report
@@ -151,7 +152,8 @@ enum MetadataHTTP {
     private static func performWithStatus<T: Decodable>(
         _ type: T.Type,
         request: URLRequest,
-        decoder: JSONDecoder
+        decoder: JSONDecoder,
+        session: URLSession = MetadataHTTP.session
     ) async -> (value: T?, reachable: Bool) {
         guard let (data, response) = try? await session.data(for: request) else {
             return (nil, false)

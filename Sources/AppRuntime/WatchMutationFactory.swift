@@ -67,8 +67,9 @@ public enum WatchMutationFactory {
         // below is the authoritative cross-server path: series identity followed by
         // exact season+episode lookup. The origin above is always retained.
         if item.kind != .episode {
-            item.sources.forEach { append(accountID: $0.accountID, itemID: $0.itemID, providerKind: $0.providerKind) }
-            additionalSources.forEach { append(accountID: $0.accountID, itemID: $0.itemID, providerKind: $0.providerKind) }
+            for source in item.sources + additionalSources where !item.rejectedSourceIDs.contains(source.id) {
+                append(accountID: source.accountID, itemID: source.itemID, providerKind: source.providerKind)
+            }
         }
         return result
     }
@@ -167,7 +168,8 @@ public enum WatchMutationFactory {
             identities: identity.identities,
             kind: item.kind,
             anchorTitle: identity.anchorTitle,
-            anchorYear: identity.anchorYear
+            anchorYear: identity.anchorYear,
+            rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id))
         )
     }
 
@@ -245,11 +247,14 @@ public enum WatchMutationFactory {
             identities: identity.identities,
             kind: item.kind,
             anchorTitle: identity.anchorTitle,
-            anchorYear: identity.anchorYear
+            anchorYear: identity.anchorYear,
+            rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id))
         )
     }
 
-    public static func playbackStop(item: MediaItem, position: TimeInterval, watchedPercent: Double, primaryAccountID: String?, additionalSources: [MediaSourceRef] = [], crossServerSync: Bool = true, capturedAt: Date = Date()) -> WatchMutation? {
+    /// External players cannot send Plozz's realtime scrobbles. Their return
+    /// opts into a durable Trakt pause without changing completed-watch mirrors.
+    public static func playbackStop(item: MediaItem, position: TimeInterval, watchedPercent: Double, primaryAccountID: String?, additionalSources: [MediaSourceRef] = [], crossServerSync: Bool = true, reportTraktProgress: Bool = false, capturedAt: Date = Date()) -> WatchMutation? {
         let targets = targets(for: item, primaryAccountID: primaryAccountID, additionalSources: additionalSources, crossServerSync: crossServerSync)
         guard !targets.isEmpty else { return nil }
         // OFF: origin-only convergence with no expansion seeds (see `playedToggle`).
@@ -271,7 +276,8 @@ public enum WatchMutationFactory {
                 identities: identity.identities,
                 kind: item.kind,
                 anchorTitle: identity.anchorTitle,
-                anchorYear: identity.anchorYear
+                anchorYear: identity.anchorYear,
+                rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id))
             )
         }
 
@@ -284,12 +290,15 @@ public enum WatchMutationFactory {
             episodeNumber: item.episodeNumber,
             resumePosition: position,
             targets: targets,
+            traktProgress: reportTraktProgress && watchedPercent.isFinite && watchedPercent > 0
+                ? traktIntent(for: item, progress: watchedPercent) : nil,
             episodeOrigin: episode.origin,
             expansionPending: episode.pending || identity.pending,
             identities: identity.identities,
             kind: item.kind,
             anchorTitle: identity.anchorTitle,
-            anchorYear: identity.anchorYear
+            anchorYear: identity.anchorYear,
+            rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id))
         )
     }
 }

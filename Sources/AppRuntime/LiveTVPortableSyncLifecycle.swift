@@ -99,7 +99,7 @@ public final class LiveTVPortableSyncLifecycle {
     }
 }
 
-private final class ObservationLease: @unchecked Sendable {
+final class ObservationLease: @unchecked Sendable {
     let center: NotificationCenter
     let token: NSObjectProtocol
     init(center: NotificationCenter, token: NSObjectProtocol) {

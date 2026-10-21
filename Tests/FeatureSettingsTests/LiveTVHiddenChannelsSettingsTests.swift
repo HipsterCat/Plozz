@@ -5,6 +5,21 @@ import XCTest
 
 @MainActor
 final class LiveTVHiddenChannelsSettingsTests: XCTestCase {
+    func testResetVisibilityPreservesFavoritesAndIndividualHiddenChannels() {
+        let store = HiddenSettingsStore()
+        store.value.organization.region = .init(isEnabled: true, languages: ["en"])
+        let rule = LiveTVCategoryRule(sourceID: "source", name: "News", visibility: .hidden, isFavorite: true)
+        store.value.organization.setCategory(rule)
+        let model = LiveTVHiddenChannelsSettingsModel(store: store)
+        model.reload()
+        XCTAssertTrue(model.hasVisibilityRules)
+        model.resetVisibility()
+        XCTAssertFalse(model.hasVisibilityRules)
+        XCTAssertEqual(model.hiddenChannels.count, 2)
+        XCTAssertEqual(store.value.organization.categories[rule.id]?.isFavorite, true)
+        XCTAssertEqual(store.value.organization.categories[rule.id]?.visibility, .automatic)
+    }
+
     func testUnreadablePreferencesAreNotAnEmptySuccessfulList() {
         let store = HiddenSettingsStore()
         store.failsLoading = true

@@ -248,6 +248,9 @@ public struct MediaSourceMetadata: Hashable, Sendable, Codable {
     public var video: VideoStream?
     public var audio: AudioStream?
     public var subtitle: SubtitleStream?
+    /// All provider-reported audio languages for this file, not subtitle languages.
+    /// Optional so older cached metadata remains readable.
+    public var audioLanguages: [String]?
 
     public init(
         container: String? = nil,
@@ -256,7 +259,8 @@ public struct MediaSourceMetadata: Hashable, Sendable, Codable {
         sourceRevision: String? = nil,
         video: VideoStream? = nil,
         audio: AudioStream? = nil,
-        subtitle: SubtitleStream? = nil
+        subtitle: SubtitleStream? = nil,
+        audioLanguages: [String]? = nil
     ) {
         self.container = container
         self.fileSizeBytes = fileSizeBytes
@@ -265,6 +269,7 @@ public struct MediaSourceMetadata: Hashable, Sendable, Codable {
         self.video = video
         self.audio = audio
         self.subtitle = subtitle
+        self.audioLanguages = audioLanguages?.isEmpty == false ? audioLanguages : nil
     }
 
     /// True when no useful field was populated (lets callers skip wiring it up).
@@ -276,6 +281,7 @@ public struct MediaSourceMetadata: Hashable, Sendable, Codable {
             && video == nil
             && audio == nil
             && subtitle == nil
+            && audioLanguages?.isEmpty != false
     }
 }
 
@@ -315,6 +321,9 @@ public struct PlaybackRequest: Hashable, Sendable {
     public var playSessionID: String?
     public var audioTracks: [MediaTrack]
     public var subtitleTracks: [MediaTrack]
+    /// Provider stream index already encoded into this rendition's video pixels.
+    /// The client must not draw it again; changing it requires a new rendition.
+    public var burnedInSubtitleTrackID: Int?
     /// Where to resume from, in seconds.
     public var startPosition: TimeInterval
     /// Whether the server is transcoding this stream (a `TranscodingUrl` was
@@ -339,6 +348,12 @@ public struct PlaybackRequest: Hashable, Sendable {
     /// source) means the custom player simply shows no scrub preview — it never
     /// blocks playback.
     public var scrubPreview: ScrubPreviewSource?
+    /// Original file the player may decode scrub stills from when the server
+    /// has no previews. Kept separately from `originalFileSource`, which a
+    /// server transcode clears so playback never falls back to the original:
+    /// reading a few keyframes for previews is fine where replaying it is not.
+    /// Not part of the memberwise init so provider call sites stay untouched.
+    public var scrubStillSource: PlaybackSource?
     /// Whether the resolved `streamURL` is already a manifest/playlist-style stream
     /// (server HLS or a local-remux HLS facade) and therefore should be fed
     /// straight to AVPlayer rather than wrapped for subtitle injection.
@@ -361,6 +376,10 @@ public struct PlaybackRequest: Hashable, Sendable {
     /// express no preference (engine uses the container default). Not part of the
     /// memberwise init so the many provider construction sites stay untouched.
     public var preferredAudioLanguages: [String] = []
+    /// TrueHD Atmos/DTS:X profile preference, not inferred from provider metadata.
+    /// Unsupported platforms and playback paths ignore this request.
+    public var trueHDAtmosEnabled: Bool = PlaybackSettings.default.trueHDAtmosEnabled
+    public var dolbyVisionFELEnabled: Bool = PlaybackSettings.default.dolbyVisionFELEnabled
     /// Explicit provider/container stream index used only when a resolved
     /// language cannot match because every audio track is untagged. Language
     /// matching remains authoritative whenever tags exist; this deterministic

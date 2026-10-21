@@ -1,6 +1,7 @@
 import Foundation
 import CoreModels
 import CoreNetworking
+import ProviderIPTV
 
 /// Persists household accounts while keeping all credential bytes in the
 /// user-independent Keychain.
@@ -18,6 +19,7 @@ public protocol AccountPersisting: Sendable {
         revision: CredentialRevision
     ) throws -> MediaShareCredentialEnvelope
     func add(_ account: Account, token: String) throws
+    func registerAuthenticatedSession(_ session: UserSession) throws -> AccountRegistration
     func addMediaShare(
         _ account: Account,
         credential: MediaShareCredentialEnvelope,
@@ -28,9 +30,23 @@ public protocol AccountPersisting: Sendable {
     func recoverCredentialMutations() throws
     @discardableResult
     func updateMediaShareLibrary(from descriptor: SyncedAccountDescriptor) throws -> Bool
+    func updateServerAddresses(expected: Account, alternatives: [URL]) throws
+    func updateServerMetadata(expected: Account, server: MediaServer) throws
+}
+
+public struct AccountRegistration: Sendable {
+    public let account: Account
+    public let previousAccount: Account?
 }
 
 public extension AccountPersisting {
+    func updateServerMetadata(expected: Account, server: MediaServer) throws {
+        throw AccountStoreError.metadataUpdatesUnavailable
+    }
+
+    func updateServerAddresses(expected: Account, alternatives: [URL]) throws {
+        throw AccountStoreError.metadataUpdatesUnavailable
+    }
     @discardableResult
     func retryUnconfirmedCredentials() -> Bool { false }
     @discardableResult
@@ -77,6 +93,12 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
     private static let processMutationLock = NSLock()
     private static let credentialCacheGenerationLock = NSLock()
     nonisolated(unsafe) private static var credentialCacheGeneration: UInt64 = 0
+    private static let catalogMaintenanceQueue = DispatchQueue(label: "com.plozz.iptv.cache-maintenance", qos: .utility)
+    private var catalogMaintenance: (directory: URL, inventoryStore: SecureStore)?
+    private var catalogMaintenanceQueued = false
+    private var catalogMaintenanceRequested = false
+    private var catalogMaintenanceSucceeded = false
+    private var removedCatalogs: Set<UUID> = []
 
     // This is intentionally a new, migration-free schema. The app is still in
     // tester-only distribution, so old account records are ignored and users
@@ -128,6 +150,7 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
     public func loadAccounts() -> [Account] {
         lock.lock()
         defer { lock.unlock() }
+        if !catalogMaintenanceSucceeded { scheduleCatalogMaintenanceLocked() }
         synchronizeCredentialCacheGenerationLocked()
         let result = visibleAccountsResultLocked()
         let accounts = result.accounts
@@ -291,6 +314,90 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
         cachedTokens.removeAll(keepingCapacity: true)
         observedCredentialCacheGeneration =
             Self.advanceCredentialCacheGeneration()
+        scheduleCatalogMaintenanceLocked()
+    }
+
+    func enableIPTVCatalogMaintenance(directory: URL, inventoryStore: SecureStore) {
+        lock.withLock {
+            catalogMaintenance = (directory, inventoryStore)
+            scheduleCatalogMaintenanceLocked()
+        }
+    }
+
+    private func scheduleCatalogMaintenanceLocked() {
+        guard catalogMaintenance != nil else { return }
+        catalogMaintenanceRequested = true
+        guard !catalogMaintenanceQueued else { return }
+        catalogMaintenanceQueued = true
+        Self.catalogMaintenanceQueue.async { [self] in
+            while let configuration = lock.withLock({ () -> (directory: URL, inventoryStore: SecureStore)? in
+                guard catalogMaintenanceRequested else {
+                    catalogMaintenanceQueued = false
+                    return nil
+                }
+                catalogMaintenanceRequested = false
+                return catalogMaintenance
+            }) {
+                do {
+                    let succeeded = try maintainIPTVCatalogs(
+                        directory: configuration.directory, inventoryStore: configuration.inventoryStore
+                    )
+                    lock.withLock { catalogMaintenanceSucceeded = succeeded }
+                } catch {
+                    lock.withLock { catalogMaintenanceSucceeded = false }
+                    PlozzLog.auth.error("IPTV cache maintenance deferred; storage or credential inventory unavailable")
+                }
+            }
+        }
+    }
+
+    /// Uses uncached, throwing reads of every household IPTV credential, never the active profile subset.
+    @discardableResult
+    func maintainIPTVCatalogs(directory: URL, inventoryStore: SecureStore) throws -> Bool {
+        let catalogs = try IPTVCatalogStorage.catalogs(in: directory)
+        guard !catalogs.isEmpty else { return true }
+        try Self.processMutationLock.withLock {
+            try lock.withLock {
+                // An absent household record may still await per-user Keychain promotion.
+                // Only an explicitly persisted empty list authorizes empty-inventory cleanup.
+                guard let raw = try inventoryStore.readString(for: accountsKey) else {
+                    throw AppError.unauthorized
+                }
+                guard let data = raw.data(using: .utf8) else { throw AccountStoreError.decodingFailed }
+                let accounts = try JSONDecoder().decode([Account].self, from: data)
+                var identities = Set<UUID>()
+                for account in accounts where account.server.provider == .iptv {
+                    guard let token = try inventoryStore.readString(for: tokenKey(account.id)) else {
+                        throw AppError.unauthorized
+                    }
+                    identities.insert(try IPTVCredential.decode(token).identity)
+                }
+                try IPTVCatalogStorage.removeUnreferenced(
+                    catalogs, retaining: identities, removed: removedCatalogs
+                ) { [weak self] in
+                    guard let self else { return }
+                    self.lock.withLock { self.scheduleCatalogMaintenanceLocked() }
+                }
+            }
+        }
+        var reclaimed = true
+        for catalog in catalogs {
+            let succeeded = try IPTVCatalogStorage.reclaimJournal(at: catalog)
+            reclaimed = succeeded && reclaimed
+        }
+        return reclaimed
+    }
+
+    private func rememberRemovedCatalogLocked(for account: Account) {
+        guard account.server.provider == .iptv else { return }
+        do {
+            guard let token = try secureStore.readString(for: tokenKey(account.id)) else {
+                throw AppError.unauthorized
+            }
+            removedCatalogs.insert(try IPTVCredential.decode(token).identity)
+        } catch {
+            PlozzLog.auth.error("Removed IPTV catalogue identity unavailable; preserving recent cache files")
+        }
     }
 
     private static func currentCredentialCacheGeneration() -> UInt64 {
@@ -351,6 +458,80 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
         } else {
             try addManagedAccountLocked(account, token: token)
         }
+    }
+
+    /// Reconnects an exact server/login without replacing the account ID referenced
+    /// by profiles, Plex Home bindings, libraries, and cached media.
+    public func registerAuthenticatedSession(_ session: UserSession) throws -> AccountRegistration {
+        Self.processMutationLock.lock()
+        defer { Self.processMutationLock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
+        defer { invalidateCredentialCacheAfterMutationLocked() }
+        let accounts = try persistedAccountsLockedThrowing()
+        var account = Account(id: Account.stableID(for: session), from: session)
+        let matchesIdentity: (Account) -> Bool = {
+            $0.server.provider == session.server.provider
+                && $0.server.id == session.server.id
+                && $0.userID == session.userID
+        }
+        let exact = accounts.first { $0.id == account.id }
+        if let exact, !matchesIdentity(exact) { throw AppError.conflict }
+        let hasKnownIdentity = !session.server.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !session.userID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let previous = exact ?? (hasKnownIdentity ? accounts.first(where: matchesIdentity) : nil)
+        if let previous {
+            account.id = previous.id
+            account.addedAt = previous.addedAt
+            account.server.alternateConnectionURLs = previous.server.alternateConnectionURLs
+        }
+        if account.server.provider == .mediaShare {
+            let credential = try legacySMBInputCredential(account: account, password: session.accessToken)
+            try addMediaShareLocked(account, credential: credential, generatedPrivateKey: nil)
+            guard let saved = try persistedAccountsLockedThrowing().first(where: { $0.id == account.id }) else {
+                throw AccountStoreError.mediaShareCredentialInvariantViolation
+            }
+            return AccountRegistration(account: saved, previousAccount: previous)
+        }
+        let saved = try addManagedAccountLocked(
+            account, token: session.accessToken, activate: previous == nil
+        )
+        return AccountRegistration(account: saved, previousAccount: previous)
+    }
+
+    public func updateServerAddresses(expected: Account, alternatives: [URL]) throws {
+        guard [.jellyfin, .emby, .plex, .silo].contains(expected.server.provider) else {
+            throw AccountStoreError.metadataUpdatesUnavailable
+        }
+        Self.processMutationLock.lock()
+        defer { Self.processMutationLock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
+        var accounts = try persistedAccountsLockedThrowing()
+        guard let index = accounts.firstIndex(where: { $0.id == expected.id }),
+              accounts[index] == expected else { throw AppError.conflict }
+        accounts[index].server.alternateConnectionURLs = alternatives.isEmpty ? nil : alternatives
+        try saveAccountsLocked(accounts)
+        invalidateCredentialCacheAfterMutationLocked()
+    }
+
+    public func updateServerMetadata(expected: Account, server: MediaServer) throws {
+        guard expected.server.provider.usesMediaBrowserAPI,
+              server.provider == expected.server.provider,
+              server.id == expected.server.id,
+              server.alternateConnectionURLs == expected.server.alternateConnectionURLs else {
+            throw AccountStoreError.metadataUpdatesUnavailable
+        }
+        Self.processMutationLock.lock()
+        defer { Self.processMutationLock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
+        var accounts = try persistedAccountsLockedThrowing()
+        guard let index = accounts.firstIndex(where: { $0.id == expected.id }),
+              accounts[index] == expected else { throw AppError.conflict }
+        accounts[index].server = server
+        try saveAccountsLocked(accounts)
+        invalidateCredentialCacheAfterMutationLocked()
     }
 
     public func credential(accountID: String, revision: CredentialRevision) throws -> String {
@@ -463,12 +644,16 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
         }
     }
 
-    private func addManagedAccountLocked(_ account: Account, token: String) throws {
+    @discardableResult
+    private func addManagedAccountLocked(
+        _ account: Account, token: String, activate: Bool = true
+    ) throws -> Account {
         var accounts = try persistedAccountsLockedThrowing()
         var persistedAccount = account
         if let index = accounts.firstIndex(where: { $0.id == account.id }) {
             let existing = accounts[index]
-            let existingToken = secureStore.string(for: tokenKey(account.id))
+            let existingToken = try secureStore.readString(for: tokenKey(account.id))
+            if existingToken != token { rememberRemovedCatalogLocked(for: existing) }
             persistedAccount.credentialRevision = existingToken == token
                 ? existing.credentialRevision
                 : CredentialRevision()
@@ -478,8 +663,9 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
         }
         try secureStore.setString(token, for: tokenKey(account.id))
         try saveAccountsLocked(accounts)
-        addToActiveSetLocked(account.id, within: accounts)
+        if activate { addToActiveSetLocked(account.id, within: accounts) }
         PlozzLog.auth.info("Added account for user \(account.userName)")
+        return persistedAccount
     }
 
     private func addMediaShareLocked(
@@ -875,6 +1061,7 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
     private func removeLocked(id: String) throws {
         var accounts = try persistedAccountsLockedThrowing()
         guard let account = accounts.first(where: { $0.id == id }) else { return }
+        rememberRemovedCatalogLocked(for: account)
 
         if account.server.provider == .mediaShare {
             let infrastructure = try mediaShareInfrastructure()

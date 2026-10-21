@@ -82,6 +82,7 @@ public struct SiloDevicePoll: Decodable, Sendable, CustomStringConvertible {
     public let poll_after: Int
     public let temporary: Bool
     public let tokens: SiloTokenPair?
+    public let expires_at: String?
     public var description: String { "SiloDevicePoll(status: \(status), credentials: <redacted>)" }
 }
 
@@ -99,8 +100,11 @@ public struct SiloAuthentication: Sendable {
         do {
             let info: Info = try await request("/system/info")
             guard info.api_major == 2 else { throw SiloAuthenticationError.unsupportedServer }
-        } catch AppError.notFound {
-            throw SiloAuthenticationError.unsupportedServer
+        } catch let failure as SiloSetupFailure where failure.underlying == .notFound {
+            throw SiloSetupFailure(
+                .init(stage: .validation, reason: .unsupported, httpStatus: failure.diagnostic.httpStatus),
+                underlying: .notFound
+            )
         }
     }
 
@@ -166,7 +170,7 @@ public struct SiloAuthentication: Sendable {
             "/playback/capabilities", token: tokens.access_token,
             profileID: profile.id, profileToken: profileToken)
         guard let installationID = capabilities.installation_id, !installationID.isEmpty else {
-            throw AppError.invalidResponse
+            throw SiloSetupFailure(.init(stage: .session, reason: .invalidResponse))
         }
         let selectedName = serverName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = selectedName.flatMap {
@@ -180,19 +184,49 @@ public struct SiloAuthentication: Sendable {
             accessToken: try credential.encoded())
     }
 
+    /// Dispose of a login used only to approve an alternate address. This never
+    /// touches the saved account's existing rotating credential.
+    public func endVerificationSession(_ session: UserSession) async throws {
+        let credential = try SiloCredential.decode(session.accessToken)
+        try await endVerificationLogin(accessToken: credential.accessToken)
+    }
+
+    public func endVerificationLogin(accessToken: String) async throws {
+        _ = try await http.send(
+            SiloAPI.endpoint("/auth/logout", method: .post, token: accessToken),
+            baseURL: baseURL
+        )
+    }
+
     func request<T: Decodable>(
         _ path: String, token: String? = nil, profileID: String? = nil,
         profileToken: String? = nil, query: [URLQueryItem] = []
     ) async throws -> T {
         let endpoint = SiloAPI.endpoint(path, query: query, token: token, profileID: profileID, profileToken: profileToken)
-        return try await http.decode(T.self, from: endpoint, baseURL: baseURL, decoder: JSONDecoder())
+        return try await SiloSetupRequest.decode(
+            T.self, endpoint: endpoint, baseURL: baseURL, http: http, stage: Self.stage(for: path)
+        )
     }
 
     func request<T: Decodable, B: Encodable>(
         _ path: String, method: HTTPMethod, body: B, token: String? = nil
     ) async throws -> T {
         let endpoint = try SiloAPI.endpoint(path, method: method, token: token).jsonBody(body)
-        return try await http.decode(T.self, from: endpoint, baseURL: baseURL, decoder: JSONDecoder())
+        return try await SiloSetupRequest.decode(
+            T.self, endpoint: endpoint, baseURL: baseURL, http: http, stage: Self.stage(for: path)
+        )
+    }
+
+    private static func stage(for path: String) -> SiloSetupDiagnostic.Stage {
+        switch path {
+        case "/system/info": .validation
+        case "/auth/device/capability": .capability
+        case "/auth/device/start": .start
+        case "/auth/device/poll": .poll
+        case "/profiles": .profiles
+        case "/playback/capabilities": .session
+        default: .pin
+        }
     }
 }
 

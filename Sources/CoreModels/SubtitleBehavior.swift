@@ -20,7 +20,8 @@ public struct SubtitleBehavior: Codable, Equatable, Sendable {
     /// match (so every client benefits). Off by default.
     public var autoDownloadSubtitles: Bool
     /// Accessibility: how hearing-impaired (SDH) subtitles are treated when
-    /// searching/auto-downloading. Prefer-non-SDH by default (mirrors Plex).
+    /// automatically selecting tracks and searching/auto-downloading.
+    /// Prefer-non-SDH remains the default; saved profile choices are preserved.
     public var hearingImpairedPreference: HearingImpairedPreference
     /// How forced (foreign-passage-only) subtitles are treated when searching/
     /// auto-downloading. Prefer-non-forced by default (mirrors Plex).

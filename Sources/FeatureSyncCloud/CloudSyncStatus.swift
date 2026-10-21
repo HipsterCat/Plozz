@@ -1,6 +1,43 @@
 import Foundation
 import Observation
 
+public enum CloudSyncRecoveryResult: Equatable, Sendable {
+    case completed
+    case unavailable
+    case interrupted
+    case failed
+}
+
+public enum CloudSyncRecoveryAction: Sendable {
+    case reload
+    case reset
+    case erase
+
+    public var progressMessage: LocalizedStringResource {
+        switch self {
+        case .reload: "Reloading from iCloud…"
+        case .reset: "Resetting iCloud Sync…"
+        case .erase: "Erasing Plozz sync data…"
+        }
+    }
+
+    public func message(for result: CloudSyncRecoveryResult) -> LocalizedStringResource {
+        switch (self, result) {
+        case (.reload, .completed): "Reloaded the latest settings from iCloud."
+        case (.reset, .completed): "Reset iCloud Sync using this device's settings."
+        case (.erase, .completed): "Erased Plozz sync data. iCloud Sync is off on this device."
+        case (.erase, .unavailable): "Plozz could not access iCloud. Check that you are signed in to iCloud and try again."
+        case (_, .unavailable): "iCloud Sync is unavailable. Check that it is on and you are signed in to iCloud."
+        case (.reload, .interrupted): "Reload was interrupted. Try again."
+        case (.reset, .interrupted): "Reset was interrupted. Try again."
+        case (.erase, .interrupted): "Erasing was interrupted. Some data may already be deleted. Try again."
+        case (.reload, .failed): "Couldn’t reload from iCloud. Try again."
+        case (.reset, .failed): "Couldn't reset iCloud Sync. Try again."
+        case (.erase, .failed): "Could not finish erasing Plozz sync data. Some data may already be deleted. Check iCloud and try again."
+        }
+    }
+}
+
 // MARK: - CloudSyncStatus
 //
 // Observable, MainActor-isolated status the UI binds to for a "last synced" line
@@ -33,13 +70,29 @@ public final class CloudSyncStatus {
     /// across devices: if one shows 0 (or fewer) than another, that device isn't
     /// receiving — the fastest on-device confirmation of a one-way sync.
     public internal(set) var syncedRecordCount: Int?
+    public private(set) var isRecovering = false
+    public private(set) var recoveryResult: CloudSyncRecoveryResult?
 
     /// Debounces error display: a transient conflict that self-heals on the engine's
     /// own retry shouldn't flash a scary "Couldn't sync". The error is only shown if
-    /// it's still pending after a short grace period without a success/syncing update.
+    /// it's still pending after a short grace period without verified recovery.
     @ObservationIgnored private var pendingErrorTask: Task<Void, Never>?
 
     public init() {}
+
+    /// Keep manual recovery separate from the engine's intermediate fetch/send phases.
+    @discardableResult
+    public func recover(
+        operation: @Sendable () async -> CloudSyncRecoveryResult
+    ) async -> CloudSyncRecoveryResult? {
+        guard !isRecovering else { return nil }
+        isRecovering = true
+        recoveryResult = nil
+        let result = await operation()
+        recoveryResult = result
+        isRecovering = false
+        return result
+    }
 
     /// Non-error phase update (idle/syncing/signedOut/disabled). Cancels any pending
     /// debounced error, since we've made forward progress.
@@ -52,13 +105,15 @@ public final class CloudSyncStatus {
     /// Record an error, but only surface it after a grace period — so a blip that
     /// the engine immediately resolves (a following idle) never shows red.
     func setError(_ message: String, diagnostic: String?) {  // l10n:content — OS/CloudKit-supplied, already-localized error text
-        pendingErrorTask?.cancel()
+        lastErrorMessage = message
+        if let diagnostic { lastDiagnostic = diagnostic }
+        // Repeated completion/retry events must not postpone a persistent error.
+        guard phase != .error, pendingErrorTask == nil else { return }
         pendingErrorTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3_500_000_000)
             guard !Task.isCancelled, let self else { return }
             self.phase = .error
-            self.lastErrorMessage = message
-            if let diagnostic { self.lastDiagnostic = diagnostic }
+            self.pendingErrorTask = nil
         }
     }
 

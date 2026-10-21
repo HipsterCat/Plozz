@@ -27,7 +27,7 @@ public struct AdaptiveMediaMetadataRow: View {
     public var body: some View {
         if !facts.isEmpty || !ratings.isEmpty || !badges.isEmpty || familyGuidanceAge != nil {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
+                WrappingHStackLayout(spacing: 12, lineSpacing: 8) {
                     MetadataFactsText(facts: facts)
                     if let familyGuidanceAge {
                         FamilyGuidanceAgeBadge(age: familyGuidanceAge)
@@ -78,7 +78,7 @@ private struct MetadataFactsAndFormats: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
+            WrappingHStackLayout(spacing: 12, lineSpacing: 8) {
                 MetadataFactsText(facts: facts)
                 ForEach(badges) { badge in
                     MetadataMediaBadgeChip(badge: badge)

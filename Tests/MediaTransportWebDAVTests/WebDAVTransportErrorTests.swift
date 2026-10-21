@@ -60,6 +60,7 @@ final class WebDAVTransportErrorTests: XCTestCase {
             (.pathEscapesRoot, "protocolViolation", false),
             (.rangeNotSupported(reason: "x"), "unsupportedRange", false),
             (.seekableRequiresStrongETag, "unsupportedRange", false),
+            (.seekableRequiresValidator, "unsupportedRange", false),
             (.rangeValidationFailed(reason: "x"), "sourceChanged", false),
             (.sourceChanged(reason: "x"), "sourceChanged", false),
             (.cancelled, "cancelled", false),

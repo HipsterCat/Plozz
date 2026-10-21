@@ -188,11 +188,12 @@ final class UniversalWatchlistActionTests: XCTestCase {
         coordinator.perform(.addToWatchlist, on: item, context: .none)
         await waitUntil { events.filter { $0 == "fanout" }.count == 1 }
         coordinator.perform(.removeFromWatchlist, on: item, context: .none)
+        XCTAssertEqual(feedback.last, "Removed from Watchlist")
         await waitUntil { events.filter { $0 == "fanout" }.count == 2 }
 
         XCTAssertEqual(
             feedback,
-            ["Added to Watchlist", "Removing from Watchlist…"]
+            ["Added to Watchlist", "Removed from Watchlist"]
         )
         XCTAssertEqual(
             events,
@@ -206,6 +207,10 @@ final class UniversalWatchlistActionTests: XCTestCase {
     func testPressIsAcknowledgedImmediatelyAndAFailureSaysSo() async {
         let gate = WatchlistPersistenceGate()
         var feedback: [String] = []
+        var acknowledgements = 0
+        var failures = 0
+        var confirmations = 0
+        var saved = false
         let successful = MediaItemActionCoordinator(
             providerResolver: { _ in nil },
             primaryAccountID: { nil },
@@ -215,6 +220,12 @@ final class UniversalWatchlistActionTests: XCTestCase {
             performUniversalWatchlist: { _, _ in await gate.wait() },
             presentUniversalWatchlistFeedback: { _, text in
                 feedback.append(String(localized: text))
+            },
+            beginUniversalWatchlistFanOut: { _, _ in saved = true },
+            makeActionConfirmation: { { confirmations += 1 } },
+            makeWatchlistFailureFeedback: {
+                acknowledgements += 1
+                return { failures += 1 }
             }
         )
         let item = MediaItem(id: "m", title: "Movie", kind: .movie)
@@ -222,7 +233,13 @@ final class UniversalWatchlistActionTests: XCTestCase {
         await gate.waitUntilStarted()
         // Acknowledged the moment it is pressed, without waiting on the write.
         XCTAssertEqual(feedback, ["Added to Watchlist"])
+        XCTAssertEqual(acknowledgements, 1)
+        XCTAssertEqual(failures, 0)
+        XCTAssertEqual(confirmations, 0)
         await gate.complete(success: true)
+        await waitUntil { saved }
+        XCTAssertEqual(failures, 0)
+        XCTAssertEqual(confirmations, 0, "Watchlist success must not invoke watched-state confirmation")
 
         var failureCalled = false
         let failed = MediaItemActionCoordinator(
@@ -237,21 +254,63 @@ final class UniversalWatchlistActionTests: XCTestCase {
             },
             presentUniversalWatchlistFeedback: { _, text in
                 feedback.append(String(localized: text))
+            },
+            makeActionConfirmation: { { confirmations += 1 } },
+            makeWatchlistFailureFeedback: {
+                acknowledgements += 1
+                return { failures += 1 }
             }
         )
         failed.perform(.removeFromWatchlist, on: item, context: .none)
+        XCTAssertEqual(acknowledgements, 2)
         await waitUntil { feedback.count == 3 }
         XCTAssertTrue(failureCalled)
+        XCTAssertEqual(failures, 1)
+        XCTAssertEqual(confirmations, 0)
         // A failure now says so. Optimistic acknowledgement means silence would
         // leave a confirmation standing for something that never happened.
         XCTAssertEqual(
             feedback,
             [
                 "Added to Watchlist",
-                "Removing from Watchlist…",
+                "Removed from Watchlist",
                 "Couldn't update Watchlist",
             ]
         )
+    }
+
+    func testOnlyLatestCoalescedIntentReceivesFailureFeedback() async {
+        let first = WatchlistPersistenceGate()
+        let second = WatchlistPersistenceGate()
+        var writes = 0
+        var token = 0
+        var failed: [Int] = []
+        let coordinator = MediaItemActionCoordinator(
+            providerResolver: { _ in nil },
+            primaryAccountID: { nil },
+            crossServerWatchSyncEnabled: { false },
+            enqueueWatchMutation: { _ in },
+            universalWatchlistEnabled: { true },
+            performUniversalWatchlist: { _, _ in
+                writes += 1
+                return writes == 1 ? await first.wait() : await second.wait()
+            },
+            makeWatchlistFailureFeedback: {
+                token += 1
+                let current = token
+                return { failed.append(current) }
+            }
+        )
+        let item = MediaItem(id: "m", title: "Movie", kind: .movie)
+        coordinator.perform(.addToWatchlist, on: item, context: .none)
+        await first.waitUntilStarted()
+        coordinator.perform(.removeFromWatchlist, on: item, context: .none)
+        await first.complete(success: true)
+        await second.waitUntilStarted()
+        XCTAssertTrue(failed.isEmpty, "Successful writes must stay silent")
+        await second.complete(success: false)
+        await waitUntil { !failed.isEmpty }
+        XCTAssertEqual(failed, [2])
     }
 
     func testOnlyMovieAndSeriesReceiveUniversalAction() {

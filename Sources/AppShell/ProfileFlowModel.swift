@@ -306,8 +306,7 @@ public final class ProfileFlowModel {
         rebuildSettingsModels()
         accountsProviders.reloadAccounts()
         isChoosingProfile = false
-        // Installs the new profile's Plex Home-user token (synchronously from
-        // cache for unprotected users; protected ones raise the PIN prompt).
+        // Verify current Plex protection before opening the selected identity.
         plexHomeUsers.ensurePlexIdentityForActiveProfile()
         // Switching INTO a profile that never finished setup — abandoned here, or
         // created on another device and synced across — asks the question again
@@ -593,7 +592,7 @@ public final class ProfileFlowModel {
         pendingLockOfferProfile = nil
     }
 
-    /// Removes a profile (the default profile can't be removed). If it was
+    /// Removes a profile while keeping at least one. If it was
     /// active, selection falls back to the first profile and re-scopes.
     ///
     /// The fallback is chosen by `ProfilesModel.remove(_:)` and may well be a

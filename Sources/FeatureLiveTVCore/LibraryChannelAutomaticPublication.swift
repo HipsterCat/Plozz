@@ -41,6 +41,12 @@ enum LibraryChannelAutomaticPublication {
         }
         let initialReferences = Set(next.definitions.flatMap(\.revisions).map(\.snapshotID))
         next.snapshots = next.snapshots.filter { initialReferences.contains($0.key) }
+        var snapshotsByItems: [[LibraryChannelItem]: LibraryChannelSnapshot] = [:]
+        for snapshot in next.snapshots.values.sorted(by: { $0.id.uuidString < $1.id.uuidString })
+            where snapshot.ineligibleDurationCount == 0 {
+            try Task.checkCancellation()
+            if snapshotsByItems[snapshot.items] == nil { snapshotsByItems[snapshot.items] = snapshot }
+        }
         for group in groups {
             try Task.checkCancellation()
             let id = LibraryChannelAutomaticIdentity.channelID(profileID: profileID, key: group.key)
@@ -72,6 +78,9 @@ enum LibraryChannelAutomaticPublication {
             } ?? false
             var addedSnapshot: LibraryChannelSnapshot?
             if !unchanged {
+                // Recipes own ordering and epochs. Exact inputs can share storage without
+                // rewriting any already-published revision or changing the wire format.
+                let sharedSnapshot = snapshotsByItems[candidate.items] ?? candidate
                 let boundary: Int64
                 let recoverableSchedule: LibraryChannelSchedule?
                 if let cached = schedules[id] { recoverableSchedule = cached }
@@ -93,9 +102,9 @@ enum LibraryChannelAutomaticPublication {
                 }
                 guard definition.revisions.count < 32 else { throw LibraryChannelError.tooManyRevisions }
                 definition.revisions.append(LibraryChannelRevision(
-                    snapshotID: candidate.id, recipe: group.recipe, epochSeconds: boundary
+                    snapshotID: sharedSnapshot.id, recipe: group.recipe, epochSeconds: boundary
                 ))
-                addedSnapshot = candidate
+                addedSnapshot = sharedSnapshot
             }
             // There is intentionally no independent per-channel auto opt-in: the profile switch owns it.
             definition.isEnabled = true
@@ -104,7 +113,10 @@ enum LibraryChannelAutomaticPublication {
             else { trial.append(definition) }
             let references = Set(trial.flatMap(\.revisions).map(\.snapshotID))
             let retainedCount = next.snapshots.reduce(0) { $0 + (references.contains($1.key) ? $1.value.items.count : 0) }
-            guard retainedCount + (addedSnapshot?.items.count ?? 0) <= LibraryChannelPortableState.maximumItems else {
+            let additionalCount = addedSnapshot.map {
+                next.snapshots[$0.id] == nil ? $0.items.count : 0
+            } ?? 0
+            guard retainedCount + additionalCount <= LibraryChannelPortableState.maximumItems else {
                 if group.isCatchall { throw LibraryChannelError.catalogTooLarge }
                 // Retire an optional stale group instead of retaining a misleading catalogue indefinitely.
                 if let existingIndex {
@@ -116,8 +128,9 @@ enum LibraryChannelAutomaticPublication {
                 continue
             }
             if let addedSnapshot {
+                if next.snapshots[addedSnapshot.id] == nil { next.staged.append(addedSnapshot) }
                 next.snapshots[addedSnapshot.id] = addedSnapshot
-                next.staged.append(addedSnapshot)
+                snapshotsByItems[addedSnapshot.items] = addedSnapshot
             }
             next.snapshots = next.snapshots.filter { references.contains($0.key) }
             if definition.revisions.allSatisfy({ next.snapshots[$0.snapshotID] != nil }) {

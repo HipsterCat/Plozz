@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import XCTest
+import SwiftUI
 import CoreModels
 @testable import PlozzCoreUI
 final class MediaFileBrowserNavigationTests: XCTestCase {
@@ -30,7 +31,53 @@ import UIKit
 
 #if canImport(UIKit)
 @MainActor
+final class PreviewCardLayoutTests: XCTestCase {
+    func testRelatedPresetTitlesReserveIdenticalHeightsAtEveryWidthAndTextSize() {
+        let titles = CardCaptionPreference.allCases.map(\.displayName)
+        for width in [CGFloat(180), 260, 340] {
+            for textSize in [DynamicTypeSize.large, .accessibility3] {
+                let heights = titles.map { title in
+                    let card = PreviewCard(
+                        title: title, isSelected: false, accent: .blue,
+                        compact: true, swatchHeight: 150, titleLineLimit: nil,
+                        titleSizeGroup: titles, action: {}
+                    ) {
+                        CardStyleSwatch(style: .borderless)
+                    }
+                    .environment(\.dynamicTypeSize, textSize)
+                    .frame(width: width)
+                    return UIHostingController(rootView: card)
+                        .sizeThatFits(in: CGSize(width: width, height: 2_000)).height
+                }
+                for height in heights {
+                    XCTAssertEqual(height, heights[0], accuracy: 0.5, "\(width) / \(textSize)")
+                    XCTAssertGreaterThan(height, 150)
+                    XCTAssertLessThan(height, 1_000)
+                }
+            }
+        }
+    }
+}
+
+@MainActor
 final class MediaFolderCardLayoutTests: XCTestCase {
+    func testFallbackNamesDoNotExpandCardsWithHiddenCaptions() {
+        for style in [CardStyle.framed, .borderless] {
+            for width in [CGFloat(86), 126, 220] {
+                let short = MediaItem(id: "short", title: "Films", kind: .movie)
+                let long = MediaItem(
+                    id: "folder", title: "A very long folder name that wraps across several lines", kind: .folder
+                )
+                XCTAssertEqual(
+                    height(MediaFolderCardLabel(item: long), width: width, style: style, captionsHidden: true),
+                    height(PosterCardView(item: short, enablesAsyncArtworkFallback: false, action: {}),
+                           width: width, style: style, captionsHidden: true),
+                    accuracy: 0.5
+                )
+            }
+        }
+    }
+
     func testMixedFolderAndMediaCardsKeepIdenticalHeights() {
         for style in [CardStyle.framed, .borderless] {
             for width in [CGFloat(126), 220] {
@@ -54,9 +101,12 @@ final class MediaFolderCardLayoutTests: XCTestCase {
         }
     }
 
-    private func height<Content: View>(_ content: Content, width: CGFloat, style: CardStyle) -> CGFloat {
+    private func height<Content: View>(
+        _ content: Content, width: CGFloat, style: CardStyle, captionsHidden: Bool = false
+    ) -> CGFloat {
         let view = content
             .environment(\.plozzCardStyle, style)
+            .environment(\.plozzCardCaptionsHidden, captionsHidden)
             .frame(width: width, alignment: .topLeading)
         return UIHostingController(rootView: view)
             .sizeThatFits(in: CGSize(width: width, height: 1_000))
@@ -66,6 +116,72 @@ final class MediaFolderCardLayoutTests: XCTestCase {
 #endif
 
 final class PosterCardPresentationTests: XCTestCase {
+    func testProgressFallsBackToResumePositionWhenPercentageIsMissing() {
+        for kind in [MediaItemKind.movie, .episode] {
+            var item = MediaItem(id: "resume", title: "Resume", kind: kind, runtime: 3600, resumePosition: 900)
+            let resumed = MediaPlaybackIndicatorState(item)
+            XCTAssertEqual(resumed.playedPercentage, 0.25)
+            XCTAssertTrue(MediaPlaybackIndicatorPresentation.showsProgress(for: resumed))
+
+            item.playedPercentage = 0.4
+            XCTAssertEqual(MediaPlaybackIndicatorState(item).playedPercentage, 0.4)
+            item.playedPercentage = nil
+            item.resumePosition = 0
+            XCTAssertFalse(MediaPlaybackIndicatorPresentation.showsProgress(for: MediaPlaybackIndicatorState(item)))
+            item.resumePosition = 3600
+            XCTAssertFalse(MediaPlaybackIndicatorPresentation.showsProgress(for: MediaPlaybackIndicatorState(item)))
+        }
+    }
+
+    #if os(tvOS)
+    @MainActor
+    func testNativeContainerArtworkFitsLandscapeAndSquareEdges() throws {
+        let coordinator = NativeTVPoster<EmptyView>.Coordinator(focus: PlozzCardFocus().projectedValue, action: {})
+        let outputSize = CGSize(width: 160, height: 240)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        for sourceSize in [CGSize(width: 400, height: 225), CGSize(width: 300, height: 300)] {
+            let source = UIGraphicsImageRenderer(size: sourceSize, format: format).image { context in
+                UIColor.blue.setFill()
+                context.fill(CGRect(origin: .zero, size: sourceSize))
+                UIColor.red.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: sourceSize.width * 0.15, height: sourceSize.height))
+                UIColor.green.setFill()
+                context.fill(CGRect(x: sourceSize.width * 0.85, y: 0, width: sourceSize.width * 0.15, height: sourceSize.height))
+            }
+            let prepared = try XCTUnwrap(coordinator.prepare(source, treatment: .fitted, size: outputSize, scale: 1))
+            XCTAssertTrue(prepared === coordinator.prepare(source, treatment: .fitted, size: outputSize, scale: 1))
+            let image = try XCTUnwrap(prepared.cgImage)
+            var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            try pixels.withUnsafeMutableBytes {
+                let context = try XCTUnwrap(CGContext(
+                    data: $0.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(image, in: CGRect(origin: .zero, size: outputSize))
+            }
+            let left = (120 * image.width + 12) * 4
+            let right = (120 * image.width + 148) * 4
+            XCTAssertGreaterThan(pixels[left], 200)
+            XCTAssertLessThan(pixels[left + 1], 30)
+            XCTAssertGreaterThan(pixels[right + 1], 200)
+            XCTAssertLessThan(pixels[right], 30)
+            let margin = (10 * image.width + 80) * 4
+            XCTAssertLessThan(Int(pixels[margin]) + Int(pixels[margin + 1]) + Int(pixels[margin + 2]), 30)
+        }
+    }
+    #endif
+
+    func testContainerCoversAcceptTheirAuthoredShapeWithoutRelaxingMediaPosters() {
+        for kind: MediaItemKind in [.collection, .playlist, .folder] {
+            XCTAssertTrue(PosterCardPresentation.preservesContainerArtwork(for: kind))
+        }
+        for kind: MediaItemKind in [.movie, .series, .season, .episode, .video] {
+            XCTAssertFalse(PosterCardPresentation.preservesContainerArtwork(for: kind))
+        }
+    }
+
     func testMissingLibraryArtworkUsesNeutralMediaInsteadOfPlaybackSymbol() {
         for status in [
             MediaAvailabilityStatus.unknown, .pending, .processing,
@@ -115,6 +231,40 @@ final class PosterCardPresentationTests: XCTestCase {
             XCTAssertFalse(PosterCardPresentation.usesFolderArtwork(for: kind))
             XCTAssertTrue(PosterCardPresentation.showsWatchStatus(for: kind))
             XCTAssertTrue(PosterCardPresentation.showsPlaybackIndicators(for: kind))
+        }
+    }
+
+    func testNavigationContainersNeverShowPlaybackStatus() {
+        for kind: MediaItemKind in [.folder, .collection, .playlist] {
+            XCTAssertFalse(PosterCardPresentation.showsWatchStatus(for: kind))
+            XCTAssertFalse(PosterCardPresentation.showsPlaybackIndicators(for: kind))
+            for played in [false, true] {
+                let state = MediaPlaybackIndicatorState(MediaItem(
+                    id: "container", title: "Container", kind: kind,
+                    resumePosition: 20, playedPercentage: 0.3, unwatchedEpisodeCount: 12, isPlayed: played
+                ))
+                XCTAssertFalse(MediaPlaybackIndicatorPresentation.showsProgress(for: state))
+                for indicator in WatchStatusIndicator.allCases {
+                    XCTAssertNil(MediaPlaybackIndicatorPresentation.status(
+                        for: state, hidesStatus: false, indicator: indicator, showsEpisodeCount: true,
+                        seerConnected: false
+                    ))
+                }
+            }
+        }
+    }
+
+    func testZeroRemainingEpisodesNeverFallsBackToAnUnwatchedFlag() {
+        for kind: MediaItemKind in [.series, .season] {
+            for count in [nil, 0, 12] as [Int?] {
+                let state = MediaPlaybackIndicatorState(MediaItem(
+                    id: "series", title: "Series", kind: kind, unwatchedEpisodeCount: count
+                ))
+                XCTAssertEqual(
+                    MediaPlaybackIndicatorPresentation.showsUnwatchedFlag(for: state, hidesStatus: false),
+                    count != 0
+                )
+            }
         }
     }
 
@@ -170,6 +320,37 @@ final class PosterCardPresentationTests: XCTestCase {
         )
 
         XCTAssertFalse(MediaPlaybackIndicatorPresentation.showsProgress(for: MediaPlaybackIndicatorState(item)))
+    }
+
+    func testEpisodeCountsAreExactAndOnlyForVisibleOwnedContainers() {
+        for kind in [MediaItemKind.series, .season, .episode, .movie] {
+            for count in [nil, -1, 0, 1, 8, 999, 12_345] as [Int?] {
+                var item = MediaItem(id: "item", title: "Item", kind: kind, playedPercentage: 0.3, unwatchedEpisodeCount: count)
+                let expected = (kind == .series || kind == .season) && (count ?? 0) > 0 ? count : nil
+                XCTAssertEqual(MediaPlaybackIndicatorPresentation.episodeCount(
+                    for: MediaPlaybackIndicatorState(item), enabled: true, hidesStatus: false), expected)
+                XCTAssertNil(MediaPlaybackIndicatorPresentation.episodeCount(
+                    for: MediaPlaybackIndicatorState(item), enabled: false, hidesStatus: false))
+                XCTAssertNil(MediaPlaybackIndicatorPresentation.episodeCount(
+                    for: MediaPlaybackIndicatorState(item), enabled: true, hidesStatus: true))
+                item.availability = .unknown
+                XCTAssertNil(MediaPlaybackIndicatorPresentation.episodeCount(
+                    for: MediaPlaybackIndicatorState(item), enabled: true, hidesStatus: false))
+            }
+        }
+    }
+
+    func testHostedEnvironmentCarriesIndependentEpisodeCountPreference() {
+        var source = EnvironmentValues()
+        source.plozzShowsUnwatchedEpisodeCount = true
+        source.plozzWatchStatusIndicator = .watched
+        var hosted = EnvironmentValues()
+        hosted.copyHostedPresentation(from: source)
+        XCTAssertTrue(hosted.plozzShowsUnwatchedEpisodeCount)
+        XCTAssertEqual(hosted.plozzWatchStatusIndicator, .watched)
+        source.plozzShowsUnwatchedEpisodeCount = false
+        hosted.copyHostedPresentation(from: source)
+        XCTAssertFalse(hosted.plozzShowsUnwatchedEpisodeCount)
     }
 
     func testProgressTakesPriorityOverWatchedBadge() {
@@ -467,20 +648,26 @@ final class TextlessBackdropStoreKeyTests: XCTestCase {
     func testEpisodesAreKeyedByTheirSeries() {
         let first = MediaItem(id: "ep1", title: "E1", kind: .episode, seriesID: "show")
         let second = MediaItem(id: "ep2", title: "E2", kind: .episode, seriesID: "show")
-        XCTAssertEqual(TextlessBackdropStore.key(for: first), "show")
-        XCTAssertEqual(TextlessBackdropStore.key(for: second), "show")
+        XCTAssertEqual(TextlessBackdropStore.key(for: first), TextlessBackdropStore.key(for: second))
+        var differentSeries = first
+        differentSeries.seriesID = "other-show"
+        XCTAssertNotEqual(TextlessBackdropStore.key(for: first), TextlessBackdropStore.key(for: differentSeries))
     }
 
     /// An episode with no series id still has to key to something stable.
     func testAnOrphanEpisodeFallsBackToItsOwnID() {
         let orphan = MediaItem(id: "ep1", title: "E1", kind: .episode)
-        XCTAssertEqual(TextlessBackdropStore.key(for: orphan), "ep1")
+        var another = orphan
+        another.id = "ep2"
+        XCTAssertNotEqual(TextlessBackdropStore.key(for: orphan), TextlessBackdropStore.key(for: another))
     }
 
     /// A movie or series already *is* the show, so it keys to itself.
     func testAMovieKeysToItself() {
         let movie = MediaItem(id: "m1", title: "Movie", kind: .movie)
-        XCTAssertEqual(TextlessBackdropStore.key(for: movie), "m1")
+        var another = movie
+        another.id = "m2"
+        XCTAssertNotEqual(TextlessBackdropStore.key(for: movie), TextlessBackdropStore.key(for: another))
     }
 
     /// Nothing is published until the picture behind it is decoded, so a store
@@ -579,11 +766,11 @@ final class TextlessBackdropIndexTests: XCTestCase {
 
     /// A conclusive miss survives a relaunch, so the second launch suppresses the
     /// logo on its first frame instead of a scroll later.
-    func testAConclusiveMissIsKnownOnTheNextLaunchsFirstFrame() {
+    func testAConclusiveMissIsKnownOnTheNextLaunchsFirstFrame() async throws {
         let index = TextlessBackdropIndex(directory: directory)
         let first = TextlessBackdropStore(store: index)
         first.recordForTesting(.none, for: anime("s1"))
-        index.flushForTesting()
+        try await index.flushForTesting()
 
         let relaunched = TextlessBackdropStore(store: TextlessBackdropIndex(directory: directory))
         XCTAssertTrue(
@@ -594,12 +781,12 @@ final class TextlessBackdropIndexTests: XCTestCase {
 
     /// The URL survives too, so the card leads with clean art from frame one
     /// rather than painting the server's titled art and pinning it.
-    func testAResolvedBackdropIsKnownOnTheNextLaunchsFirstFrame() {
+    func testAResolvedBackdropIsKnownOnTheNextLaunchsFirstFrame() async throws {
         let url = URL(string: "https://tmdb.test/clean.jpg")!
         let index = TextlessBackdropIndex(directory: directory)
         let first = TextlessBackdropStore(store: index)
         first.recordForTesting(.available(url), for: anime("s2"))
-        index.flushForTesting()
+        try await index.flushForTesting()
 
         let relaunched = TextlessBackdropStore(store: TextlessBackdropIndex(directory: directory))
         XCTAssertEqual(relaunched.backdrop(for: anime("s2")), url)
@@ -621,6 +808,90 @@ final class TextlessBackdropIndexTests: XCTestCase {
         try? Data("not json".utf8).write(to: directory.appendingPathComponent("index.json"))
         let store = TextlessBackdropStore(store: TextlessBackdropIndex(directory: directory))
         XCTAssertFalse(store.suppressesLogo(for: anime("s4")))
+    }
+
+    func testBlockedDiskWriteKeepsMainActorResponsiveAndCoalescesNewerAnswers() async throws {
+        let writer = BackdropIndexWriterProbe(blockFirst: true)
+        defer { writer.release.signal() }
+        let index = TextlessBackdropIndex(directory: directory, writeData: writer.write)
+        index.save(.none, for: "first")
+        await fulfillment(of: [writer.started], timeout: 3)
+        let newest = URL(string: "https://fixture.invalid/newest.jpg")!
+        for value in 0..<100 {
+            index.save(.none, for: "show-\(value)")
+        }
+        index.save(.available(newest), for: "first")
+        XCTAssertEqual(index.load()["first"], .available(newest))
+        writer.release.signal()
+        try await index.flushForTesting()
+
+        XCTAssertFalse(writer.snapshot.wroteOnMainThread)
+        XCTAssertFalse(writer.snapshot.timedOut, "The main actor must run while the writer is blocked.")
+        XCTAssertEqual(writer.snapshot.writes, 2, "Keep one in-flight write and coalesce the pending changes.")
+        let relaunched = TextlessBackdropIndex(directory: directory)
+        XCTAssertEqual(relaunched.load()["first"], .available(newest))
+        XCTAssertEqual(relaunched.load().count, 101)
+    }
+
+    func testWriteFailureKeepsAnswersAndRetriesOnlyWhenRequested() async throws {
+        let writer = BackdropIndexWriterProbe(failFirst: true)
+        let index = TextlessBackdropIndex(directory: directory, writeData: writer.write)
+        index.save(.none, for: "saved")
+        do {
+            try await index.flushForTesting()
+            XCTFail("A failed write must be reported.")
+        } catch {
+            XCTAssertEqual((error as NSError).code, CocoaError.fileWriteNoPermission.rawValue)
+        }
+        XCTAssertEqual(writer.snapshot.writes, 1)
+        XCTAssertEqual(index.load()["saved"], TextlessBackdropStore.Outcome.none)
+        try await index.flushForTesting()
+        XCTAssertEqual(writer.snapshot.writes, 2)
+        XCTAssertEqual(TextlessBackdropIndex(directory: directory).load()["saved"], TextlessBackdropStore.Outcome.none)
+    }
+
+    func testAsynchronousPersistenceRetainsTheEntryBudget() async throws {
+        let index = TextlessBackdropIndex(directory: directory)
+        for value in 0..<500 { index.save(.none, for: "show-\(value)") }
+        try await index.flushForTesting()
+        XCTAssertEqual(index.load().count, 400)
+        XCTAssertEqual(TextlessBackdropIndex(directory: directory).load().count, 400)
+    }
+}
+
+private final class BackdropIndexWriterProbe: @unchecked Sendable {
+    struct State {
+        var writes = 0
+        var wroteOnMainThread = false
+        var timedOut = false
+    }
+    let started = XCTestExpectation(description: "Background index writer started")
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var state = State()
+    private let blockFirst: Bool
+    private let failFirst: Bool
+
+    init(blockFirst: Bool = false, failFirst: Bool = false) {
+        self.blockFirst = blockFirst
+        self.failFirst = failFirst
+    }
+
+    var snapshot: State { lock.withLock { state } }
+
+    func write(_ data: Data, to url: URL) throws {
+        let first = lock.withLock {
+            state.writes += 1
+            state.wroteOnMainThread = state.wroteOnMainThread || Thread.isMainThread
+            return state.writes == 1
+        }
+        if first && failFirst { throw CocoaError(.fileWriteNoPermission) }
+        if first && blockFirst {
+            started.fulfill()
+            let timedOut = release.wait(timeout: .now() + 5) == .timedOut
+            lock.withLock { state.timedOut = timedOut }
+        }
+        try data.write(to: url, options: .atomic)
     }
 }
 
@@ -659,12 +930,12 @@ final class TextlessAnswerReadinessTests: XCTestCase {
     /// The path that has to cost nothing: on every launch after a show's first
     /// appearance the answer is read back from disk synchronously, so the card is
     /// ready on its first frame and never shows a placeholder at all.
-    func testAPreviouslyAnsweredShowIsReadyOnTheFirstFrame() {
+    func testAPreviouslyAnsweredShowIsReadyOnTheFirstFrame() async throws {
         let directory = directory()
         let index = TextlessBackdropIndex(directory: directory)
         let first = TextlessBackdropStore(store: index)
         first.recordForTesting(.available(URL(string: "https://tmdb.test/clean.jpg")!), for: show())
-        index.flushForTesting()
+        try await index.flushForTesting()
 
         let relaunched = TextlessBackdropStore(store: TextlessBackdropIndex(directory: directory))
         XCTAssertTrue(

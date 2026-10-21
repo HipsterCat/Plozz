@@ -1,8 +1,141 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import CoreModels
 
+private final class SyncLimitRecorder: @unchecked Sendable {
+    private final class Buffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [LiveTVSyncLimitDiagnostic] = []
+        var values: [LiveTVSyncLimitDiagnostic] { lock.withLock { recorded } }
+        func append(_ value: LiveTVSyncLimitDiagnostic) { lock.withLock { recorded.append(value) } }
+    }
+
+    private let buffer = Buffer()
+    private var observer: NSObjectProtocol?
+    var values: [LiveTVSyncLimitDiagnostic] { buffer.values }
+
+    init() {
+        let buffer = buffer
+        observer = NotificationCenter.default.addObserver(
+            forName: LiveTVSyncLimitDiagnostic.notification, object: nil, queue: nil
+        ) { notification in
+            if let value = notification.object as? LiveTVSyncLimitDiagnostic { buffer.append(value) }
+        }
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+}
+
 final class LiveTVPortableSnapshotTests: XCTestCase {
+    func testSyncLimitDiagnosticsDoNotPublishUnknownOrUnexceededMeasurements() {
+        let recorder = SyncLimitRecorder()
+        for (observed, maximum) in [(1, 1), (0, 1), (-1, 1), (2, 0), (Int.max, 1)] {
+            LiveTVSyncLimitDiagnostic.record(.recordBytes, observed: observed, maximum: maximum)
+        }
+        XCTAssertTrue(recorder.values.isEmpty)
+    }
+
+    func testOversizedRecordKeepsOriginalErrorAndReportsExistingByteCount() throws {
+        let recorder = SyncLimitRecorder()
+        let bytes = Data(repeating: 0, count: LiveTVPortableRecord.maximumBytes + 1)
+        XCTAssertThrowsError(try LiveTVPortableRecord.decode(
+            bytes, key: .init(profileID: "private", kind: .channel, entityID: "private")
+        )) {
+            XCTAssertEqual($0 as? LiveTVPortableStateError, .tooLarge)
+        }
+        XCTAssertEqual(recorder.values, [try XCTUnwrap(LiveTVSyncLimitDiagnostic(
+            limit: .recordBytes, observed: bytes.count, maximum: LiveTVPortableRecord.maximumBytes
+        ))])
+    }
+
+    func testLargeLibraryExportUsesBoundedRecordStorageAbove64MiB() throws {
+        let title = String(repeating: "x", count: 8_000)
+        let items = try (0..<8_400).map { index in
+            try LibraryChannelItem(
+                item: .init(id: "item-\(index)", title: title, kind: .movie, runtime: 60),
+                library: .init(accountID: "account", libraryID: "library"), serverID: "server", userID: "user"
+            )
+        }
+        let snapshot = try LibraryChannelSnapshot(items: items, createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let definition = LibraryChannelDefinition(profileID: "profile", revisions: [
+            .init(snapshotID: snapshot.id, recipe: .init(
+                name: "Movies", libraries: [.init(accountID: "account", libraryID: "library")]
+            ), epochSeconds: 1_700_000_000)
+        ])
+        let recorder = SyncLimitRecorder()
+        let export = try LiveTVPortableLibraryExport(definitions: [definition], snapshots: [snapshot])
+        XCTAssertGreaterThan(export.encodedRecordBytes, 64 * 1_024 * 1_024)
+        XCTAssertLessThanOrEqual(export.residentRecordBytes, LiveTVPortableRecordStorage.maximumResidentBytes)
+        XCTAssertEqual(export.state.snapshots, [snapshot])
+        XCTAssertTrue(recorder.values.isEmpty)
+    }
+
+    func testStreamingSnapshotDigestMatchesTheExistingSortedJSONWireFormat() throws {
+        let library = LibraryChannelLibrary(accountID: "account", libraryID: "library")
+        for seconds in [1_700_000_000.0, 1_700_000_000.123456, -1.25] {
+            let snapshot = try LibraryChannelSnapshot(
+                items: [try LibraryChannelItem(
+                    item: .init(id: "movie", title: "Quotes \" / newline\n caf\u{e9}", kind: .movie, runtime: 61),
+                    library: library, serverID: "server", userID: "user"
+                )], createdAt: Date(timeIntervalSince1970: seconds), ineligibleDurationCount: 3
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let expected = SHA256.hash(data: try encoder.encode(snapshot))
+                .map { String(format: "%02x", $0) }.joined()
+            let part = try XCTUnwrap(LiveTVPortableSnapshots.partition(snapshot).first)
+            XCTAssertEqual(part.contentDigest, expected, "Existing clients must assemble the unchanged digest.")
+        }
+    }
+
+    func testLibraryExportStillRejectsTheStorageQuotaWithoutReturningAPrefix() throws {
+        let library = LibraryChannelLibrary(accountID: "account", libraryID: "library")
+        let title = String(repeating: "x", count: 8_000)
+        let items = try (0..<17_000).map {
+            try LibraryChannelItem(
+                item: .init(id: "movie-\($0)", title: title, kind: .movie, runtime: 60),
+                library: library, serverID: "server", userID: "user"
+            )
+        }
+        let snapshots = try stride(from: 0, to: items.count, by: 8_500).map {
+            try LibraryChannelSnapshot(items: Array(items[$0..<($0 + 8_500)]),
+                                       createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        }
+        let definitions = snapshots.map {
+            LibraryChannelDefinition(profileID: "profile", revisions: [
+                .init(snapshotID: $0.id, recipe: .init(name: "Movies", libraries: [library]),
+                      epochSeconds: 1_700_000_000)
+            ])
+        }
+        let recorder = SyncLimitRecorder()
+        XCTAssertThrowsError(try LiveTVPortableLibraryExport(definitions: definitions, snapshots: snapshots)) {
+            XCTAssertEqual($0 as? LiveTVPortableStateError, .tooLarge)
+        }
+        let measured = try XCTUnwrap(recorder.values.first)
+        XCTAssertEqual(recorder.values.count, 1)
+        XCTAssertEqual(measured.limit, .libraryExportBytes)
+        XCTAssertEqual(measured.maximum, LiveTVPortableRecordStorage.maximumStoredBytes)
+        XCTAssertGreaterThan(measured.observed, measured.maximum)
+    }
+
+    func testSuccessfulExportDoesNotInvokeDiagnosticsObservers() throws {
+        let snapshot = try makeSnapshot(count: 800)
+        let definition = LibraryChannelDefinition(profileID: "profile", revisions: [
+            .init(snapshotID: snapshot.id, recipe: .init(
+                name: "Movies", libraries: [.init(accountID: "account", libraryID: "library")]
+            ), epochSeconds: 1_700_000_000)
+        ])
+        let recorder = SyncLimitRecorder()
+        for _ in 0..<3 {
+            let export = try LiveTVPortableLibraryExport(definitions: [definition], snapshots: [snapshot])
+            XCTAssertEqual(export.state.snapshots, [snapshot])
+        }
+        XCTAssertTrue(recorder.values.isEmpty, "Successful serialization must not do diagnostic work per record.")
+    }
+
     func testPartitionedImmutableInputsProduceSameScheduleAndOffset() throws {
         let snapshot = try makeSnapshot(count: 800)
         let parts = try LiveTVPortableSnapshots.partition(snapshot)
@@ -14,6 +147,7 @@ final class LiveTVPortableSnapshotTests: XCTestCase {
             XCTAssertLessThanOrEqual(data.count, LiveTVPortableRecord.maximumBytes)
             XCTAssertEqual(try LiveTVPortableRecord.decode(data, key: key), record)
         }
+
         let received = try LiveTVPortableSnapshots.assemble(parts.reversed())
         XCTAssertEqual(received, snapshot)
         let recipe = LibraryChannelRecipe(

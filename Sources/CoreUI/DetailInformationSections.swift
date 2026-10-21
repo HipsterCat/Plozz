@@ -8,26 +8,6 @@ import UIKit
 /// Shared title-level detail sections. Platform shells keep their own Cast rail
 /// first, then place this view beneath it so content and ordering stay identical
 /// while the adaptive grids naturally collapse on iPhone.
-#if os(tvOS) && canImport(UIKit)
-/// Makes the presenting sheet's own host transparent, so the card floats over
-/// the page (dimmed) instead of on an opaque full-screen plate.
-private struct ClearSheetBackground: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        DispatchQueue.main.async {
-            view.superview?.superview?.backgroundColor = .clear
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {}
-}
-#else
-private struct ClearSheetBackground: View {
-    var body: some View { Color.clear }
-}
-#endif
-
 private struct OverviewCardHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -36,6 +16,8 @@ private struct OverviewCardHeightKey: PreferenceKey {
 }
 
 public struct DetailInformationSections: View {
+    static let bandFillOpacity = 0.4
+
     private let item: MediaItem
     private let horizontalInset: CGFloat
     private let selectedSource: MediaSourceRef?
@@ -66,6 +48,8 @@ public struct DetailInformationSections: View {
     @State private var bodyLineHeight: CGFloat = 0
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzCardFocusStyle) private var cardFocusStyle
+    @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
+    @Environment(\.plozzReduceTransparency) private var reduceTransparency
 
     public init(
         item: MediaItem,
@@ -86,28 +70,22 @@ public struct DetailInformationSections: View {
     }
 
     public var body: some View {
+        if let url = item.metadataProvenance.wetrakrWatchlistURL {
+            WetrakrWatchlistLink(url: url)
+                .padding(.horizontal, horizontalInset)
+        }
         if hasContent {
             sectionBody
                 .environment(\.plozzNativeInformationFocus, true)
+                .plozzAdaptiveCardSurface()
                 .padding(.horizontal, horizontalInset)
                 .padding(.top, bandTopPadding)
                 .padding(.bottom, bandBottomPadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // A subtle full-bleed tint marks the lower "info" band as its own
-                // zone. Deliberately quiet, and distinct from the cards inside it
-                // (which sit on their own surface).
-                //
-                // "Full-bleed" has to be painted, not declared: this sits inside a
-                // ScrollView, which has already consumed the container's safe area
-                // and turned it into content insets, so `ignoresSafeArea` here has
-                // nothing left to ignore. tvOS's overscan margin kept the tint off
-                // the left and right edges, and on both platforms the strip below
-                // the last content (home indicator / tab bar / bottom overscan)
-                // stayed page-coloured. Negative padding on the *background* layer
-                // reaches past all of it without touching the layout — a background
-                // never affects the size of what it sits behind.
                 .background {
                     palette.informationSurface
+                        .opacity(gradientEnabled && !reduceTransparency ? Self.bandFillOpacity : 1)
+                        // Paint past scroll-view insets without changing the content layout.
                         .padding(.horizontal, -Self.backgroundBleed)
                         .padding(.bottom, -Self.backgroundBleed)
                 }
@@ -384,7 +362,7 @@ public struct DetailInformationSections: View {
                 cornerRadius: cardCornerRadius,
                 focusedScale: PlozzTheme.Metrics.readOnlyFocusedCardScale
             )
-            .sheet(isPresented: $showsFullOverview) {
+            .plozzSheet(isPresented: $showsFullOverview, style: overviewPresentationStyle) {
                 overviewSheet
             }
         } else {
@@ -565,6 +543,14 @@ public struct DetailInformationSections: View {
         #endif
     }
 
+    private var overviewPresentationStyle: PlozzSheetStyle {
+        #if os(tvOS)
+        .floatingCard
+        #else
+        .standard
+        #endif
+    }
+
     #if os(tvOS)
     /// A centred card, sized to its text — deliberately NOT the
     /// `NavigationStack` + `navigationTitle` used on iOS.
@@ -629,7 +615,6 @@ public struct DetailInformationSections: View {
             .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             .plozzSurface(.overlay, cornerRadius: 32)
         }
-        .background(ClearSheetBackground())
     }
     #endif
 
@@ -650,7 +635,7 @@ public struct DetailInformationSections: View {
             #if !os(tvOS)
             .scrollContentBackground(.hidden)
             #endif
-            .background(palette.settingsBackground)
+            .background { SettingsPageBackground() }
             .navigationTitle(item.title)
             #if !os(tvOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -665,7 +650,6 @@ public struct DetailInformationSections: View {
             #endif
         }
         #if !os(tvOS)
-        .presentationBackground(palette.settingsBackground)
         .presentationCornerRadius(overviewSheetCornerRadius)
         .preferredColorScheme(palette.isLight ? .light : .dark)
         // Elevation edge for dark themes, reusing the Settings sheet treatment:
@@ -817,7 +801,7 @@ public struct DetailInformationSections: View {
 
     var sortedRatings: [ExternalRating] {
         // Header preferences select a preview, never a subset of the full Ratings section.
-        item.ratings.sorted { $0.source.sortRank < $1.source.sortRank }
+        item.ratings.sorted { $0.sortRank < $1.sortRank }
     }
 
     var familyGuidanceSummary: FamilyGuidanceSummary? {

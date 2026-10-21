@@ -49,7 +49,6 @@ struct SelectHomeLayoutView: View {
             ZStack {
                 Button(action: onContinue) {
                     Text("Continue")
-                        .frame(minWidth: 360)
                 }
                 .plozzActionButton()
                 .focused($focus, equals: .continueButton)

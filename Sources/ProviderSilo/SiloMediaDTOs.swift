@@ -42,6 +42,13 @@ struct SiloItem: Decodable, Sendable {
     let content_rating: String?
     let release_date: String?
     let air_date: String?
+    let status: String?
+    let rating_imdb: Double?
+    let rating_tmdb: Double?
+    let rating_rt_critic: Double?
+    let rating_rt_audience: Double?
+    let ratings: [SiloRating]?
+    let sort_metrics: SiloSortMetrics?
     let imdb_id: String?
     let tmdb_id: String?
     let tvdb_id: String?
@@ -53,6 +60,20 @@ struct SiloItem: Decodable, Sendable {
     let credits: SiloMarker?
     let recap: SiloMarker?
     let preview: SiloMarker?
+}
+
+struct SiloRating: Decodable, Sendable {
+    let source: String
+    let name: String
+    let score: Double
+    let display: String
+}
+
+struct SiloSortMetrics: Decodable, Sendable {
+    let play_count: Int?
+    let progress_ratio: Double?
+    let viewed_at: String?
+    let release_date: String?
 }
 
 struct SiloCastCredit: Decodable, Sendable {
@@ -70,6 +91,8 @@ struct SiloUserState: Decodable, Sendable {
 
 struct SiloWatchRollup: Decodable, Sendable {
     let played: Bool
+    let watched_count: Int?
+    let unplayed_count: Int?
     let position_seconds: Double?
     let duration_seconds: Double?
 }

@@ -7,6 +7,83 @@ import XCTest
 
 @MainActor
 final class ArtworkLoadRecoveryTests: XCTestCase {
+    func testWindowRequestsKeepVariantAndBackgroundGenerationIdentity() async throws {
+        let data = try imageData(.red)
+        let loader = ControlledArtworkLoader(first: data, subsequent: data)
+        await loader.releaseAll()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = ArtworkImageCache(
+            derivedCache: LocalArtworkDerivedCache(directory: directory),
+            remoteDataLoader: { _ in await loader.load() }
+        )
+        let url = URL(string: "https://artwork.example.test/\(UUID()).jpg")!
+        let first = try XCTUnwrap(cache.prefetchRequest(for: url, variant: .posterCard))
+        XCTAssertEqual(first.id, cache.prefetchRequest(for: url, variant: .posterCard)?.id)
+        XCTAssertNotEqual(first.id, cache.prefetchRequest(for: url, variant: .heroPreview)?.id)
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        XCTAssertNil(cache.prefetchRequest(for: url, variant: .posterCard))
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
+        await first.prepare()
+        var count = await loader.count
+        XCTAssertEqual(count, 0)
+        let resumed = try XCTUnwrap(cache.prefetchRequest(for: url, variant: .posterCard))
+        XCTAssertNotEqual(resumed.id, first.id, "A stale completed window entry must not suppress resumed work.")
+        await resumed.prepare()
+        count = await loader.count
+        XCTAssertEqual(count, 1)
+        XCTAssertNotNil(cache.cachedImage(for: url, variant: .posterCard))
+    }
+
+    func testQueuedPrefetchRechecksResidencyAfterForegroundLoad() async throws {
+        let data = try imageData(.red)
+        let loader = ControlledArtworkLoader(first: data, subsequent: data)
+        await loader.releaseAll()
+        let blocker = ControlledArtworkLoader(first: data, subsequent: data)
+        let limiter = ConcurrencyLimiter(limit: 1)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = ArtworkImageCache(
+            derivedCache: LocalArtworkDerivedCache(directory: directory),
+            warmLimiter: limiter,
+            remoteDataLoader: { _ in await loader.load() }
+        )
+        let occupied = Task { await limiter.run { await blocker.load() } }
+        await blocker.waitUntilStarted(1)
+        let url = URL(string: "https://artwork.example.test/\(UUID()).jpg")!
+        let pending = (0..<20).compactMap { _ in cache.prefetch(url, variant: .posterCard) }
+        let foreground = await cache.image(for: url, variant: .posterCard)
+        XCTAssertNotNil(foreground)
+        await blocker.releaseAll()
+        _ = await occupied.value
+        for task in pending { await task.value }
+        let loads = await loader.count
+        XCTAssertEqual(loads, 1, "Queued warming must not reload an image already made resident.")
+        XCTAssertTrue(cache.cachedImage(for: url, variant: .posterCard) === foreground)
+    }
+
+    func testCancelledPrefetchLeavesTheQueueBeforeItsPermitIsReleased() async throws {
+        let data = try imageData(.red)
+        let blocker = ControlledArtworkLoader(first: data, subsequent: data)
+        let limiter = ConcurrencyLimiter(limit: 1)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = ArtworkImageCache(
+            derivedCache: LocalArtworkDerivedCache(directory: directory),
+            warmLimiter: limiter
+        )
+        let occupied = Task { await limiter.run { await blocker.load() } }
+        await blocker.waitUntilStarted(1)
+        let task = try XCTUnwrap(cache.prefetch(URL(string: "https://artwork.example.test/cancelled.jpg")!))
+        task.cancel()
+        let returned = expectation(description: "Cancelled queued prefetch releases its caller")
+        let waiter = Task { await task.value; returned.fulfill() }
+        await fulfillment(of: [returned], timeout: 2)
+        await blocker.releaseAll()
+        _ = await occupied.value
+        await waiter.value
+    }
+
     func testExpiredRemoteLoadReleasesEveryWaiterAndAllowsFreshWork() async throws {
         try await checkExpiredLoad(networkFile: false)
     }

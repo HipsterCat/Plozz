@@ -78,6 +78,18 @@ final class HeroLoadKeyTests: XCTestCase {
         XCTAssertEqual(curation(featured, revision: 1), curation(restyled, revision: 1))
     }
 
+    func testCollectionSelectionAndHistoryRevisionRestartCuration() {
+        var settings = featured
+        settings.sources = [.collection]
+        settings.collections = [.init(accountID: "a", libraryID: "l", collectionID: "c", title: "Collection")]
+        let initial = curation(settings, revision: 0)
+        XCTAssertNotEqual(initial, curation(settings, revision: 1))
+        settings.collections.append(.init(accountID: "a", libraryID: "l", collectionID: "other", title: "Collection"))
+        XCTAssertNotEqual(initial, curation(settings, revision: 0))
+        settings.hideWatched = false
+        XCTAssertEqual(curation(settings, revision: 0), curation(settings, revision: 1))
+    }
+
     private func status(
         _ items: [MediaItem], context: String = "profile-a/connection-a",
         configured: Bool = true, settings: HeroSettings? = nil

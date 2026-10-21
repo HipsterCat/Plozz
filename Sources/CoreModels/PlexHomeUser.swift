@@ -12,9 +12,10 @@ public struct PlexHomeUser: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     /// Display name (Plex `title`).
     public let name: String
-    /// `true` when switching to this user requires a PIN (a password-protected
-    /// Home user). Plozz prompts for the PIN on every switch and never stores it.
+    /// Plex's Home PIN protection flag, distinct from the account password.
     public let requiresPIN: Bool
+    /// Only explicit protection metadata can authorize a PIN prompt or PIN-less recovery.
+    public let pinRequirementVerified: Bool?
     /// `true` for the Home's admin/owner user.
     public let isAdmin: Bool
     /// `true` for a managed (restricted) user, e.g. a kid profile.
@@ -29,11 +30,13 @@ public struct PlexHomeUser: Identifiable, Hashable, Sendable, Codable {
         requiresPIN: Bool,
         isAdmin: Bool = false,
         isRestricted: Bool = false,
-        avatarURL: URL? = nil
+        avatarURL: URL? = nil,
+        pinRequirementVerified: Bool? = true
     ) {
         self.id = id
         self.name = name
         self.requiresPIN = requiresPIN
+        self.pinRequirementVerified = pinRequirementVerified
         self.isAdmin = isAdmin
         self.isRestricted = isRestricted
         self.avatarURL = avatarURL

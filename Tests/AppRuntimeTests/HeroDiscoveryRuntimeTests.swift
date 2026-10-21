@@ -5,7 +5,38 @@ import FeatureHomeCore
 import XCTest
 @testable import AppRuntime
 
+private actor DiscoveryPolicyProbe {
+    private(set) var allowed = true
+    func restrict() { allowed = false }
+}
+
 final class HeroDiscoveryRuntimeTests: XCTestCase {
+    func testKidsPolicyPreventsPublicCatalogFetch() async {
+        let runtime = HeroDiscoveryRuntime(
+            accounts: [], identitySources: { _ in [] }, discovery: { _, _ in
+                XCTFail("A Kids profile must not request external Discovery")
+                return []
+            },
+            allowsDiscovery: { false }
+        )
+        let items = await runtime.candidates(.init(), sources: [.tmdb], hideWatched: false)
+        XCTAssertTrue(items.isEmpty)
+    }
+
+    func testInFlightDiscoveryIsDiscardedWhenProfileBecomesKids() async {
+        let policy = DiscoveryPolicyProbe()
+        let raw = external()
+        let runtime = HeroDiscoveryRuntime(
+            accounts: [], identitySources: { _ in [] }, discovery: { _, _ in
+                await policy.restrict()
+                return [raw]
+            },
+            allowsDiscovery: { await policy.allowed }
+        )
+        let items = await runtime.candidates(.init(), sources: [.tmdb], hideWatched: false)
+        XCTAssertTrue(items.isEmpty, "A request started before a Kids flag change must not publish its results.")
+    }
+
     @MainActor
     func testColdFeaturedReverifiesAfterIndexPublicationAndUpgradesThePinnedSlide() async throws {
         let raw = external()

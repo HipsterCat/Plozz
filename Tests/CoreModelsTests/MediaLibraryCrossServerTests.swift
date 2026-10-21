@@ -5,6 +5,25 @@ import XCTest
 /// aggregator fold the *same* library on several servers into one tile whose
 /// browse pages every server (criterion 1, Library-browse half).
 final class MediaLibraryCrossServerTests: XCTestCase {
+    func testServerCollectionDirectoryKeepsAccountIdentityAndHasNoMediaHomeRows() throws {
+        let library = MediaLibrary(
+            id: "jellyfin:collections", title: "Collections", kind: .collection, synthesizedName: .collections
+        )
+        let first = library.taggingSource("first")
+        let second = library.taggingSource("second")
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(first.containerID(forSourceAccountID: "first"), library.id)
+        XCTAssertTrue(first.isServerCollectionDirectory)
+        let decoded = try JSONDecoder().decode(MediaLibrary.self, from: JSONEncoder().encode(first))
+        XCTAssertTrue(decoded.isServerCollectionDirectory)
+        let aggregated = AggregatedLibrary(
+            accountID: "first", accountName: "Viewer", serverName: "Server", providerKind: .jellyfin, library: first
+        )
+        XCTAssertTrue(LibraryHomeRowKind.available(for: aggregated).isEmpty)
+        XCTAssertTrue(HomeLibraryVisibility.default.isEnabled(aggregated.key))
+        XCTAssertFalse(MediaLibrary(id: "native", title: "Collections", kind: .collection).isServerCollectionDirectory)
+    }
+
 
     func testTaggingSourceStampsPrimaryAndContainerMap() {
         let lib = MediaLibrary(id: "movies-jelly", title: "Movies", kind: .movie)

@@ -32,6 +32,14 @@ public struct HeroRandomLibrary: Hashable, Sendable {
 /// so it works for both Jellyfin and Plex.
 public typealias RandomLibraryContentProviding = @Sendable (_ libraries: [HeroRandomLibrary], _ limit: Int) async -> [MediaItem]
 
+public typealias HeroCollectionContentProviding = @Sendable (
+    _ collection: HeroCollectionSelection, _ limit: Int
+) async throws -> MediaPage
+
+public enum HeroCollectionProvider {
+    public static let none: HeroCollectionContentProviding = { _, _ in throw AppError.notFound }
+}
+
 /// Namespaced defaults for the hero content seams, so call sites can wire an
 /// inert default without inventing an empty closure inline.
 public enum HeroFeaturedProvider {

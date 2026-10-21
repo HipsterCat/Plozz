@@ -23,14 +23,14 @@ struct PlozziOSDiagnosticsSettingsView: View {
             appVersion: version.displayVersion,
             appBuild: version.build,
             providers: providers.isEmpty ? "None" : providers,
-            repoURL: "https://github.com/thatcube/Plozz",
+            repoURL: AppLinks.repository.absoluteString,
             recentLogTail: PlozzLog.recentLogText(limit: 8),
             marketingVersion: version.marketingVersion
         )
     }
 
     private var crashReportingFooter: LocalizedStringResource {
-        "Anonymous crash and freeze reports. No servers, logins, credentials, or viewing activity."
+        "Anonymous crash, freeze, and IPTV setup failure reports. No servers, logins, credentials, or viewing activity."
     }
 
     var body: some View {

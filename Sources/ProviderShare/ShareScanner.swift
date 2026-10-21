@@ -367,6 +367,16 @@ actor ShareScanner {
         if Task.isCancelled || !backgroundWorkAllowed {
             return .cancelled(scanGeneration: nil)
         }
+        let performance = PerformanceDiagnostics.shared.begin(.shareScan, provider: .mediaShare)
+        var performanceOutcome = PerformanceDiagnostics.Outcome.failed
+        var listingRequests = 0
+        var filesFound = 0
+        defer {
+            performance?.finish(
+                Task.isCancelled || !backgroundWorkAllowed || isInvalidated ? .cancelled : performanceOutcome,
+                metrics: .init(items: filesFound, requests: listingRequests)
+            )
+        }
         isRunning = true
         activeResumeState = nil
         await store.activateScanGeneration(scanGeneration)
@@ -444,6 +454,7 @@ actor ShareScanner {
                 "share.scan personal-videos live-tree-only elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
             )
             await finishScan(listers: [], completed: true)
+            performanceOutcome = configurationApplied ? .succeeded : .failed
             return configurationApplied ? .completedClean : .completedPartial
         }
 
@@ -545,7 +556,6 @@ actor ShareScanner {
         var listedDirectoryMTimes: [String: Date?] = [:]
         var dirsWalked = 0
         var dirsSkipped = 0
-        var filesFound = 0
         var extrasFound = 0
         // Split local bookkeeping from network wait in the scan diagnostics.
         var storeNanos: UInt64 = 0
@@ -603,6 +613,7 @@ actor ShareScanner {
                     guard index < frontier.count, let lister = free.popLast() else { return }
                     let entry = frontier[index]
                     index += 1
+                    listingRequests += 1
                     let configuration = libraryConfiguration
                     group.addTask {
                         await Self.processDirectory(
@@ -623,6 +634,13 @@ actor ShareScanner {
                           !isInvalidated else {
                         group.cancelAll()
                         continue
+                    }
+                    if result.dir.isEmpty {
+                        if result.ok {
+                            reporter.reachability(shareID, false)
+                        } else if result.failureCategory == .timedOut || result.failureCategory == .connectionLost {
+                            reporter.reachability(shareID, true)
+                        }
                     }
                     if result.ok {
                         free.append(result.lister)     // healthy — return it to the pool
@@ -986,6 +1004,7 @@ actor ShareScanner {
         )
         activeResumeState = nil
         await finishScan(listers: pool, completed: true)
+        performanceOutcome = anyListingFailed ? .failed : .succeeded
         // A completed pass earns a completion stamp. When some listing failed the pass
         // stayed unpruned (partial), but it is still a *completed* pass under the
         // approved partial throttle — the coordinator distinguishes this from a
@@ -1600,6 +1619,19 @@ enum ShareScanListFailureCategory: String, Sendable, CaseIterable {
     case other
 
     init(_ error: Error) {
+        if let transport = error as? MediaTransportError {
+            switch transport {
+            case .timeout: self = .timedOut
+            case .cancelled: self = .cancelled
+            case .authentication: self = .authFailed
+            case .permissionDenied: self = .permissionDenied
+            case .transport(let code):
+                self.init(NSError(
+                    domain: code < 0 ? NSURLErrorDomain : NSPOSIXErrorDomain, code: code))
+            default: self = .other
+            }
+            return
+        }
         if error is CancellationError {
             self = .cancelled
             return

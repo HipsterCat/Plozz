@@ -99,11 +99,11 @@ public final class KeyedViewStateCache<Key: Hashable, Value> {
     }
 
     /// The value for `key`, building it with `make` only when absent.
-    public func value(forKey key: Key, _ make: () -> Value) -> Value {
+    public func value(forKey key: Key, _ make: () throws -> Value) rethrows -> Value {
         if let existing = storage[key] {
             return existing
         }
-        let built = make()
+        let built = try make()
         storage[key] = built
         order.append(key)
         while order.count > capacity {

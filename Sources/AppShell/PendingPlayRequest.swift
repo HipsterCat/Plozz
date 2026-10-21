@@ -1,4 +1,6 @@
+import Foundation
 import Observation
+import TopShelfKit
 
 /// A Top Shelf deep link (`plozz://item/<id>`) waiting for the signed-in UI to
 /// open it.
@@ -14,22 +16,28 @@ import Observation
 ///
 /// A stored `let` reference to this object is stable across `body` passes, so
 /// intermediate views (`MainTabView`, `HomeTab`) can carry it without becoming
-/// subscribers. Only the small leaf that reads ``itemID`` — the deep-link
+/// subscribers. Only the small leaf that reads ``request`` — the deep-link
 /// router — is invalidated, and its body is empty.
 @MainActor
 @Observable
 public final class PendingPlayRequest {
-    /// The item id to open, or `nil` when there is nothing pending. Set when the
-    /// app is launched/foregrounded from a Top Shelf card, cleared once the Home
-    /// tab has routed to it.
-    public var itemID: String?
-    /// Which server the link said the title lives on, when it said.
-    ///
-    /// A bare id is unique only within one server — Plex ratingKeys are small
-    /// per-server integers — so on a device signed in to several, resolving by id
-    /// alone can open the wrong title. The link carries the account; this is where
-    /// it survives until the router can use it.
-    public var accountID: String?
+    public struct Request: Equatable, Sendable {
+        public let id: UUID
+        public let reference: TopShelf.ItemReference
+    }
+
+    public private(set) var request: Request?
 
     public init() {}
+
+    public func enqueue(_ reference: TopShelf.ItemReference) {
+        request = Request(id: UUID(), reference: reference)
+    }
+
+    /// A completed fetch cannot consume a newer action, even for the same title.
+    public func consume(_ expected: Request) -> Bool {
+        guard request == expected else { return false }
+        request = nil
+        return true
+    }
 }

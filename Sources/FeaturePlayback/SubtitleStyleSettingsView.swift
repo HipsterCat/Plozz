@@ -11,8 +11,10 @@ public struct SubtitleStyleSettingsView: View {
     @State private var prepared = false
     @State private var previewOptions = SubtitlePreviewOptions()
     #if os(tvOS)
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var screen = PlayerControls.SubtitleScreen.style
+    @State private var returningToParent = false
     #endif
 
     public init(style: Binding<SubtitleStyle>, isLiveTV: Bool = false) {
@@ -21,62 +23,70 @@ public struct SubtitleStyleSettingsView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        GeometryReader { geometry in
+            let context = SubtitleStyleEditingContext(
+                controls: controls, style: $style, secondaryPreview: secondaryPreview,
+                offersDualSubtitles: !isLiveTV
+            )
             #if os(tvOS)
-            SettingsPageHeader(pageTitle)
-                .plozzForeground(.primary)
-            #endif
-            GeometryReader { geometry in
-                let context = SubtitleStyleEditingContext(
-                    controls: controls, style: $style, secondaryPreview: secondaryPreview,
-                    offersDualSubtitles: !isLiveTV
+            VStack(alignment: .leading, spacing: SettingsFormMetrics.sectionSpacing) {
+                SettingsPageHeader(pageTitle)
+                TelevisionSubtitleStyleColumn(
+                    context: context, screen: Binding(get: { screen }, set: openScreen),
+                    returningToParent: returningToParent, style: style,
+                    secondaryVisible: secondaryVisible, previewOptions: previewOptions
                 )
-                #if os(tvOS)
-                HStack(alignment: .center, spacing: 44) {
-                    TelevisionSubtitleStyleColumn(
-                        context: context, screen: $screen, style: style,
-                        secondaryVisible: secondaryVisible, previewOptions: previewOptions
-                    )
-                        .frame(width: SubtitleStylePanel.panelWidth)
-                    SubtitleStylePreview(
-                        style: style, secondaryVisible: secondaryVisible,
-                        referenceSize: SubtitleStylePreviewMetrics.televisionCanvas,
-                        options: previewOptions
-                    )
-                    .frame(maxWidth: .infinity)
-                    .allowsHitTesting(false)
-                }
-                #else
-                let width = max(geometry.size.width, geometry.size.height)
-                let reference = CGSize(width: width, height: width * 9 / 16)
-                let layout = geometry.size.width > geometry.size.height
-                    ? AnyLayout(HStackLayout(alignment: .top, spacing: 24))
-                    : AnyLayout(VStackLayout(alignment: .leading, spacing: 20))
-                layout {
-                    SubtitleStylePreview(
-                        style: style, secondaryVisible: secondaryVisible,
-                        referenceSize: reference, options: previewOptions
-                    )
-                        .frame(maxWidth: .infinity)
-                    NavigationStack {
-                        MobileSubtitleStyleEditor(viewModel: context)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                #endif
+                .frame(width: SubtitleStylePanel.panelWidth)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.top, SettingsFormMetrics.pageTopInset)
+            .padding(.bottom, SettingsFormMetrics.pageBottomInset)
+            .overlay(alignment: .trailing) {
+                SubtitleStylePreview(
+                    style: style, secondaryVisible: secondaryVisible,
+                    referenceSize: SubtitleStylePreviewMetrics.televisionCanvas,
+                    options: previewOptions
+                )
+                .frame(width: max(0, geometry.size.width - SubtitleStylePanel.panelWidth - 44))
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("subtitle-style-preview")
+            }
+            #else
+            let width = max(geometry.size.width, geometry.size.height)
+            let reference = CGSize(width: width, height: width * 9 / 16)
+            let layout = geometry.size.width > geometry.size.height
+                ? AnyLayout(HStackLayout(alignment: .top, spacing: 24))
+                : AnyLayout(VStackLayout(alignment: .leading, spacing: 20))
+            layout {
+                SubtitleStylePreview(
+                    style: style, secondaryVisible: secondaryVisible,
+                    referenceSize: reference, options: previewOptions
+                )
+                .frame(maxWidth: .infinity)
+                NavigationStack {
+                    MobileSubtitleStyleEditor(viewModel: context)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            #endif
         }
         .padding(.horizontal, pageInset)
+        #if !os(tvOS)
         .padding(.vertical, 24)
+        #endif
         .background { SettingsPageBackground() }
         #if os(tvOS)
         .navigationTitle(Text(verbatim: ""))
         .onExitCommand {
             if screen == .style { dismiss() }
-            else { screen = screen.parent }
+            else { openScreen(screen.parent) }
         }
         #else
         .navigationTitle(Text(pageTitle))
+        #if os(iOS)
+        .toolbarTitleDisplayMode(.inline)
+        #endif
         #endif
         .onChange(of: style, initial: true) { previous, value in
             controls.subtitleStyle = value
@@ -94,6 +104,15 @@ public struct SubtitleStyleSettingsView: View {
     private var pageTitle: LocalizedStringResource {
         isLiveTV ? "Customize Live TV subtitles" : "Customize subtitle style"
     }
+
+    #if os(tvOS)
+    private func openScreen(_ next: PlayerControls.SubtitleScreen) {
+        returningToParent = next == screen.parent
+        withAnimation(reduceMotion ? nil : SettingsPageMotion.animation) {
+            screen = next
+        }
+    }
+    #endif
 
     private var pageInset: CGFloat {
         #if os(tvOS)
@@ -121,6 +140,7 @@ public struct SubtitleStyleSettingsView: View {
 private struct TelevisionSubtitleStyleColumn: View {
     let context: SubtitleStyleEditingContext
     @Binding var screen: PlayerControls.SubtitleScreen
+    let returningToParent: Bool
     let style: SubtitleStyle
     let secondaryVisible: Bool
     let previewOptions: SubtitlePreviewOptions
@@ -128,12 +148,15 @@ private struct TelevisionSubtitleStyleColumn: View {
     @State private var fullscreenPresented = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            TelevisionSubtitleStyleEditor(context: context, screen: $screen)
+        VStack(spacing: SettingsFormMetrics.controlSpacing) {
+            TelevisionSubtitleStyleEditor(
+                context: context, screen: $screen, returningToParent: returningToParent
+            )
             SubtitlePreviewControls(
                 style: style, secondaryVisible: secondaryVisible, options: previewOptions,
                 fullscreenPresented: $fullscreenPresented, focus: $previewFocus
             )
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -141,44 +164,29 @@ private struct TelevisionSubtitleStyleColumn: View {
 private struct TelevisionSubtitleStyleEditor: View {
     let context: SubtitleStyleEditingContext
     @Binding var screen: PlayerControls.SubtitleScreen
+    let returningToParent: Bool
     @Environment(\.themePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focus: PlayerControls.FocusSlot?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 16) {
-                if screen != .style {
-                    Button {
-                        screen = screen.parent
-                    } label: {
-                        Label("Back", systemImage: "chevron.left")
-                    }
-                    .labelStyle(.iconOnly)
-                    .focused($focus, equals: .subBack)
-                }
-                Text(title).font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            Divider().padding(.horizontal, 28)
+        ZStack(alignment: .topLeading) {
             ScrollView {
-                SubtitleStylePanel(
-                    screen: screen, model: context.controls, palette: palette,
-                    actions: PlayerOptionsActions(setSubtitleStyle: context.applySubtitleStyle),
-                    focus: $focus,
-                    openScreen: { screen = $0 },
-                    secondaryPreview: context.secondaryPreview,
-                    offersDualSubtitles: context.offersDualSubtitles
-                )
+                page
             }
-            .clipped()
-            .padding(.bottom, 16)
+            .id(screen)
+            .transition(reduceMotion ? .identity : SettingsPageMotion.transition(isReturning: returningToParent))
         }
+        .frame(maxHeight: .infinity)
+        .padding(.top, SettingsFormMetrics.groupInset)
+        .padding(.bottom, SettingsFormMetrics.headingInset)
         .settingsGroupSurface(cornerRadius: 32)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("subtitle-style-editor-card")
         .task(id: screen) {
             focus = nil
             await Task.yield()
+            guard !Task.isCancelled else { return }
             let style = context.effectiveStyle
             switch screen {
             case .styleFont:
@@ -191,6 +199,32 @@ private struct TelevisionSubtitleStyleEditor: View {
                 } ?? 0)
             default: focus = .row(0)
             }
+        }
+    }
+
+    private var page: some View {
+        VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+            if screen != .style {
+                HStack(spacing: 16) {
+                    SettingsBackButton {
+                        screen = screen.parent
+                    }
+                    .focused($focus, equals: .subBack)
+                    Text(title).font(.headline)
+                    Spacer()
+                }
+                .padding(.horizontal, SettingsFormMetrics.pageInset)
+                Divider().padding(.horizontal, SettingsFormMetrics.pageInset)
+            }
+            SubtitleStylePanel(
+                screen: screen, model: context.controls, palette: palette,
+                actions: PlayerOptionsActions(setSubtitleStyle: context.applySubtitleStyle),
+                focus: $focus,
+                openScreen: { screen = $0 },
+                secondaryPreview: context.secondaryPreview,
+                offersDualSubtitles: context.offersDualSubtitles,
+                separatesSettingsRows: true
+            )
         }
     }
 

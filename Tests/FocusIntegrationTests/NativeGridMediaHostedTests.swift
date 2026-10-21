@@ -61,10 +61,11 @@ final class NativeGridMediaHostedTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(600))
             XCTAssertTrue(cell.isFocused, "UIKit, not a SwiftUI proxy or child lockup, must own focus.")
             XCTAssertNil(descendant(TVLockupView.self, in: cell))
-            let media = try XCTUnwrap(descendant(TVMediaItemContentView.self, in: cell))
+            let media = try XCTUnwrap(descendant(NativePosterImageView.self, in: cell))
             let source = try XCTUnwrap(descendant(DetailTransitionSourceView.self, in: cell)?.reference)
             XCTAssertTrue(source.nativeArtworkView === media)
             let caption = try XCTUnwrap(descendant(SystemPosterCaption.CaptionView.self, in: cell))
+            XCTAssertFalse(caption.isHidden)
             XCTAssertFalse(caption.isDescendant(of: media))
             XCTAssertEqual(media.bounds.height / media.bounds.width, 1.5, accuracy: 0.02)
             let focused = snapshot(window)
@@ -78,7 +79,7 @@ final class NativeGridMediaHostedTests: XCTestCase {
                 focusedPixels.width, restPixels.width + 10,
                 "The actual painted image must grow; focus flags/guides alone are insufficient.")
             XCTAssertGreaterThan(focusedPixels.height, restPixels.height + 10)
-            let captionFrame = caption.convert(caption.bounds, to: window)
+            let captionFrame = caption.title.convert(caption.title.bounds, to: window)
             XCTAssertGreaterThanOrEqual(captionFrame.minY, focusedPixels.maxY - 1)
             for (name, image) in [("rest", rest), ("focus", focused)] {
                 let attachment = XCTAttachment(image: image)
@@ -112,6 +113,7 @@ final class NativeGridMediaHostedTests: XCTestCase {
                 var environment = EnvironmentValues()
                 environment.themePalette = palette
                 environment.plozzCardStyle = style
+                environment.plozzCardCaptionsHidden = false
                 environment.plozzMetrics = .standard
                 environment.locale = Locale(identifier: "en")
                 let cell = NativeTVLibraryCell(frame: CGRect(
@@ -121,13 +123,14 @@ final class NativeGridMediaHostedTests: XCTestCase {
                 cell.configure(item: nil, spoilerSettings: .default, environment: environment)
                 cell.updateConfiguration(using: cell.configurationState)
                 cell.layoutIfNeeded()
-                let content = try XCTUnwrap(cell.contentConfiguration as? TVMediaItemContentConfiguration)
-                XCTAssertNotNil(content.image)
-                XCTAssertNil(content.overlayView, "Pending metadata must not draw a playback/folder glyph.")
+                let artwork = try XCTUnwrap(descendant(NativePosterImageView.self, in: cell))
+                XCTAssertNotNil(artwork.image)
+                XCTAssertNil(artwork.indicatorView.image, "Pending metadata must not draw a playback/folder glyph.")
                 XCTAssertEqual(cell.accessibilityLabel, "Loading")
                 XCTAssertTrue(cell.canBecomeFocused)
                 XCTAssertTrue(cell.accessibilityTraits.contains(.notEnabled))
                 let caption = try XCTUnwrap(descendant(SystemPosterCaption.CaptionView.self, in: cell))
+                XCTAssertFalse(caption.isHidden)
                 caption.layoutIfNeeded()
                 let height = caption.intrinsicContentSize.height
                 for (line, fraction) in [(caption.title, CGFloat(0.7)), (caption.subtitle, CGFloat(0.45))] {
@@ -263,6 +266,7 @@ private final class GridController: UIViewController, UICollectionViewDataSource
     init(style: CardStyle, artworkURL: URL) {
         self.artworkURL = artworkURL
         environment.plozzCardStyle = style
+        environment.plozzCardCaptionsHidden = false
         environment.plozzCardFocusStyle = .system
         environment.plozzMetrics = .standard
         environment.themePalette = .dark

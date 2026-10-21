@@ -39,6 +39,7 @@ public enum DeveloperInfo {
             ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
             ?? "—"
         let bundleID = bundle.bundleIdentifier ?? "—"
+        let versionIdentity = AppVersionIdentity(infoDictionary: bundle.infoDictionary ?? [:])
 
         // `--branded` side-by-side apps carry a suffixed bundle id; the canonical
         // app is exactly `com.plozz.app`. Surfacing this removes all doubt about
@@ -64,12 +65,12 @@ public enum DeveloperInfo {
             DeveloperInfoItem(id: "build-kind", label: "Build", value: isBranded ? "Branded (side-by-side)" : "Canonical"),
             DeveloperInfoItem(id: "bundle-id", label: "Bundle ID", value: bundleID),
             DeveloperInfoItem(id: "version", label: "Version", value: string("CFBundleShortVersionString")),
-            DeveloperInfoItem(id: "build-number", label: "Build #", value: string("CFBundleVersion")),
+            DeveloperInfoItem(id: "build-number", label: "Build #", value: versionIdentity.displayBuild),
             DeveloperInfoItem(id: "channel", label: "Channel", value: channelLabel),
             DeveloperInfoItem(id: "app-group", label: "App Group", value: appGroupAvailable ? "Available" : "Unavailable (Top Shelf off)"),
             DeveloperInfoItem(id: "crash-endpoint", label: "Crash Endpoint", value: crashConfigured ? "Configured" : "Not configured"),
         ]
-        if let release = AppVersionIdentity(infoDictionary: bundle.infoDictionary ?? [:]).releaseVersion {
+        if let release = versionIdentity.releaseVersion {
             items.insert(DeveloperInfoItem(id: "release-version", label: "Release", value: release), at: 3)
         }
         return items

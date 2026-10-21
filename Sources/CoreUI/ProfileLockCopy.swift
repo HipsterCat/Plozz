@@ -233,8 +233,8 @@ public enum ProfileLockCopy {
 ///
 /// "Kids Profile" is the term Netflix, Disney+ and Hulu all use, so it needs no
 /// explaining. The description is deliberately precise about what it does and
-/// does NOT do: Plozz has no maturity filtering yet, so promising "only suitable
-/// content" would be a lie.
+/// does NOT do: external Home Discovery is disabled, but library content is
+/// governed by the selected server user's restrictions, not an app-wide filter.
 public enum KidsProfileCopy {
     public static let title = LocalizedStringResource(
         "settings.kidsProfile.title",
@@ -243,9 +243,9 @@ public enum KidsProfileCopy {
     )
 
     public static let explanation = LocalizedStringResource(
-        "settings.kidsProfile.explanation",
-        defaultValue: "Hides shared settings, so servers and profiles can't be changed from it. Doesn't filter what can be watched.",
-        comment: "Explains what marking a profile as a Kids Profile does. The last sentence matters: there is no content filtering yet and the copy must not imply otherwise."
+        "settings.kidsProfile.discoveryExplanation",
+        defaultValue: "Disables Discovery recommendations. Library content follows the connected server user's restrictions. Add a Parental PIN to protect shared settings and prevent switching to a grown-up profile.",
+        comment: "Kids profiles always disable external Discovery, but do not provide an app-wide maturity filter. The optional Parental PIN protects settings and profile switching."
     )
 
     // MARK: Parental PIN
@@ -267,9 +267,9 @@ public enum KidsProfileCopy {
     )
 
     public static let parentalPINExplanation = LocalizedStringResource(
-        "settings.parentalPIN.explanation",
-        defaultValue: "One PIN for the household. Without it, Kids Profiles aren't restricted.",
-        comment: "Subtitle of the Parental PIN page. Must stay honest that a Kids Profile alone restricts nothing."
+        "settings.parentalPIN.protectionExplanation",
+        defaultValue: "One PIN protects shared settings and leaving Kids profiles. Without it, those actions remain available.",
+        comment: "Explains the settings and profile-switching protection provided by the household Parental PIN."
     )
 
     /// Shown under the Kids Profile row when the household has no Parental PIN.
@@ -279,9 +279,9 @@ public enum KidsProfileCopy {
     /// under a toggle: it opened with "One PIN for the household" with nothing to
     /// attach that to, and said "this screen" of a screen it wasn't on.
     public static let kidsNeedsParentalPIN = LocalizedStringResource(
-        "settings.kidsProfile.needsParentalPIN",
-        defaultValue: "Not restricted yet — open Kids Profile to add a Parental PIN.",
-        comment: "Warning under the Kids Profile row when no household Parental PIN exists. Points at the row directly, because a Kids Profile hides the household section where the PIN otherwise lives."
+        "settings.kidsProfile.needsPINForSettings",
+        defaultValue: "Settings and profile switching aren't protected yet — open Kids Profile to add a Parental PIN.",
+        comment: "Warning that a Kids Profile without a household PIN still permits settings changes and switching profiles. Discovery is disabled regardless."
     )
 
     public static let parentalPINCreate = LocalizedStringResource(

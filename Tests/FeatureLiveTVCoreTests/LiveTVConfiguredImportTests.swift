@@ -5,23 +5,173 @@ import XCTest
 
 @MainActor
 final class LiveTVConfiguredImportTests: XCTestCase {
-    func testOnlySafeDeclaredGuidesAreDiscoveredAfterChannelsPublish() async throws {
+    func testSourceRetryClearsCachedChannelsWhenProfileAccessIsRevoked() async throws {
         let playlist = source()
-        let safe = URL(string: "https://example.test/discovered.xml")!
-        let text = m3u.replacingOccurrences(
-            of: "#EXTM3U", with: "#EXTM3U url-tvg=\"\(safe.absoluteString),https://other.test/guide.xml\""
-        )
-        let loader = ConfiguredImportLoader(playlists: [playlist.playlistURL: text], guides: [:])
+        let loader = ConfiguredImportLoader(playlists: [playlist.playlistURL: m3u])
+        var authorized = true
         let imports = LiveTVPrototypeImportModel(
-            configuration: .init(playlists: [playlist]), loader: loader
+            configuration: .init(playlists: [playlist]), loader: loader,
+            catalogIsAuthorized: { authorized }
         )
         let model = LiveTVPrototypeModel(channels: [])
         await imports.reload(into: model)
         XCTAssertEqual(model.channels.count, 1)
-        XCTAssertEqual(imports.guideSources.map(\.source.url), [safe])
-        XCTAssertEqual(imports.guideDiscoveryFailures[playlist.id], .unsafeGuideOrigin)
+        authorized = false
+
+        do {
+            try await imports.reloadSource(playlist.id, into: model)
+            XCTFail("Revoked access must cancel the retry.")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+
+        XCTAssertTrue(model.channels.isEmpty)
         let calls = await loader.calls
-        XCTAssertEqual(calls.guides, [safe])
+        XCTAssertEqual(calls.playlists, [playlist.playlistURL])
+    }
+
+    func testSourceRetryLoadsOnlyItsPlaylistAndGuidesAndPreservesOtherFailures() async throws {
+        let firstGuide = URL(string: "https://example.test/one.xml")!
+        let secondGuide = URL(string: "https://example.test/two.xml")!
+        let first = source(id: "one", guides: [firstGuide])
+        let second = source(id: "two", guides: [secondGuide])
+        let now = Date()
+        let loader = ConfiguredImportLoader(
+            playlists: [first.playlistURL: m3u, second.playlistURL: m3u],
+            guides: [firstGuide: xml(title: "First", now: now), secondGuide: xml(title: "Second", now: now)]
+        )
+        let imports = LiveTVPrototypeImportModel(configuration: .init(playlists: [first, second]), loader: loader)
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        await imports.reload(into: model)
+        let channels = model.channels
+        await loader.failPlaylist(first.playlistURL)
+        await loader.failPlaylist(second.playlistURL)
+        await imports.reload(into: model)
+        let otherStatus = imports.playlistSources.last
+        let otherGuide = imports.guideSources.last
+        let before = await loader.calls
+        var invalidated: Set<String> = []
+        imports.beforeSourceRefresh = { invalidated.formUnion($0) }
+
+        await loader.recoverPlaylist(first.playlistURL)
+        try await imports.reloadSource(first.id, into: model)
+
+        let after = await loader.calls
+        XCTAssertEqual(Array(after.playlists.dropFirst(before.playlists.count)), [first.playlistURL])
+        XCTAssertEqual(Array(after.guides.dropFirst(before.guides.count)), [firstGuide])
+        XCTAssertEqual(invalidated, [first.id])
+        XCTAssertNil(imports.playlistSources.first?.failure)
+        XCTAssertEqual(imports.playlistSources.last, otherStatus)
+        XCTAssertEqual(imports.guideSources.last, otherGuide)
+        XCTAssertEqual(imports.playlistFailure, .downloadFailed)
+        XCTAssertEqual(model.channels, channels)
+    }
+
+    func testSourceRetryRejectsRemovedDisabledAndUnauthorizedSources() async throws {
+        let playlist = source(isEnabled: false)
+        let loader = ConfiguredImportLoader()
+        var authorized = true
+        let imports = LiveTVPrototypeImportModel(
+            configuration: .init(playlists: [playlist]), loader: loader,
+            catalogIsAuthorized: { authorized }
+        )
+        let model = LiveTVPrototypeModel(channels: [])
+        for id in ["removed", playlist.id] {
+            do {
+                try await imports.reloadSource(id, into: model)
+                XCTFail("Unavailable source retry must fail.")
+            } catch {
+                XCTAssertEqual(error as? LiveTVSourcesValidationError, .invalidSourceID)
+            }
+        }
+        authorized = false
+        do {
+            try await imports.reloadSource(playlist.id, into: model)
+            XCTFail("Unauthorized source retry must fail.")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        let calls = await loader.calls
+        XCTAssertTrue(calls.playlists.isEmpty)
+        XCTAssertTrue(calls.guides.isEmpty)
+    }
+
+    func testExcessDeclaredGuidesKeepChannelsAndBoundAutomaticGuideRequests() async throws {
+        let playlist = source()
+        let guides = (0..<101).map { URL(string: "https://example.test/guide/\($0).xml")! }
+        let now = Date()
+        let selected = Array(guides.prefix(32))
+        let loader = ConfiguredImportLoader(
+            playlists: [playlist.playlistURL: declaringGuides(guides)],
+            guides: Dictionary(uniqueKeysWithValues: selected.map { ($0, xml(title: "Schedule", now: now)) })
+        )
+        let imports = LiveTVPrototypeImportModel(configuration: .init(playlists: [playlist]), loader: loader)
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(model.channels.count, 1)
+        XCTAssertEqual(imports.playlistPhase, .loaded)
+        XCTAssertNil(imports.playlistFailure)
+        XCTAssertNil(imports.playlistSources.first?.failure)
+        XCTAssertEqual(imports.guideSources.map(\.source.url), selected)
+        XCTAssertEqual(imports.guideDiscoveryFailures[playlist.id], .guideSourceLimitReached)
+        let calls = await loader.calls
+        XCTAssertEqual(calls.guides, selected)
+    }
+
+    func testConfiguredGuidesKeepPriorityWithinTheDiscoveryBudget() async throws {
+        let preferred = (0..<31).map { URL(string: "https://example.test/preferred/\($0).xml")! }
+        let declared = (0..<101).map { URL(string: "https://example.test/guide/\($0).xml")! }
+        let playlist = source(guides: preferred)
+        let loader = ConfiguredImportLoader(playlists: [playlist.playlistURL: declaringGuides(declared)])
+        let imports = LiveTVPrototypeImportModel(configuration: .init(playlists: [playlist]), loader: loader)
+        let model = LiveTVPrototypeModel(channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(model.channels.count, 1)
+        XCTAssertEqual(imports.guideSources.map(\.source.url), preferred + [declared[0]])
+        XCTAssertEqual(imports.guideDiscoveryFailures[playlist.id], .guideSourceLimitReached)
+        let calls = await loader.calls
+        XCTAssertEqual(calls.guides, preferred + [declared[0]])
+    }
+
+    func testLegacyDiscoveryOptOutNoLongerPreventsAutomaticGuides() async throws {
+        var playlist = source()
+        playlist.discoversPlaylistGuides = false
+        let guides = (0..<101).map { URL(string: "https://example.test/guide/\($0).xml")! }
+        let loader = ConfiguredImportLoader(playlists: [playlist.playlistURL: declaringGuides(guides)])
+        let imports = LiveTVPrototypeImportModel(configuration: .init(playlists: [playlist]), loader: loader)
+        let model = LiveTVPrototypeModel(channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(model.channels.count, 1)
+        XCTAssertEqual(imports.guideSources.map(\.source.url), Array(guides.prefix(32)))
+        XCTAssertEqual(imports.guideDiscoveryFailures[playlist.id], .guideSourceLimitReached)
+        let calls = await loader.calls
+        XCTAssertEqual(calls.guides, Array(guides.prefix(32)))
+    }
+
+    func testDeclaredGuidesLoadAcrossOriginsWithoutExplicitConfiguration() async throws {
+        let playlist = source()
+        let guides = [
+            URL(string: "https://example.test/discovered.xml")!,
+            URL(string: "https://guide.test/guide.xml?token=guide-only")!,
+            URL(string: "http://guide.test:8080/guide.xml")!
+        ]
+        let now = Date()
+        let loader = ConfiguredImportLoader(
+            playlists: [playlist.playlistURL: declaringGuides(guides)],
+            guides: Dictionary(uniqueKeysWithValues: guides.map { ($0, xml(title: "Schedule", now: now)) })
+        )
+        let imports = LiveTVPrototypeImportModel(
+            configuration: .init(playlists: [playlist]), loader: loader
+        )
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(model.channels.count, 1)
+        XCTAssertEqual(imports.guideSources.map(\.source.url), guides)
+        XCTAssertTrue(imports.guideSources.allSatisfy { $0.phase == .loaded && $0.failure == nil })
+        XCTAssertNil(imports.guideDiscoveryFailures[playlist.id])
+        XCTAssertEqual(model.currentProgram(for: try XCTUnwrap(model.channels.first?.id))?.title, "Schedule")
+        let calls = await loader.calls
+        XCTAssertEqual(calls.guides, guides)
     }
 
     func testDefaultImporterNeverSelectsOrLoadsPublicFeeds() async {
@@ -531,6 +681,12 @@ final class LiveTVConfiguredImportTests: XCTestCase {
         """
     }
 
+    private func declaringGuides(_ guides: [URL]) -> String {
+        m3u.replacingOccurrences(
+            of: "#EXTM3U", with: "#EXTM3U x-tvg-url=\"\(guides.map(\.absoluteString).joined(separator: ","))\""
+        )
+    }
+
     private func xml(title: String, now: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -571,6 +727,7 @@ private actor ConfiguredImportLoader: LiveTVSourceLoading {
     }
 
     func failPlaylist(_ url: URL) { failedPlaylists.insert(url) }
+    func recoverPlaylist(_ url: URL) { failedPlaylists.remove(url) }
 
     func loadPlaylist(from url: URL) async throws -> LiveTVPlaylistImport {
         calls.playlists.append(url)

@@ -439,7 +439,7 @@ final class NativePlaybackFailureTests: XCTestCase {
         return NativePlaybackFailure.VideoFormat(try XCTUnwrap(description))
     }
 
-    func testHDRH264FailureGivesSpecificAdviceWithoutClaimingToReadServerSettings() throws {
+    func testHDRH264FailureExplainsObservedIncompatibilityWithoutGuessingServerSettings() throws {
         for transfer in [
             kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ,
             kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG
@@ -453,8 +453,10 @@ final class NativePlaybackFailureTests: XCTestCase {
             var message = result.userMessage
             message.locale = Locale(identifier: "en_US")
             let text = String(localized: message)
-            XCTAssertTrue(text.contains("requires Emby Premiere"))
-            XCTAssertTrue(text.contains("SDR version"))
+            XCTAssertTrue(text.contains("HDR video"))
+            XCTAssertTrue(text.contains("cannot decode"))
+            XCTAssertFalse(text.contains("Premiere"))
+            XCTAssertFalse(text.contains("tone mapping"))
             XCTAssertFalse(text.contains("disabled"))
         }
     }
@@ -501,7 +503,7 @@ final class NativePlaybackFailureTests: XCTestCase {
         }
     }
 
-    func testHDRContextGivesConditionalAdviceWhenDecoderFailsBeforeFormatArrives() throws {
+    func testHDRContextAdmitsUnconfirmedOutputWhenDecoderFailsBeforeFormatArrives() throws {
         let failure = NativePlaybackFailure.classify(
             NSError(domain: "CoreMediaErrorDomain", code: -12927),
             provider: .emby, convertingHDRSource: true
@@ -511,7 +513,8 @@ final class NativePlaybackFailureTests: XCTestCase {
         var message = failure.userMessage
         message.locale = Locale(identifier: "en_US")
         let text = String(localized: message)
-        XCTAssertTrue(text.contains("may be needed"))
+        XCTAssertTrue(text.contains("could not be confirmed"))
+        XCTAssertFalse(text.contains("tone mapping"))
         XCTAssertFalse(text.contains("disabled"))
         XCTAssertEqual(NativePlaybackFailure.classify(
             NSError(domain: "CoreMediaErrorDomain", code: -12927), provider: .emby
@@ -606,6 +609,7 @@ final class NativePlaybackFailureTests: XCTestCase {
         let result = NativePlaybackFailure.classify(outer)
         XCTAssertEqual(result.kind, .timedOut)
         XCTAssertEqual(result.diagnosticCode, "URL -1001")
+        XCTAssertEqual(result.underlyingErrors.map(\.code), [-11800, -1001])
         XCTAssertFalse(result.allowsCodecFallback)
         XCTAssertFalse(String(localized: result.userMessage).contains("private"))
     }
@@ -613,17 +617,33 @@ final class NativePlaybackFailureTests: XCTestCase {
     func testHTTPAndDecoderFailuresRemainDistinct() {
         for (status, kind) in [
             (401, StreamingPlaybackFailure.Kind.accessDenied), (403, .accessDenied),
-            (404, .unavailable), (500, .server), (503, .server), (504, .timedOut)
+            (404, .unavailable), (410, .unavailable), (429, .rateLimited), (451, .accessRestricted),
+            (500, .server), (503, .server), (504, .timedOut), (509, .rateLimited)
         ] {
             let result = NativePlaybackFailure.classify(nil, httpStatus: status)
             XCTAssertEqual(result.kind, kind)
             XCTAssertEqual(result.diagnosticCode, "HTTP \(status)")
-            XCTAssertEqual(result.allowsCodecFallback, kind == .unavailable)
+            XCTAssertFalse(result.allowsCodecFallback)
         }
         let error = NSError(domain: AVFoundationErrorDomain, code: AVError.Code.decodeFailed.rawValue)
         let result = NativePlaybackFailure.classify(error)
         XCTAssertEqual(result.kind, .unsupportedFormat)
         XCTAssertTrue(result.allowsCodecFallback)
+    }
+
+    func testNetworkMessagesExplainKnownOfflineDNSAndCertificateFailures() {
+        for (code, expected) in [
+            (URLError.notConnectedToInternet, "offline"),
+            (.cannotFindHost, "address"),
+            (.dnsLookupFailed, "resolved"),
+            (.serverCertificateUntrusted, "secure connection"),
+            (.serverCertificateHasBadDate, "secure connection")
+        ] {
+            let failure = NativePlaybackFailure.classify(URLError(code) as NSError)
+            XCTAssertEqual(failure.kind, .network)
+            XCTAssertFalse(failure.allowsCodecFallback)
+            XCTAssertTrue(String(localized: failure.userMessage).contains(expected))
+        }
     }
 
     func testUnknownDomainsAndMessagesCannotLeakIntoDiagnostics() {

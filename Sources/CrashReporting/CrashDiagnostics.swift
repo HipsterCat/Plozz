@@ -1,4 +1,5 @@
 import Foundation
+import CoreModels
 #if canImport(Sentry)
 import Sentry
 #endif
@@ -14,33 +15,77 @@ import Sentry
 /// SDK is actually running). Otherwise it sends nothing and returns `false`, and
 /// the caller should tell the user to turn crash reporting on first.
 public enum CrashDiagnostics {
-    /// Send `logText` to the crash-reporting backend as a single event with the
-    /// log attached as a file. Returns `true` when the report was handed off,
-    /// `false` when crash reporting is inactive (no DSN, or not opted in).
+    /// Send a diagnostic event with its log attachment and linked anonymous feedback.
+    /// Returns `true` for SDK handoff, not confirmation of server delivery;
+    /// `false` when reporting is inactive or either event was rejected.
     @MainActor
     @discardableResult
     public static func send(logText: String, note: String? = nil) -> Bool {
         #if canImport(Sentry)
-        guard SentrySDK.isEnabled else { return false }
+        return send(
+            logText: logText,
+            note: note,
+            isEnabled: SentrySDK.isEnabled,
+            sourceDiagnostics: { LiveTVSourceDiagnostics.captureReport() },
+            captureEvent: { event, attachment in
+                SentrySDK.capture(event: event) { scope in
+                    scope.addAttachment(attachment)
+                }
+            },
+            captureFeedback: { SentrySDK.capture(event: $0) }
+        )
+        #else
+        return false
+        #endif
+    }
+
+    #if canImport(Sentry)
+    @MainActor
+    static func send(
+        logText: String,
+        note: String?,
+        isEnabled: Bool,
+        sourceDiagnostics: @MainActor () -> String = { "" },
+        captureEvent: (Event, Attachment) -> SentryId,
+        captureFeedback: (Event) -> SentryId
+    ) -> Bool {
+        guard isEnabled else { return false }
 
         let trimmed = logText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = trimmed.isEmpty ? "(recent activity log was empty)" : trimmed
+        var body = trimmed.isEmpty ? "(recent activity log was empty)" : trimmed
+        let sourceJournal = sourceDiagnostics()
+        if !sourceJournal.isEmpty {
+            body += "\n\n--- Persistent Live TV source diagnostics ---\n" + sourceJournal
+        }
+        let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let message = trimmedNote.isEmpty ? "User diagnostics report" : trimmedNote
         let attachment = Attachment(
             data: Data(body.utf8),
             filename: "plozz-recent-activity.log",
             contentType: "text/plain"
         )
 
-        SentrySDK.capture(message: note ?? "User diagnostics report") { scope in
-            scope.setLevel(.info)
-            scope.setTag(value: "user-diagnostics", key: "report.kind")
-            scope.addAttachment(attachment)
-        }
-        return true
-        #else
-        return false
-        #endif
+        let event = Event(level: .info)
+        event.message = SentryMessage(formatted: message)
+        event.tags = ["report.kind": "user-diagnostics"]
+        let eventID = captureEvent(event, attachment)
+        guard eventID != .empty else { return false }
+
+        let feedback = SentryFeedback(
+            message: message,
+            name: nil,
+            email: nil,
+            source: .custom,
+            associatedEventId: eventID
+        )
+        // Sentry's feedback convenience API bypasses beforeSend. Keep this a
+        // normal event until our privacy hook scrubs it and sets the feedback type.
+        let feedbackEvent = Event(level: .info)
+        feedbackEvent.tags = ["report.kind": "user-feedback"]
+        feedbackEvent.context = ["feedback": feedback.serialize()]
+        return captureFeedback(feedbackEvent) != .empty
     }
+    #endif
 
     /// Whether a diagnostics report can actually be sent right now (the SDK is
     /// live). UIs can use this to enable/disable a "Send to developer" button,

@@ -18,6 +18,7 @@ public struct ParentalPINView: View {
     private let destination: Profile?
     private let errorMessage: LocalizedStringResource?
     private let sequenceStep: PINSequenceStep?
+    private let isCompact: Bool
     private let onSubmit: (String) -> Void
     private let onCancel: () -> Void
 
@@ -29,6 +30,7 @@ public struct ParentalPINView: View {
         destination: Profile? = nil,
         errorMessage: LocalizedStringResource?,
         sequenceStep: PINSequenceStep? = nil,
+        isCompact: Bool = false,
         onSubmit: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
@@ -36,6 +38,7 @@ public struct ParentalPINView: View {
         self.destination = destination
         self.errorMessage = errorMessage
         self.sequenceStep = sequenceStep
+        self.isCompact = isCompact
         self.onSubmit = onSubmit
         self.onCancel = onCancel
     }
@@ -46,6 +49,7 @@ public struct ParentalPINView: View {
             name: destination.map { Text(verbatim: $0.name) } ?? Text(KidsProfileCopy.parentalPIN),
             errorMessage: errorMessage,
             sequenceStep: sequenceStep,
+            isCompact: isCompact,
             onSubmit: onSubmit,
             onCancel: onCancel
         ) {

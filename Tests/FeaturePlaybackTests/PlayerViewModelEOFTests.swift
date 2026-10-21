@@ -3,6 +3,7 @@ import XCTest
 import CoreModels
 import PlozzCoreUI
 import MediaPlayer
+import MetadataKit
 @testable import FeaturePlayback
 #if canImport(UIKit)
 import UIKit
@@ -10,6 +11,113 @@ import UIKit
 
 @MainActor
 final class PlayerViewModelEOFTests: XCTestCase {
+    func testCommunityMarkersResolveSeriesOrderAndTVDBEvenWithExistingTMDB() async throws {
+        let item = MediaItem(id: "episode", title: "Episode", kind: .episode,
+                             seasonNumber: 1, episodeNumber: 2, seriesID: "series",
+                             providerIDs: ["SeriesTmdb": "1396", "Tvdb": "349232"])
+        let series = MediaItem(id: "series", title: "Series", kind: .series, episodeOrdering: .dvd,
+                               providerIDs: ["Tvdb": "81189", "Tmdb": "999"])
+        let provider = RecordingPlaybackProvider(request: .init(
+            item: series, streamURL: URL(string: "https://fixture.invalid/video.mp4")!
+        ))
+        let service = RecordingCommunityMarkers()
+        _ = await PlayerViewModel.communitySegments(
+            for: item, sources: [.introDB, .theIntroDB], duration: 3000, provider: provider,
+            seriesIDResolver: { XCTFail("Do not fetch the same series twice"); return nil }, service: service
+        )
+        let queries = await service.queries
+        let query = try XCTUnwrap(queries.first)
+        XCTAssertEqual(query.tvdbID, "81189")
+        XCTAssertEqual(query.tvdbEpisodeID, "349232")
+        XCTAssertEqual(query.tmdbID, "1396")
+        XCTAssertEqual(query.episodeOrdering, .dvd)
+        XCTAssertEqual(query.duration, 3000)
+        let requests = await provider.itemCallCount
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testCommunityResolverFillsTVDBWithoutReplacingKnownSeriesIDs() async throws {
+        let item = MediaItem(id: "episode", title: "Episode", kind: .episode,
+                             seasonNumber: 1, episodeNumber: 2, providerIDs: ["SeriesTmdb": "1396"])
+        let provider = RecordingPlaybackProvider(request: .init(
+            item: item, streamURL: URL(string: "https://fixture.invalid/video.mp4")!
+        ))
+        let service = RecordingCommunityMarkers()
+        _ = await PlayerViewModel.communitySegments(
+            for: item, sources: [.theIntroDB], duration: nil, provider: provider,
+            seriesIDResolver: { ["Tvdb": "81189", "Tmdb": "999"] }, service: service
+        )
+        let query = await service.queries.first
+        XCTAssertEqual(query?.tvdbID, "81189")
+        XCTAssertEqual(query?.tmdbID, "1396")
+        let requests = await provider.itemCallCount
+        XCTAssertEqual(requests, 0)
+    }
+
+    func testCombinedEpisodesAndDisabledCommunityDoNotFetchMetadata() async {
+        var item = MediaItem(id: "episode", title: "Episode", kind: .episode,
+                             seasonNumber: 1, episodeNumber: 2, episodeNumberEnd: 3, seriesID: "series")
+        let provider = RecordingPlaybackProvider(request: .init(
+            item: item, streamURL: URL(string: "https://fixture.invalid/video.mp4")!
+        ))
+        let service = RecordingCommunityMarkers()
+        _ = await PlayerViewModel.communitySegments(
+            for: item, sources: [.theIntroDB], duration: 3000, provider: provider,
+            seriesIDResolver: nil, service: service
+        )
+        item.episodeNumberEnd = nil
+        _ = await PlayerViewModel.communitySegments(
+            for: item, sources: [], duration: 3000, provider: provider,
+            seriesIDResolver: nil, service: service
+        )
+        let queries = await service.queries
+        let requests = await provider.itemCallCount
+        XCTAssertTrue(queries.isEmpty)
+        XCTAssertEqual(requests, 0)
+    }
+
+    func testCancelledCommunityLookupDoesNotPublishOrCallService() async {
+        let item = MediaItem(id: "episode", title: "Episode", kind: .episode,
+                             seasonNumber: 1, episodeNumber: 2)
+        let provider = RecordingPlaybackProvider(request: .init(
+            item: item, streamURL: URL(string: "https://fixture.invalid/video.mp4")!
+        ))
+        let service = RecordingCommunityMarkers()
+        let lookup = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await PlayerViewModel.communitySegments(
+                for: item, sources: [.theIntroDB], duration: 3000, provider: provider,
+                seriesIDResolver: nil, service: service
+            )
+        }
+        let segments = await lookup.value
+        let queries = await service.queries
+        XCTAssertTrue(segments.isEmpty)
+        XCTAssertTrue(queries.isEmpty)
+    }
+
+    func testCenterSpinnerDisappearsForDisplayedVideoWhileScrubSeekRemainsPending() async {
+        let request = PlaybackRequest(
+            item: .init(id: "movie", title: "Movie", kind: .movie),
+            streamURL: URL(string: "https://fixture.test/movie.mp4")!, startPosition: 134
+        )
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: RecordingPlaybackProvider(request: request), itemID: "movie",
+            engineFactory: .init(makeNative: { _ in engine })
+        )
+        await viewModel.load()
+        XCTAssertTrue(viewModel.showBringUpSpinner)
+        viewModel.controls.isSeeking = true
+        engine.currentTime = 0.5
+        engine.hasPresentedVideoFrame = true
+        XCTAssertFalse(viewModel.showBringUpSpinner)
+        XCTAssertTrue(viewModel.controls.isSeeking, "The center cover must not fake completion of the scrub-bar seek")
+        engine.isPaused = true
+        XCTAssertFalse(viewModel.showBringUpSpinner, "An already displayed paused picture needs no center cover")
+        await viewModel.stop()
+    }
+
     func testSequenceCardsFillThePlayerBandWithRoomForArtworkAndTitles() {
         for metrics in [PlayerCardMetrics.tv, .horizontalWide, .horizontalNarrow] {
             let layout = PlayerSequenceLayout(
@@ -883,6 +991,42 @@ final class PlayerViewModelEOFTests: XCTestCase {
         XCTAssertEqual(context.loadError, .serverUnreachable)
         XCTAssertNil(viewModel.pendingNextEpisode)
         await viewModel.stop()
+    }
+
+    func testTrueHDAtmosPreferenceReachesInitialAndHandoffLoads() async throws {
+        for enabled in [false, true] {
+            let (viewModel, engine, _) = makeViewModel(
+                playbackSettings: .init(trueHDAtmosEnabled: enabled)
+            )
+            await viewModel.load()
+            XCTAssertEqual(engine.lastLoadedRequest?.trueHDAtmosEnabled, enabled)
+            var handoff = try XCTUnwrap(engine.lastLoadedRequest)
+            handoff.trueHDAtmosEnabled = !enabled
+            handoff.preferredAudioLanguages = ["ja"]
+            handoff.preferredAudioTrackID = 3
+            await viewModel.handoffPlayResolved(handoff, engineKind: .native, startPosition: 10)
+            XCTAssertEqual(engine.loadCount, 2)
+            XCTAssertEqual(engine.lastLoadedRequest?.trueHDAtmosEnabled, enabled)
+            XCTAssertEqual(engine.lastLoadedRequest?.preferredAudioLanguages, ["ja"])
+            XCTAssertEqual(engine.lastLoadedRequest?.preferredAudioTrackID, 3)
+            await viewModel.stop()
+        }
+    }
+
+    func testFELPreferenceReachesInitialAndHandoffLoads() async throws {
+        for enabled in [false, true] {
+            let (viewModel, engine, _) = makeViewModel(
+                playbackSettings: .init(dolbyVisionFELEnabled: enabled)
+            )
+            await viewModel.load()
+            XCTAssertEqual(engine.lastLoadedRequest?.dolbyVisionFELEnabled, enabled)
+            var handoff = try XCTUnwrap(engine.lastLoadedRequest)
+            handoff.dolbyVisionFELEnabled = !enabled
+            await viewModel.handoffPlayResolved(handoff, engineKind: .native, startPosition: 10)
+            XCTAssertEqual(engine.loadCount, 2)
+            XCTAssertEqual(engine.lastLoadedRequest?.dolbyVisionFELEnabled, enabled)
+            await viewModel.stop()
+        }
     }
 
     func testBackgroundAudioPreferenceReachesEngineAndPreservesPlatformDefault() async {
@@ -2104,6 +2248,14 @@ private final class PreCommitYieldGate {
     }
 }
 
+private actor RecordingCommunityMarkers: CommunitySkipMarkerFetching {
+    private(set) var queries: [CommunitySkipMarkerQuery] = []
+    func segments(for query: CommunitySkipMarkerQuery, sources: CommunitySkipMarkerSources) async -> [MediaSegment] {
+        queries.append(query)
+        return []
+    }
+}
+
 private actor RecordingPlaybackProvider: MediaProvider {
     struct Report: Sendable {
         let event: PlaybackEvent
@@ -2301,6 +2453,7 @@ private final class SpyVideoEngine: VideoEngine {
     var status: VideoEngineStatus = .idle
     var isPaused = false
     var preventsDisplaySleep = false
+    var hasPresentedVideoFrame = false
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
     var furthestObservedPosition: TimeInterval = 0
@@ -2321,9 +2474,11 @@ private final class SpyVideoEngine: VideoEngine {
     var drainGate: PreCommitYieldGate?
     var failureDuringLoad: AppError?
     var cancelDuringLoad = false
+    var lastLoadedRequest: PlaybackRequest?
 
     func load(request: PlaybackRequest, startPosition: TimeInterval) async {
         loadCount += 1
+        lastLoadedRequest = request
         if let failureDuringLoad { status = .failed(failureDuringLoad) }
         else { status = .ready }
         currentTime = startPosition

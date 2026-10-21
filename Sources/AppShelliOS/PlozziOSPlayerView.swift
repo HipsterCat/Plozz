@@ -1,6 +1,8 @@
 #if os(iOS)
 import CoreModels
 import PlozzCoreUI
+import CoreNetworking
+import AppRuntime
 import FeatureHomeCore
 import FeaturePlayback
 import SwiftUI
@@ -34,7 +36,8 @@ struct PlozziOSPlaybackRequest: Identifiable {
 struct PlozziOSPlayerView: View {
     @Environment(HeroTrailerController.self) private var trailerController
     @Environment(PlozziOSAppModel.self) private var appModel
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    let orientation: PlozziOSPlayerOrientation
     /// Installed by the enclosing navigation stack. Used by the Cast card's
     /// credit posters, which leave the film for a title's own page — the same
     /// contract they have on tvOS.
@@ -42,6 +45,8 @@ struct PlozziOSPlayerView: View {
     /// Likewise for "See more" on a cast member, which opens their own page.
     @Environment(\.mediaPersonSourceNavigator) private var navigateToPerson
     @State private var viewModel: PlayerViewModel?
+    @State private var keyboardActions = PlozziOSPlayerKeyboardActions()
+    @State private var playbackSession: PlozziOSAppModel.PlaybackSession?
     @State private var playerIdentity = UUID()
     @State private var handoffTask: Task<Void, Never>?
     @State private var isPresented = false
@@ -52,18 +57,23 @@ struct PlozziOSPlayerView: View {
     @State private var activeItem: MediaItem?
     @State private var activePlaylist: VideoPlaylistPlaybackContext?
     @State private var presentsVersions = false
-    @State private var showsSDRVersions = false
-    @State private var selectedSDRAlternative = false
     @State private var announcedSDRPlayer: UUID?
     @State private var playbackStatus = TransientStatusPresenter()
+    @State private var versionChoice = PlaybackVersionChoiceModel()
+    @State private var versionChoiceFailed = false
+    @State private var versionChoiceFailureMessage: LocalizedStringResource = "Please try playing this video again."
     /// See the bisect note in `body`.
 
     let request: PlozziOSPlaybackRequest
     let provider: any MediaProvider
 
-    init(request: PlozziOSPlaybackRequest, provider: any MediaProvider) {
+    init(
+        request: PlozziOSPlaybackRequest, provider: any MediaProvider,
+        orientation: PlozziOSPlayerOrientation
+    ) {
         self.request = request
         self.provider = provider
+        self.orientation = orientation
         _activePlaylist = State(initialValue: request.playlist)
     }
 
@@ -71,26 +81,28 @@ struct PlozziOSPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
+            PlozziOSPlayerKeyboardControls(
+                isEnabled: keyboardCommandsEnabled,
+                canSeek: keyboardActions.canSeek,
+                onSkip: { keyboardActions.skip?($0) },
+                onPlayPause: { keyboardActions.playPause?() }
+            )
+
             if let viewModel {
                 PlayerView(
                     viewModel: viewModel,
                     showDiagnostics: appModel.settings.diagnostics.settings.isEnabled,
                     showsSharedControls: false,
-                    onChangeQuality: { presentsStreamingQuality = true },
-                    onChangeVersion: PlayerVersionSelection.versions(for: versionItem).count > 1
-                        ? { showVersions(onlySDR: false) } : nil,
-                    onPlaySDRVersion: viewModel.streamingHasHDRConversionError
-                        && !PlayerVersionSelection.sdrAlternatives(
-                            for: versionItem, mediaSourceID: viewModel.currentMediaSourceID
-                        ).isEmpty ? { showVersions(onlySDR: true) } : nil
+                    onDismiss: orientation.close
                 )
                 .id(playerIdentity)
                 if viewModel.phase == .ready, !viewModel.showBringUpSpinner {
                     PlozziOSPlayerControlsOverlay(
                         viewModel: viewModel,
+                        keyboardActions: keyboardActions,
                         hasVersions: PlayerVersionSelection.versions(for: versionItem).count > 1,
                         versionsPresented: presentsVersions,
-                        onShowVersions: { showVersions(onlySDR: false) },
+                        onShowVersions: { presentsVersions = true },
                         onClose: { dismiss() }
                     )
                     .id(playerIdentity)
@@ -105,8 +117,10 @@ struct PlozziOSPlayerView: View {
             }
         }
         .statusBarHidden()
+        .playerTouchLevelSession(isActive: viewModel?.externalPlaybackRouteName == nil)
         .overlay(alignment: .top) {
-            TransientStatusView(presenter: playbackStatus).padding(.top, 60)
+            TransientStatusView(presenter: playbackStatus)
+                .padding(.top, 60)
         }
         .onAppear {
             suspendHeroPlayback()
@@ -114,6 +128,8 @@ struct PlozziOSPlayerView: View {
         }
         .onDisappear {
             isPresented = false
+            keyboardActions.clear()
+            versionChoice.cancel()
             playbackStatus.dismiss()
             handoffTask?.cancel()
             handoffTask = nil
@@ -133,23 +149,51 @@ struct PlozziOSPlayerView: View {
                 if let outgoing { await outgoing.stop() }
                 if let heroOwner { heroController.resumeAfterPlayback(owner: heroOwner) }
             }
+
         }
         .task {
+            ExternalPlaybackRuntime.shared.beginPlaybackIntent()
             suspendHeroPlayback()
+            let session = playbackSession ?? appModel.makePlaybackSession()
+            playbackSession = session
+            let item: MediaItem
+            do {
+                if let activeItem {
+                    item = activeItem
+                } else {
+                    item = try await prepareVersion(request.item, session: session)
+                }
+                activeItem = item
+            } catch is CancellationError {
+                if isPresented { dismiss() }
+                return
+            } catch {
+                showVersionChoiceFailure(error)
+                return
+            }
             guard usesStreamingQuality else {
                 if viewModel == nil {
-                    viewModel = makeViewModel(item: request.item, startPosition: request.startPosition)
+                    if await openExternalPlayer(item: item) { return }
+                    guard !Task.isCancelled, isPresented, isCurrentPlaybackSession else { return }
+                    orientation.beginPlayback()
+                    viewModel = makeViewModel(item: item, startPosition: request.startPosition)
                     PlozziOSScreenshotSeed.freezeIfRequested(viewModel)
                 }
                 return
             }
             for await network in PlozziOSStreamingNetwork.updates() {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, appModel.isCurrentPlaybackSession(session) else { return }
                 streamingNetwork = network
                 let connection = resolvedStreamingConnection()
                 if viewModel == nil {
                     streamingConnection = connection
-                    viewModel = makeViewModel(item: request.item, startPosition: request.startPosition)
+                    if await openExternalPlayer(
+                        item: item,
+                        streamingOptions: appModel.settings.playback.settings.streaming.options(for: connection)
+                    ) { return }
+                    guard !Task.isCancelled, isPresented, isCurrentPlaybackSession else { return }
+                    orientation.beginPlayback()
+                    viewModel = makeViewModel(item: item, startPosition: request.startPosition)
                     PlozziOSScreenshotSeed.freezeIfRequested(viewModel)
                 } else if streamingConnection != connection {
                     streamingConnection = connection
@@ -157,13 +201,22 @@ struct PlozziOSPlayerView: View {
                 }
             }
         }
-        .sheet(isPresented: $presentsStreamingQuality) {
+        .playbackVersionChoice(versionChoice)
+        .onChange(of: versionChoice.prompt?.id) { _, id in
+            if id != nil { viewModel?.setPaused(true) }
+        }
+        .alert("Couldn't load versions", isPresented: $versionChoiceFailed) {
+            Button("Close player") { dismiss() }
+        } message: {
+            Text(versionChoiceFailureMessage)
+        }
+        .plozzSheet(isPresented: $presentsStreamingQuality) {
             if let viewModel { PlozziOSStreamingQualitySheet(viewModel: viewModel) }
         }
-        .sheet(isPresented: $presentsVersions) {
+        .plozzSheet(isPresented: $presentsVersions) {
             PlozziOSPlayerVersionSheet(
                 item: versionItem, mediaSourceID: viewModel?.currentMediaSourceID,
-                onlySDR: showsSDRVersions,
+                onlySDR: false,
                 onSelect: switchVersion
             )
         }
@@ -180,15 +233,35 @@ struct PlozziOSPlayerView: View {
         .onChange(of: viewModel?.pendingNextEpisode?.id) { _, nextID in
             guard nextID != nil,
                   let outgoing = viewModel,
-                  let next = outgoing.pendingNextEpisode,
+                  let candidate = outgoing.pendingNextEpisode,
                   handoffTask == nil else {
                 return
             }
-            let prefetched = outgoing.consumePrefetchedNext(matching: next.id)
             handoffTask = Task { @MainActor in
-                await outgoing.stop()
-                guard !Task.isCancelled, isPresented, viewModel === outgoing else {
+                let next: MediaItem
+                do {
+                    guard let session = playbackSession else { throw CancellationError() }
+                    next = try await prepareVersion(candidate, session: session)
+                } catch is CancellationError {
                     handoffTask = nil
+                    if isPresented { dismiss() }
+                    return
+                } catch {
+                    handoffTask = nil
+                    showVersionChoiceFailure(error)
+                    return
+                }
+                let prefetched = await outgoing.prepareEpisodeHandoff(to: next)
+                guard !Task.isCancelled, isPresented, isCurrentPlaybackSession else {
+                    await outgoing.discardEpisodeHandoff(prefetched)
+                    handoffTask = nil
+                    return
+                }
+                await outgoing.stop()
+                guard !Task.isCancelled, isPresented, viewModel === outgoing,
+                      isCurrentPlaybackSession else {
+                    handoffTask = nil
+                    await outgoing.discardEpisodeHandoff(prefetched)
                     return
                 }
                 activePlaylist = nil
@@ -203,7 +276,6 @@ struct PlozziOSPlayerView: View {
                 }
                 viewModel = incoming
                 activeItem = next
-                selectedSDRAlternative = false
                 playerIdentity = UUID()
                 handoffTask = nil
             }
@@ -214,20 +286,40 @@ struct PlozziOSPlayerView: View {
                   let next = outgoing.pendingPlaylistSelection?.item,
                   handoffTask == nil else { return }
             handoffTask = Task { @MainActor in
+                let selected: MediaItem
+                do {
+                    guard let session = playbackSession else { throw CancellationError() }
+                    selected = try await prepareVersion(next, session: session)
+                } catch is CancellationError {
+                    handoffTask = nil
+                    if isPresented { dismiss() }
+                    return
+                } catch {
+                    handoffTask = nil
+                    showVersionChoiceFailure(error)
+                    return
+                }
                 await outgoing.stop()
-                guard !Task.isCancelled, isPresented, viewModel === outgoing else {
+                guard !Task.isCancelled, isPresented, viewModel === outgoing,
+                      isCurrentPlaybackSession else {
                     handoffTask = nil
                     return
                 }
                 playlist.advance(to: index)
-                let incoming = makeViewModel(item: next, startPosition: 0)
+                let incoming = makeViewModel(item: selected, startPosition: 0)
                 viewModel = incoming
-                activeItem = next
-                selectedSDRAlternative = false
+                activeItem = selected
                 playerIdentity = UUID()
                 handoffTask = nil
             }
         }
+    }
+
+    private var keyboardCommandsEnabled: Bool {
+        keyboardActions.isEnabled && scenePhase == .active
+            && !presentsStreamingQuality && !presentsVersions
+            && versionChoice.prompt == nil && !versionChoiceFailed
+            && viewModel?.controls.diagnosticsEnabled != true
     }
 
     private var closeButton: some View {
@@ -242,12 +334,67 @@ struct PlozziOSPlayerView: View {
                         .frame(width: 44, height: 44)
                         .background(.ultraThinMaterial, in: Circle())
                 }
+
                 .accessibilityLabel("Close player")
             }
             Spacer()
         }
         .foregroundStyle(.white)
         .padding()
+    }
+
+    private func dismiss() { orientation.close() }
+
+    private func openExternalPlayer(
+        item: MediaItem, streamingOptions: StreamingPlaybackOptions? = nil
+    ) async -> Bool {
+        let deviceSettings = ExternalPlayerSettingsModel.shared
+        deviceSettings.migrateIfNeeded(from: appModel.settings.playback.settings.externalPlayer)
+        guard deviceSettings.settings.player != .builtIn else { return false }
+        do {
+            let model = appModel
+            let opened = try await ExternalPlaybackRuntime.shared.launch(
+                item: item, startPosition: request.startPosition,
+                settings: model.settings.playback.settings, selection: deviceSettings.settings,
+                streamingOptions: streamingOptions,
+                context: { model.externalPlaybackContext() }, isPresented: { isPresented && isCurrentPlaybackSession }
+            )
+            if opened { dismiss() }
+            return opened
+        } catch is CancellationError {
+            if isPresented { dismiss() }
+            return true
+        } catch {
+            PlozzLog.playback.error("External player handoff failed; using Plozz.")
+            return false
+        }
+    }
+
+    private func prepareVersion(
+        _ item: MediaItem, session: PlozziOSAppModel.PlaybackSession
+    ) async throws -> MediaItem {
+        let model = appModel
+        let sourceSnapshot = model.identityIndex.identitySnapshotStore.current
+        let selected = try await versionChoice.prepare(
+            item, provider: provider, settings: model.settings.playback,
+            preferences: model.versionPreferences,
+            offlineResolver: model.downloads.offlineResolver,
+            sourceResolver: crossServerSourceResolver(
+                in: model.accountsProviders.resolvedActiveAccounts,
+                identitySources: { sourceSnapshot.sourceRefs(for: $0) }
+            ),
+            isCurrent: { model.isCurrentPlaybackSession(session) }
+        )
+        try Task.checkCancellation()
+        guard isPresented, model.isCurrentPlaybackSession(session) else { throw CancellationError() }
+        return selected
+    }
+
+    private func showVersionChoiceFailure(_ error: Error) {
+        guard isPresented else { return }
+        viewModel?.setPaused(true)
+        versionChoiceFailureMessage = PlaybackVersionChoiceModel.reportFailure(error)
+        versionChoiceFailed = true
     }
 
     private var usesStreamingQuality: Bool {
@@ -257,7 +404,9 @@ struct PlozziOSPlayerView: View {
 
     private func resolvedStreamingConnection() -> StreamingConnection {
         let locality = provider.connectionLocality
-        let connection = StreamingConnection.resolve(network: streamingNetwork, locality: locality)
+        let connection = StreamingConnection.resolve(
+            network: streamingNetwork, locality: locality, previousConnection: streamingConnection
+        )
         let settings = appModel.settings.playback.settings.streaming
         HandoffDiagnostics.emit(
             "streaming DEFAULTS network=\(streamingNetwork) locality=\(locality) connection=\(connection.rawValue) "
@@ -281,15 +430,10 @@ struct PlozziOSPlayerView: View {
         )
     }
 
-    private func showVersions(onlySDR: Bool) {
-        showsSDRVersions = onlySDR
-        presentsVersions = true
-    }
-
     private func presentSDRNoticeIfReady() {
         guard let viewModel, viewModel.phase == .ready, !viewModel.showBringUpSpinner,
               announcedSDRPlayer != playerIdentity,
-              selectedSDRAlternative || viewModel.streamingUsesSDRConversion else { return }
+              viewModel.streamingUsesSDRConversion else { return }
         announcedSDRPlayer = playerIdentity
         playbackStatus.present(icon: "display", text: "Playing in SDR")
     }
@@ -298,26 +442,30 @@ struct PlozziOSPlayerView: View {
         guard let outgoing = viewModel, handoffTask == nil,
               let incomingItem = PlayerVersionSelection.selecting(id, in: versionItem) else { return }
         let continuation = outgoing.continuationForVersionChange()
-        let choseSDR = showsSDRVersions && PlayerVersionSelection.sdrAlternatives(
-            for: versionItem, mediaSourceID: outgoing.currentMediaSourceID
-        ).contains { $0.id == id }
-        if let version = PlayerVersionSelection.versions(for: versionItem).first(where: { $0.id == id }) {
+        if appModel.versionPreferences.shouldRememberVersion(for: versionItem),
+           let version = PlayerVersionSelection.versions(for: versionItem).first(where: { $0.id == id }) {
             appModel.versionPreferences.rememberVersion(
                 version, forTitle: DetailPlaybackSelection.versionPreferenceKey(for: versionItem)
             )
         }
         handoffTask = Task { @MainActor in
             await outgoing.stop()
-            guard !Task.isCancelled, isPresented else { handoffTask = nil; return }
+            guard !Task.isCancelled, isPresented, isCurrentPlaybackSession else {
+                handoffTask = nil
+                return
+            }
             let incoming = makeViewModel(
                 item: incomingItem, startPosition: continuation.position, continuation: continuation
             )
             activeItem = incomingItem
-            selectedSDRAlternative = choseSDR
             viewModel = incoming
             playerIdentity = UUID()
             handoffTask = nil
         }
+    }
+
+    private var isCurrentPlaybackSession: Bool {
+        playbackSession.map { appModel.isCurrentPlaybackSession($0) } ?? false
     }
 
     private func makeViewModel(
@@ -326,6 +474,8 @@ struct PlozziOSPlayerView: View {
         adoptedResolved: PlayerViewModel.PrefetchedPlayback? = nil,
         continuation: PlaybackContinuation? = nil
     ) -> PlayerViewModel {
+        let session = playbackSession ?? appModel.makePlaybackSession()
+        playbackSession = session
         let resolver = appModel.authenticatedHTTPResolver
         let playbackSettings = appModel.settings.playback.settings
         let model = appModel
@@ -354,7 +504,7 @@ struct PlozziOSPlayerView: View {
             seriesTrackStore: appModel.seriesTrackStore,
             seriesAccountFallbackID: item.sourceAccountID,
             startPosition: startPosition,
-            scrobbler: appModel.trackerScrobbler,
+            scrobbler: session.scrobbler,
             engineFactory: PlozziOSPlaybackEngineComposition.engineFactory(
                 networkFileResolver: appModel.mediaShareRuntime.networkFileResolver,
                 authenticatedHTTPResolver: resolver
@@ -367,6 +517,7 @@ struct PlozziOSPlayerView: View {
                 Task { @MainActor in
                     model?.finishPlayback(
                         for: item,
+                        session: session,
                         position: position,
                         watchedPercent: watchedPercent
                     )
@@ -374,13 +525,14 @@ struct PlozziOSPlayerView: View {
             },
             onPlaybackStarted: { [weak model] in
                 Task { @MainActor in
-                    model?.beginPlayback(for: item)
+                    model?.beginPlayback(for: item, session: session)
                 }
             },
             onPlaybackCheckpoint: { [weak model] position, watchedPercent in
                 Task { @MainActor in
                     model?.checkpointPlayback(
                         for: item,
+                        session: session,
                         position: position,
                         watchedPercent: watchedPercent
                     )

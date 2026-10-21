@@ -101,7 +101,7 @@ public struct MediaItemEllipsisMenu: View {
 /// exactly those and leave the subject in the middle untouched. (A radial wash
 /// from one corner — the earlier tvOS treatment — dims the subject on its way
 /// across the frame and only ever protects one corner.)
-public struct MediaArtworkChromeScrim: View {
+public struct MediaArtworkChromeScrim: View, Equatable {
     private let hasTopChrome: Bool
     private let hasBottomChrome: Bool
     private let bottomStart: CGFloat
@@ -145,7 +145,7 @@ public struct MediaArtworkChromeScrim: View {
     /// the artwork. Easing in from zero slope (see ``ArtworkGradientRamp``) makes
     /// the darkening start where it is too slight to notice, which is the only
     /// way it can start without announcing itself.
-    private var stops: [Gradient.Stop] {
+    var stops: [Gradient.Stop] {
         let quiet = min(0.34, bottomStart)
         var stops: [Gradient.Stop] = []
         if hasTopChrome {

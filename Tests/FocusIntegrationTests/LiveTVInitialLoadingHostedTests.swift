@@ -171,6 +171,7 @@ final class LiveTVInitialLoadingHostedTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertTrue(empty.contains("Add your channels"), "A confirmed empty catalog must still offer setup: \(empty)")
+        XCTAssertTrue(empty.contains("Experimental"), "The setup introduction must disclose Live TV's status: \(empty)")
     }
 
     private func text(in window: UIWindow) throws -> String {

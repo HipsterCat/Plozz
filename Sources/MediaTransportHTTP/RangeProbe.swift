@@ -1,3 +1,4 @@
+import CoreModels
 import Foundation
 
 /// Case-insensitive HTTP header helpers shared by the range/probe logic.
@@ -56,23 +57,54 @@ struct ContentRange: Equatable {
     }
 }
 
+/// A validator from the actual GET representation, not its DAV listing.
+/// Modification dates detect changes at HTTP-date (one-second) precision;
+/// they do not provide the byte-identity guarantee of a strong ETag.
+public enum RangeValidator: Equatable, Sendable {
+    case strongETag(ETag)
+    case lastModified(Date)
+}
+
 /// Result of successfully probing a resource for range/seek support.
 public struct RangeProbeResult: Equatable, Sendable {
-    public let etag: ETag
+    public let validator: RangeValidator
     public let totalLength: Int64
     public let resourceURL: URL
+    public let lastModified: Date?
+    let usesAnonymousSession: Bool
+
+    public var etag: ETag? {
+        guard case .strongETag(let etag) = validator else { return nil }
+        return etag
+    }
 
     public init(etag: ETag, totalLength: Int64, resourceURL: URL) {
-        self.etag = etag
+        self.init(validator: .strongETag(etag), totalLength: totalLength, resourceURL: resourceURL)
+    }
+
+    init(
+        validator: RangeValidator,
+        totalLength: Int64,
+        resourceURL: URL,
+        lastModified: Date? = nil,
+        usesAnonymousSession: Bool = false
+    ) {
+        self.validator = validator
         self.totalLength = totalLength
         self.resourceURL = resourceURL
+        if case .lastModified(let date) = validator {
+            self.lastModified = date
+        } else {
+            self.lastModified = lastModified
+        }
+        self.usesAnonymousSession = usesAnonymousSession
     }
 }
 
 /// Builds and validates the two request/response pairs a safe ranged read
-/// needs: an initial 1-byte probe that establishes a strong `ETag` and the
+/// needs: an initial 1-byte probe that establishes a validator and the
 /// resource's total length, and every subsequent bounded read, which must
-/// reuse that exact `ETag` as an `If-Match` precondition.
+/// reuse it as an `If-Match` or `If-Unmodified-Since` precondition.
 ///
 /// All of this is pure request-building / response-validation logic with no
 /// I/O, so it is exhaustively unit-testable against hand-built
@@ -94,8 +126,8 @@ public enum RangeProbe {
 
     /// Validates a probe response. Success requires: `206` (not `200` — a
     /// server that ignores `Range` and returns the whole body is not
-    /// seekable by this module's definition), a syntactically valid
-    /// **strong** `ETag`, a well-formed `Content-Range: bytes 0-0/<total>`,
+    /// seekable by this module's definition), a strong `ETag` or valid
+    /// `Last-Modified`, a well-formed `Content-Range: bytes 0-0/<total>`,
     /// and a 1-byte body.
     public static func validateProbe(
         status: Int,
@@ -118,11 +150,14 @@ public enum RangeProbe {
            contentEncoding.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "identity" {
             return .failure(.rangeValidationFailed(reason: "range response used a content encoding"))
         }
-        guard let etagHeader = normalized["etag"], let etag = ETag(headerValue: etagHeader) else {
-            return .failure(.seekableRequiresStrongETag)
-        }
-        guard etag.isValidStrongValidator else {
-            return .failure(.seekableRequiresStrongETag)
+        let lastModified = normalized["last-modified"].flatMap(HTTPDate.parse)
+        let validator: RangeValidator
+        if let raw = normalized["etag"], let etag = ETag(headerValue: raw), etag.isValidStrongValidator {
+            validator = .strongETag(etag)
+        } else if let date = lastModified {
+            validator = .lastModified(date)
+        } else {
+            return .failure(.seekableRequiresValidator)
         }
         guard let contentRangeHeader = normalized["content-range"], let contentRange = ContentRange.parse(contentRangeHeader) else {
             return .failure(.rangeValidationFailed(reason: "missing/malformed Content-Range on probe"))
@@ -135,9 +170,10 @@ public enum RangeProbe {
         }
         return .success(
             RangeProbeResult(
-                etag: etag,
+                validator: validator,
                 totalLength: contentRange.total,
-                resourceURL: resourceURL
+                resourceURL: resourceURL,
+                lastModified: lastModified
             )
         )
     }
@@ -162,6 +198,16 @@ public enum RangeProbe {
         ifMatch etag: ETag,
         maxReadBytes: Int64 = defaultMaxReadBytes
     ) -> Result<URLRequest, TransportError> {
+        readRequest(url: url, start: start, end: end, validator: .strongETag(etag), maxReadBytes: maxReadBytes)
+    }
+
+    public static func readRequest(
+        url: URL,
+        start: Int64,
+        end: Int64,
+        validator: RangeValidator,
+        maxReadBytes: Int64 = defaultMaxReadBytes
+    ) -> Result<URLRequest, TransportError> {
         guard start >= 0, end >= start else {
             return .failure(.rangeValidationFailed(reason: "invalid range \(start)-\(end)"))
         }
@@ -176,15 +222,22 @@ public enum RangeProbe {
         guard size <= maxReadBytes else {
             return .failure(.rangeValidationFailed(reason: "requested range size \(size) exceeds max \(maxReadBytes)"))
         }
-        guard etag.isValidStrongValidator else {
-            return .failure(.seekableRequiresStrongETag)
-        }
-
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
-        request.setValue(etag.rawValue, forHTTPHeaderField: "If-Match")
+        switch validator {
+        case .strongETag(let etag):
+            guard etag.isValidStrongValidator else {
+                return .failure(.seekableRequiresStrongETag)
+            }
+            request.setValue(etag.rawValue, forHTTPHeaderField: "If-Match")
+        case .lastModified(let date):
+            guard date.timeIntervalSince1970.isFinite else {
+                return .failure(.seekableRequiresValidator)
+            }
+            request.setValue(HTTPDate.string(from: date), forHTTPHeaderField: "If-Unmodified-Since")
+        }
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         return .success(request)
     }
@@ -207,6 +260,22 @@ public enum RangeProbe {
         expectedTotal: Int64,
         expectedETag: ETag
     ) -> Result<Void, TransportError> {
+        validateRead(
+            status: status, headers: headers, bodyLength: bodyLength,
+            expectedStart: expectedStart, expectedEnd: expectedEnd, expectedTotal: expectedTotal,
+            expectedValidator: .strongETag(expectedETag)
+        )
+    }
+
+    public static func validateRead(
+        status: Int,
+        headers: [String: String],
+        bodyLength: Int,
+        expectedStart: Int64,
+        expectedEnd: Int64,
+        expectedTotal: Int64,
+        expectedValidator: RangeValidator
+    ) -> Result<Void, TransportError> {
         if status == 412 {
             return .failure(.sourceChanged(reason: "412 Precondition Failed — resource changed since it was probed"))
         }
@@ -222,17 +291,19 @@ public enum RangeProbe {
            contentEncoding.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "identity" {
             return .failure(.rangeValidationFailed(reason: "range response used a content encoding"))
         }
-        guard expectedETag.isValidStrongValidator else {
-            return .failure(.seekableRequiresStrongETag)
-        }
-        guard let etagHeader = normalized["etag"], let etag = ETag(headerValue: etagHeader) else {
-            return .failure(.sourceChanged(reason: "response carried no ETag to validate against the probe"))
-        }
-        guard etag.isValidStrongValidator else {
-            return .failure(.sourceChanged(reason: "response ETag is no longer a strong validator"))
-        }
-        guard etag.rawValue == expectedETag.rawValue else {
-            return .failure(.sourceChanged(reason: "ETag changed since the resource was probed"))
+        switch expectedValidator {
+        case .strongETag(let expectedETag):
+            guard expectedETag.isValidStrongValidator else {
+                return .failure(.seekableRequiresStrongETag)
+            }
+            guard let raw = normalized["etag"], let etag = ETag(headerValue: raw),
+                  etag.isValidStrongValidator, etag == expectedETag else {
+                return .failure(.sourceChanged(reason: "ETag missing or changed since the resource was probed"))
+            }
+        case .lastModified(let expectedDate):
+            guard let raw = normalized["last-modified"], HTTPDate.parse(raw) == expectedDate else {
+                return .failure(.sourceChanged(reason: "Last-Modified missing or changed since the resource was probed"))
+            }
         }
         guard let contentRangeHeader = normalized["content-range"], let contentRange = ContentRange.parse(contentRangeHeader) else {
             return .failure(.rangeValidationFailed(reason: "missing/malformed Content-Range on bounded read"))

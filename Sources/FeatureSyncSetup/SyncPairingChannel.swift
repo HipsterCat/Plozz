@@ -23,11 +23,16 @@ public struct SyncPairingInvite: Codable, Hashable, Sendable {
     public var serviceName: String
     public var publicKeyData: Data
     public var context: SyncPairingContext
+    public let firstRunCaseID: UUID?
 
-    public init(serviceName: String, publicKeyData: Data, context: SyncPairingContext) {
+    public init(
+        serviceName: String, publicKeyData: Data, context: SyncPairingContext,
+        installation: AppInstallation = .current
+    ) {
         self.serviceName = serviceName
         self.publicKeyData = publicKeyData
         self.context = context
+        firstRunCaseID = installation.firstRunCaseID
     }
 
     /// Compact, URL-safe string embedded in the QR. Uses an https **Universal
@@ -36,7 +41,8 @@ public struct SyncPairingInvite: Codable, Hashable, Sendable {
     /// The payload rides in the URL **fragment** (`#…`) so it is never sent to
     /// the server. Legacy `plozz-pair://` strings are still accepted by `decode`.
     public func encoded() -> String {
-        SyncPairingInvite.universalLinkPrefix + encodedPayload()
+        let installation = firstRunCaseID.map(AppInstallation.firstRun) ?? .standard
+        return installation.pairingURLPrefix + encodedPayload()
     }
 
     /// The base64url payload alone (no scheme/URL), used by `encoded()` and tests.
@@ -54,15 +60,25 @@ public struct SyncPairingInvite: Codable, Hashable, Sendable {
     /// Legacy custom-scheme prefix, still decoded for backward compatibility.
     public static let legacyScheme = "plozz-pair://"
 
-    public static func decode(_ string: String) -> SyncPairingInvite? {
+    public static func decode(
+        _ string: String, installation: AppInstallation = .current
+    ) -> SyncPairingInvite? {
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let payload = extractPayload(trimmed) else { return nil }
+        let payload: String?
+        if installation.firstRunCaseID != nil, trimmed.hasPrefix(installation.pairingURLPrefix) {
+            payload = String(trimmed.dropFirst(installation.pairingURLPrefix.count))
+        } else {
+            payload = extractPayload(trimmed)
+        }
+        guard let payload else { return nil }
         var b64 = payload
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         while b64.count % 4 != 0 { b64 += "=" }
         guard let data = Data(base64Encoded: b64) else { return nil }
-        return try? JSONDecoder().decode(SyncPairingInvite.self, from: data)
+        guard let invite = try? JSONDecoder().decode(SyncPairingInvite.self, from: data),
+              invite.firstRunCaseID == installation.firstRunCaseID else { return nil }
+        return invite
     }
 
     /// Pull the base64url payload out of any accepted form: the https universal
@@ -217,8 +233,10 @@ public enum SyncPairingSession {
         serviceName: String,
         over link: PairingLink,
         presentSAS: @escaping @Sendable (String) -> Void = { _ in },
+        progress: @escaping @Sendable (DeviceSetupDiagnostic.Stage) async -> Void = { _ in },
         now: Date = Date()
     ) async throws -> SyncTransferBundle {
+        await progress(.handshake)
         // 1. Await the guest's hello (with its commitment in SAS mode).
         let helloData = try await withPairingTimeout(seconds: phaseTimeout, onTimeout: { link.close() }) {
             try await link.receive()
@@ -248,12 +266,14 @@ public enum SyncPairingSession {
                 guestNonce: reveal.guestNonce, ceremonyID: context.ceremonyID
             )
             presentSAS(sas)
+            await progress(.confirmation)
         }
 
         // 4. Receive the sealed bundle (arrives only after the guest confirmed).
         let sealedData = try await withPairingTimeout(seconds: phaseTimeout, onTimeout: { link.close() }) {
             try await link.receive()
         }
+        await progress(.transfer)
         let sealed = try JSONDecoder().decode(SealedSyncPayload.self, from: sealedData)
         return try SyncPairingCrypto.open(sealed, with: identity, now: now)
     }
@@ -270,8 +290,10 @@ public enum SyncPairingSession {
         over link: PairingLink,
         expectedPublicKey: Data?,
         confirmSAS: @escaping @Sendable (String) async -> Bool = { _ in true },
+        progress: @escaping @Sendable (DeviceSetupDiagnostic.Stage) async -> Void = { _ in },
         now: Date = Date()
     ) async throws {
+        await progress(.handshake)
         let mode: PairingHandshakeMode = expectedPublicKey == nil ? .sas : .qr
 
         // 1. Say hello. In SAS mode commit to our nonce BEFORE seeing the host key.
@@ -299,10 +321,12 @@ public enum SyncPairingSession {
                 hostPublicKey: invite.publicKeyData, hostNonce: invite.hostNonce,
                 guestNonce: guestNonce, ceremonyID: invite.context.ceremonyID
             )
+            await progress(.confirmation)
             guard await confirmSAS(sas) else { throw SyncPairingError.notConfirmed }
         }
 
         // 3. Seal our bundle to the (now-authenticated) key and send it.
+        await progress(.transfer)
         let sealed = try SyncPairingCrypto.seal(bundle, toPublicKey: invite.publicKeyData, context: invite.context)
         try await link.send(try JSONEncoder().encode(sealed))
     }

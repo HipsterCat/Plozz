@@ -34,7 +34,7 @@ enum SubtitleMatchScorer {
         func score(_ track: MediaTrack) -> Int {
             var s = 0
             if track.isForced == provider.isForced { s += 2 }
-            if track.isHearingImpaired == provider.isHearingImpaired { s += 1 }
+            if track.isSDHSubtitle == provider.isSDHSubtitle { s += 1 }
             if track.isBitmapSubtitle == provider.isBitmapSubtitle { s += 1 }
             return s
         }

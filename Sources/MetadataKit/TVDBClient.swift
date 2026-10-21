@@ -334,6 +334,10 @@ public actor TVDBClient {
     /// artwork. TheTVDB has rich fanart for most TV + film, so this fills heroes
     /// that would otherwise have no wide art. Never throws.
     public func backdropURL(title: String, year: Int?, isMovie: Bool, tvdbID: String?) async -> URL? {  // l10n:content — media title used as a TheTVDB lookup key
+        await backdropURL(title: title, year: year, isMovie: isMovie, tvdbID: tvdbID, prefersPortrait: false)
+    }
+
+    func backdropURL(title: String, year: Int?, isMovie: Bool, tvdbID: String?, prefersPortrait: Bool) async -> URL? {  // l10n:content — media title used as a TheTVDB lookup key
         guard config.isConfigured else { return nil }
         let id: String?
         if let tvdbID, !tvdbID.isEmpty {
@@ -351,7 +355,24 @@ public actor TVDBClient {
             if !reachable { self.token = nil }   // likely-expired token; re-login next time
             return nil
         }
-        return Self.bestBackdrop(response.data?.artworks ?? [])
+        let artworks = response.data?.artworks ?? []
+        return prefersPortrait ? Self.bestPortraitHero(artworks) : Self.bestBackdrop(artworks)
+    }
+
+    static func bestPortraitHero(_ artworks: [Artwork]) -> URL? {
+        let usable = artworks.filter { $0.image?.isEmpty == false }
+        let portraits = usable.filter {
+            guard let width = $0.width, let height = $0.height, width > 0, height > 0,
+                  $0.image?.isEmpty == false else { return false }
+            return (0.45...0.9).contains(Double(width) / Double(height))
+        }
+        func bestPortrait(_ candidates: [Artwork]) -> URL? {
+            candidates.max { $0.pixelArea < $1.pixelArea }?.image.flatMap(Self.imageURL)
+        }
+        return bestPortrait(portraits.filter(\.isLanguageNeutral))
+            ?? bestBackdrop(usable.filter(\.isLanguageNeutral))
+            ?? bestPortrait(portraits)
+            ?? bestBackdrop(usable)
     }
 
     /// Pick the best genuinely-landscape artwork (a background/fanart rather than a

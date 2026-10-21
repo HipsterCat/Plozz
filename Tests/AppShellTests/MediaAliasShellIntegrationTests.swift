@@ -73,6 +73,8 @@ final class MediaAliasShellIntegrationTests: XCTestCase {
         ]
         expectedSchemas.append(.liveTVStateV1)
         expectedFiles.append("cloud-live-tv-state-v1.json")
+        expectedSchemas.append(.liveTVSourcesV1)
+        expectedFiles.append("cloud-live-tv-sources-v1.sealed")
         XCTAssertEqual(schemas, expectedSchemas)
         XCTAssertEqual(
             stateFileURLs.map(\.lastPathComponent),
@@ -85,12 +87,11 @@ final class MediaAliasShellIntegrationTests: XCTestCase {
             "channel zones must be disjoint"
         )
 
-        // Credentials must never ride in a plaintext field, and nothing else
-        // should quietly start being encrypted either.
+        // Both credential-bearing channels must use encrypted payloads.
         XCTAssertEqual(
             schemas.filter(\.encryptsValue),
-            [.trackerTokensV1],
-            "only the tracker-token channel carries an encrypted payload"
+            [.trackerTokensV1, .liveTVSourcesV1],
+            "tracker tokens and complete Live TV sources carry encrypted payloads"
         )
     }
 
@@ -134,6 +135,31 @@ final class MediaAliasShellIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(recaptured[key.recordName], removeBytes)
         XCTAssertNotEqual(addBytes, removeBytes)
+    }
+
+    func testDeferredProfileDeletionDoesNotRecaptureAliasesOrWatchlist() async throws {
+        let state = makeState()
+        let profileID = state.profilesModel.activeProfileID
+        let evidence = try XCTUnwrap(MediaAliasEvidence(
+            kind: .movie,
+            weak: MediaAliasWeakEvidence(kind: .movie, title: "Local", year: 2026)
+        ))
+        let aliasID = try await state.mediaAliasLedger.resolveOrCreate(
+            profileID: profileID, evidence: evidence
+        )
+        try state.universalWatchlist.activate(profileID: profileID)
+        try state.universalWatchlist.add(profileID: profileID, aliasID: aliasID, kind: .movie)
+        let aliasKey = MediaStateRecordKey(profileID: profileID, aliasID: aliasID).recordName
+        let watchlistKey = WatchlistMediaStateRecordKey(profileID: profileID, aliasID: aliasID).recordName
+        let before = await state.captureMediaStateSyncRecords(fallback: [:])
+        XCTAssertNotNil(before[aliasKey])
+        XCTAssertNotNil(before[watchlistKey])
+
+        state.profilesModel.applySyncedProfileDTOs([:], deletions: [profileID])
+        let after = await state.captureMediaStateSyncRecords(fallback: before)
+
+        XCTAssertNil(after[aliasKey])
+        XCTAssertNil(after[watchlistKey])
     }
 
     func testPoisonAndDeletedProfileRecordsDoNotBlockValidMediaState() async throws {

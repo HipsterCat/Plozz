@@ -78,8 +78,18 @@ public final class NavigationStyleSettingsModel {
     /// order. Persisted regardless of style so switching chrome never loses it.
     public private(set) var libraryLayout: NavigationLibraryLayout
 
+    public var automaticallyHiddenKeys: Set<String> = []
+    public var hasWatchlistItems = false
+    public private(set) var contentLibraries: [AggregatedLibrary]
+    public private(set) var discoveredAccountIDs: Set<String>
+    public private(set) var offlineAccountIDs: Set<String> = []
+
+    public var resolvedLibraryLayout: NavigationLibraryLayout {
+        libraryLayout.resolvingAutomaticVisibility(hidden: automaticallyHiddenKeys)
+    }
+
     public var showsWatchlist: Bool {
-        get { libraryLayout.isVisible(NavigationLibraryLayout.watchlistKey) }
+        get { resolvedLibraryLayout.isVisible(NavigationLibraryLayout.watchlistKey) }
         set { setDestination(newValue, key: NavigationLibraryLayout.watchlistKey) }
     }
 
@@ -90,16 +100,42 @@ public final class NavigationStyleSettingsModel {
 
     private let store: NavigationStyleSettingsStoring
     private let layoutStore: NavigationLibraryLayoutStoring
+    private let librariesSnapshotStore: (any NavigationLibrariesSnapshotStoring)?
 
     public init(
         store: NavigationStyleSettingsStoring = NavigationStyleSettingsStore(),
-        layoutStore: NavigationLibraryLayoutStoring = NavigationLibraryLayoutStore()
+        layoutStore: NavigationLibraryLayoutStoring = NavigationLibraryLayoutStore(),
+        librariesSnapshotStore: (any NavigationLibrariesSnapshotStoring)? = nil
     ) {
         self.store = store
         self.layoutStore = layoutStore
         self.style = store.load()
         self.preventsAccidentalExit = store.loadPreventsAccidentalExit()
         self.libraryLayout = layoutStore.load()
+        self.librariesSnapshotStore = librariesSnapshotStore
+        let libraries = librariesSnapshotStore?.load() ?? []
+        self.contentLibraries = libraries
+        self.discoveredAccountIDs = Set(libraries.map(\.accountID))
+    }
+
+    public func updateContentLibraries(
+        _ discovered: [AggregatedLibrary],
+        accountIDs: Set<String>,
+        unreachableAccountIDs: Set<String>,
+        failures: [String: AppError] = [:]
+    ) {
+        contentLibraries = NavigationContentAvailability.reconcileLibraries(
+            discovered: discovered,
+            unreachableAccountIDs: unreachableAccountIDs,
+            remembered: contentLibraries
+        ).filter { accountIDs.contains($0.accountID) }
+        discoveredAccountIDs.formIntersection(accountIDs)
+        discoveredAccountIDs.formUnion(accountIDs.subtracting(unreachableAccountIDs))
+        let offline = unreachableAccountIDs.intersection(accountIDs).filter {
+            failures[$0] == nil || failures[$0] == .serverUnreachable
+        }
+        if offlineAccountIDs != offline { offlineAccountIDs = offline }
+        librariesSnapshotStore?.save(contentLibraries)
     }
 
     public var requiredNavigationKeys: Set<String> {
@@ -111,17 +147,25 @@ public final class NavigationStyleSettingsModel {
     }
 
     /// The editable enabled/hidden split for the Settings reorder control.
-    public func librarySections(available: [String]) -> OrderedVisibilityList.Sections<String> {
-        libraryLayout.sections(available: available, requiredEnabled: requiredNavigationKeys)
+    public func librarySections(
+        available: [String], automaticallyHiddenKeys additionalHiddenKeys: Set<String> = []
+    ) -> OrderedVisibilityList.Sections<String> {
+        libraryLayout.resolvingAutomaticVisibility(
+            hidden: automaticallyHiddenKeys.union(additionalHiddenKeys)
+        ).sections(available: available, requiredEnabled: requiredNavigationKeys)
     }
 
     /// Applies an edit from the reorder control and persists it.
     public func applyLibrarySections(
         _ sections: OrderedVisibilityList.Sections<String>,
-        available: [String]
+        available: [String],
+        automaticallyHiddenKeys additionalHiddenKeys: Set<String> = []
     ) {
         var next = libraryLayout
-        next.apply(sections, available: available, requiredEnabled: requiredNavigationKeys)
+        next.apply(
+            sections, available: available, requiredEnabled: requiredNavigationKeys,
+            automaticallyHiddenKeys: automaticallyHiddenKeys.union(additionalHiddenKeys)
+        )
         guard next != libraryLayout else { return }
         libraryLayout = next
         layoutStore.save(next)

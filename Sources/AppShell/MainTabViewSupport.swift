@@ -22,27 +22,30 @@ import AniListService
 import MALService
 import LastFmService
 
-/// Resolves the provider that owns `accountID`, falling back to the primary
-/// (first) account. `accounts` is guaranteed non-empty by the caller
-/// (`RootView`).
-///
-/// The fallback is legitimate only for a **nil** `accountID` (a genuinely
-/// untagged item — e.g. a route with no owning server — plays from the primary
-/// account). A **non-nil but unmatched** `accountID` is different: it means the
-/// caller handed an explicit source whose account is no longer signed in, and
-/// silently playing it from `accounts[0]` is the "random / wrong server" symptom
-/// — you'd stream a *different server's* copy than the one selected. The play
-/// paths prune to live accounts first (`bestSourcePlayItem`) so this shouldn't
-/// be reached in practice; when it is, emit a (gated) diagnostic so the stale
-/// pick is observable on device rather than masquerading as a successful play.
-func resolveProvider(_ accountID: String?, in accounts: [ResolvedAccount]) -> any MediaProvider {
+/// An empty enabled-source set is valid. Only genuinely untagged items may use
+/// the primary account; a missing explicit source must never change servers.
+func resolveProvider(_ accountID: String?, in accounts: [ResolvedAccount]) throws -> any MediaProvider {
+    let account: ResolvedAccount?
     if let accountID {
-        if let match = accounts.first(where: { $0.account.id == accountID }) {
-            return match.provider
-        }
-        FanoutDiagnostics.emit("resolveProvider fallback: explicit account \(accountID) not signed in; using primary \(accounts[0].account.id)")
+        account = accounts.first { $0.account.id == accountID }
+    } else {
+        account = accounts.first
     }
-    return accounts[0].provider
+    guard let account else {
+        PlozzLog.app.error("Media source is no longer available for this route")
+        throw AppError.unauthorized
+    }
+    return account.provider
+}
+
+struct MediaSourceUnavailableView: View {
+    var body: some View {
+        ContentUnavailableView(
+            "Source Unavailable",
+            systemImage: "externaldrive.badge.exclamationmark",
+            description: Text("Connect or enable this source in Settings, then try again.")
+        )
+    }
 }
 
 /// Resolves a specific account id to its provider, or `nil` when that account is
@@ -101,9 +104,13 @@ func makeHeroDiscoveryProvider(
     accounts: [ResolvedAccount],
     hideWatched: Bool,
     visibility: HomeLibraryVisibilityModel,
+    heroSettings: HeroSettingsModel,
     identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef]
 ) -> HeroDiscoveryContentProviding {
-    let runtime = HeroDiscoveryRuntime(accounts: accounts, identitySources: identitySources)
+    let runtime = HeroDiscoveryRuntime(
+        accounts: accounts, identitySources: identitySources,
+        allowsDiscovery: { await heroSettings.allowsDiscovery }
+    )
     return { request, sources in
         let currentVisibility = await visibility.visibility
         return await runtime.candidates(
@@ -295,7 +302,7 @@ func resolveLibraryBrowse(
     in accounts: [ResolvedAccount],
     identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef],
     identityRevision: @escaping @Sendable () -> Int = { 0 }
-) -> (provider: any MediaProvider, sourceAccountID: String?) {
+) throws -> (provider: any MediaProvider, sourceAccountID: String?) {
     let accountIDs = library.allSourceAccountIDs
     if accountIDs.count > 1 {
         let sources: [AggregatedLibrarySource] = accountIDs.compactMap { accountID in
@@ -320,8 +327,10 @@ func resolveLibraryBrowse(
         if let only = sources.first {
             return (only.provider, only.accountID)
         }
+        PlozzLog.app.error("No active source remains for the requested library")
+        throw AppError.unauthorized
     }
-    return (resolveProvider(library.sourceAccountID, in: accounts), library.sourceAccountID)
+    return (try resolveProvider(library.sourceAccountID, in: accounts), library.sourceAccountID)
 }
 
 /// Builds the provider that backs the combined **All Libraries** grid: every
@@ -436,9 +445,8 @@ func librarySourceSignature(_ library: MediaLibrary) -> String {
 ///
 /// `accounts` are the currently signed-in accounts. A merged card's `sources`
 /// can still list a server the user has since removed (the eager index snapshot
-/// lags an account sign-out), and ``resolveProvider(_:in:)`` silently falls back
-/// to `accounts[0]` for an unknown account — so selecting a dead source would
-/// play the *wrong* server's copy (or fail). Pruning to live accounts before
+/// lags an account sign-out). Selecting a dead source would fail even when a
+/// reachable copy remains. Pruning to live accounts before
 /// selection guarantees we only ever pick a server we can actually resolve, and
 /// drops the stale refs from the item handed to the player.
 ///
@@ -565,7 +573,7 @@ private func makePlayerViewModel(
     adoptedResolved: PlayerViewModel.PrefetchedPlayback? = nil,
     continuation: PlaybackContinuation? = nil,
     versionPreferences: any VersionPreferenceStoring = VersionPreferenceStore()
-) -> PlayerViewModel {
+) throws -> PlayerViewModel {
     if let videoID = request.item.youTubeTrailerVideoID {
         let trailerItem = request.item
         let onlineTrailerResolver = ItemDetailViewModel.defaultOnlineTrailerResolver
@@ -612,10 +620,9 @@ private func makePlayerViewModel(
         trailerViewModel.onSubtitleStyleChanged = onSubtitleStyleChanged
         return trailerViewModel
     }
-    // Capture only Sendable value types / closures for the durable convergence hook
-    // so it can run off the main actor when the player stops. The eager identity
-    // lookup itself is resolved at stop time, after the shared index has had the
-    // full playback window to warm.
+    // The player can invoke convergence off-main. Its bound bridge selects the
+    // identity snapshot on the main actor, atomically with profile validation,
+    // after the index has had the full playback window to warm.
     let convergingItem = request.item
     let primaryAccountID = accounts.first?.account.id
     // The live session key must match the origin target the factory derives for
@@ -628,7 +635,7 @@ private func makePlayerViewModel(
     // playthrough auto-advances and controls can offer a mid-play jump. The
     // provider is captured (a value-type session); `children(of:)` lists the
     // season in broadcast order. Movies/trailers pass no resolver.
-    let episodeProvider = resolveProvider(request.item.sourceAccountID, in: accounts)
+    let episodeProvider = try resolveProvider(request.item.sourceAccountID, in: accounts)
     let neighborResolver: (@Sendable () async -> (previous: MediaItem?, next: MediaItem?))?
     if convergingItem.kind == .episode, let seasonID = convergingItem.seasonID {
         let originAccountID = convergingItem.sourceAccountID
@@ -713,7 +720,9 @@ private func makePlayerViewModel(
             // Guard the streaming server while it plays: a mid-play drain can't
             // disturb/zero its now-playing session. Deferred, not dropped.
             if let liveAccountID {
-                watchBridge.beginLiveSession(liveAccountID, liveItemID)
+                Task { @MainActor in
+                    watchBridge.beginLiveSession(liveAccountID, liveItemID)
+                }
             }
         },
         onPlaybackCheckpoint: makePlaybackCheckpointHandler(
@@ -762,30 +771,34 @@ func makePlaybackCheckpointHandler(
     identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef]
 ) -> @Sendable (_ position: TimeInterval, _ watchedPercent: Double) -> Void {
     { position, percent in
-        let union = identitySources(convergingItem)
-        let mutation = WatchMutationFactory.playbackStop(
-            item: convergingItem,
-            position: position,
-            watchedPercent: percent,
-            primaryAccountID: primaryAccountID,
-            additionalSources: union,
-            crossServerSync: watchBridge.crossServerSync()
-        )
-        guard let mutation else { return }
-        FanoutDiagnostics.emit(FanoutDiagnostics.stopLine(
-            title: convergingItem.title,
-            kind: convergingItem.kind,
-            itemID: convergingItem.id,
-            originAccountID: convergingItem.sourceAccountID ?? primaryAccountID,
-            identities: MediaItemIdentity.identities(for: convergingItem),
-            indexUnion: union,
-            mutationTargets: mutation.targets,
-            played: mutation.played,
-            resumePosition: mutation.resumePosition,
-            watchedPercent: percent,
-            phase: "checkpoint"
-        ))
-        watchBridge.checkpoint(mutation)
+        let capturedAt = Date()
+        Task { @MainActor in
+            let union = watchBridge.identitySources?(convergingItem) ?? identitySources(convergingItem)
+            let mutation = WatchMutationFactory.playbackStop(
+                item: convergingItem,
+                position: position,
+                watchedPercent: percent,
+                primaryAccountID: primaryAccountID,
+                additionalSources: union,
+                crossServerSync: watchBridge.crossServerSync(),
+                capturedAt: capturedAt
+            )
+            guard let mutation else { return }
+            FanoutDiagnostics.emit(FanoutDiagnostics.stopLine(
+                title: convergingItem.title,
+                kind: convergingItem.kind,
+                itemID: convergingItem.id,
+                originAccountID: convergingItem.sourceAccountID ?? primaryAccountID,
+                identities: MediaItemIdentity.identities(for: convergingItem),
+                indexUnion: union,
+                mutationTargets: mutation.targets,
+                played: mutation.played,
+                resumePosition: mutation.resumePosition,
+                watchedPercent: percent,
+                phase: "checkpoint"
+            ))
+            watchBridge.checkpoint(mutation)
+        }
     }
 }
 
@@ -798,33 +811,37 @@ func makePlaybackStoppedHandler(
     identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef]
 ) -> @Sendable (_ position: TimeInterval, _ watchedPercent: Double) -> Void {
     { position, percent in
-        let union = identitySources(convergingItem)
-        let mutation = WatchMutationFactory.playbackStop(
-            item: convergingItem,
-            position: position,
-            watchedPercent: percent,
-            primaryAccountID: primaryAccountID,
-            additionalSources: union,
-            crossServerSync: watchBridge.crossServerSync()
-        )
-        // (b)+(c) Make the stop event visible: the played item's resolved identity,
-        // the index union found for it, and the final mutation target set. Pure
-        // string building + fire-and-forget os_log — never delays the durable write.
-        FanoutDiagnostics.emit(FanoutDiagnostics.stopLine(
-            title: convergingItem.title,
-            kind: convergingItem.kind,
-            itemID: convergingItem.id,
-            originAccountID: convergingItem.sourceAccountID ?? primaryAccountID,
-            identities: MediaItemIdentity.identities(for: convergingItem),
-            indexUnion: union,
-            mutationTargets: mutation?.targets,
-            played: mutation?.played,
-            resumePosition: mutation?.resumePosition,
-            watchedPercent: percent
-        ))
-        // Queue the final write before lifting the live-session guard. `percent` rides
-        // along so the surface the user returns to can flip its resume bar in place.
-        watchBridge.finishPlayback(liveAccountID, liveItemID, percent, mutation, convergingItem)
+        let capturedAt = Date()
+        Task { @MainActor in
+            let union = watchBridge.identitySources?(convergingItem) ?? identitySources(convergingItem)
+            let mutation = WatchMutationFactory.playbackStop(
+                item: convergingItem,
+                position: position,
+                watchedPercent: percent,
+                primaryAccountID: primaryAccountID,
+                additionalSources: union,
+                crossServerSync: watchBridge.crossServerSync(),
+                capturedAt: capturedAt
+            )
+            // (b)+(c) Make the stop event visible: the played item's resolved identity,
+            // the index union found for it, and the final mutation target set. Pure
+            // string building + fire-and-forget os_log — never delays the durable write.
+            FanoutDiagnostics.emit(FanoutDiagnostics.stopLine(
+                title: convergingItem.title,
+                kind: convergingItem.kind,
+                itemID: convergingItem.id,
+                originAccountID: convergingItem.sourceAccountID ?? primaryAccountID,
+                identities: MediaItemIdentity.identities(for: convergingItem),
+                indexUnion: union,
+                mutationTargets: mutation?.targets,
+                played: mutation?.played,
+                resumePosition: mutation?.resumePosition,
+                watchedPercent: percent
+            ))
+            // Queue the final write before lifting the live-session guard. `percent` rides
+            // along so the surface the user returns to can flip its resume bar in place.
+            watchBridge.finishPlayback(liveAccountID, liveItemID, percent, mutation, convergingItem)
+        }
     }
 }
 
@@ -845,7 +862,7 @@ extension View {
         offlinePlaybackResolver: (any OfflinePlaybackResolving)?,
         behavior: SubtitleBehavior,
         style: SubtitleStyle,
-        playbackSettings: PlaybackSettings,
+        playbackSettingsModel: PlaybackSettingsModel,
         spoilerSettings: SpoilerSettings,
         subtitlePolicy: SubtitlePolicy,
         audioPolicy: AudioPolicy,
@@ -866,7 +883,7 @@ extension View {
             PlayerPresentation(
                 request: request,
                 make: { request, adopted, continuation in
-                    let model = makePlayerViewModel(
+                    let model = try makePlayerViewModel(
                         for: request,
                         accounts: accounts,
                         networkFileResolver: networkFileResolver,
@@ -874,7 +891,7 @@ extension View {
                         offlinePlaybackResolver: offlinePlaybackResolver,
                         behavior: behavior,
                         style: style,
-                        playbackSettings: playbackSettings,
+                        playbackSettings: playbackSettingsModel.settings,
                         spoilerSettings: spoilerSettings,
                         subtitlePolicy: subtitlePolicy,
                         audioPolicy: audioPolicy,
@@ -907,16 +924,33 @@ extension View {
                 },
                 showDiagnostics: showDiagnostics,
                 themePalette: themePalette,
-                versionPreferences: versionPreferences
+                versionPreferences: versionPreferences,
+                prepareVersion: { choice, item in
+                    guard let account = item.sourceAccountID
+                        .flatMap({ id in accounts.first { $0.account.id == id } })
+                        ?? (item.sourceAccountID == nil ? accounts.first : nil) else {
+                        throw AppError.unauthorized
+                    }
+                    return try await choice.prepare(
+                        item, provider: account.provider, settings: playbackSettingsModel,
+                        preferences: versionPreferences, offlineResolver: offlinePlaybackResolver,
+                        sourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
+                        isCurrent: { playRequest.wrappedValue?.traceID == request.traceID }
+                    )
+                },
+                versionAuthorizationScope: accounts.flatMap {
+                    [$0.account.id, $0.provider.session.userID, $0.plexHomeUserID ?? "",
+                     $0.credentialRevision.rawValue.uuidString]
+                },
+                playbackSettings: playbackSettingsModel.settings
             )
         }
         .resumePrompt(item: resumePrompt) { item, startPosition in
             let origin = pendingPlaylistOrigin.wrappedValue
                 .flatMap { $0.containsSelection(item) ? $0 : nil }
-            let playlist = origin.map {
-                VideoPlaylistPlaybackContext(
-                    origin: $0, provider: resolveProvider($0.accountID, in: accounts)
-                )
+            let playlist: VideoPlaylistPlaybackContext? = origin.flatMap { origin in
+                guard let provider = try? resolveProvider(origin.accountID, in: accounts) else { return nil }
+                return VideoPlaylistPlaybackContext(origin: origin, provider: provider)
             }
             pendingPlaylistOrigin.wrappedValue = nil
             let request = PlayRequest(

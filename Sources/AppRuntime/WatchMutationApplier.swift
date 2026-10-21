@@ -1,5 +1,6 @@
 import Foundation
 import CoreModels
+import TraktService
 
 /// Concrete ``WatchMutationApplying`` for either app: resolves an `accountID` to its
 /// live `MediaProvider` (on the main actor) and performs the played / resume write,
@@ -16,10 +17,16 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
     /// profile's in-flight drain must keep its mutations queued, never write
     /// through services/providers now scoped to another profile.
     private let isActive: @Sendable () async -> Bool
-    /// Main-actor provider resolution (account id → live provider).
+    private let validateServerScope: @Sendable (WatchMutationServerScope) async throws -> Void
+    /// Main-actor provider resolution (account id → live provider). Scoped
+    /// dispatches must validate the task-local server scope in that same actor
+    /// turn; `AccountsProvidersModel.provider(forWatchMutationAccountID:...)`
+    /// supplies this atomic check-and-resolve contract.
     private let resolveProvider: @Sendable (String) async -> (any MediaProvider)?
     private let applyTrakt: @Sendable (TraktScrobbleIntent) async throws -> Void
     private let applySimkl: @Sendable (TraktScrobbleIntent) async throws -> Void
+    private let currentWetrakrAccountIdentity: @Sendable () -> String?
+    private let applyWetrakr: @Sendable (TraktScrobbleIntent, Date, String, String) async throws -> Void
     private let applyAniList: @Sendable (TraktScrobbleIntent) async throws -> Void
     private let applyMAL: @Sendable (TraktScrobbleIntent) async throws -> Void
     /// The **active** `Account.id`s (the set the identity index warms and that
@@ -49,7 +56,7 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
     /// split the union apart when a server mis-tagged a *different* movie with the
     /// same external id (so a Scream 7 watch never fans out to a mis-tagged
     /// Scream 6); `nil` anchor ⇒ prior unguarded union.
-    private let indexedSources: @Sendable ([MediaIdentity], MediaItemKind?, String?, Int?) -> [IndexedSource]
+    private let indexedSources: @Sendable ([MediaIdentity], MediaItemKind?, String?, Int?, Set<String>) -> [IndexedSource]
     /// Every `Account.id` the identity index has indexed at least once. A movie /
     /// series identity expansion is **conclusive** only once every active account
     /// appears here (the union can still grow until then), so a mutation stopped
@@ -71,22 +78,32 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
 
     public init(
         isActive: @escaping @Sendable () async -> Bool = { true },
+        validateServerScope: @escaping @Sendable (WatchMutationServerScope) async throws -> Void = { _ in
+            throw WatchMutationServerScopeError.unavailable
+        },
         resolveProvider: @escaping @Sendable (String) async -> (any MediaProvider)?,
         applyTrakt: @escaping @Sendable (TraktScrobbleIntent) async throws -> Void,
         applySimkl: @escaping @Sendable (TraktScrobbleIntent) async throws -> Void,
         applyAniList: @escaping @Sendable (TraktScrobbleIntent) async throws -> Void,
         applyMAL: @escaping @Sendable (TraktScrobbleIntent) async throws -> Void,
+        wetrakrAccountIdentity: @escaping @Sendable () -> String? = { nil },
+        applyWetrakr: @escaping @Sendable (TraktScrobbleIntent, Date, String, String) async throws -> Void = { _, _, _, _ in
+            throw AppError.invalidResponse
+        },
         allAccountIDs: @escaping @Sendable () async -> [String] = { [] },
         indexedSeriesSources: @escaping @Sendable (MediaItem) -> [IndexedSource] = { _ in [] },
-        indexedSources: @escaping @Sendable ([MediaIdentity], MediaItemKind?, String?, Int?) -> [IndexedSource] = { _, _, _, _ in [] },
+        indexedSources: @escaping @Sendable ([MediaIdentity], MediaItemKind?, String?, Int?, Set<String>) -> [IndexedSource] = { _, _, _, _, _ in [] },
         indexedAccountIDs: @escaping @Sendable () -> Set<String> = { [] },
         maxIdentityExpansionAttempts: Int = 12,
         searchDeadline: TimeInterval = 4
     ) {
         self.isActive = isActive
+        self.validateServerScope = validateServerScope
         self.resolveProvider = resolveProvider
         self.applyTrakt = applyTrakt
         self.applySimkl = applySimkl
+        self.currentWetrakrAccountIdentity = wetrakrAccountIdentity
+        self.applyWetrakr = applyWetrakr
         self.applyAniList = applyAniList
         self.applyMAL = applyMAL
         self.allAccountIDs = allAccountIDs
@@ -97,6 +114,18 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
         self.searchDeadline = searchDeadline
     }
 
+    public func requireServerScope(_ scope: WatchMutationServerScope) async throws {
+        try await validateServerScope(scope)
+    }
+
+    private func scopedProvider(for accountID: String) async -> (any MediaProvider)? {
+        if let scope = WatchMutationDeliveryAuthorization.current?.serverScope,
+           !scope.accounts.contains(where: { $0.accountID == accountID }) {
+            return nil
+        }
+        return await resolveProvider(accountID)
+    }
+
     public func setPlayed(_ played: Bool, on target: WatchMutationTarget) async throws {
         try await setPlayed(played, on: target, capturedAt: Date())
     }
@@ -104,7 +133,7 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
     public func setPlayed(_ played: Bool, on target: WatchMutationTarget, capturedAt: Date) async throws {
         guard await isActive() else { throw AppError.serverUnreachable }
         try await WatchMutationDeliveryAuthorization.check()
-        guard let provider = await resolveProvider(target.accountID) else {
+        guard let provider = await scopedProvider(for: target.accountID) else {
             FanoutDiagnostics.emit("write.setPlayed acct=\(target.accountID) item=\(target.itemID) -> provider=nil (unreachable/unresolved, will retry)")
             throw AppError.serverUnreachable
         }
@@ -142,7 +171,7 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
     ) async throws {
         guard await isActive() else { throw AppError.serverUnreachable }
         try await WatchMutationDeliveryAuthorization.check()
-        guard let provider = await resolveProvider(target.accountID) else {
+        guard let provider = await scopedProvider(for: target.accountID) else {
             FanoutDiagnostics.emit("write.setResume acct=\(target.accountID) item=\(target.itemID) -> provider=nil (unreachable/unresolved, will retry)")
             throw AppError.serverUnreachable
         }
@@ -184,10 +213,63 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
         try await applyTrakt(intent)
     }
 
+    public func scrobbleTrakt(_ intent: TraktScrobbleIntent, source: WatchMutationTarget?) async throws {
+        do {
+            try await scrobbleTrakt(intent)
+        } catch TraktScrobbleError.unidentifiableItem {
+            guard let source else { throw TraktScrobbleError.unidentifiableItem }
+            guard await isActive() else { throw AppError.serverUnreachable }
+            try await WatchMutationDeliveryAuthorization.check()
+            guard let provider = await scopedProvider(for: source.accountID) else {
+                throw AppError.serverUnreachable
+            }
+            guard await isActive() else { throw AppError.serverUnreachable }
+            try await WatchMutationDeliveryAuthorization.check()
+            let item = try await provider.item(id: source.itemID)
+            guard await isActive() else { throw AppError.serverUnreachable }
+            try await WatchMutationDeliveryAuthorization.check()
+            guard item.id == source.itemID, item.kind == intent.kind,
+                  item.sourceAccountID == nil || item.sourceAccountID == source.accountID,
+                  intent.seasonNumber == nil || intent.seasonNumber == item.seasonNumber,
+                  intent.episodeNumber == nil || intent.episodeNumber == item.episodeNumber else {
+                throw TraktScrobbleError.unidentifiableItem
+            }
+            var recovered = intent
+            recovered.seasonNumber = item.seasonNumber
+            recovered.episodeNumber = item.episodeNumber
+            let refreshedKeys = Set(item.providerIDs.keys.map { $0.lowercased() })
+            recovered.providerIDs = intent.providerIDs.filter { !refreshedKeys.contains($0.key.lowercased()) }
+                .merging(item.providerIDs) { _, refreshed in refreshed }
+            if !TraktScrobbler.canIdentify(recovered.makeScrobbleItem()),
+               item.kind == .episode, let seriesID = item.seriesID {
+                let series = try await provider.item(id: seriesID)
+                guard await isActive() else { throw AppError.serverUnreachable }
+                try await WatchMutationDeliveryAuthorization.check()
+                guard series.id == seriesID, series.kind == .series,
+                      series.sourceAccountID == nil || series.sourceAccountID == source.accountID else {
+                    throw TraktScrobbleError.unidentifiableItem
+                }
+                recovered.providerIDs.mergeSeriesProviderIDs(from: series.providerIDs)
+            }
+            try await scrobbleTrakt(recovered)
+        }
+    }
+
     public func scrobbleSimkl(_ intent: TraktScrobbleIntent) async throws {
         guard await isActive() else { throw AppError.serverUnreachable }
         try await WatchMutationDeliveryAuthorization.check()
         try await applySimkl(intent)
+    }
+
+    public var wetrakrAccountIdentity: String? { currentWetrakrAccountIdentity() }
+
+    public func scrobbleWetrakr(
+        _ intent: TraktScrobbleIntent, capturedAt: Date,
+        idempotencyKey: String, expectedAccountIdentity: String
+    ) async throws {
+        guard await isActive() else { throw AppError.serverUnreachable }
+        try await WatchMutationDeliveryAuthorization.check()
+        try await applyWetrakr(intent, capturedAt, idempotencyKey, expectedAccountIdentity)
     }
 
     public func scrobbleAniList(_ intent: TraktScrobbleIntent) async throws {
@@ -250,8 +332,10 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
         // when a kind is supplied. Legacy mutations (nil kind, enqueued before this
         // field existed) get the prior unscoped single-level union so a queued write
         // is never dropped.
-        let scopedSources = indexedSources(mutation.identities, mutation.kind, mutation.anchorTitle, mutation.anchorYear)
-        let targets = scopedSources.map(\.target)
+        let scopedSources = indexedSources(
+            mutation.identities, mutation.kind, mutation.anchorTitle, mutation.anchorYear, mutation.rejectedSourceIDs
+        )
+        let targets = scopedSources.filter { !mutation.rejectedSourceIDs.contains($0.id) }.map(\.target)
         let everyAccount = Set(await allAccountIDs())
         guard await WatchMutationDeliveryAuthorization.allowsExpansion() else {
             return WatchTargetExpansion(inconclusiveAccountIDs: ["authorization"])
@@ -288,7 +372,7 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
         // Discover the origin series identity. Needs the origin server; if it can't
         // be reached, report it inconclusive so a later drain retries (we never
         // guess a series identity).
-        guard let originProvider = await resolveProvider(origin.accountID) else {
+        guard let originProvider = await scopedProvider(for: origin.accountID) else {
             return WatchTargetExpansion(inconclusiveAccountIDs: [origin.accountID])
         }
         let originSeries: MediaItem
@@ -310,7 +394,7 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
             guard await WatchMutationDeliveryAuthorization.allowsExpansion() else {
                 return WatchTargetExpansion(inconclusiveAccountIDs: ["authorization"])
             }
-            if let provider = await resolveProvider(accountID) {
+            if let provider = await scopedProvider(for: accountID) {
                 providers[accountID] = provider
             }
         }
@@ -391,6 +475,8 @@ public struct AppShellWatchMutationApplier: WatchMutationAuthorizationEnforcing 
 }
 
 extension TraktScrobbleIntent {
+    public var playbackEvent: PlaybackEvent { progress < 100 ? .pause : .stop }
+
     /// Rebuilds a minimal `MediaItem` carrying just the fields a Trakt scrobble body
     /// needs (kind, ids, season/episode, title/year), so the durable intent can be
     /// replayed without retaining the original item.

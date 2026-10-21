@@ -15,6 +15,7 @@ import RatingsService
 import TraktService
 import SeerService
 import SimklService
+import WetrakrService
 import AniListService
 import MALService
 import LastFmService
@@ -28,10 +29,12 @@ import LastFmService
 struct RealtimePlaybackScrobbler: TraktScrobbling {
     let trakt: any TraktScrobbling
     let simkl: any SimklScrobbling
+    let wetrakr: WetrakrScrobbler
 
     func scrobble(item: MediaItem, progress: Double, event: PlaybackEvent) async {
         await trakt.scrobble(item: item, progress: progress, event: event)
         await simkl.scrobble(item: item, progress: progress, event: event)
+        await wetrakr.scrobble(item: item, progress: progress, event: event)
     }
 }
 #endif

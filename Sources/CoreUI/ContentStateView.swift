@@ -12,6 +12,9 @@ public struct ContentStateView<Value: Sendable, Content: View>: View {
     private let onRetry: () -> Void
     private let content: (Value) -> Content
     private let emptyMessage: LocalizedStringResource
+    private let errorMessage: LocalizedStringResource?
+    private let errorServers: [MediaServer]
+    private let errorReport: PlaybackDiagnosticReport?
     /// Optional custom view for the `.idle`/`.loading` states. When `nil` the
     /// default `LoadingMessagesView` (spinner → playful messages) is shown; Home
     /// passes a 1:1 skeleton here so the loading state matches the loaded layout.
@@ -20,11 +23,17 @@ public struct ContentStateView<Value: Sendable, Content: View>: View {
     public init(
         state: LoadState<Value>,
         emptyMessage: LocalizedStringResource = "Nothing here yet.",
+        errorMessage: LocalizedStringResource? = nil,
+        errorServers: [MediaServer] = [],
+        errorReport: PlaybackDiagnosticReport? = nil,
         onRetry: @escaping () -> Void,
         @ViewBuilder content: @escaping (Value) -> Content
     ) {
         self.state = state
         self.emptyMessage = emptyMessage
+        self.errorMessage = errorMessage
+        self.errorServers = errorServers
+        self.errorReport = errorReport
         self.onRetry = onRetry
         self.content = content
         self.loadingContent = nil
@@ -35,12 +44,18 @@ public struct ContentStateView<Value: Sendable, Content: View>: View {
     public init<Loading: View>(
         state: LoadState<Value>,
         emptyMessage: LocalizedStringResource = "Nothing here yet.",
+        errorMessage: LocalizedStringResource? = nil,
+        errorServers: [MediaServer] = [],
+        errorReport: PlaybackDiagnosticReport? = nil,
         onRetry: @escaping () -> Void,
         @ViewBuilder loadingContent: @escaping () -> Loading,
         @ViewBuilder content: @escaping (Value) -> Content
     ) {
         self.state = state
         self.emptyMessage = emptyMessage
+        self.errorMessage = errorMessage
+        self.errorServers = errorServers
+        self.errorReport = errorReport
         self.onRetry = onRetry
         self.content = content
         self.loadingContent = { AnyView(loadingContent()) }
@@ -69,25 +84,38 @@ public struct ContentStateView<Value: Sendable, Content: View>: View {
         case let .failed(error):
             messageView(
                 icon: error == .serverUnreachable ? "wifi.slash" : "exclamationmark.triangle",
-                title: error.userMessage,
-                showRetry: true
+                title: errorMessage ?? error.userMessage,
+                showRetry: true,
+                servers: errorServers,
+                report: errorReport
             )
         }
     }
 
-    private func messageView(icon: String, title: LocalizedStringResource, showRetry: Bool) -> some View {
+    private func messageView(
+        icon: String, title: LocalizedStringResource, showRetry: Bool,
+        servers: [MediaServer] = [],
+        report: PlaybackDiagnosticReport? = nil
+    ) -> some View {
         VStack(spacing: 24) {
             Image(systemName: icon)
                 .font(.system(size: 72))
                 .plozzForeground(.secondary)
+            ForEach(servers, id: \.self) { server in
+                ServerIdentityChip(server: server)
+            }
             Text(title)
                 .font(.title2)
                 .multilineTextAlignment(.center)
                 .plozzForeground(.secondary)
                 .frame(maxWidth: 800)
             if showRetry {
-                Button("Try Again", action: onRetry)
-                    .plozzActionButton()
+                if let report {
+                    ContentFailureActions(report: report, onRetry: onRetry)
+                } else {
+                    Button("Try Again", action: onRetry)
+                        .plozzActionButton()
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -95,19 +123,41 @@ public struct ContentStateView<Value: Sendable, Content: View>: View {
     }
 }
 
-#if DEBUG
-#Preview("Loading") {
-    ContentStateView(state: LoadState<String>.loading, onRetry: {}) { Text(verbatim: $0) }
-        .padding(80)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .background(.black)
+/// Native recovery actions and the same optional details sheet used by playback and setup.
+public struct ContentFailureActions: View {
+    private let report: PlaybackDiagnosticReport?
+    private let onRetry: () -> Void
+    @State private var showsDetails = false
+
+    public init(report: PlaybackDiagnosticReport?, onRetry: @escaping () -> Void) {
+        self.report = report
+        self.onRetry = onRetry
+    }
+
+    public var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) { actions }
+            VStack(alignment: .leading, spacing: 12) { actions }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .plozzSheet(isPresented: $showsDetails) {
+            if let report { PlaybackDiagnosticDetailsSheet(report: report) }
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if report != nil {
+            Button("Details", systemImage: "info.circle") { showsDetails = true }
+                .plozzActionButton(role: .secondary)
+                .fixedSize(horizontal: true, vertical: true)
+                .accessibilityIdentifier("content-failure-details")
+        }
+        Button("Try Again", action: onRetry)
+            .plozzActionButton()
+            .fixedSize(horizontal: true, vertical: true)
+            .accessibilityIdentifier("content-failure-retry")
+    }
 }
 
-#Preview("Failed") {
-    ContentStateView(state: LoadState<String>.failed(.serverUnreachable), onRetry: {}) { Text(verbatim: $0) }
-        .padding(80)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .background(.black)
-}
-#endif
 #endif

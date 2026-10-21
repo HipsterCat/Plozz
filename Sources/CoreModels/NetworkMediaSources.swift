@@ -474,6 +474,11 @@ public protocol AuthenticatedHTTPResourceResolving: Sendable {
 /// differ from the account's persisted primary URL.
 public protocol AuthenticatedHTTPOriginProviding: Sendable {
     var authenticatedHTTPOrigin: URL { get }
+    func resolveAuthenticatedHTTPOrigin() async throws -> URL
+}
+
+public extension AuthenticatedHTTPOriginProviding {
+    func resolveAuthenticatedHTTPOrigin() async throws -> URL { authenticatedHTTPOrigin }
 }
 
 /// Scheme, host, and effective port accepted for one DLNA resource.
@@ -752,7 +757,7 @@ enum MediaPathPolicy {
     }
 }
 
-private enum SensitiveQueryPolicy {
+public enum SensitiveQueryPolicy {
     private static let exactNames: Set<String> = [
         "access_token",
         "apikey",
@@ -783,7 +788,7 @@ private enum SensitiveQueryPolicy {
         "x-plex-token"
     ]
 
-    static func isSensitive(_ name: String) -> Bool {
+    public static func isSensitive(_ name: String) -> Bool {
         let normalized = name.lowercased()
         return exactNames.contains(normalized)
             || normalized.contains("token")

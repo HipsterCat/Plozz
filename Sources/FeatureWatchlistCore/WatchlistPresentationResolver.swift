@@ -83,7 +83,7 @@ public enum WatchlistPresentationResolver {
                     resolved.watchlistAliasID = aliasID
                     return WatchlistPresentationEntry(
                         aliasID: aliasID,
-                        item: resolved
+                        item: attributing(resolved, entry: entry)
                     )
                 }
                 // Falls back to the MARKED candidate, not the original. A Plex
@@ -102,7 +102,7 @@ public enum WatchlistPresentationResolver {
                     )
                 } ?? candidate
                 item.watchlistAliasID = aliasID
-                return WatchlistPresentationEntry(aliasID: aliasID, item: item)
+                return WatchlistPresentationEntry(aliasID: aliasID, item: attributing(item, entry: entry))
             }
             let record = aliasSnapshot.record(for: aliasID)
             let presentation = record?.presentation ?? entry.presentation
@@ -151,8 +151,17 @@ public enum WatchlistPresentationResolver {
                 return owned
             } ?? resolved ?? placeholder
             item.watchlistAliasID = aliasID
-            return WatchlistPresentationEntry(aliasID: aliasID, item: item)
+            return WatchlistPresentationEntry(aliasID: aliasID, item: attributing(item, entry: entry))
         }
+    }
+
+    private static func attributing(_ item: MediaItem, entry: WatchlistUnionEntry) -> MediaItem {
+        var item = item
+        item.metadataProvenance[MetadataField(rawValue: "watchlist.wetrakr")] = nil
+        for attribution in entry.attributions {
+            item.metadataProvenance[MetadataField(rawValue: "watchlist.\(attribution.source.rawValue)")] = attribution
+        }
+        return item
     }
 
     /// Carries the owned library's artwork onto the item at the same moment its
@@ -196,14 +205,12 @@ public enum WatchlistPresentationResolver {
     ) -> [MediaAliasID: MediaItem] {
         var result: [MediaAliasID: MediaItem] = [:]
         for item in items {
-            guard let evidence = MediaAliasEvidence(item: item) else { continue }
-            let aliases = evidence.strong.reduce(into: Set<MediaAliasID>()) {
-                $0.formUnion(aliasSnapshot.aliases(for: $1))
-            }
-            let candidates = aliases.isEmpty
-                ? evidence.weak.map { aliasSnapshot.aliases(for: $0) } ?? []
-                : aliases
-            guard candidates.count == 1, let aliasID = candidates.first else { continue }
+            guard let evidence = MediaAliasEvidence(item: item),
+                  let aliasID = MediaAliasResolver.lookup(
+                    evidence: evidence,
+                    preferredAliasID: item.watchlistAliasID,
+                    in: aliasSnapshot
+                  ) else { continue }
             if result[aliasID]?.locallyValidatedPlayableSource == true,
                !item.locallyValidatedPlayableSource {
                 continue

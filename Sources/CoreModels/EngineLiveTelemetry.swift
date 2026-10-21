@@ -13,12 +13,16 @@ public struct EngineLiveTelemetry: Equatable, Sendable {
     public var observedBitrate: Double?
     /// Contiguous media held by the engine, independent of AVPlayer's decode buffer.
     public var bufferedSecondsAhead: Double?
+    /// Engine-owned label for the active audio pipeline, not a receiver-output
+    /// measurement. Display verbatim; never parse it to make playback decisions.
+    public var audioPipelineDescription: String?
 
     public init(droppedFrameCount: Int? = nil, observedFps: Double? = nil, observedBitrate: Double? = nil,
-                bufferedSecondsAhead: Double? = nil) {
+                bufferedSecondsAhead: Double? = nil, audioPipelineDescription: String? = nil) {
         self.droppedFrameCount = droppedFrameCount
         self.observedFps = observedFps
         self.observedBitrate = observedBitrate
         self.bufferedSecondsAhead = bufferedSecondsAhead
+        self.audioPipelineDescription = audioPipelineDescription
     }
 }

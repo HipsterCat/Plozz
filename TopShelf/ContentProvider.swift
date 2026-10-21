@@ -18,39 +18,6 @@ final class ContentProvider: TVTopShelfContentProvider {
 
     private static func makeContent() -> TVTopShelfContent? {
         guard let snapshot = TopShelfStore.load() else { return nil }
-
-        let collections: [TVTopShelfItemCollection<TVTopShelfSectionedItem>] =
-            snapshot.sections.compactMap { section in
-                let items = section.items.map(makeItem)
-                guard !items.isEmpty else { return nil }
-                let collection = TVTopShelfItemCollection(items: items)
-                collection.title = section.title
-                return collection
-            }
-
-        guard !collections.isEmpty else { return nil }
-        return TVTopShelfSectionedContent(sections: collections)
-    }
-
-    private static func makeItem(_ item: TopShelfSnapshot.Item) -> TVTopShelfSectionedItem {
-        let shelfItem = TVTopShelfSectionedItem(identifier: item.shelfIdentifier)
-        shelfItem.title = item.title
-        shelfItem.imageShape = .poster
-        // No native `playbackProgress`: tvOS only draws that bar on `.hdtv`
-        // cards. For in-progress Continue-Watching items the app composites the
-        // resume bar directly into the poster art (`item.imageURL` points at the
-        // burned-in local file), so the bar shows on a poster card.
-
-        if let imageURL = item.imageURL {
-            shelfItem.setImageURL(imageURL, for: .screenScale1x)
-            shelfItem.setImageURL(imageURL, for: .screenScale2x)
-        }
-
-        let deepLink = TopShelf.itemDeepLink(id: item.id, accountID: item.accountID)
-        let action = TVTopShelfAction(url: deepLink)
-        shelfItem.displayAction = action
-        shelfItem.playAction = action
-
-        return shelfItem
+        return TopShelfContentBuilder.makeContent(from: snapshot)
     }
 }

@@ -4,17 +4,29 @@ import Foundation
 /// tvOS Top Shelf. The main app writes this into the shared App Group
 /// container; the Top Shelf extension (a separate process) reads it back.
 ///
-/// Keeping this intentionally small and dependency-free means the same two
-/// source files (`TopShelfSnapshot` + `TopShelfStore`) can be compiled into
-/// both the app (via the `TopShelfKit` package) and the extension (by source
-/// path) without dragging the Jellyfin client / UI stack into the extension's
-/// tight memory budget. Jellyfin image URLs are token-free, so the extension
-/// can render them directly from the snapshot with no auth.
+/// The snapshot, store and native content builder compile into both the app
+/// package and extension without the provider or app UI stack. The app exports
+/// policy-resolved artwork so the extension needs no provider credentials.
 public struct TopShelfSnapshot: Codable, Equatable, Sendable {
+    public enum MediaOption: String, Codable, Equatable, Sendable {
+        case hd, ultraHD, hdr, dolbyVision, dolbyAtmos, closedCaptions, sdh
+    }
+
+    public struct NamedAttribute: Codable, Equatable, Sendable {
+        public var name: String  // l10n:content — localized by the app before crossing the process boundary
+        public var values: [String]
+
+        public init(name: String, values: [String]) {  // l10n:content — already-resolved label
+            self.name = name
+            self.values = values
+        }
+    }
+
     /// When the snapshot was produced. Used purely for debugging/freshness.
     public var generatedAt: Date
+    public var usesFullScreen: Bool
 
-    /// Ordered list of carousels to render in the Top Shelf.
+    /// Ordered feeds, rendered as separate poster rows or one full-screen carousel.
     public var sections: [Section]
 
     public struct Section: Codable, Equatable, Identifiable, Sendable {
@@ -44,15 +56,19 @@ public struct TopShelfSnapshot: Codable, Equatable, Sendable {
         public var accountID: String?
         public var title: String  // l10n:content — server-supplied media title
         public var subtitle: String?  // l10n:content — server-supplied media subtitle (e.g. episode label)
-        /// Poster artwork (2:3) for the shelf card. Usually a remote Jellyfin
-        /// poster URL, but for a mid-playback Continue-Watching item it's a
-        /// **local file URL** in the shared App Group container pointing at a
-        /// poster with the resume bar composited in (see `TopShelfPosterComposer`).
+        /// Artwork in the selected layout: 2:3 poster or 16:9 full-screen background.
+        /// The app exports policy-resolved images into the shared App Group.
+        /// Posters may include a composited resume bar; backdrops never do.
         public var imageURL: URL?
         /// Fraction watched (0…1), recorded for reference. The bar itself is
-        /// burned into `imageURL` (posters can't show the native Top Shelf bar),
-        /// so the extension doesn't read this — it renders the artwork as-is.
+        /// burned into poster artwork. Full-screen backgrounds omit the bar.
         public var playbackProgress: Double?
+        public var summary: String?  // l10n:content — spoiler-filtered server synopsis
+        public var genre: String?  // l10n:content — server-supplied genre
+        public var duration: TimeInterval?
+        public var releaseDate: Date?
+        public var mediaOptions: [MediaOption]?
+        public var namedAttributes: [NamedAttribute]?
 
         /// Collision-free identity for the shelf card and its deep link.
         public var shelfIdentifier: String {
@@ -66,7 +82,13 @@ public struct TopShelfSnapshot: Codable, Equatable, Sendable {
             title: String,  // l10n:content — server-supplied media title
             subtitle: String? = nil,  // l10n:content — server-supplied media subtitle
             imageURL: URL? = nil,
-            playbackProgress: Double? = nil
+            playbackProgress: Double? = nil,
+            summary: String? = nil,  // l10n:content — spoiler-filtered server synopsis
+            genre: String? = nil,  // l10n:content — server-supplied genre
+            duration: TimeInterval? = nil,
+            releaseDate: Date? = nil,
+            mediaOptions: [MediaOption]? = nil,
+            namedAttributes: [NamedAttribute]? = nil
         ) {
             self.id = id
             self.accountID = accountID
@@ -74,11 +96,29 @@ public struct TopShelfSnapshot: Codable, Equatable, Sendable {
             self.subtitle = subtitle
             self.imageURL = imageURL
             self.playbackProgress = playbackProgress
+            self.summary = summary
+            self.genre = genre
+            self.duration = duration
+            self.releaseDate = releaseDate
+            self.mediaOptions = mediaOptions
+            self.namedAttributes = namedAttributes
         }
     }
 
-    public init(generatedAt: Date = Date(), sections: [Section]) {
+    public init(generatedAt: Date = Date(), usesFullScreen: Bool = false, sections: [Section]) {
         self.generatedAt = generatedAt
+        self.usesFullScreen = usesFullScreen
         self.sections = sections
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generatedAt, usesFullScreen, sections
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try values.decode(Date.self, forKey: .generatedAt)
+        usesFullScreen = try values.decodeIfPresent(Bool.self, forKey: .usesFullScreen) ?? false
+        sections = try values.decode([Section].self, forKey: .sections)
     }
 }

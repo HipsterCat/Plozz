@@ -4,6 +4,139 @@ import notify
 
 @MainActor
 final class ShowcaseNavigationTests: XCTestCase {
+    func testPartialServerFailureKeepsContinueWatchingFocusThroughReconciliation() throws {
+        try checkPartialServerFailure(leavesResume: false)
+    }
+
+    func testPartialServerFailureDoesNotStealFocusBackFromDiscover() throws {
+        try checkPartialServerFailure(leavesResume: true)
+    }
+
+    private func checkPartialServerFailure(leavesResume: Bool) throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        let resumeNotification = "com.thatcube.Plozz.HomeFixtureRows.\(UUID().uuidString)"
+        let publicationNotification = "com.thatcube.Plozz.HomeResumePublication.\(UUID().uuidString)"
+        app.launchArguments = [
+            "--production-home-fixture", "--immersive-home", "--showcase-discover-fixture",
+            "--progressive-home-load", "--partial-home-failure"
+        ]
+        app.launchEnvironment["PLOZZ_HOME_ROWS_RELEASE_NOTIFICATION"] = resumeNotification
+        app.launchEnvironment["PLOZZ_HOME_RESUME_PUBLICATION_NOTIFICATION"] = publicationNotification
+        app.launch()
+        defer {
+            notify_post(resumeNotification)
+            notify_post(publicationNotification)
+            app.terminate()
+        }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        let loading = app.descendants(matching: .any)["media-row-loading-entry"].firstMatch
+        let focused = NSPredicate { _, _ in
+            loading.exists && app.staticTexts["home-native-focus-history"].label.split(separator: "|").last == "Loading"
+        }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 10
+        ), .completed, app.debugDescription)
+        let discoveryReady = NSPredicate { _, _ in
+            app.staticTexts["home-fixture-discover-state"].label == "ready"
+        }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: discoveryReady, object: nil)], timeout: 10
+        ), .completed)
+
+        XCTAssertEqual(notify_post(resumeNotification), UInt32(NOTIFY_STATUS_OK))
+        let reconciling = NSPredicate { _, _ in app.staticTexts["home-resume-publication"].label == "waiting" }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: reconciling, object: nil)], timeout: 10
+        ), .completed)
+        XCTAssertTrue(loading.exists
+                      && app.staticTexts["home-native-focus-history"].label.split(separator: "|").last == "Loading",
+                      "A failed source must not replace the focused loading row while healthy cards reconcile.")
+        XCTAssertEqual(app.staticTexts["home-fixture-resume-state"].label, "pending")
+        var expectedCard = "Fixture movie 0"
+        if leavesResume {
+            XCUIRemote.shared.press(.down)
+            waitForStableCard(in: app)
+            expectedCard = focusedCard(in: app).label
+            let index = try XCTUnwrap(Int(expectedCard.split(separator: " ").last ?? ""))
+            XCTAssertTrue((24..<48).contains(index))
+        }
+        XCTAssertEqual(notify_post(publicationNotification), UInt32(NOTIFY_STATUS_OK))
+        let ready = NSPredicate { [self] _, _ in
+            app.staticTexts["home-fixture-resume-state"].label == "ready"
+                && focusedCard(in: app).label == expectedCard
+        }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 10
+        ), .completed)
+        let history = app.staticTexts["home-native-focus-history"].label
+        XCTAssertTrue(history.contains("Loading"))
+        XCTAssertTrue(history.contains(expectedCard))
+        let movieLabels = history.split(separator: "|").filter { $0.hasPrefix("Fixture movie ") }
+        XCTAssertTrue(movieLabels.allSatisfy { $0 == expectedCard },
+                      "Row publication must never choose a different native focus target: \(history)")
+
+        if !leavesResume {
+            XCUIRemote.shared.press(.down)
+            waitForStableCard(in: app)
+            let index = try XCTUnwrap(Int(focusedCard(in: app).label.split(separator: " ").last ?? ""))
+            XCTAssertTrue((24..<48).contains(index), "Normal navigation to Discover must remain available.")
+        }
+    }
+
+    func testDiscoverUsesCachedCardsBeforeTheLiveRequestFinishes() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        let notification = "com.thatcube.Plozz.HomeFixtureDiscover.\(UUID().uuidString)"
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home",
+            "--showcase-discover-fixture", "--cached-showcase-discover"
+        ]
+        app.launchEnvironment["PLOZZ_HOME_DISCOVER_RELEASE_NOTIFICATION"] = notification
+        app.launch()
+        defer { notify_post(notification); app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        XCTAssertTrue(app.staticTexts["Discover"].exists)
+        XCUIRemote.shared.press(.down)
+        waitForStableCard(in: app)
+        let card = focusedCard(in: app)
+        XCTAssertEqual(card.label, "Fixture movie 34", "The first Down must reach cached Discover without the network.")
+        let before = card.frame
+        XCTAssertEqual(notify_post(notification), UInt32(NOTIFY_STATUS_OK))
+        let fresh = NSPredicate { _, _ in app.staticTexts["home-fixture-discover-state"].label == "ready" }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: fresh, object: nil)], timeout: 10
+        ), .completed)
+        waitForStableCard(in: app)
+        XCTAssertEqual(focusedCard(in: app).label, card.label)
+        XCTAssertEqual(focusedCard(in: app).frame.minY, before.minY, accuracy: 0.5)
+    }
+
+    func testDiscoverReservesItsHeadingBeforeAnUncachedRequestFinishes() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        let notification = "com.thatcube.Plozz.HomeFixtureDiscover.\(UUID().uuidString)"
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home", "--showcase-discover-fixture"
+        ]
+        app.launchEnvironment["PLOZZ_HOME_DISCOVER_RELEASE_NOTIFICATION"] = notification
+        app.launch()
+        defer { notify_post(notification); app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        let heading = app.staticTexts["Discover"]
+        XCTAssertTrue(heading.exists, "An uncached row reserves its slot instead of inserting after navigation begins.")
+        let before = heading.frame
+        let focus = focusedCard(in: app).label
+        XCTAssertEqual(notify_post(notification), UInt32(NOTIFY_STATUS_OK))
+        let ready = NSPredicate { _, _ in app.staticTexts["home-fixture-discover-state"].label == "ready" }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 10
+        ), .completed)
+        waitForStableCard(in: app)
+        XCTAssertEqual(heading.frame.minY, before.minY, accuracy: 0.5)
+        XCTAssertEqual(focusedCard(in: app).label, focus)
+    }
+
     func testLowerRowArrivalDoesNotMoveFocusOrTheContinueWatchingAnchor() throws {
         try checkUnrequestedRowArrival(showcase: true)
     }
@@ -370,8 +503,8 @@ final class ShowcaseNavigationTests: XCTestCase {
         for _ in 0..<3 { XCUIRemote.shared.press(.right) }
         waitForStableCard(in: app)
         let second = focusedCard(in: app)
-        let secondLabel = second.label
-        let secondFrame = second.frame
+        var secondLabel = second.label
+        var secondFrame = second.frame
         let secondHeading = app.staticTexts["Recently Added"].frame
         let secondHeroY = description.frame.minY
         XCTAssertNotEqual(firstLabel, secondLabel)
@@ -382,7 +515,9 @@ final class ShowcaseNavigationTests: XCTestCase {
         firstLabel = focusedCard(in: app).label
         firstFrame = focusedCard(in: app).frame
         XCUIRemote.shared.press(.down)
-        waitForCard(in: app, label: secondLabel, frame: secondFrame)
+        waitForStableCard(in: app)
+        secondLabel = focusedCard(in: app).label
+        secondFrame = focusedCard(in: app).frame
         for _ in 0..<3 {
             XCUIRemote.shared.press(.down)
             XCTAssertEqual(focusedCard(in: app).label, secondLabel, "The last row must retain focus without drift.")
@@ -448,8 +583,77 @@ final class ShowcaseNavigationTests: XCTestCase {
         try measureNavigation(vertical: false)
     }
 
+    func testPendingArtworkNeverGatesHorizontalOrVerticalNavigation() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home", "--held-home-artwork"
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        let started = app.staticTexts["home-held-artwork-started"]
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in (Int(started.label) ?? 0) > 0 }, object: nil
+        )], timeout: 5), .completed)
+        let initial = focusedCard(in: app).label
+        for _ in 0..<3 { XCUIRemote.shared.press(.right) }
+        waitForStableCard(in: app)
+        let moved = focusedCard(in: app).label
+        XCTAssertNotEqual(moved, initial)
+        let heading = app.staticTexts["Continue Watching"]
+        let headingY = heading.frame.minY
+        XCUIRemote.shared.press(.down)
+        waitForStableCard(in: app)
+        XCTAssertNotEqual(focusedCard(in: app).label, moved)
+        XCTAssertLessThan(heading.frame.minY, headingY - 20)
+        XCUIRemote.shared.press(.up)
+        waitForStableCard(in: app)
+        XCTAssertEqual(heading.frame.minY, headingY, accuracy: 0.5)
+        XCUIRemote.shared.press(.left)
+        waitForStableCard(in: app)
+        XCTAssertNotEqual(focusedCard(in: app).label, moved)
+        XCTAssertEqual(app.staticTexts["home-held-artwork-completed"].label, "0",
+                       "All navigation must complete while the actual artwork loader is still held.")
+    }
+
     func testVerticalNavigationHitches() throws {
         try measureNavigation(vertical: true)
+    }
+
+    func testCarouselHeroGradientNavigationHitches() throws {
+        guard #available(tvOS 26.0, *) else { throw XCTSkip("Presented-frame metrics require tvOS 26.") }
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--home-performance-fixture", "--distinct-home-artwork",
+            "--gradient-performance", "--gradient-black"
+        ]
+        if ProcessInfo.processInfo.environment["PLOZZ_GRADIENT_DISABLED"] == "1" {
+            app.launchArguments.append("--gradient-off")
+        }
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        let hero = app.buttons["home-hero-action-row"]
+        XCTAssertTrue(hero.waitForExistence(timeout: 20))
+        XCTAssertTrue(hero.hasFocus)
+        let initial = hero.label
+        for _ in 0..<6 { XCUIRemote.shared.press(.right); Thread.sleep(forTimeInterval: 0.5) }
+        XCTAssertNotEqual(hero.label.components(separatedBy: ",").first, initial.components(separatedBy: ",").first,
+                          "Measure actual hero slide changes, not just movement between action buttons.")
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+        measure(metrics: [XCTHitchMetric(application: app)], options: options) {
+            startMeasuring()
+            for _ in 0..<6 { XCUIRemote.shared.press(.right); Thread.sleep(forTimeInterval: 0.5) }
+            stopMeasuring()
+            XCTAssertTrue(hero.hasFocus)
+        }
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Carousel gradient after hero navigation"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testHorizontalRowAndHeroAnchorsStayFixed() throws {
@@ -501,19 +705,23 @@ final class ShowcaseNavigationTests: XCTestCase {
         let headingY = heading.frame.minY
         let heroY = description.frame.minY
         let initialLabel = focusedCard(in: app).label
-        for _ in 0..<3 {
+        // A held press does not produce a fixed repeat count. Verify the actual
+        // endpoint as well as the anchors, rather than assuming three holds suffice.
+        for _ in 0..<4 {
             XCUIRemote.shared.press(.right, forDuration: 4)
             Thread.sleep(forTimeInterval: 0.3)
             XCTAssertEqual(heading.frame.minY, headingY, accuracy: 0.5)
             XCTAssertEqual(description.frame.minY, heroY, accuracy: 0.5)
+            if focusedCard(in: app).label == "Fixture movie 74" { break }
         }
         XCTAssertEqual(focusedCard(in: app).label, "Fixture movie 74",
                        "Traverse the entire long row, beyond its initially realized native posters.")
-        for _ in 0..<3 {
+        for _ in 0..<4 {
             XCUIRemote.shared.press(.left, forDuration: 4)
             Thread.sleep(forTimeInterval: 0.3)
             XCTAssertEqual(heading.frame.minY, headingY, accuracy: 0.5)
             XCTAssertEqual(description.frame.minY, heroY, accuracy: 0.5)
+            if focusedCard(in: app).label == initialLabel { break }
         }
         XCTAssertEqual(focusedCard(in: app).label, initialLabel)
     }
@@ -527,6 +735,12 @@ final class ShowcaseNavigationTests: XCTestCase {
             "--production-home-fixture", "--pinned-home", "--immersive-home",
             "--home-performance-fixture", "--distinct-home-artwork",
         ]
+        if ProcessInfo.processInfo.environment["PLOZZ_GRADIENT_COMPARISON"] == "1" {
+            app.launchArguments += ["--gradient-performance", "--gradient-black"]
+            if ProcessInfo.processInfo.environment["PLOZZ_GRADIENT_DISABLED"] == "1" {
+                app.launchArguments.append("--gradient-off")
+            }
+        }
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
@@ -583,6 +797,12 @@ final class ShowcaseNavigationTests: XCTestCase {
                     && $0.frame.minY < inactiveTitle.frame.maxY + 100
             }
             .min { $0.frame.minX < $1.frame.minX }
+        if preview == nil {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "Missing Showcase preview card"
+            tree.lifetime = .keepAlways
+            add(tree)
+        }
         let next = try XCTUnwrap(preview)
         let inactiveGap = next.frame.minY - inactiveTitle.frame.maxY
         let gapAboveHeading = inactiveTitle.frame.minY - first.frame.maxY
@@ -595,6 +815,7 @@ final class ShowcaseNavigationTests: XCTestCase {
         add(previewScreenshot)
         XCTAssertGreaterThan(app.frame.maxY - next.frame.minY, 20, "Down needs real visible card area.")
         XCUIRemote.shared.press(.down)
+        waitForStableCard(in: app)
         let poster = focusedCard(in: app)
         let activeGap = poster.frame.minY - inactiveTitle.frame.maxY
         XCTAssertGreaterThanOrEqual(poster.frame.width, 280, "Showcase uses full-size posters instead of 70% artwork.")

@@ -26,10 +26,7 @@ struct HeroForegroundRepresentable: UIViewRepresentable {
     let logoFallbacks: [String: @Sendable () async -> URL?]
     /// Persisted local-first logo candidates for the same bounded slide window.
     let logoReferences: [String: [ArtworkReference]]
-    /// Async backdrop colour samplers by itemID, mirroring the SwiftUI hero's
-    /// `backgroundSample`. Feeds the shared logo legibility analysis so the UIKit
-    /// hero decides the contrast halo exactly like ``HeroLogoArtwork``.
-    let backgroundSamplers: [String: @Sendable () async -> HeroBackgroundSample?]
+    let backgroundSample: HeroBackgroundSample?
     /// Whether the show description (logo/metadata/overview/pills) is currently
     /// shown; the SwiftUI hero snaps this to `false` on a page and back to `true`
     /// ~280ms later. The renderer mirrors it as an imperative alpha animation.
@@ -49,10 +46,10 @@ struct HeroForegroundRepresentable: UIViewRepresentable {
         context.coordinator.locale = context.environment.locale
         context.coordinator.logoFallbacks = logoFallbacks
         context.coordinator.logoReferences = logoReferences
-        context.coordinator.backgroundSamplers = backgroundSamplers
+        context.coordinator.updateArtworkPolicy(context.environment.plozzArtworkPolicy)
         context.coordinator.configure(width: width, height: height)
         context.coordinator.prepare(neighbours)
-        context.coordinator.apply(model, metadataVisible: metadataVisible)
+        context.coordinator.apply(model, metadataVisible: metadataVisible, backgroundSample: backgroundSample)
         return view
     }
 
@@ -65,10 +62,10 @@ struct HeroForegroundRepresentable: UIViewRepresentable {
         context.coordinator.locale = context.environment.locale
         context.coordinator.logoFallbacks = logoFallbacks
         context.coordinator.logoReferences = logoReferences
-        context.coordinator.backgroundSamplers = backgroundSamplers
+        context.coordinator.updateArtworkPolicy(context.environment.plozzArtworkPolicy)
         context.coordinator.configure(width: width, height: height)
         context.coordinator.prepare(neighbours)
-        context.coordinator.apply(model, metadataVisible: metadataVisible)
+        context.coordinator.apply(model, metadataVisible: metadataVisible, backgroundSample: backgroundSample)
     }
 
     static func dismantleUIView(_ uiView: HeroForegroundUIView, coordinator: HeroForegroundCoordinator) {
@@ -91,6 +88,7 @@ final class HeroForegroundCoordinator {
     private var appliedLocale: Locale?
     /// Whether the description block is currently shown (mirrors `metadataVisible`).
     private var appliedMetadataVisible = true
+    private var appliedBackgroundSample: HeroBackgroundSample?
     private var configuredWidth: CGFloat = 0
     private var configuredHeight: CGFloat = 0
 
@@ -114,10 +112,16 @@ final class HeroForegroundCoordinator {
     /// case — to resolve the real (series, for an episode) logo on demand.
     var logoFallbacks: [String: @Sendable () async -> URL?] = [:]
     var logoReferences: [String: [ArtworkReference]] = [:]
+    private var artworkPolicy = ArtworkPresentationPolicy(area: .home)
 
-    /// Async backdrop colour samplers by itemID (mirrors the SwiftUI hero's
-    /// `backgroundSample`), feeding the shared logo legibility halo decision.
-    var backgroundSamplers: [String: @Sendable () async -> HeroBackgroundSample?] = [:]
+    func updateArtworkPolicy(_ policy: ArtworkPresentationPolicy) {
+        guard artworkPolicy != policy else { return }
+        artworkPolicy = policy
+        cancelLoads()
+        warmedLogos.removeAll()
+        appliedModel = nil
+        generation &+= 1
+    }
 
     func configure(width: CGFloat, height: CGFloat) {
         guard width != configuredWidth || height != configuredHeight else { return }
@@ -148,10 +152,10 @@ final class HeroForegroundCoordinator {
 
     /// Applies a slide's visuals in place. Emits a gated HIT/MISS marker (was the
     /// model already prepared?) and times the imperative update.
-    func apply(_ model: HeroForegroundModel, metadataVisible: Bool) {
+    func apply(_ model: HeroForegroundModel, metadataVisible: Bool, backgroundSample: HeroBackgroundSample? = nil) {
         guard let view else { return }
         let unchanged = appliedModel == model && appliedMetadataVisible == metadataVisible
-            && appliedLocale == locale
+            && appliedLocale == locale && appliedBackgroundSample == backgroundSample
         guard !unchanged else { return }
 
         let slideChanged = appliedModel?.itemID != model.itemID
@@ -162,6 +166,7 @@ final class HeroForegroundCoordinator {
         appliedLocale = locale
         view.contentLocale = locale
         appliedMetadataVisible = metadataVisible
+        appliedBackgroundSample = backgroundSample
         prepared[model.itemID] = model
 
         HeroForegroundDiagnostics.emit(
@@ -170,7 +175,7 @@ final class HeroForegroundCoordinator {
         HeroForegroundDiagnostics.measure("update") {
             view.apply(
                 model,
-                logo: warmedLogos[model.itemID],
+                logo: warmedLogos[model.itemID]?.matchingBackground(backgroundSample),
                 metadataVisible: metadataVisible,
                 slideChanged: slideChanged
             )
@@ -199,23 +204,23 @@ final class HeroForegroundCoordinator {
             ?? []
         let fallback = logoFallbacks[id]
         guard !references.isEmpty || fallback != nil else { return }
-        let sampler = backgroundSamplers[id]
+        let policy = artworkPolicy
         loadTasks[id] = Task { [weak self] in
             let logo = await HeroUIKitLogoRenderer.render(
                 references: references,
                 asyncFallbackURL: fallback,
-                backgroundSample: sampler,
-                priority: .userInitiated
+                priority: .userInitiated,
+                prefersOnlineArtwork: policy.prefersOnlineArtwork
             )
             await MainActor.run {
-                guard let self else { return }
+                guard !Task.isCancelled, let self, self.artworkPolicy == policy else { return }
                 self.loadTasks[id] = nil
                 guard let logo else { return }
                 self.warmedLogos[id] = logo
                 // Only paint if this is still the fronted slide and no newer apply
                 // has superseded us.
                 if assignIfCurrent, self.appliedModel?.itemID == id, gen <= self.generation {
-                    self.view?.setLogo(logo, for: id)
+                    self.view?.setLogo(logo.matchingBackground(self.appliedBackgroundSample), for: id)
                 }
             }
         }

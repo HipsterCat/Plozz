@@ -2,6 +2,66 @@ import XCTest
 @testable import CoreModels
 
 final class SubtitleSelectionTests: XCTestCase {
+    func testCallersWithoutSDHPreferencePreserveExistingStreamOrder() {
+        let sdh = MediaTrack(id: 1, kind: .subtitle, displayTitle: "English SDH", language: "en")
+        let regular = MediaTrack(id: 2, kind: .subtitle, displayTitle: "English", language: "en")
+        XCTAssertEqual([sdh, regular].defaultSubtitleSelection(mode: .all, preferredLanguage: "en")?.id, 1)
+        XCTAssertEqual([regular, sdh].defaultSubtitleSelection(mode: .all, preferredLanguage: "en")?.id, 2)
+    }
+
+    func testSDHSelectionHonorsLanguageFullDialogueAndStrictness() {
+        let regular = SubtitleCandidate(id: 1, languageCode: "eng")
+        let sdh = SubtitleCandidate(id: 2, languageCode: "en", isHearingImpaired: true)
+        let foreign = SubtitleCandidate(id: 3, languageCode: "fr", isHearingImpaired: true)
+        let forced = SubtitleCandidate(id: 4, languageCode: "en", isForced: true, isHearingImpaired: true)
+        func decide(_ tracks: [SubtitleCandidate], _ preference: HearingImpairedPreference, mode: SubtitleMode = .all) -> SubtitleDecision {
+            SubtitleSelector.decide(
+                candidates: tracks, mode: mode, preferredLanguage: "en",
+                hearingImpairedPreference: preference
+            )
+        }
+        XCTAssertEqual(decide([regular, sdh], .preferSDH), .select(id: 2))
+        XCTAssertEqual(decide([sdh, regular], .preferNonSDH), .select(id: 1))
+        XCTAssertEqual(decide([foreign, regular], .preferSDH), .select(id: 1))
+        XCTAssertEqual(decide([regular], .onlySDH), .none)
+        XCTAssertEqual(decide([sdh], .onlyNonSDH), .none)
+        XCTAssertEqual(decide([sdh], .preferNonSDH), .select(id: 2))
+        XCTAssertEqual(decide([regular, forced], .preferSDH), .select(id: 1))
+        XCTAssertEqual(decide([regular, sdh, forced], .onlySDH, mode: .forcedOnly), .select(id: 4))
+        XCTAssertEqual(decide([regular, sdh], .preferSDH, mode: .off), .none)
+        XCTAssertEqual(decide([regular, foreign], .onlySDH), .none)
+        XCTAssertEqual(decide([sdh, .init(id: 5, languageCode: "en", isHearingImpaired: true)], .preferSDH), .select(id: 2))
+    }
+
+    func testSDHTitlesExternalFilesAndStreamingSelectionUseTheSamePolicy() {
+        let regular = MediaTrack(id: 1, kind: .subtitle, displayTitle: "English", language: "en")
+        let sdh = MediaTrack(id: 2, kind: .subtitle, displayTitle: "English [SDH]", language: "eng", isExternal: true)
+        let tracks = [regular, sdh]
+        XCTAssertEqual(tracks.defaultSubtitleSelection(mode: .all, preferredLanguage: "en", hearingImpairedPreference: .preferSDH)?.id, 2)
+        XCTAssertFalse([regular].hasSuitableSubtitle(forLanguage: "en", hearingImpairedPreference: .onlySDH))
+        XCTAssertTrue(tracks.hasSuitableSubtitle(forLanguage: "en", hearingImpairedPreference: .onlySDH))
+        XCTAssertFalse(tracks.hasSuitableSubtitle(forLanguage: "en", mode: .forcedOnly, hearingImpairedPreference: .onlySDH))
+        var options = StreamingPlaybackOptions(quality: .hd720)
+        options.subtitleMode = .all
+        options.subtitleLanguage = "en"
+        options.hearingImpairedPreference = .onlySDH
+        XCTAssertEqual(options.selectedSubtitle(in: tracks)?.id, 2)
+        XCTAssertNil(options.selectedSubtitle(in: [regular]))
+        options.subtitleTrack = regular
+        XCTAssertEqual(options.selectedSubtitle(in: tracks)?.id, 1, "A manual selection overrides SDH policy")
+        options.subtitlesOff = true
+        XCTAssertNil(options.selectedSubtitle(in: tracks))
+    }
+
+    func testSDHDetectionDoesNotMistakeLanguageOrSubstringsForAccessibility() {
+        for title in ["English [SDH]", "English CC", "Hard-of-hearing", "hearing-impaired", "English HOH"] {
+            XCTAssertTrue(TrackLabeling.isHearingImpaired(title), title)
+        }
+        for title in ["Hindi", "hi", "Ghibli", "SDHnotATag", "English"] {
+            XCTAssertFalse(TrackLabeling.isHearingImpaired(title), title)
+        }
+    }
+
     private func sub(_ id: Int, _ lang: String?, forced: Bool = false, isDefault: Bool = false) -> SubtitleCandidate {
         SubtitleCandidate(id: id, languageCode: lang, isForced: forced, isDefault: isDefault)
     }
@@ -102,6 +162,18 @@ final class SubtitleSelectionTests: XCTestCase {
 }
 
 final class ImageSubtitleRoutingTests: XCTestCase {
+    func testRegularTextIsNotAnEquivalentForSDHBitmap() {
+        var bitmap = imageSub(2, "en")
+        bitmap.isHearingImpaired = true
+        let plain = textSub(3, "en")
+        XCTAssertTrue([plain, bitmap].defaultSubtitleNeedsHybridEngine(
+            mode: .all, preferredLanguage: "en", hearingImpairedPreference: .preferSDH))
+        var accessibleText = textSub(4, "eng")
+        accessibleText.isHearingImpaired = true
+        XCTAssertFalse([bitmap, accessibleText].defaultSubtitleNeedsHybridEngine(
+            mode: .all, preferredLanguage: "en", hearingImpairedPreference: .onlySDH))
+    }
+
     private func textSub(_ id: Int, _ lang: String?, forced: Bool = false, isDefault: Bool = false) -> MediaTrack {
         MediaTrack(id: id, kind: .subtitle, displayTitle: lang ?? "Sub", language: lang,
                    isDefault: isDefault, isForced: forced,
@@ -305,11 +377,10 @@ final class RemoteSubtitleBestMatchTests: XCTestCase {
         XCTAssertEqual(results.bestMatch(forLanguage: "en", preference: pref)?.id, "sdh")
     }
 
-    func testOnlySDHGracefullyDegradesWhenNoneAreSDH() {
-        // No SDH candidates → Only-SDH must not dead-end; fall back to the pool.
+    func testOnlySDHDoesNotSilentlyDownloadRegularSubtitles() {
         let results = [hi("a", lang: "eng", rating: 5), hi("b", lang: "eng", rating: 9)]
         let pref = SubtitleSearchPreference(hearingImpaired: .onlySDH)
-        XCTAssertEqual(results.bestMatch(forLanguage: "en", preference: pref)?.id, "b")
+        XCTAssertNil(results.bestMatch(forLanguage: "en", preference: pref))
     }
 
     func testRequireLanguageMatchReturnsNilWhenNoLanguageMatch() {
@@ -327,7 +398,7 @@ final class RemoteSubtitleBestMatchTests: XCTestCase {
         XCTAssertEqual(results.bestMatch(forLanguage: "en", mode: .forcedOnly, preference: pref)?.id, "b")
     }
 
-    func testApplyingSortsByPreferenceAndDegrades() {
+    func testApplyingSortsByPreferenceAndKeepsSDHRestrictionsStrict() {
         let results = [
             hi("plain", lang: "eng", rating: 9, sdh: false),
             hi("sdh", lang: "eng", rating: 1, sdh: true)
@@ -337,9 +408,10 @@ final class RemoteSubtitleBestMatchTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.id), ["sdh", "plain"])
         // Only-SDH with an SDH present → filters to just sdh.
         XCTAssertEqual(results.applying(SubtitleSearchPreference(hearingImpaired: .onlySDH)).map(\.id), ["sdh"])
-        // Only-SDH with none SDH → degrade, keep both.
+        // Only SDH is strict even when no result is labelled.
         let nonSDH = [hi("a", lang: "eng", rating: 1), hi("b", lang: "eng", rating: 2)]
-        XCTAssertEqual(Set(nonSDH.applying(SubtitleSearchPreference(hearingImpaired: .onlySDH)).map(\.id)), ["a", "b"])
+        XCTAssertTrue(nonSDH.applying(SubtitleSearchPreference(hearingImpaired: .onlySDH)).isEmpty)
+        XCTAssertTrue([hi("sdh", lang: "en", sdh: true)].applying(.init(hearingImpaired: .onlyNonSDH)).isEmpty)
     }
 
     func testNameSuggestsHearingImpairedWordBoundary() {

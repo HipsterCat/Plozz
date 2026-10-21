@@ -83,8 +83,7 @@ struct RecentActivityDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Recent Activity")
-                .font(.largeTitle.weight(.semibold))
+            SettingsPageHeader("Recent Activity")
             Text("The most recent app log lines, kept only on this Apple TV and already stripped of tokens and secrets. Newest first — a maintainer may ask what Plozz was doing when a bug happened.")
                 .font(.callout)
                 .plozzForeground(.secondary)

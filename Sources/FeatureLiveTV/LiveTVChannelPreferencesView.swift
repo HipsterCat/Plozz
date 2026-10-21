@@ -45,7 +45,7 @@ public struct LiveTVChannelPreferencesView: View {
             } footer: {
                 Text("Blank fields use source metadata. These changes are personal labels, not program information.")
             }
-            if model.favoriteIDs.contains(channelID) {
+            if model.favoriteOrder.contains(channelID) {
                 SettingsSectionGroup("Favorite order") {
                     Button("Move earlier") { move(-1) }
                         .buttonStyle(SettingsFocusButtonStyle(size: .contained))
@@ -71,6 +71,7 @@ public struct LiveTVChannelPreferencesView: View {
         guard let index = order.firstIndex(of: channelID), order.indices.contains(index + offset) else { return }
         order.swapAt(index, index + offset)
         failed = !model.setFavoriteOrder(order)
+        if !failed { TouchFeedback.shared.emit(.selection) }
     }
 }
 
@@ -100,7 +101,7 @@ public struct LiveTVUnavailableFavoritesView: View {
                             }
                             .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                         }
-                        Button("Remove favorite") { model.toggleFavorite(channel.id) }
+                        Button("Remove favorite") { model.toggleFavoriteWithFeedback(channel.id) }
                             .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     }
                 }
@@ -109,6 +110,16 @@ public struct LiveTVUnavailableFavoritesView: View {
             } footer: {
                 Text("Favorites stay saved while their source is unavailable or disabled. A similar name never replaces a saved channel.")
             }
+        }
+    }
+}
+
+extension LiveTVPrototypeModel {
+    func toggleFavoriteWithFeedback(_ id: String, feedback: TouchFeedback = .shared) {
+        let wasFavorite = favoriteIDs.contains(id)
+        toggleFavorite(id)
+        if favoriteIDs.contains(id) != wasFavorite {
+            feedback.emit(.confirmation)
         }
     }
 }

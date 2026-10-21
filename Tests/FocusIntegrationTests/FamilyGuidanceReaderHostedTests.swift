@@ -6,6 +6,48 @@ import XCTest
 
 @MainActor
 final class FamilyGuidanceReaderHostedTests: XCTestCase {
+    func testFamilyGuidanceMarkKeepsItsColorAndUsesThePaletteContrastVariant() throws {
+        for (palette, light) in [(ThemePalette.light, true), (.dark, false), (.pureBlack, false)] {
+            for scheme in [ColorScheme.light, .dark] {
+                let renderer = ImageRenderer(content:
+                    FamilyGuidanceIcon(size: 128)
+                        .environment(\.themePalette, palette)
+                        .environment(\.colorScheme, scheme)
+                )
+                renderer.scale = 1
+                let image = try XCTUnwrap(renderer.uiImage)
+                XCTAssertEqual(try pixel(image, x: 0, y: 0)[3], 0)
+                var greenSamples = 0
+                var checkSamples = 0
+                for y in stride(from: 4, to: 128, by: 8) {
+                    for x in stride(from: 4, to: 128, by: 8) {
+                        let sample = try pixel(image, x: x, y: y)
+                        guard sample[3] > 240 else { continue }
+                        if Int(sample[1]) > Int(sample[0]) + 30,
+                           Int(sample[1]) > Int(sample[2]) + 30 {
+                            greenSamples += 1
+                            continue
+                        }
+                        checkSamples += 1
+                        for channel in 0..<3 {
+                            if light {
+                                XCTAssertLessThan(sample[channel], 80)
+                            } else {
+                                XCTAssertGreaterThan(sample[channel], 220)
+                            }
+                        }
+                    }
+                }
+                XCTAssertGreaterThan(greenSamples, 8, "The original green ring must render without tinting.")
+                XCTAssertGreaterThan(checkSamples, 8, "The check must contrast with the app palette, not the system scheme.")
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "family-guidance-light-\(light)-scheme-\(scheme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     func testReaderKeepsBothTopCornersVisibleWhileFocusedAndScrolled() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),

@@ -41,4 +41,15 @@ public struct TVDBArtworkProvider: ArtworkProvider {
             return nil
         }
     }
+
+    public func portraitHeroURL(for query: MetadataQuery) async -> URL? {
+        switch query.contentType {
+        case .movie, .tvShow, .unknown: break
+        case .anime, .music: return nil
+        }
+        return await client.backdropURL(
+            title: query.title, year: query.year, isMovie: !query.isTV,
+            tvdbID: query.providerIDs.providerID(.tvdb), prefersPortrait: true
+        )
+    }
 }

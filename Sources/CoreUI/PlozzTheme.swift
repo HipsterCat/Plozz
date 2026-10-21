@@ -58,6 +58,8 @@ public enum PlozzTheme {
         /// Standard poster card width (3:2-ish) tuned for tvOS 10-foot UI.
         public static let posterWidth: CGFloat = 280
         public static let posterHeight: CGFloat = 420
+        /// Resting portrait cards visible in a television row at standard density.
+        public static let portraitRowVisibleCards: CGFloat = 6.25
         public static let landscapeWidth: CGFloat = 480
         public static let landscapeHeight: CGFloat = 270
 
@@ -77,6 +79,8 @@ public enum PlozzTheme {
         /// reflection stops reading as the picture having a soft bottom and
         /// starts being a feature of its own that the chip then sits on top of.
         public static let continueWatchingReflectionShare: CGFloat = 0.135
+        /// Narrow portrait slots need a deeper band to keep the resume chip below the full poster.
+        public static let continueWatchingPortraitReflectionShare: CGFloat = 0.10
         /// Fraction of the artwork's width trimmed from **each** side of a
         /// Continue Watching card.
         ///
@@ -183,6 +187,8 @@ public enum PlozzTheme {
         public static let posterArtCornerRadius: CGFloat = 16
         /// Inner media corner radius for a landscape (medium) card. Matches Twozz.
         public static let mediumMediaCornerRadius: CGFloat = 18
+        /// Shared artwork rounding for posters and Continue Watching on touch.
+        public static let touchMediaCornerRadius: CGFloat = 12
         /// Uniform inset between a media card's glass surface and its artwork —
         /// shared by **every** poster *and* landscape card so the glass border
         /// reads the same thickness across the whole UI. Density-scaled in
@@ -223,13 +229,10 @@ public enum PlozzTheme {
             /// (`panel − content`; == `cardInset` base).
             public static let inset: CGFloat = 12
         }
-        /// Optical clearance factor for a media card's caption: the title/metadata
-        /// text is inset horizontally from the glass edge by this fraction of the
-        /// card's *outer* corner radius, so left-aligned text clears the rounded
-        /// corner instead of crowding it. ~0.8 keeps text off the curve while
-        /// staying visually tied to the artwork's edge. Applied per-card in
-        /// `PlozzMetrics` (artwork itself is unaffected).
+        /// Bottom caption clearance from the glass edge as a fraction of the
+        /// outer radius. TV also uses this clearance horizontally.
         public static let captionCornerClearanceFactor: CGFloat = 0.8
+        public static let touchCaptionHorizontalInset: CGFloat = 4
         /// Vertical gap between a media card's artwork and its caption block —
         /// the *base* shared by every poster and landscape card. The artwork sits
         /// flush against the top corner curve (unlike the side/bottom text, which
@@ -477,6 +480,8 @@ public enum PlozzTheme {
         /// the drop never changes the tile's footprint. Base value; density-scaled
         /// in `PlozzMetrics` so it tracks the display-size preference.
         public static let focusCaptionPush: CGFloat = 16
+        /// TVUIKit's artwork expansion does not shrink with compact card density.
+        public static let nativeFocusCaptionMinimumPush: CGFloat = 24
 
         // MARK: Borderless ("Posters") card style
 
@@ -488,15 +493,6 @@ public enum PlozzTheme {
         /// `cardInset` so a borderless poster still reads larger than the framed
         /// card's inset artwork. Base value; density-scaled in `PlozzMetrics`.
         public static let borderlessCardSideMargin: CGFloat = 10
-
-        /// Base height of a card's watched-progress bar. Density-scaled (with a
-        /// floor at `progressBarMinHeight`) in `PlozzMetrics`, so the scrubber
-        /// grows/shrinks with the display-size setting like the rest of the card
-        /// instead of staying a fixed pixel height.
-        public static let progressBarHeight: CGFloat = 12
-        /// Smallest the density-scaled progress bar is allowed to get, so it stays
-        /// legible at the smallest display-size settings.
-        public static let progressBarMinHeight: CGFloat = 9
 
         /// Base leg length of the "unwatched" corner flag (the right-triangle in a
         /// card's top-trailing corner). Density-scaled (with a floor at
@@ -515,6 +511,8 @@ public enum PlozzTheme {
         /// instead of staying a fixed pixel size. Nudged a little larger than its
         /// former fixed 38pt so it reads better on large cards.
         public static let watchedBadgeSize: CGFloat = 42
+        /// TVUIKit's artwork corner, also used by flush numbered corner tiles.
+        public static let nativePosterArtworkCornerRadius: CGFloat = 21
         /// Smallest the density-scaled watched badge is allowed to get, so the
         /// check stays legible on the tiniest (micro-density) cards.
         public static let watchedBadgeMinSize: CGFloat = 36

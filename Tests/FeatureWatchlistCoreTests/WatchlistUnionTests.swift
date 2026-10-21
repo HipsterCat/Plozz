@@ -14,6 +14,31 @@ final class WatchlistUnionTests: XCTestCase {
     private let plex = WatchlistDestinationID(rawValue: "plex")!
     private let jellyfin = WatchlistDestinationID(rawValue: "jellyfin")!
 
+    func testTrackerAttributionSurvivesNativePersistenceAndRetractsOnDisconnect() throws {
+        let tracker = try XCTUnwrap(WatchlistDestinationID(rawValue: "wetrakr"))
+        let alias = MediaAliasID()
+        let url = try XCTUnwrap(URL(string: "https://wetrakr.com/movies/42"))
+        let entry = try XCTUnwrap(NativeWatchlistEntry(
+            aliasID: alias, kind: .movie,
+            presentation: .init(title: "Movie"), index: 0,
+            attribution: .init(source: .wetrakr, sourceURL: url)
+        ))
+        var native = NativeWatchlistView()
+        native.applySuccess(destinationID: tracker, entries: [entry], identityScope: "first")
+        native = try JSONDecoder().decode(NativeWatchlistView.self, from: JSONEncoder().encode(native))
+        let model = WatchlistModel()
+        try model.activate(profileID: "p")
+        let union = model.union(profileID: "p", nativeView: native, aliasSnapshot: .empty, enabledDestinationIDs: [tracker])
+        let resolved = WatchlistPresentationResolver.resolve(
+            union: union, aliasSnapshot: .empty, currentItemsByAliasID: [:]
+        )
+        XCTAssertEqual(resolved.first?.item.metadataProvenance.wetrakrWatchlistURL, url)
+        native.discardCachedEntries(for: tracker, unlessIdentityScopeMatches: "disconnected")
+        XCTAssertTrue(model.union(
+            profileID: "p", nativeView: native, aliasSnapshot: .empty, enabledDestinationIDs: [tracker]
+        ).orderedEntries.isEmpty)
+    }
+
     private func view(
         _ buckets: [(WatchlistDestinationID, [MediaAliasID])]
     ) -> NativeWatchlistView {
@@ -321,6 +346,141 @@ final class WatchlistUnionTests: XCTestCase {
         )
 
         XCTAssertEqual(union.orderedEntries.map(\.aliasID), [alias])
+    }
+
+    func testSameTitleWithConflictingIDsStaysSeparateOnOneServer() throws {
+        for kind in [MediaItemKind.movie, .series] {
+            let first = try XCTUnwrap(MediaAliasRecord(
+                kind: kind,
+                strongEvidence: [try XCTUnwrap(.init(kind: kind, namespace: .imdb, value: "tt111"))]
+            ))
+            let second = try XCTUnwrap(MediaAliasRecord(
+                kind: kind,
+                strongEvidence: [try XCTUnwrap(.init(kind: kind, namespace: .imdb, value: "tt222"))]
+            ))
+            let presentation = MediaAliasPresentation(title: "Same Title", year: 2020)
+            let source = MediaSourceRef(
+                accountID: "server", itemID: "second-film", kind: kind, providerKind: .plex
+            )
+            var native = NativeWatchlistView()
+            native.applySuccess(destinationID: plex, entries: [
+                try XCTUnwrap(NativeWatchlistEntry(
+                    aliasID: first.id, kind: kind, presentation: presentation, index: 0
+                )),
+                try XCTUnwrap(NativeWatchlistEntry(
+                    aliasID: second.id, kind: kind, presentation: presentation,
+                    index: 1, ownedSource: source
+                ))
+            ])
+            let aliases = MediaAliasSnapshot(records: [first, second])
+            let union = WatchlistUnion(
+                snapshot: .empty, nativeView: native, aliasSnapshot: aliases,
+                enabledDestinationIDs: [plex]
+            )
+
+            XCTAssertEqual(union.orderedEntries.map(\.aliasID), [first.id, second.id])
+            XCTAssertNil(union.orderedEntries.first?.ownedSource)
+            XCTAssertEqual(union.orderedEntries.last?.ownedSource, source)
+            let rows = WatchlistPresentationResolver.resolve(
+                union: union, aliasSnapshot: aliases, currentItemsByAliasID: [:]
+            )
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertEqual(rows.first?.item.locallyValidatedPlayableSource, false)
+            XCTAssertEqual(rows.last?.item.id, source.itemID)
+        }
+    }
+
+    func testSameTitleWithoutCanonicalEvidenceDoesNotBorrowOwnership() throws {
+        let first = MediaAliasID()
+        let second = MediaAliasID()
+        let presentation = MediaAliasPresentation(title: "Same Title", year: 2020)
+        var native = NativeWatchlistView()
+        native.applySuccess(destinationID: plex, entries: [
+            try XCTUnwrap(NativeWatchlistEntry(
+                aliasID: first, kind: .movie, presentation: presentation, index: 0
+            )),
+            try XCTUnwrap(NativeWatchlistEntry(
+                aliasID: second, kind: .movie, presentation: presentation, index: 1,
+                ownedSource: MediaSourceRef(accountID: "server", itemID: "owned", kind: .movie)
+            ))
+        ])
+
+        let union = WatchlistUnion(
+            snapshot: .empty, nativeView: native, aliasSnapshot: .empty,
+            enabledDestinationIDs: [plex]
+        )
+        XCTAssertEqual(union.orderedEntries.map(\.aliasID), [first, second])
+        XCTAssertNil(union.orderedEntries.first?.ownedSource)
+    }
+
+    func testCanonicalOwnershipKeepsFirstSlotAndUsesMatchingOwnedPresentation() throws {
+        let canonical = try XCTUnwrap(MediaAliasRecord(kind: .movie))
+        let old = try XCTUnwrap(MediaAliasRecord(kind: .movie, redirectTarget: canonical.id))
+        let neighbor = MediaAliasID()
+        let source = MediaSourceRef(accountID: "server", itemID: "owned", kind: .movie)
+        let ownedPresentation = MediaAliasPresentation(
+            title: "Library Title", artworkURL: "https://library.example/poster.jpg"
+        )
+        var native = NativeWatchlistView()
+        native.applySuccess(destinationID: plex, entries: [
+            try XCTUnwrap(NativeWatchlistEntry(
+                aliasID: old.id, kind: .movie,
+                presentation: .init(title: "Discover Title"), index: 0
+            )),
+            try XCTUnwrap(NativeWatchlistEntry(aliasID: neighbor, kind: .movie, index: 1)),
+            try XCTUnwrap(NativeWatchlistEntry(
+                aliasID: canonical.id, kind: .movie, index: 2,
+                ownedSource: source, ownedPresentation: ownedPresentation
+            ))
+        ])
+        let aliases = MediaAliasSnapshot(records: [old, canonical])
+        let union = WatchlistUnion(
+            snapshot: .empty, nativeView: native, aliasSnapshot: aliases,
+            enabledDestinationIDs: [plex]
+        )
+
+        XCTAssertEqual(union.orderedEntries.map(\.aliasID), [canonical.id, neighbor])
+        XCTAssertEqual(union.orderedEntries.first?.ownedSource, source)
+        XCTAssertEqual(union.orderedEntries.first?.presentation, ownedPresentation)
+        XCTAssertEqual(union.orderedEntries.first?.artworkSourceAccountID, source.accountID)
+
+        let removal = try XCTUnwrap(WatchlistIntent(
+            aliasID: old.id, kind: .movie, desiredState: .absent, rank: 0, origin: .local
+        ))
+        let removed = WatchlistUnion(
+            snapshot: WatchlistSnapshot(intents: [removal], aliasSnapshot: aliases),
+            nativeView: native, aliasSnapshot: aliases, enabledDestinationIDs: [plex]
+        )
+        XCTAssertEqual(removed.orderedEntries.map(\.aliasID), [neighbor])
+    }
+
+    func testOwnedCopySelectionUsesDestinationOrderNotDictionaryOrder() throws {
+        let alias = MediaAliasID()
+        let first = try XCTUnwrap(WatchlistDestinationID(rawValue: "plex.a"))
+        let second = try XCTUnwrap(WatchlistDestinationID(rawValue: "plex.z"))
+        let intent = try XCTUnwrap(WatchlistIntent(
+            aliasID: alias, kind: .movie, desiredState: .present, rank: 0, origin: .local
+        ))
+        for destinations in [[first, second], [second, first]] {
+            var native = NativeWatchlistView()
+            for destination in destinations {
+                native.applySuccess(destinationID: destination, entries: [
+                    try XCTUnwrap(NativeWatchlistEntry(
+                        aliasID: alias, kind: .movie, index: 0,
+                        ownedSource: MediaSourceRef(
+                            accountID: destination.rawValue, itemID: "owned", kind: .movie
+                        ),
+                        ownedPresentation: .init(title: destination.rawValue)
+                    ))
+                ])
+            }
+            let union = WatchlistUnion(
+                snapshot: WatchlistSnapshot(intents: [intent]), nativeView: native,
+                aliasSnapshot: .empty, enabledDestinationIDs: [first, second]
+            )
+            XCTAssertEqual(union.orderedEntries.first?.ownedSource?.accountID, first.rawValue)
+            XCTAssertEqual(union.orderedEntries.first?.presentation?.title, first.rawValue)
+        }
     }
 
     /// An explicit add that a server also lists stays the viewer's own, and

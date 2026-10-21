@@ -203,17 +203,31 @@ extension SiloProvider: ProviderHTTPResourceResolving {
         let capability: SiloPlaybackCapabilities = try await client.request("/playback/capabilities")
         let fixedSourceSupported = capability.features.contains("fixed_media_file_v1")
         HandoffDiagnostics.emit("silo playback capabilities available=\(capability.state == "available") allowed=\(capability.allowed) protocol3=\(capability.protocol_versions.contains(3)) fixedSource=\(fixedSourceSupported) installation=\(capability.installation_id != nil)")
-        guard capability.state == "available", capability.allowed, capability.protocol_versions.contains(3),
-              let installationID = capability.installation_id, !installationID.isEmpty else { throw AppError.invalidResponse }
+        guard capability.allowed else { throw StreamingQualityError.permissionDenied }
+        guard capability.state == "available" else {
+            throw StreamingQualityError.serverRefusal("Playback is unavailable on this Silo server.", reason: .providerUnavailable)
+        }
+        guard capability.protocol_versions.contains(3) else {
+            throw StreamingQualityError.serverRefusal("This Silo server does not support the playback protocol Plozz requires.", reason: .protocolUnsupported)
+        }
+        guard let installationID = capability.installation_id, !installationID.isEmpty else {
+            throw StreamingQualityError.malformedResponse
+        }
         if streamingSelection?.requiresEncoding == true,
            !capability.deliveries.contains("server_transcode_hls") {
-            throw StreamingQualityError.serverRefusal("Transcoding is disabled on this Silo server.")
+            throw StreamingQualityError.serverRefusal("Silo does not offer transcoding on this server.", reason: .transcodingDisabled)
         }
         let credential = try SiloCredential.decode(session.accessToken)
         let body = SiloPlaybackStart(
             installation_id: installationID, file_id: selected.file_id, profile_id: credential.profileID,
             capabilities: capabilitiesSnapshot, forceTranscode: forceTranscode,
             fixedSourceSupported: fixedSourceSupported, streaming: streamingSelection)
+        HandoffDiagnostics.emit(
+            "silo playback request quality=\(body.quality_preference) "
+                + "encoding=\(streamingSelection?.requiresEncoding ?? forceTranscode) "
+                + "hdr10plus=\(selected.video_tracks?.first?.hdr10_plus == true) "
+                + "dvProfile=\(selected.video_tracks?.first?.dv_profile ?? 0)"
+        )
         let encodedBody = try JSONEncoder().encode(body)
         // Finish an admitted negotiation even if the view disappears, so its
         // session ID can be released rather than lost to cancellation.
@@ -233,24 +247,32 @@ extension SiloProvider: ProviderHTTPResourceResolving {
             guard decision.protocol_version == 3, decision.outcome == "playable",
                   let plan = decision.playback_plan, plan.protocol_version == 3,
                   let sessionID = ownedSessionID, !sessionID.isEmpty else {
-                if streaming != nil { throw SiloStreamingSelection.refusal(terminalReason) }
-                throw AppError.invalidResponse
+                throw SiloStreamingSelection.refusal(terminalReason)
             }
             let negotiatedCodec = try streamingSelection?.validate(plan)
             HandoffDiagnostics.emit("silo playback plan sameFile=\(plan.effective_media_file_id == selected.file_id) headers=\(plan.stream.headers.count) refreshNone=\(plan.stream.header_refresh == "none") offset=\(plan.timeline.timeline_offset_seconds) seekable=\(plan.timeline.can_seek_anywhere) original=\(plan.delivery == "original_http") hls=\(plan.delivery == "server_remux_hls" || plan.delivery == "server_transcode_hls")")
-            guard plan.effective_media_file_id == selected.file_id,
-                  plan.stream.headers.isEmpty, plan.stream.header_refresh == "none",
-                  plan.timeline.timeline_offset_seconds == 0,
-                  plan.timeline.can_seek_anywhere else { throw AppError.invalidResponse }
+            guard plan.effective_media_file_id == selected.file_id else {
+                throw StreamingQualityError.serverRefusal("Silo returned a different file than the selected version. Plozz stopped playback to avoid playing the wrong file.", reason: .sourceMismatch)
+            }
+            guard plan.stream.headers.isEmpty, plan.stream.header_refresh == "none" else {
+                throw StreamingQualityError.serverRefusal("Silo returned stream headers or header refresh requirements that Plozz does not support.", reason: .unsupportedHeaders)
+            }
+            guard plan.timeline.timeline_offset_seconds == 0 else {
+                throw StreamingQualityError.serverRefusal("Silo returned a playback timeline offset that Plozz does not support.", reason: .unsupportedTimeline)
+            }
+            guard plan.timeline.can_seek_anywhere else {
+                throw StreamingQualityError.serverRefusal("Silo returned a stream without seeking support. Plozz requires a seekable stream for this playback path.", reason: .nonSeekable)
+            }
             let mode: PlaybackDiagnostics.PlaybackMode
             let delivery: AuthenticatedHTTPDeliveryMode
             switch plan.delivery {
             case "original_http": mode = .directPlay; delivery = .directFile
             case "server_remux_hls": mode = .remux; delivery = .hls
             case "server_transcode_hls": mode = .transcode; delivery = .hls
-            default: throw AppError.invalidResponse
+            default:
+                throw StreamingQualityError.serverRefusal("Silo returned a stream delivery format that Plozz does not support.", reason: .unsupportedDelivery)
             }
-            guard let streamURL = resourceURL(plan.stream.url) else { throw AppError.invalidResponse }
+            guard let streamURL = resourceURL(plan.stream.url) else { throw StreamingQualityError.malformedResponse }
             var resources: [String: URL] = [:]
             func locator(url: URL, key: String, purpose: AuthenticatedHTTPResourcePurpose) throws -> AuthenticatedHTTPPlaybackLocator {
                 let path = "silo/\(UUID().uuidString)/\(key)"
@@ -281,7 +303,7 @@ extension SiloProvider: ProviderHTTPResourceResolving {
                 }
             }
             let expiry = plan.expires_at.flatMap(Self.date)
-            guard plan.expires_at == nil || expiry != nil else { throw AppError.invalidResponse }
+            guard plan.expires_at == nil || expiry != nil else { throw StreamingQualityError.malformedResponse }
             try await playback.insert(.init(itemID: itemID, sourceID: selected.file_id, installationID: installationID,
                                             expiry: expiry, streamURL: streamURL, resources: resources,
                                             downloadedTracks: downloadedTracks), id: sessionID)
@@ -387,7 +409,7 @@ struct SiloPlaybackStart: Encodable {
         let subtitles = Subtitles()
         let features: [String] = []
         let auth_header_refresh = false
-        let validated_claims: [String] = []
+        var validated_claims: [String] = []
         let transformations: [String] = []
         var max_channels: Int? = nil
     }
@@ -456,8 +478,11 @@ struct SiloPlaybackStart: Encodable {
             deliveries: [
                 "original_http": Delivery(
                     enabled: streaming.map { !$0.requiresEncoding } ?? !forceTranscode,
-                    containers: containers, video_codecs: video, audio_decode_codecs: audio),
-                "hls": Delivery(enabled: true, containers: ["mp4", "mpegts"], video_codecs: hardwareVideo,
+                    containers: containers, video_codecs: video, audio_decode_codecs: audio,
+                    // The original-file player resolves HDR presentation and
+                    // selects audio locally; neither requires server conversion.
+                    validated_claims: ["client_managed_dynamic_range_v1", "client_selected_audio_track_v1"]),
+                "hls": Delivery(enabled: true, containers: ["hls", "mp4", "mpegts"], video_codecs: hardwareVideo,
                                 audio_decode_codecs: ["aac", "ac3", "eac3", "alac"],
                                 max_channels: streaming.flatMap {
                                     $0.requiresEncoding || $0.options.quality != .original ? 2 : nil

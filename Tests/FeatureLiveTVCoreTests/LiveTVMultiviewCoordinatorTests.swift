@@ -197,11 +197,16 @@ final class LiveTVMultiviewCoordinatorTests: XCTestCase {
         await coordinator.replace(pane.id, with: channel(3))?.value
         let current = try XCTUnwrap(pane.preparation.current?.id)
         coordinator.confirmWatching(pane.id, preparedID: current)
-        coordinator.playbackFailed(pane.id, preparedID: previous)
+        let report = LiveChannelFailureReport(failure: .engine(.notFound))
+        coordinator.playbackFailed(pane.id, preparedID: previous, report: report)
+        XCTAssertNil(pane.preparation.playbackFailure)
         XCTAssertTrue(pane.hasPresentedFrame)
         XCTAssertEqual(pane.preparation.current?.id, current)
         coordinator.confirmWatching(pane.id, preparedID: current)
         XCTAssertEqual(watched, ["multiview-3"])
+        coordinator.playbackFailed(pane.id, preparedID: current, report: report)
+        XCTAssertEqual(pane.preparation.playbackFailure, report)
+        XCTAssertNotNil(coordinator.panes[0].preparation.current)
         await coordinator.close()
     }
 

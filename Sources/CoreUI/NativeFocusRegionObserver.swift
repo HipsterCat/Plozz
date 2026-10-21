@@ -2,14 +2,70 @@
 import SwiftUI
 import UIKit
 
+@MainActor
+public enum NativeFocusRegion {
+    public static func owningController(of item: any UIFocusEnvironment) -> UIViewController? {
+        var environment: (any UIFocusEnvironment)? = item
+        var seen = Set<ObjectIdentifier>()
+        while let current = environment, seen.insert(ObjectIdentifier(current)).inserted {
+            if let controller = current as? UIViewController { return controller }
+            if let view = current as? UIView {
+                var responder: UIResponder? = view
+                while let current = responder {
+                    if let controller = current as? UIViewController { return controller }
+                    responder = current.next
+                }
+            }
+            environment = current.parentFocusEnvironment
+        }
+        return nil
+    }
+
+    public static func contains(_ item: (any UIFocusItem)?, in region: UIView) -> Bool {
+        guard let window = region.window,
+              let root = owningController(of: region)?.viewIfLoaded ?? region.superview,
+              let item, item.canBecomeFocused, !region.bounds.isEmpty else { return false }
+        let frame: CGRect
+        if let view = item as? UIView {
+            guard view.window === window, view.isDescendant(of: root) else { return false }
+            frame = view.convert(view.bounds, to: region)
+        } else {
+            var parent = item.parentFocusEnvironment
+            var container: (any UIFocusItemContainer)?
+            var belongsToContent = false
+            var seen = Set<ObjectIdentifier>()
+            while let environment = parent, seen.insert(ObjectIdentifier(environment)).inserted {
+                if let view = environment as? UIView {
+                    guard view.window === window else { return false }
+                    if view.isDescendant(of: root) { belongsToContent = true }
+                }
+                if container == nil { container = environment.focusItemContainer }
+                if belongsToContent, container != nil { break }
+                parent = environment.parentFocusEnvironment
+            }
+            guard belongsToContent, let container else { return false }
+            let coordinates: any UICoordinateSpace = region
+            frame = coordinates.convert(item.frame, from: container.coordinateSpace)
+        }
+        guard !frame.isEmpty, !frame.isNull, !frame.isInfinite else { return false }
+        return region.bounds.contains(CGPoint(x: frame.midX, y: frame.midY))
+    }
+}
+
 /// Observes UIKit focus entering a region, including native Menu controls whose
 /// focus can arrive before SwiftUI's FocusState binding catches up.
+/// Exit callbacks require a real handoff, not temporary nil focus or scrolling.
 public struct NativeFocusRegionObserver: UIViewRepresentable {
     private let isEnabled: Bool
+    private let onFocusExited: (() -> Void)?
     private let onFocusEntered: () -> Void
 
-    public init(isEnabled: Bool = true, onFocusEntered: @escaping () -> Void) {
+    public init(
+        isEnabled: Bool = true, onFocusExited: (() -> Void)? = nil,
+        onFocusEntered: @escaping () -> Void
+    ) {
         self.isEnabled = isEnabled
+        self.onFocusExited = onFocusExited
         self.onFocusEntered = onFocusEntered
     }
 
@@ -21,6 +77,7 @@ public struct NativeFocusRegionObserver: UIViewRepresentable {
     }
 
     public func updateUIView(_ view: ObserverView, context: Context) {
+        view.onFocusExited = onFocusExited
         view.onFocusEntered = onFocusEntered
         view.isEnabled = isEnabled
     }
@@ -30,6 +87,7 @@ public struct NativeFocusRegionObserver: UIViewRepresentable {
     }
 
     public final class ObserverView: UIView {
+        var onFocusExited: (() -> Void)?
         var onFocusEntered: (() -> Void)?
         var isEnabled = false {
             didSet {
@@ -37,6 +95,7 @@ public struct NativeFocusRegionObserver: UIViewRepresentable {
             }
         }
         private var containsCurrentFocus = false
+        private var containsLastKnownFocus = false
         private var pendingCheck: Task<Void, Never>?
 
         public override func didMoveToWindow() {
@@ -51,6 +110,7 @@ public struct NativeFocusRegionObserver: UIViewRepresentable {
 
         func stop() {
             isEnabled = false
+            onFocusExited = nil
             onFocusEntered = nil
         }
 
@@ -58,6 +118,7 @@ public struct NativeFocusRegionObserver: UIViewRepresentable {
             NotificationCenter.default.removeObserver(self)
             pendingCheck?.cancel()
             containsCurrentFocus = false
+            containsLastKnownFocus = false
             guard isEnabled, window != nil else { return }
             NotificationCenter.default.addObserver(
                 self, selector: #selector(focusDidUpdate(_:)),
@@ -82,54 +143,30 @@ public struct NativeFocusRegionObserver: UIViewRepresentable {
         @objc private func focusDidUpdate(_ notification: Notification) {
             guard let context = notification.userInfo?[UIFocusSystem.focusUpdateContextUserInfoKey]
                 as? UIFocusUpdateContext else { return }
-            reportFocus(context.nextFocusedItem)
+            reportFocus(
+                context.nextFocusedItem,
+                reportsExit: context.nextFocusedItem !== context.previouslyFocusedItem
+            )
         }
 
-        func reportFocus(_ item: (any UIFocusItem)?) {
+        func reportFocus(_ item: (any UIFocusItem)?, reportsExit: Bool = false) {
             guard isEnabled else { return }
             let inside = containsFocus(item)
             let entered = inside && !containsCurrentFocus
             containsCurrentFocus = inside
+            if inside {
+                containsLastKnownFocus = true
+            } else if reportsExit, item?.canBecomeFocused == true {
+                // A temporarily nil item or an offscreen layout is not a focus handoff.
+                let exited = containsLastKnownFocus
+                containsLastKnownFocus = false
+                if exited { onFocusExited?() }
+            }
             if entered { onFocusEntered?() }
         }
 
         func containsFocus(_ item: (any UIFocusItem)?) -> Bool {
-            guard let window, let root = contentRoot, let item,
-                  item.canBecomeFocused, !bounds.isEmpty else { return false }
-            let frame: CGRect
-            if let view = item as? UIView {
-                guard view.window === window, view.isDescendant(of: root) else { return false }
-                frame = view.convert(view.bounds, to: self)
-            } else {
-                var parent = item.parentFocusEnvironment
-                var container: (any UIFocusItemContainer)?
-                var belongsToContent = false
-                while let environment = parent {
-                    if let view = environment as? UIView {
-                        guard view.window === window else { return false }
-                        if view.isDescendant(of: root) { belongsToContent = true }
-                    }
-                    if container == nil { container = environment.focusItemContainer }
-                    if belongsToContent, container != nil { break }
-                    parent = environment.parentFocusEnvironment
-                }
-                guard belongsToContent, let container else { return false }
-                let coordinates: any UICoordinateSpace = self
-                frame = coordinates.convert(item.frame, from: container.coordinateSpace)
-            }
-            guard !frame.isEmpty, !frame.isNull, !frame.isInfinite else { return false }
-            return bounds.contains(CGPoint(x: frame.midX, y: frame.midY))
-        }
-
-        private var contentRoot: UIView? {
-            var responder = next
-            while let current = responder {
-                if let controller = current as? UIViewController {
-                    return controller.viewIfLoaded
-                }
-                responder = current.next
-            }
-            return superview
+            NativeFocusRegion.contains(item, in: self)
         }
 
         deinit {

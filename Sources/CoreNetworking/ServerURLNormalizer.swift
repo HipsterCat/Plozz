@@ -1,7 +1,40 @@
 import Foundation
+import CoreModels
 
 /// Helpers for turning messy user/discovery input into a usable base URL.
 public enum ServerURLNormalizer {
+    /// Only credential-free discovery may resolve a new API base. Authenticated
+    /// requests continue to use the strict same-origin transport policy.
+    public static func resolvedBaseURL(
+        requested: URL, responseURL: URL?, endpointPath: String
+    ) throws -> URL {
+        guard let responseURL,
+              var response = URLComponents(url: responseURL, resolvingAgainstBaseURL: false),
+              let original = URLComponents(url: requested, resolvingAgainstBaseURL: false),
+              original.user == nil, original.password == nil,
+              original.query == nil, original.fragment == nil,
+              response.user == nil, response.password == nil,
+              response.query == nil, response.fragment == nil,
+              let originalScheme = original.scheme, let originalHost = original.host,
+              let responseScheme = response.scheme, let responseHost = response.host,
+              let originalOrigin = try? NetworkOrigin(
+                scheme: originalScheme, host: originalHost, port: original.port
+              ),
+              let responseOrigin = try? NetworkOrigin(
+                scheme: responseScheme, host: responseHost, port: response.port
+              ),
+              originalOrigin == responseOrigin || (
+                originalOrigin.scheme == "http" && responseOrigin.scheme == "https"
+                    && originalOrigin.host == responseOrigin.host
+              ) else { throw AppError.invalidResponse }
+        guard !endpointPath.isEmpty, response.percentEncodedPath.hasSuffix(endpointPath) else {
+            throw AppError.invalidResponse
+        }
+        response.percentEncodedPath = String(response.percentEncodedPath.dropLast(endpointPath.count))
+        guard let resolved = response.url else { throw AppError.invalidResponse }
+        return resolved
+    }
+
     /// Normalises a user-entered host/URL into a canonical base `URL`.
     ///
     /// Rules:

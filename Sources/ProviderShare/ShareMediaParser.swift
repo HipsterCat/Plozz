@@ -19,7 +19,8 @@ enum ShareMediaParser {
     /// v10: normalize series titles (strip year/season/edition/quality junk),
     /// prefer the clean filename title over a junky folder, and capture the series
     /// year — collapses split/variant folders and fixes same-name matches.
-    static let classifierVersion = 15
+    /// v16: include ISO disc images, including in unchanged existing directories.
+    static let classifierVersion = 16
 
     /// Bumped when the SIDECAR/explicit-id inventory the scanner records changes
     /// shape (new sidecar kinds recognized, new explicit-id namespaces extracted),
@@ -33,7 +34,7 @@ enum ShareMediaParser {
     /// File extensions we treat as playable video.
     static let videoExtensions: Set<String> = [
         "mkv", "mp4", "m4v", "mov", "avi", "webm", "ts", "m2ts", "mts",
-        "wmv", "mpg", "mpeg", "flv", "ogv", "3gp",
+        "wmv", "mpg", "mpeg", "flv", "ogv", "3gp", "iso",
     ]
 
     static func isVideoFile(_ name: String) -> Bool {

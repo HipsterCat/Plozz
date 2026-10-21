@@ -9,8 +9,7 @@ import FoundationNetworking
 /// always preflighted through ``CredentialPreflight`` before a request is
 /// built.
 ///
-/// This is the HTTP adapter integration point: it composes the other
-/// primitives in this module but is not adopted by any provider yet.
+/// Used by the WebDAV media transport for browsing and file delivery.
 public struct WebDAVClient: Sendable {
     private let registry: TransportSessionRegistry
 
@@ -90,10 +89,9 @@ public struct WebDAVClient: Sendable {
         )
     }
 
-    /// Establishes seekability for `url`: a 1-byte range probe that must
-    /// come back `206` with a strong `ETag`. `root` bounds the *final* resolved
-    /// URL so a same-origin redirect can't move the read outside the configured
-    /// folder (matching ``listChildren``/``properties``).
+    /// Establishes a GET validator and size with a bounded one-byte probe.
+    /// Same-origin hops remain root-bound; external HTTPS media hops use an
+    /// isolated anonymous session. Its final URL lives only in the source lease.
     public func probeRange(
         root: WebDAVRoot,
         url: URL,
@@ -101,14 +99,16 @@ public struct WebDAVClient: Sendable {
         credential: WebDAVCredential,
         trustPolicy: TrustPolicy
     ) async throws -> RangeProbeResult {
-        let (data, response) = try await execute(
+        let (result, anonymous) = try await executeMediaGET(
             requestBuilder: { RangeProbe.probeRequest(url: $0) },
+            root: root,
             url: url,
             sessionKey: sessionKey,
             credential: credential,
             trustPolicy: trustPolicy,
             maxResponseBytes: 1
         )
+        let (data, response) = (result.data, result.response)
         try validateAuthenticationStatus(response)
         // Surface a transient/error status as a classifiable protocol error
         // *before* range validation, which would otherwise mislabel a 500/503/
@@ -117,13 +117,8 @@ public struct WebDAVClient: Sendable {
         guard response.statusCode < 400 || response.statusCode == 412 else {
             throw TransportError.protocolError(status: response.statusCode, detail: "unexpected status during range probe")
         }
-        guard let resourceURL = response.url,
-              TransportOrigin(url: resourceURL) == sessionKey.origin else {
-            throw TransportError.invalidOrigin(reason: "range probe response URL did not match the session origin")
-        }
-        guard let finalPath = WebDAVPathPolicy.normalizedPath(of: resourceURL),
-              WebDAVPathPolicy.isWithinRoot(finalPath, root: root.path) else {
-            throw TransportError.pathEscapesRoot
+        guard let resourceURL = response.url else {
+            throw TransportError.invalidOrigin(reason: "range probe response had no URL")
         }
         let headers = HTTPHeaderUtilities.normalizedHeaders(from: response.allHeaderFields)
         switch RangeProbe.validateProbe(
@@ -133,14 +128,21 @@ public struct WebDAVClient: Sendable {
             resourceURL: resourceURL
         ) {
         case .success(let result):
-            return result
+            return RangeProbeResult(
+                validator: result.validator,
+                totalLength: result.totalLength,
+                resourceURL: result.resourceURL,
+                lastModified: result.lastModified,
+                usesAnonymousSession: anonymous
+            )
         case .failure(let error):
             throw error
         }
     }
 
-    /// A single validated bounded read, gated on the exact strong `ETag`
-    /// `probeRange` returned. Throws ``TransportError/sourceChanged(reason:)``
+    /// A single bounded read gated on the validator `probeRange` returned.
+    /// Never rebinds an active source to a new delivery URL/representation.
+    /// Throws ``TransportError/sourceChanged(reason:)``
     /// if the resource changed since the probe.
     public func readRange(
         url: URL,
@@ -160,7 +162,7 @@ public struct WebDAVClient: Sendable {
             url: url,
             start: start,
             end: end,
-            ifMatch: representation.etag,
+            validator: representation.validator,
             maxReadBytes: maxReadBytes
         ) {
         case .success(let request):
@@ -177,14 +179,24 @@ public struct WebDAVClient: Sendable {
             throw TransportError.rangeValidationFailed(reason: "range size cannot be represented")
         }
 
-        let (data, response) = try await execute(
-            requestBuilder: { _ in builtRequest },
-            url: url,
-            sessionKey: sessionKey,
-            credential: credential,
-            trustPolicy: trustPolicy,
-            maxResponseBytes: Int(readSize)
-        )
+        let data: Data
+        let response: HTTPURLResponse
+        if representation.usesAnonymousSession {
+            let result = try await executeAnonymousMediaGET(
+                request: builtRequest, sourceKey: sessionKey, maxResponseBytes: Int(readSize)
+            )
+            (data, response) = (result.data, result.response)
+        } else {
+            (data, response) = try await execute(
+                requestBuilder: { _ in builtRequest },
+                url: url,
+                sessionKey: sessionKey,
+                credential: credential,
+                trustPolicy: trustPolicy,
+                maxResponseBytes: Int(readSize),
+                followRedirects: false
+            )
+        }
         try validateAuthenticationStatus(response)
         // A transient/error status (500/503/408/504/…) must be classifiable as
         // such, not funneled through range validation into a terminal
@@ -196,6 +208,9 @@ public struct WebDAVClient: Sendable {
         guard response.url?.absoluteString == representation.resourceURL.absoluteString else {
             throw TransportError.sourceChanged(reason: "read response URL did not match the probed resource")
         }
+        guard !(300..<400).contains(response.statusCode) else {
+            throw TransportError.sourceChanged(reason: "active media representation redirected")
+        }
         let headers = HTTPHeaderUtilities.normalizedHeaders(from: response.allHeaderFields)
         switch RangeProbe.validateRead(
             status: response.statusCode,
@@ -204,7 +219,7 @@ public struct WebDAVClient: Sendable {
             expectedStart: start,
             expectedEnd: end,
             expectedTotal: representation.totalLength,
-            expectedETag: representation.etag
+            expectedValidator: representation.validator
         ) {
         case .success:
             return data
@@ -289,14 +304,16 @@ public struct WebDAVClient: Sendable {
         guard maxBytes > 0 else {
             throw TransportError.rangeValidationFailed(reason: "bounded read cap must be positive")
         }
-        let (data, response) = try await execute(
+        let (result, _) = try await executeMediaGET(
             requestBuilder: { WebDAVRequestBuilder.get(url: $0) },
+            root: root,
             url: url,
             sessionKey: sessionKey,
             credential: credential,
             trustPolicy: trustPolicy,
             maxResponseBytes: maxBytes
         )
+        let (data, response) = (result.data, result.response)
         try validateAuthenticationStatus(response)
         guard response.statusCode == 200 else {
             throw TransportError.protocolError(
@@ -304,20 +321,78 @@ public struct WebDAVClient: Sendable {
                 detail: "expected 200 OK for a bounded whole-file GET"
             )
         }
-        guard let resourceURL = response.url,
-              TransportOrigin(url: resourceURL) == sessionKey.origin else {
-            throw TransportError.invalidOrigin(reason: "bounded GET response URL did not match the session origin")
-        }
-        // Bound the final resolved URL to the configured root so a same-origin
-        // redirect can't serve a file outside the user's chosen folder.
-        guard let finalPath = WebDAVPathPolicy.normalizedPath(of: resourceURL),
-              WebDAVPathPolicy.isWithinRoot(finalPath, root: root.path) else {
-            throw TransportError.pathEscapesRoot
-        }
         return data
     }
 
     // MARK: - Shared execution path
+
+    private func executeMediaGET(
+        requestBuilder: (URL) -> URLRequest,
+        root: WebDAVRoot,
+        url: URL,
+        sessionKey: TransportSessionKey,
+        credential: WebDAVCredential,
+        trustPolicy: TrustPolicy,
+        maxResponseBytes: Int
+    ) async throws -> (TransportDataResponse, Bool) {
+        guard sessionKey.origin == root.origin else {
+            throw TransportError.invalidOrigin(reason: "media root did not match session")
+        }
+        try WebDAVMediaRedirectPolicy.validateRootURL(url, root: root)
+        var currentURL = url
+        var anonymous = false
+        for hop in 0...WebDAVMediaRedirectPolicy.maximumRedirects {
+            try Task.checkCancellation()
+            let result: TransportDataResponse
+            if anonymous {
+                result = try await executeAnonymousMediaGET(
+                    request: requestBuilder(currentURL), sourceKey: sessionKey, maxResponseBytes: maxResponseBytes
+                )
+            } else {
+                let (data, response) = try await execute(
+                    requestBuilder: requestBuilder, url: currentURL, sessionKey: sessionKey,
+                    credential: credential, trustPolicy: trustPolicy,
+                    maxResponseBytes: maxResponseBytes, followRedirects: false
+                )
+                result = TransportDataResponse(data: data, response: response)
+            }
+            guard result.response.url?.absoluteString == currentURL.absoluteString else {
+                throw TransportError.invalidOrigin(reason: "media response did not match requested URL")
+            }
+            guard WebDAVMediaRedirectPolicy.statuses.contains(result.response.statusCode) else {
+                return (result, anonymous)
+            }
+            guard hop < WebDAVMediaRedirectPolicy.maximumRedirects else {
+                throw TransportError.tooManyRedirects(limit: WebDAVMediaRedirectPolicy.maximumRedirects)
+            }
+            guard let location = result.response.value(forHTTPHeaderField: "Location"), !location.isEmpty else {
+                throw TransportError.invalidOrigin(reason: "media redirect lacked a location")
+            }
+            (currentURL, anonymous) = try WebDAVMediaRedirectPolicy.target(
+                location: location, previous: currentURL, root: root, alreadyAnonymous: anonymous
+            )
+        }
+        throw TransportError.tooManyRedirects(limit: WebDAVMediaRedirectPolicy.maximumRedirects)
+    }
+
+    private func executeAnonymousMediaGET(
+        request: URLRequest,
+        sourceKey: TransportSessionKey,
+        maxResponseBytes: Int
+    ) async throws -> TransportDataResponse {
+        guard let url = request.url, let origin = TransportOrigin(url: url), origin.isSecure else {
+            throw TransportError.invalidOrigin(reason: "invalid anonymous media origin")
+        }
+        // Build afresh; never copy auth, cookies, Referer or account headers.
+        var clean = URLRequest(url: url)
+        clean.httpMethod = "GET"
+        clean.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        for header in ["Range", "Accept-Encoding", "If-Match", "If-Unmodified-Since"] {
+            clean.setValue(request.value(forHTTPHeaderField: header), forHTTPHeaderField: header)
+        }
+        let session = try await registry.mediaSession(for: sourceKey, origin: origin)
+        return try await session.data(for: clean, maxResponseBytes: maxResponseBytes, followRedirects: false)
+    }
 
     private func execute(
         requestBuilder: (URL) -> URLRequest,
@@ -325,7 +400,8 @@ public struct WebDAVClient: Sendable {
         sessionKey: TransportSessionKey,
         credential: WebDAVCredential,
         trustPolicy: TrustPolicy,
-        maxResponseBytes: Int
+        maxResponseBytes: Int,
+        followRedirects: Bool = true
     ) async throws -> (Data, HTTPURLResponse) {
         guard let origin = TransportOrigin(url: url), origin == sessionKey.origin else {
             throw TransportError.invalidOrigin(reason: "request URL does not match the session key's origin")
@@ -346,7 +422,9 @@ public struct WebDAVClient: Sendable {
             credential: credential,
             trustPolicy: trustPolicy
         )
-        let result = try await session.data(for: request, maxResponseBytes: maxResponseBytes)
+        let result = try await session.data(
+            for: request, maxResponseBytes: maxResponseBytes, followRedirects: followRedirects
+        )
         return (result.data, result.response)
     }
 

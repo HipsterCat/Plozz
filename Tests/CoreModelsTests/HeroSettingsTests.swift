@@ -1,4 +1,5 @@
 import XCTest
+import Observation
 @testable import CoreModels
 
 /// Locks down `HeroSettings` value semantics (clamping, de-dup, lenient decode)
@@ -20,15 +21,147 @@ final class HeroSettingsTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDefaultIsActiveWithAllSources() {
+    @MainActor
+    func testKidsPolicyAppliesWithoutPINAndPreservesSavedDiscoveryPreferences() throws {
+        let profiles = ProfilesModel(store: ProfileStore(defaults: defaults))
+        let store = HeroSettingsStore(defaults: defaults)
+        var saved = HeroSettings.default
+        saved.showsDiscoverRow = true
+        saved.showsDiscoverySources = true
+        saved.discoverySources = [.anilist, .tmdb]
+        store.save(saved)
+        let model = HeroSettingsModel(store: store)
+        model.setDiscoveryPolicy { !profiles.activeProfile.isKids }
+        XCTAssertEqual(model.effectiveSettings, saved)
+
+        var profile = profiles.activeProfile
+        profile.isKids = true
+        profiles.update(profile)
+        XCTAssertFalse(model.allowsDiscovery)
+        XCTAssertFalse(model.effectiveSettings.isEnabled(.featured))
+        XCTAssertTrue(model.effectiveSettings.discoverySources.isEmpty)
+        XCTAssertFalse(model.effectiveSettings.showsDiscoverRow)
+        XCTAssertFalse(model.effectiveSettings.showsDiscoverySources)
+        XCTAssertTrue(model.effectiveSettings.isEnabled(.continueWatching))
+        XCTAssertEqual(store.load(), saved)
+
+        model.settings.maxItems = 10
+        model.settings.sources = [.featured, .watchlist]
+        model.settings.showsDiscoverRow = true
+        XCTAssertEqual(model.effectiveSettings.sources, [.watchlist])
+        XCTAssertFalse(model.effectiveSettings.showsDiscoverRow)
+        XCTAssertEqual(store.load().discoverySources, saved.discoverySources)
+
+        profile.isKids = false
+        profiles.update(profile)
+        XCTAssertTrue(model.allowsDiscovery)
+        XCTAssertEqual(model.effectiveSettings, store.load())
+        XCTAssertEqual(model.effectiveSettings.maxItems, 10)
+        XCTAssertTrue(model.effectiveSettings.showsDiscoverRow)
+        XCTAssertTrue(model.effectiveSettings.showsDiscoverySources)
+    }
+
+    func testRuntimeDiscoveryPolicyIsNotDecodedFromSyncedPreferences() throws {
+        let input = Data(#"{"sources":["featured"],"allowsDiscovery":false,"showsDiscoverRow":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(HeroSettings.self, from: input)
+        XCTAssertTrue(decoded.allowsDiscovery)
+        let encoded = try JSONEncoder().encode(decoded.applyingDiscoveryPolicy(allowed: false))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(object["allowsDiscovery"])
+    }
+
+    @MainActor
+    func testProfileUpdatesInvalidateEffectiveSettingsObservationWithoutRebuildingTheModel() async {
+        let profiles = ProfilesModel(store: ProfileStore(defaults: defaults))
+        let model = HeroSettingsModel(store: InMemoryHeroSettingsStore())
+        model.setDiscoveryPolicy { !profiles.activeProfile.isKids }
+        let changed = expectation(description: "Profile policy invalidates visible Home and settings")
+        withObservationTracking {
+            _ = model.effectiveSettings
+        } onChange: {
+            changed.fulfill()
+        }
+        var profile = profiles.activeProfile
+        profile.isKids = true
+        profiles.update(profile)
+        await fulfillment(of: [changed], timeout: 1)
+        XCTAssertFalse(model.effectiveSettings.allowsDiscovery)
+    }
+
+    func testDefaultIsActiveWithoutOptInCollection() {
         let d = HeroSettings.default
         XCTAssertTrue(d.isActive)
-        XCTAssertEqual(d.sources, HeroSourceKind.allCases)
+        XCTAssertEqual(d.sources, HeroSourceKind.allCases.filter { $0 != .collection })
+        XCTAssertTrue(d.collections.isEmpty)
         XCTAssertTrue(d.hideWatched)
         XCTAssertFalse(d.showsRatings)
         XCTAssertFalse(d.showsDiscoverySources)
         XCTAssertFalse(d.watchlistDiscoveryEnabled)
         XCTAssertEqual(d.maxItems, 8)
+    }
+
+    func testCollectionSelectionRoundTripsAndTransfersOnlyWithItsProfile() throws {
+        var settings = HeroSettings.default
+        settings.sources = [.collection]
+        settings.collections = [
+            .init(accountID: "a", libraryID: "movies", collectionID: "c", title: "Favorites"),
+            .init(accountID: "b", libraryID: "shows", collectionID: "c", title: "Favorites", serverUserID: "viewer")
+        ]
+        XCTAssertEqual(try JSONDecoder().decode(HeroSettings.self, from: JSONEncoder().encode(settings)), settings)
+        HeroSettingsStore(defaults: defaults, namespace: "one").save(settings)
+        let snapshot = ProfileSettingsTransfer.capture(namespace: "one", defaults: defaults)
+        ProfileSettingsTransfer.apply(snapshot, namespace: "two", defaults: defaults)
+        XCTAssertEqual(HeroSettingsStore(defaults: defaults, namespace: "two").load(), settings)
+        XCTAssertTrue(HeroSettingsStore(defaults: defaults).load().collections.isEmpty)
+        XCTAssertTrue(settings.requiresExternalWatchHistory)
+    }
+
+    func testOldSettingsDoNotAdoptCollectionWithoutSelection() throws {
+        let settings = try JSONDecoder().decode(HeroSettings.self, from: Data(#"{"sources":["watchlist"]}"#.utf8))
+        XCTAssertTrue(settings.collections.isEmpty)
+        XCTAssertFalse(settings.sources.contains(.collection))
+    }
+
+    func testPersonalCollectionSelectionRoundTripsWithoutInventingALibrary() throws {
+        var settings = HeroSettings.default
+        settings.sources = [.collection]
+        settings.collections = [.init(accountID: "a", collectionID: "personal", title: "Favorites", serverUserID: "viewer")]
+        HeroSettingsStore(defaults: defaults, namespace: "one").save(settings)
+        let snapshot = ProfileSettingsTransfer.capture(namespace: "one", defaults: defaults)
+        ProfileSettingsTransfer.apply(snapshot, namespace: "two", defaults: defaults)
+        XCTAssertEqual(HeroSettingsStore(defaults: defaults, namespace: "two").load(), settings)
+        XCTAssertNil(settings.collections.first?.libraryKey)
+        let legacy = try JSONDecoder().decode(HeroCollectionSelection.self, from: Data(
+            #"{"accountID":"a","libraryID":"movies","collectionID":"c","title":"Favorites"}"#.utf8
+        ))
+        XCTAssertEqual(legacy.libraryKey, "a:movies")
+    }
+
+    func testLegacyCollectionMigratesWithoutResurrectingAClearedSelection() throws {
+        let legacy = #"{"sources":["collection"],"collection":{"accountID":"a","libraryID":"movies","collectionID":"c","title":"Favorites","serverUserID":"viewer"}}"#
+        let migrated = try JSONDecoder().decode(HeroSettings.self, from: Data(legacy.utf8))
+        XCTAssertEqual(migrated.collections, [
+            .init(accountID: "a", libraryID: "movies", collectionID: "c", title: "Favorites", serverUserID: "viewer")
+        ])
+        let cleared = legacy.dropLast() + #","collections":[]}"#
+        XCTAssertTrue(try JSONDecoder().decode(HeroSettings.self, from: Data(cleared.utf8)).collections.isEmpty)
+        let encoded = try JSONEncoder().encode(migrated)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(object["collection"])
+        XCTAssertNotNil(object["collections"])
+    }
+
+    func testSelectionIdentityIncludesScopeButNotItsDisplayName() {
+        let first = HeroCollectionSelection(accountID: "a", libraryID: "movies", collectionID: "c", title: "Original", serverUserID: "viewer")
+        let renamed = HeroCollectionSelection(accountID: "a", libraryID: "movies", collectionID: "c", title: "Renamed", serverUserID: "viewer")
+        let others: [HeroCollectionSelection] = [
+            .init(accountID: "b", libraryID: "movies", collectionID: "c", title: "Original", serverUserID: "viewer"),
+            .init(accountID: "a", libraryID: "shows", collectionID: "c", title: "Original", serverUserID: "viewer"),
+            .init(accountID: "a", libraryID: "movies", collectionID: "c", title: "Original", serverUserID: "child"),
+            .init(accountID: "a", collectionID: "c", title: "Original", serverUserID: "viewer")
+        ]
+        XCTAssertEqual(first.id, renamed.id)
+        XCTAssertEqual(HeroCollectionSelection.normalized([first, renamed] + others), [first] + others)
     }
 
     func testMaxItemsIsClamped() {

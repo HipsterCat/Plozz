@@ -1,51 +1,6 @@
 import CoreModels
 import Foundation
 
-// MARK: - Stored tokens
-
-/// The OAuth tokens persisted after a successful Trakt connection.
-///
-/// Trakt access tokens are long-lived (currently ~3 months) but do expire, so
-/// the refresh token is kept to silently renew them. `createdAt` + `expiresIn`
-/// derive the absolute expiry used to decide when to refresh.
-public struct TraktTokens: Codable, Sendable, Equatable {
-    public var accessToken: String
-    public var refreshToken: String
-    public var accountIdentity: String?
-    /// Absolute expiry instant (createdAt + expiresIn).
-    public var expiresAt: Date
-
-    public init(
-        accessToken: String,
-        refreshToken: String,
-        expiresAt: Date,
-        accountIdentity: String? = nil
-    ) {
-        self.accessToken = accessToken
-        self.refreshToken = refreshToken
-        self.expiresAt = expiresAt
-        self.accountIdentity = accountIdentity
-    }
-
-    /// Treated as expired a few minutes early so a scrobble never races the
-    /// deadline with a token the server is about to reject.
-    public var isExpired: Bool {
-        Date() >= expiresAt.addingTimeInterval(-300)
-    }
-
-    public var stableAccountIdentity: String {
-        accountIdentity ?? WatchlistReconciliationIdentity.credential(
-            refreshToken.isEmpty ? accessToken : refreshToken
-        )
-    }
-
-    public func inheritingAccountIdentity(from previous: Self) -> Self {
-        var value = self
-        value.accountIdentity = previous.stableAccountIdentity
-        return value
-    }
-}
-
 // MARK: - OAuth device-code DTOs
 
 /// Response to `POST /oauth/device/code`: the code the user types plus polling
@@ -111,7 +66,7 @@ public struct TraktUserSettings: Decodable, Sendable, Equatable {
 
 /// External database ids for a movie/show/episode, as Trakt expects them.
 /// Only the ids we can resolve are sent; the rest stay `nil` and are omitted.
-struct TraktIDs: Encodable, Equatable {
+struct TraktIDs: Codable, Equatable {
     var trakt: Int?
     var imdb: String?
     var tmdb: Int?
@@ -120,19 +75,19 @@ struct TraktIDs: Encodable, Equatable {
     var isEmpty: Bool { trakt == nil && imdb == nil && tmdb == nil && tvdb == nil }
 }
 
-struct TraktMovieRef: Encodable, Equatable {
+struct TraktMovieRef: Codable, Equatable {
     var title: String?  // l10n:content — media title sent to Trakt, sourced from our own item metadata
     var year: Int?
     var ids: TraktIDs
 }
 
-struct TraktShowRef: Encodable, Equatable {
+struct TraktShowRef: Codable, Equatable {
     var title: String?  // l10n:content — media title sent to Trakt, sourced from our own item metadata
     var year: Int?
     var ids: TraktIDs
 }
 
-struct TraktEpisodeRef: Encodable, Equatable {
+struct TraktEpisodeRef: Codable, Equatable {
     var season: Int?
     var number: Int?
     var ids: TraktIDs
@@ -145,6 +100,31 @@ struct TraktScrobbleBody: Encodable, Equatable {
     var episode: TraktEpisodeRef?
     /// Watched percentage, 0...100.
     var progress: Double
+
+    var diagnosticDescription: String {
+        var fields = ["progress=\(progress)"]
+        if let movie { fields.append("movie[\(movie.ids.diagnosticDescription)]") }
+        if let show { fields.append("show[\(show.ids.diagnosticDescription)]") }
+        if let episode {
+            fields.append(
+                "episode[season=\(episode.season.map(String.init) ?? "none"),number=\(episode.number.map(String.init) ?? "none"),\(episode.ids.diagnosticDescription)]"
+            )
+        }
+        return fields.joined(separator: " ")
+    }
+}
+
+private extension TraktIDs {
+    var diagnosticDescription: String {
+        let safeIMDb: String
+        if let imdb {
+            safeIMDb = imdb.range(of: #"\Att[0-9]{1,16}\z"#, options: .regularExpression) != nil
+                ? imdb : "invalid"
+        } else {
+            safeIMDb = "none"
+        }
+        return "trakt=\(trakt.map(String.init) ?? "none"),imdb=\(safeIMDb),tmdb=\(tmdb.map(String.init) ?? "none"),tvdb=\(tvdb.map(String.init) ?? "none")"
+    }
 }
 
 // MARK: - Watchlist DTOs

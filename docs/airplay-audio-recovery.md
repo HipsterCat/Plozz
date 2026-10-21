@@ -174,7 +174,31 @@ The same root cause applies wherever we drive audio through **`AVPlayer`**:
   HLS-fMP4 → `AVPlayer`) both output audio via `AVAudioSession` and are subject to
   the same HomePod renegotiation on **seek** and on any player-item swap.
 
-### Known gap in the video path (as of this writing)
+### What video does now (October 2026)
+
+Measured on an Apple TV 4K with a HomePod stereo pair as its speakers:
+
+- At idle the route is the pair's low-latency TV-speaker path
+  (`AirPlay:"…-LL"` at 48 kHz, which system sounds keep using). Once AVPlayer
+  plays video it moves to a buffered AirPlay stream (`AirPlay:"AirPlay"` at
+  44.1 kHz, `outputLatency` 2.0 s). The route-sharing policy does not change
+  this: the native engine (default policy) and Plozzigen (`.longFormAudio`) both
+  land there.
+- **Native AVPlayer reading a progressive MP4** over HTTP lost audio mid-title
+  with no event at all (still `playing`, same route, no stall or interruption),
+  while system sounds carried on. **Plozzigen** (local HLS-fMP4 to AVPlayer, as
+  Rivulet uses) held up across skips, seeks and long stretches. So on an AirPlay
+  route, `EngineSelection` sends direct play to Plozzigen; server transcodes are
+  HLS already and stay native.
+- **Seeks stuttered and ended paused** because the post-seek resume check kicked
+  (pause → play) every ~350 ms while the buffered route refilled, making AirPlay
+  resync each time, then gave up and paused. It now kicks only a player that has
+  actually stopped (`timeControlStatus == .paused`) and waits on one that reports
+  playing or waiting, within a ~15 s cap (`SeekScrubCoordinator`).
+- **Resume from pause** on AirPlay runs the deactivate → reactivate cycle
+  (`AirPlayAudioSession`), so pause/play brings back a silent stream.
+
+### Earlier note on the video path
 
 `NativeVideoEngine.observeAudioRouteChanges` currently recovers with
 `setActive(true)` **alone** — the exact no-op that failed for music:

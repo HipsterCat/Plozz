@@ -1,13 +1,14 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// A compact, one-line settings row: a fixed-width title column on the leading
+/// A compact settings row: a minimum-width title column on the leading
 /// edge and an arbitrary control (pills, a stepper, a menu, a toggle…) trailing
 /// it. Stacking a header label *above* every control eats a lot of vertical
 /// space in the 10-foot UI; laying the label beside the control instead lets a
 /// whole settings panel breathe on one screen.
 ///
-/// The title column is a fixed width so controls line up down the panel. Pass an
+/// TV rows stack when the label and control cannot fit side by side.
+/// The title column has a shared minimum width so controls line up down the panel. Pass an
 /// optional `subtitle` for a secondary line of helper text under the title.
 /// Pair the trailing slot with ``SettingsOptionPicker`` for the common
 /// "label + pills" row.
@@ -42,27 +43,52 @@ public struct LabeledSettingRow<Trailing: View>: View {
     }
 
     public var body: some View {
-        HStack(alignment: .center, spacing: 24) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline.weight(.semibold))
-                    // Never wrap the label to a second line: keep it on one line
-                    // and let the column grow past `labelWidth` for a long title
-                    // (e.g. "Preferred language") instead of wrapping.
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.footnote)
-                        .plozzForeground(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        #if os(tvOS)
+        ViewThatFits(in: .horizontal) {
+            horizontalRow
+            VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+                label(wrapping: true)
+                trailing
+                    .frame(maxWidth: .infinity, alignment: trailingAlignment)
             }
-            .frame(minWidth: labelWidth, alignment: .leading)
+        }
+        .settingsFormTextLayout()
+        #else
+        horizontalRow
+        #endif
+    }
 
+    private var horizontalRow: some View {
+        HStack(alignment: .center, spacing: 24) {
+            label(wrapping: false)
             trailing
                 .frame(maxWidth: .infinity, alignment: trailingAlignment)
         }
+    }
+
+    private func label(wrapping: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(SettingsRowMetrics.titleFont)
+                .lineLimit(wrapping ? nil : 1)
+                .fixedSize(horizontal: !wrapping, vertical: wrapping)
+            if let subtitle {
+                Text(subtitle)
+                    #if os(tvOS)
+                    .font(SettingsRowMetrics.helperFont)
+                    .settingsRowSecondary()
+                    #else
+                    .font(.footnote)
+                    .plozzForeground(.secondary)
+                    #endif
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(
+            minWidth: wrapping ? 0 : labelWidth,
+            maxWidth: wrapping ? .infinity : nil,
+            alignment: .leading
+        )
     }
 }
 

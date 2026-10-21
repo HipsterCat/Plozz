@@ -142,6 +142,9 @@ public struct BorderlessCardCaption: View {
     private let horizontalInset: CGFloat
     private let reservesSubtitleSpace: Bool
     private let isFocused: Bool
+    private let providerKind: ProviderKind?
+    private let mediaShareTransport: MediaShareTransportKind?
+    private let usesPosterTypography: Bool
 
     @Environment(\.plozzMetrics) private var metrics
 
@@ -150,39 +153,65 @@ public struct BorderlessCardCaption: View {
         subtitle: String?,   // l10n:content — media title/subtitle from the server
         horizontalInset: CGFloat,
         reservesSubtitleSpace: Bool = true,
-        isFocused: Bool = false
+        isFocused: Bool = false,
+        providerKind: ProviderKind? = nil,
+        mediaShareTransport: MediaShareTransportKind? = nil,
+        usesPosterTypography: Bool = false
     ) {
         self.title = title
         self.subtitle = subtitle
         self.horizontalInset = horizontalInset
         self.reservesSubtitleSpace = reservesSubtitleSpace
         self.isFocused = isFocused
+        self.providerKind = providerKind
+        self.mediaShareTransport = mediaShareTransport
+        self.usesPosterTypography = usesPosterTypography
     }
+
+    private var titleFontSize: CGFloat { usesPosterTypography ? metrics.posterTitleFontSize : metrics.cardTitleFontSize }
+    private var subtitleFontSize: CGFloat { usesPosterTypography ? metrics.posterSubtitleFontSize : metrics.cardSubtitleFontSize }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            PlozzMarqueeText(
-                text: title,
-                font: .system(size: metrics.cardTitleFontSize, weight: .semibold),
-                color: .primary,
-                inset: horizontalInset,
-                isFocused: isFocused
-            )
+            if let providerKind {
+                HStack(spacing: PlozzTheme.Spacing.small) {
+                    ProviderBrandMark(
+                        provider: providerKind, size: titleFontSize,
+                        mediaShareTransport: mediaShareTransport
+                    )
+                    .accessibilityHidden(true)
+                    titleLine(inset: 0)
+                }
+                .padding(.horizontal, horizontalInset)
+            } else {
+                titleLine(inset: horizontalInset)
+            }
             if let subtitle {
                 PlozzMarqueeText(
                     text: Text(subtitle),
-                    font: .system(size: metrics.cardSubtitleFontSize),
+                    font: .system(size: subtitleFontSize),
                     color: .secondary,
                     inset: horizontalInset,
                     isFocused: isFocused
                 )
             } else if reservesSubtitleSpace {
                 Text(verbatim: " ")
-                    .font(.system(size: metrics.cardSubtitleFontSize))
+                    .font(.system(size: subtitleFontSize))
                     .hidden()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func titleLine(inset: CGFloat) -> some View {
+        PlozzMarqueeText(
+            text: title,
+            font: .system(size: titleFontSize, weight: .semibold),
+            color: .primary,
+            inset: inset,
+            fadeWidth: horizontalInset * PlozzTheme.Metrics.marqueeFadeRatio,
+            isFocused: isFocused
+        )
     }
 }
 #endif

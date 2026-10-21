@@ -2,10 +2,186 @@
 import XCTest
 import AVFoundation
 import CoreModels
+import os
 @testable import FeaturePlayback
 
 @MainActor
 final class PlaybackDiagnosticsSamplerTests: XCTestCase {
+    func testActualAudioPipelineTracksConversionFallbackTrackChangesAndUnknownWithoutAProbe() {
+        let sampler = PlaybackDiagnosticsSampler()
+        defer { sampler.stop() }
+        var telemetry: EngineLiveTelemetry?
+        sampler.start(
+            player: nil, mode: .plozzigen,
+            metadata: .init(audio: .init(codec: "truehd", profile: "Dolby Atmos", channels: 8)),
+            engineTelemetry: { telemetry }, includesSystemMetrics: false
+        )
+        XCTAssertNil(sampler.latest?.audioPipelineDescription)
+        XCTAssertNil(sampler.latest?.audioOutputDescription)
+        for pipeline in [
+            "TRUEHD Atmos → APAC 7.1.4", "TRUEHD → FLAC bridge",
+            "TRUEHD → EAC3 bridge", "Stream-copy (EAC3+JOC Atmos)",
+            "libavcodec aac -> CoreAudio", nil
+        ] {
+            telemetry = .init(audioPipelineDescription: pipeline)
+            sampler.sampleTick()
+            XCTAssertEqual(sampler.latest?.audioPipelineDescription, pipeline)
+            XCTAssertNil(sampler.latest?.audioOutputDescription)
+        }
+        telemetry = .init(audioPipelineDescription: "TRUEHD Atmos → APAC 7.1.4")
+        sampler.sampleTick()
+        telemetry = nil
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.audioPipelineDescription, "Missing telemetry must not retain a previous pipeline")
+    }
+
+    func testAudioPipelineDoesNotLeakAcrossStopRestartOrNativeRouteHandoff() {
+        let sampler = PlaybackDiagnosticsSampler()
+        defer { sampler.stop() }
+        var route = LiveChannelEngineRoute.localHLS
+        sampler.start(
+            player: nil, mode: .plozzigen,
+            engineTelemetry: { .init(audioPipelineDescription: "TRUEHD Atmos → APAC 7.1.4") },
+            liveRoute: { route }, includesSystemMetrics: false
+        )
+        sampler.sampleTick()
+        XCTAssertNotNil(sampler.latest?.audioPipelineDescription)
+        route = .nativeHLS
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.audioPipelineDescription)
+        route = .localHLS
+        sampler.sampleTick()
+        XCTAssertNotNil(sampler.latest?.audioPipelineDescription)
+        sampler.stop()
+        XCTAssertNil(sampler.latest?.audioPipelineDescription)
+        sampler.start(player: nil, mode: .plozzigen, includesSystemMetrics: false)
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.audioPipelineDescription)
+    }
+
+    func testNativeAndServerTranscodesDoNotAcquireAnEngineConversionClaim() {
+        for mode: PlaybackDiagnostics.PlaybackMode in [.directPlay, .remux, .transcode] {
+            let sampler = PlaybackDiagnosticsSampler()
+            defer { sampler.stop() }
+            sampler.start(
+                player: nil, mode: mode,
+                engineTelemetry: { .init(audioPipelineDescription: "TRUEHD Atmos → APAC 7.1.4") },
+                probedFacts: { .init(audioDecoder: "TRUEHD Atmos → APAC 7.1.4") },
+                includesSystemMetrics: false
+            )
+            sampler.sampleTick()
+            XCTAssertNil(sampler.latest?.audioPipelineDescription)
+        }
+    }
+
+    func testLiveActiveTracksReplaceInitialFactsAndClearOnItemReplacement() async throws {
+        let item = AVPlayerItem(asset: AVMutableComposition())
+        let output = MediaSourceMetadata(
+            video: .init(codec: "h264", frameRate: 50, videoRangeType: "SDR"),
+            audio: .init(codec: "ac3", channels: 6)
+        )
+        let sampler = PlaybackDiagnosticsSampler(liveTracksReader: { current in
+            current === item ? output : .init()
+        }, logReader: { _ in .init() })
+        defer { sampler.stop() }
+        let player = AVPlayer(playerItem: item)
+        sampler.start(
+            player: player, mode: .plozzigen,
+            metadata: .init(video: .init(codec: "hevc", frameRate: 25, videoRangeType: "HDR10"),
+                            audio: .init(codec: "aac", channels: 2)),
+            liveStream: { .init(route: "Native HLS") }, includesSystemMetrics: false
+        )
+        try await wait { sampler.sampleTick(); return sampler.latest?.audioChannels == 6 }
+        XCTAssertEqual(sampler.latest?.audioCodec, "Dolby Digital")
+        XCTAssertEqual(sampler.latest?.frameRate, 50)
+        XCTAssertEqual(sampler.latest?.hdr, .sdr)
+        player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.audioCodec)
+        XCTAssertNil(sampler.latest?.audioChannels)
+        XCTAssertEqual(sampler.latest?.hdr, .unknown)
+    }
+
+    func testBlockedLogReadIsOffMainCoalescedAndCannotPublishIntoReplacement() async throws {
+        let entered = expectation(description: "Background log reader entered")
+        let release = DispatchSemaphore(value: 0)
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        let old = AVPlayerItem(asset: AVMutableComposition())
+        let sampler = PlaybackDiagnosticsSampler(logReader: { item in
+            XCTAssertFalse(Thread.isMainThread)
+            reads.withLock { $0 += 1 }
+            if item === old {
+                entered.fulfill()
+                release.wait()
+                return .init(stalls: 99, liveEvents: [
+                    .init(playbackType: "OLD", startupTime: 1, mediaRequests: 1, bytesTransferred: 1, downloadOverdue: 0)
+                ])
+            }
+            return .init(stalls: 2)
+        })
+        defer { release.signal(); sampler.stop() }
+        let player = AVPlayer(playerItem: old)
+        sampler.start(player: player, mode: .plozzigen, liveStream: { .init() }, includesSystemMetrics: false)
+        await fulfillment(of: [entered], timeout: 2)
+        for _ in 0..<10 { sampler.sampleTick() }
+        player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
+        sampler.sampleTick()
+        XCTAssertEqual(reads.withLock { $0 }, 1)
+        XCTAssertNil(sampler.latest?.stallCount)
+        XCTAssertNil(sampler.latest?.liveStream?.playlistType)
+        release.signal()
+        try await wait { sampler.sampleTick(); return sampler.latest?.stallCount == 2 }
+        XCTAssertNil(sampler.latest?.liveStream?.playlistType)
+    }
+
+    func testStopReleasesLiveTelemetryCallback() {
+        let sampler = PlaybackDiagnosticsSampler()
+        var calls = 0
+        sampler.start(player: nil, mode: .plozzigen, liveStream: { calls += 1; return .init() }, includesSystemMetrics: false)
+        sampler.sampleTick()
+        XCTAssertEqual(calls, 1)
+        sampler.stop()
+        sampler.sampleTick()
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testLiveDolbyVisionProfileRequiresAnActualMeasurement() {
+        let profiles: [Int?] = [nil, 8]
+        for profile in profiles {
+            var diagnostics = PlaybackDiagnostics()
+            let metadata = MediaSourceMetadata(video: .init(
+                codec: "dvh1", videoRangeType: "DOVI", dolbyVisionProfile: profile
+            ))
+            PlaybackDiagnosticsSampler.applyLiveTracks(from: metadata, into: &diagnostics)
+            XCTAssertEqual(diagnostics.hdr, .dolbyVision)
+            XCTAssertEqual(diagnostics.dolbyVisionProfile, profile)
+        }
+    }
+
+    func testLateLiveRouteAndNativeFallbackNeverReportLoopbackAsNetworkThroughput() async throws {
+        for startingRoute in [LiveChannelEngineRoute.none, .nativeHLS] {
+            var route = startingRoute
+            var supplied: AVPlayer?
+            let sampler = PlaybackDiagnosticsSampler(logReader: { _ in
+                .init(indicatedBitrate: 10_000_000, observedBitrate: 100_000_000, stalls: 2)
+            })
+            defer { sampler.stop() }
+            sampler.start(
+                player: nil, playerProvider: { supplied }, mode: route.diagnosticsMode,
+                liveRoute: { route }, liveStream: { .init() }, includesSystemMetrics: false
+            )
+            supplied = AVPlayer(playerItem: AVPlayerItem(asset: AVMutableComposition()))
+            try await wait { sampler.sampleTick(); return sampler.latest?.stallCount == 2 }
+            XCTAssertEqual(sampler.latest?.observedBitrate, startingRoute == .nativeHLS ? 100_000_000 : nil)
+            route = .localHLS
+            supplied?.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
+            try await wait { sampler.sampleTick(); return sampler.latest?.stallCount == 2 }
+            XCTAssertEqual(sampler.latest?.mode, .plozzigen)
+            XCTAssertNil(sampler.latest?.observedBitrate)
+            XCTAssertNil(sampler.latest?.indicatedBitrate)
+        }
+    }
+
     func testLateInternalPlayerAndReplacementAreSampledWithoutRestartingTheHUD() {
         let sampler = PlaybackDiagnosticsSampler()
         defer { sampler.stop() }
@@ -353,6 +529,27 @@ final class PlaybackDiagnosticsSamplerTests: XCTestCase {
         sampler.sampleTick()
         XCTAssertNil(sampler.latest?.resolution)
         XCTAssertTrue(details.technicalBadges.isEmpty)
+    }
+
+    func testH264SDRRequestCannotRelabelTheServersActualHDROutput() async throws {
+        for rangeParameter in ["h264-videorange", "h264-rangetype"] {
+            let output = MediaSourceMetadata(video: .init(codec: "h264", videoRangeType: "HDR10"))
+            let sampler = PlaybackDiagnosticsSampler(streamDetailsReader: { _ in output })
+            defer { sampler.stop() }
+            let player = AVPlayer(playerItem: AVPlayerItem(asset: AVMutableComposition()))
+            var details = PlaybackStreamDetails()
+            sampler.start(
+                player: player, mode: .transcode,
+                metadata: .init(video: .init(codec: "hevc", videoRangeType: "DOVI")),
+                streamURL: URL(string: "https://media.example.test/master.m3u8?VideoCodec=h264&\(rangeParameter)=SDR"),
+                onStreamDetails: { details = $0 }
+            )
+            try await wait { sampler.sampleTick(); return sampler.latest?.hdr == .hdr10 }
+            XCTAssertEqual(sampler.latest?.videoCodec, "H.264")
+            XCTAssertEqual(sampler.latest?.hdr, .hdr10)
+            XCTAssertEqual(details.metadata, output)
+            XCTAssertEqual(details.technicalBadges.map(\.label), ["H.264", "HDR10"])
+        }
     }
 
     func testReplacedPlayerItemAndLatePriorReadsCannotRestoreOldFormat() async throws {

@@ -5,6 +5,24 @@ import MediaTransportCore
 import XCTest
 
 final class ShareTransportBrowserTests: XCTestCase {
+    func testFolderBrowserIncludesISODiscImagesWithStableFileIdentity() async throws {
+        let path = "Movies/Disc (2024).ISO"
+        let fileSystem = BrowserFakeFileSystem(listResults: [.success([
+            try RemoteFileEntry(relativePath: path, kind: .file, size: 31_316_770_816),
+            try RemoteFileEntry(relativePath: "Movies/Disc.iso.zip", kind: .file, size: 10)
+        ])])
+        let session = try BrowserFakeSession(fileSystem: fileSystem)
+        let browser = ShareTransportBrowser(role: .scanner, sessionFactory: { _ in session })
+        let library = ShareLibraryStore(browser: browser, serverName: "Fixture")
+        let entries = try await library.entries(forContainerID: "d:Movies")
+        await library.close()
+
+        XCTAssertEqual(entries.map(\.id), ["f:\(path)"])
+        XCTAssertEqual(entries.first?.kind, .movie)
+        let playbackPath = await library.path(forItemID: try XCTUnwrap(entries.first).id)
+        XCTAssertEqual(playbackPath, path)
+    }
+
     func testTransientFailureReplacesSessionAndRetriesOnce() async throws {
         let firstFileSystem = BrowserFakeFileSystem(
             listResults: [.failure(MediaTransportError.transport(code: 54))]

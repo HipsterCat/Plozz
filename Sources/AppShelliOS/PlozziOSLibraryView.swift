@@ -57,6 +57,9 @@ struct PlozziOSLibrariesView: View {
                 ContentUnavailableView {
                     Label("Unable to load libraries", systemImage: "exclamationmark.triangle")
                 } description: {
+                    if let server = appModel.accountsProviders.primaryProvider?.session.server {
+                        ServerIdentityChip(server: server)
+                    }
                     Text(error.userMessage)
                 } actions: {
                     Button("Try Again") {
@@ -70,12 +73,13 @@ struct PlozziOSLibrariesView: View {
             }
         }
         .navigationTitle("Home")
+        .toolbarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Server", systemImage: "plus", action: onAddServer)
             }
         }
-        .task(id: appModel.accounts.map(\.credentialRevision)) {
+        .task(id: appModel.accounts.map(\.connectionScopeKey)) {
             await model.load(provider: appModel.accountsProviders.primaryProvider)
         }
     }
@@ -126,7 +130,7 @@ private struct PlozziOSLibraryCard: View {
         if cardStyle == .framed {
             content
                 .plozzFramedMediaCard(
-                    innerCornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
+                    innerCornerRadius: metrics.landscapeArtworkCornerRadius
                 )
                 .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
         } else {
@@ -147,7 +151,7 @@ private struct PlozziOSLibraryCard: View {
                 Rectangle()
                     .fill(palette.fill)
                     .overlay {
-                        Image(systemName: library.kind == .series ? "tv" : "film")
+                        Image(systemName: librarySymbol)
                             .font(.largeTitle)
                             .plozzForeground(.secondary)
                     }
@@ -156,18 +160,18 @@ private struct PlozziOSLibraryCard: View {
             .aspectRatio(16 / 10, contentMode: .fit)
             .clipShape(
                 RoundedRectangle(
-                    cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
+                    cornerRadius: metrics.landscapeArtworkCornerRadius,
                     style: .continuous
                 )
             )
             .plozzMediaEdge(
-                cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
+                cornerRadius: metrics.landscapeArtworkCornerRadius
             )
 
             library.displayName
                 .font(.headline)
                 .lineLimit(2)
-                .padding(.horizontal, metrics.landscapeCaptionInset)
+                .padding(.horizontal, metrics.landscapeCaptionHorizontalInset)
                 .padding(
                     .bottom,
                     cardStyle == .framed ? metrics.landscapeCaptionInset : 0
@@ -175,16 +179,28 @@ private struct PlozziOSLibraryCard: View {
         }
         .contentShape(Rectangle())
     }
+
+    private var librarySymbol: String {
+        switch library.kind {
+        case .series: "tv"
+        case .collection: "rectangle.stack"
+        default: "film"
+        }
+    }
 }
 
 struct PlozziOSLibraryGridView: View {
     @Environment(PlozziOSAppModel.self) private var appModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.themePalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .headline) private var accessiblePosterWidth: CGFloat = 116
     /// Per-profile card presentation. Decides how far a grid card insets its
     /// artwork, which is what the banner's edges have to match.
     @Environment(\.plozzCardStyle) private var cardStyle
     @State private var viewModel: LibraryBrowseViewModel
+    @State private var selectedRecommendedItem: MediaItem?
     private let title: String   // l10n:content — library name from the server
     private let provider: any MediaProvider
     private let settings: PlozziOSSettingsModel
@@ -209,86 +225,74 @@ struct PlozziOSLibraryGridView: View {
 
     var body: some View {
         let generation = viewModel.contentGeneration
-        Group {
-            switch viewModel.state {
-            case .idle, .loading:
-                ProgressView("Loading \(title)…")
-            case .empty:
-                ContentUnavailableView {
-                    Label {
-                        Text(viewModel.emptyMessage)
-                    } icon: {
-                        Image(systemName: "rectangle.stack")
-                    }
-                }
-            case let .loaded(total):
-                if total == 0 {
-                    ContentUnavailableView {
-                        Label {
-                            Text(viewModel.emptyMessage)
-                        } icon: {
-                            Image(systemName: "rectangle.stack")
-                        }
-                    }
-                } else {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            browseControls
-                            scanBanner
-                            LazyVGrid(
-                                columns: settings.density.density.iOSPosterGridColumns(
-                                    horizontalSizeClass: horizontalSizeClass
-                                ),
-                                spacing: 18
-                            ) {
-                                ForEach(0..<total, id: \.self) { index in
-                                    PlozziOSLibraryItemCell(
-                                        slot: viewModel.slot(at: index),
-                                        index: index,
-                                        generation: generation,
-                                        provider: provider,
-                                        playlistOrigin: { viewModel.playlistOrigin(at: index) },
-                                        onAppear: { await viewModel.itemAppeared(at: index, generation: generation) },
-                                        onDisappear: { viewModel.itemDisappeared(at: index, generation: generation) }
-                                    )
-                                    .id(index)
-                                }
-                            }
-                            .padding()
-                        }
-                        .onChange(of: viewModel.alphabet.destination) { _, destination in
-                            if let destination { proxy.scrollTo(destination.index, anchor: .top) }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    browseControls
+                    Group {
+                        if viewModel.contentMode == .recommended {
+                            recommendedContent
+                        } else {
+                            browseContent(generation: generation)
                         }
                     }
                     .id(viewModel.contentMode)
                 }
-            case let .failed(error):
-                ContentUnavailableView {
-                    Label("Unable to load \(title)", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(error.userMessage)
-                } actions: {
-                    Button("Try Again") {
-                        Task { await viewModel.loadFirstPage() }
-                    }
-                }
+                .padding(.top, 8)
+                .padding(.bottom, 24)
+                // Include the top padding so changing modes returns to the true
+                // scroll edge instead of moving the header and navigation chrome.
+                .id("library-top")
+            }
+            .accessibilityIdentifier("library-page")
+            .onChange(of: viewModel.contentMode) { _, _ in
+                proxy.scrollTo("library-top", anchor: .top)
+            }
+            .onChange(of: viewModel.alphabet.destination) { _, destination in
+                if let destination { proxy.scrollTo(destination.index, anchor: .top) }
             }
         }
         .navigationTitle(title)
+        .environment(\.plozzCardCaptionView, viewModel.browseScope.cardCaptionView(for: viewModel.contentMode))
+        .environment(\.plozzArtworkArea, nil)
         .navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if (viewModel.availableContentModes.count > 1 || !viewModel.availableSortFields.isEmpty),
-               viewModel.state.value == nil || viewModel.state.value == 0 {
-                browseControls
-                    .background(.bar)
-            }
+        .navigationDestination(item: $selectedRecommendedItem) { item in
+            PlozziOSItemDetailView(
+                appModel: appModel,
+                provider: provider,
+                item: item,
+                originSourceAccountID: item.sourceAccountID
+            )
         }
         .safeAreaInset(edge: .bottom) {
-            if let error = viewModel.pageError {
-                HStack {
-                    Text(error.userMessage)
+            if viewModel.collectionScanIncomplete, viewModel.state.value != nil, viewModel.pageError == nil,
+               viewModel.contentMode == .collections {
+                LibraryCollectionLoadingView(progress: viewModel.collectionProgress) {
+                    Task { await viewModel.loadFirstPage() }
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(.regularMaterial)
+            }
+            if viewModel.contentMode == .recommended, let error = viewModel.recommendationError,
+               viewModel.recommendationState.value != nil {
+                VStack(alignment: .leading, spacing: 12) {
+                    InlineErrorMessage(Text(error.userMessage))
+                    ContentFailureActions(report: viewModel.recommendationDiagnostic.map(PlaybackDiagnosticReport.library)) {
+                        Task { await viewModel.loadRecommendations() }
+                    }
+                }
+                .padding()
+                .background(.regularMaterial)
+            }
+            if viewModel.contentMode != .recommended, let error = viewModel.pageError {
+                VStack(alignment: .leading, spacing: 12) {
+                    if viewModel.collectionScanIncomplete {
+                        Text("Some collections haven't been checked yet. The list is incomplete.")
+                    }
+                    Text(viewModel.queryMessage ?? error.userMessage)
                         .plozzForeground(.secondary)
-                    Button("Try Again") {
+                    ContentFailureActions(report: viewModel.browseDiagnostic.map(PlaybackDiagnosticReport.library)) {
                         Task { await viewModel.retryFailedPages() }
                     }
                 }
@@ -297,16 +301,6 @@ struct PlozziOSLibraryGridView: View {
             }
         }
         .toolbar {
-            if viewModel.alphabet.isVisible {
-                ToolbarItem(placement: .primaryAction) {
-                    LibraryAlphabetMenu(entries: viewModel.letterEntries, isLoading: viewModel.alphabet.isLoading,
-                                        isJumping: viewModel.alphabet.jumpingTo != nil,
-                                        onSelect: { letter, id in viewModel.beginLetterJump(letter, menuPresentationID: id) },
-                                        onDismiss: viewModel.alphabet.menuDidDismiss,
-                                        onCancel: viewModel.cancelLetterJump,
-                                        onRetry: viewModel.retryLetterIndex)
-                }
-            }
             if let library = viewModel.fileBrowserLibrary {
                 ToolbarItem(placement: .primaryAction) {
                     NavigationLink(
@@ -324,7 +318,7 @@ struct PlozziOSLibraryGridView: View {
         .background {
             LibraryAlphabetFeedback(letter: viewModel.alphabet.jumpingTo, message: viewModel.alphabet.message)
         }
-        .onDisappear { viewModel.cancelLetterJump() }
+        .onDisappear { viewModel.cancelPendingQuery() }
         .plozziOSLibraryDestination(appModel: appModel)
         .background {
             if viewModel.isMediaShare {
@@ -344,20 +338,163 @@ struct PlozziOSLibraryGridView: View {
     }
 
     @ViewBuilder
-    private var browseControls: some View {
-        if viewModel.availableContentModes.count > 1 || !viewModel.availableSortFields.isEmpty {
-            HStack {
-                if viewModel.availableContentModes.count > 1 {
-                    PlozziOSLibraryContentModeControl(viewModel: viewModel)
-                }
-                Spacer(minLength: 12)
-                if !viewModel.availableSortFields.isEmpty {
-                    sortControl
+    private var recommendedContent: some View {
+        switch viewModel.recommendationState {
+        case .idle, .loading:
+            ProgressView("Loading recommendations…")
+                .frame(maxWidth: .infinity, minHeight: 220)
+        case .empty:
+            ContentUnavailableView("No recommendations in this library", systemImage: "sparkles")
+        case .loaded(let sections):
+            VStack(alignment: .leading, spacing: PlozziOSMediaRailLayout.sectionSpacing) {
+                ForEach(sections) { section in
+                    PlozziOSLibraryRecommendationRow(
+                        section: section,
+                        spoilerSettings: settings.spoilers.settings,
+                        showsSeriesArtwork: section.id == "continueWatching"
+                            && settings.homeVisibility.continueWatchingUsesSeriesArtwork,
+                        continueWatchingLayout: settings.homeVisibility.continueWatchingLayout,
+                        onSelect: { selectedRecommendedItem = $0 }
+                    )
+                    .environment(\.plozzArtworkArea, section.id == "continueWatching" ? .continueWatching : .recommended)
                 }
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+        case .failed(let error):
+            ContentUnavailableView {
+                Label("Unable to load recommendations", systemImage: "exclamationmark.triangle")
+            } description: {
+                ForEach(viewModel.errorServers, id: \.self) { server in
+                    ServerIdentityChip(server: server)
+                }
+                Text(error.userMessage)
+            } actions: {
+                ContentFailureActions(report: viewModel.recommendationDiagnostic.map(PlaybackDiagnosticReport.library)) {
+                    Task { await viewModel.loadRecommendations() }
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func browseContent(generation: Int) -> some View {
+        switch viewModel.state {
+        case .idle, .loading:
+            if let progress = viewModel.collectionProgress {
+                LibraryCollectionLoadingView(progress: progress) {
+                    Task { await viewModel.loadFirstPage() }
+                }
+                .frame(maxWidth: .infinity, minHeight: 220)
+                .padding(.horizontal)
+            } else if let progress = viewModel.queryProgress {
+                LibraryQueryPreparationView(progress: progress) { Task { await viewModel.cancelIndex() } }
+                    .frame(height: 320)
+            } else {
+                ProgressView("Loading \(title)…")
+                    .frame(maxWidth: .infinity, minHeight: 220)
+            }
+        case .empty:
+            ContentUnavailableView {
+                Label {
+                    Text(viewModel.emptyMessage)
+                } icon: {
+                    Image(systemName: "rectangle.stack")
+                }
+            }
+        case let .loaded(total):
+            if total == 0 {
+                ContentUnavailableView {
+                    Label {
+                        Text(viewModel.emptyMessage)
+                    } icon: {
+                        Image(systemName: "rectangle.stack")
+                    }
+                }
+            } else {
+                scanBanner
+                LazyVGrid(
+                    columns: gridColumns,
+                    spacing: 18
+                ) {
+                    ForEach(0..<total, id: \.self) { index in
+                        PlozziOSLibraryItemCell(
+                            slot: viewModel.slot(at: index),
+                            index: index,
+                            generation: generation,
+                            provider: provider,
+                            playlistOrigin: { viewModel.playlistOrigin(at: index) },
+                            onAppear: { await viewModel.itemAppeared(at: index, generation: generation) },
+                            onDisappear: { viewModel.itemDisappeared(at: index, generation: generation) }
+                        )
+                        .id(index)
+                    }
+                }
+                .padding(.horizontal, horizontalInset - posterArtworkInset)
+                .accessibilityIdentifier("library-grid")
+            }
+        case let .failed(error):
+            ContentUnavailableView {
+                Label("Unable to load \(title)", systemImage: "exclamationmark.triangle")
+            } description: {
+                ForEach(viewModel.errorServers, id: \.self) { server in
+                    ServerIdentityChip(server: server)
+                }
+                Text(viewModel.queryMessage ?? error.userMessage)
+            } actions: {
+                ContentFailureActions(report: viewModel.browseDiagnostic.map(PlaybackDiagnosticReport.library)) {
+                    Task { await viewModel.loadFirstPage() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var browseControls: some View {
+        VStack(spacing: 8) {
+            if viewModel.availableContentModes.count > 1 {
+                PlozziOSLibraryContentModeControl(viewModel: viewModel)
+            }
+            if viewModel.showsFilterMenu || !viewModel.availableSortFields.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 24) {
+                        queryControls.fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        queryControls
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.subheadline)
+                .tint(palette.primaryText)
+                .padding(.horizontal, horizontalInset)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var queryControls: some View {
+        if !viewModel.availableSortFields.isEmpty {
+            sortControl
+        }
+        if viewModel.showsFilterMenu {
+            LibraryFilterMenu(
+                filters: viewModel.filters, capabilities: viewModel.queryCapabilities, facets: viewModel.queryFacets,
+                isLoading: viewModel.facetsLoading, hasError: viewModel.facetsError != nil,
+                onChange: { value in Task { await viewModel.setFilters(value) } },
+                onLoadFacets: { await viewModel.loadQueryFacetsIfNeeded() },
+                onRetry: { Task { await viewModel.loadQueryFacetsIfNeeded(retry: true) } }
+            )
+            .frame(minWidth: 44, minHeight: 44)
+        }
+    }
+
+    private var gridColumns: [GridItem] {
+        guard dynamicTypeSize.isAccessibilitySize else {
+            return settings.density.density.iOSPosterGridColumns(horizontalSizeClass: horizontalSizeClass)
+        }
+        if horizontalSizeClass == .compact {
+            return [GridItem(.flexible(), spacing: 16)]
+        }
+        return [GridItem(.adaptive(minimum: accessiblePosterWidth * settings.density.density.scale), spacing: 16)]
     }
 
     /// Live scan/enrich progress for the media share backing THIS library, above
@@ -376,8 +513,7 @@ struct PlozziOSLibraryGridView: View {
                 status: scanStatus,
                 shareID: viewModel.sourceServerID
             )
-            .padding(.horizontal, Self.gridInset + posterArtworkInset)
-            .padding(.top, Self.gridInset)
+            .padding(.horizontal, horizontalInset)
         }
     }
 
@@ -386,9 +522,9 @@ struct PlozziOSLibraryGridView: View {
         cardStyle == .framed ? metrics.cardInset : metrics.borderlessCardSideMargin
     }
 
-    /// The grid's own `.padding()` — matched so the banner starts from the same
-    /// edge before the artwork inset is added.
-    private static let gridInset: CGFloat = 16
+    private var horizontalInset: CGFloat {
+        PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass)
+    }
 
     private var sortControl: some View {
         Menu {
@@ -407,9 +543,9 @@ struct PlozziOSLibraryGridView: View {
                 "Sort: \(viewModel.sort.field.displayName)",
                 systemImage: "arrow.up.arrow.down"
             )
-            .labelStyle(.iconOnly)
             .frame(minWidth: 44, minHeight: 44)
         }
+        .accessibilityIdentifier("library-sort")
     }
 
     private var sortFieldBinding: Binding<SortField> {
@@ -447,18 +583,75 @@ struct PlozziOSLibraryGridView: View {
 
 private struct PlozziOSLibraryContentModeControl: View {
     let viewModel: LibraryBrowseViewModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
-        Picker("Show", selection: Binding(
-            get: { viewModel.contentMode },
-            set: { mode in Task { await viewModel.setContentMode(mode) } }
-        )) {
-            ForEach(viewModel.availableContentModes, id: \.self) { mode in
-                Text(mode.displayName).tag(mode)
-            }
+        PlozzContentTabs(
+            options: viewModel.availableContentModes, id: \.self,
+            selection: viewModel.contentMode,
+            horizontalInset: PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass),
+            title: { Text($0.displayName) },
+            tabIdentifier: { "library-mode-\($0.rawValue)" }
+        ) { mode in
+            Task { await viewModel.setContentMode(mode) }
         }
-        .pickerStyle(.segmented)
+        .accessibilityLabel("Show")
         .accessibilityIdentifier("library-content-mode")
+    }
+}
+
+struct PlozziOSLibraryRecommendationRow: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardStyle) private var cardStyle
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .headline) private var accessiblePosterWidth: CGFloat = 116
+    let section: LibrarySection
+    let spoilerSettings: SpoilerSettings
+    let showsSeriesArtwork: Bool
+    var continueWatchingLayout: ContinueWatchingCardLayout = .landscape
+    let onSelect: (MediaItem) -> Void
+
+    var body: some View {
+        let inset = PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass)
+        let style: PosterCardView.Style = section.id == "continueWatching"
+            ? continueWatchingLayout.cardStyle
+            : (section.style == .poster ? .poster : .landscape)
+        PlozziOSMediaSection(
+            title: section.displayName,
+            artworkInset: cardStyle == .framed ? metrics.cardInset : 0
+        ) {
+            ScrollView(.horizontal) {
+                LazyHStack(
+                    alignment: .top,
+                    spacing: PlozziOSMediaRailLayout.stackSpacing(metrics: metrics, cardStyle: cardStyle)
+                ) {
+                    ForEach(MediaRowView.uniqued(section.items), id: \.stablePresentationID) { item in
+                        Button { onSelect(item) } label: {
+                            PlozziOSPosterCard(
+                                item: item, style: style,
+                                showsSeriesArtwork: showsSeriesArtwork,
+                                spoilerSettings: spoilerSettings,
+                                showsResumeChip: section.id == "continueWatching"
+                            )
+                            .frame(width: cardWidth(style: style))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .contentMargins(.horizontal,
+                            PlozziOSMediaRailLayout.artworkAlignedInset(inset, metrics: metrics, cardStyle: cardStyle),
+                            for: .scrollContent)
+            .plozziOSMediaRailClearance()
+        }
+    }
+
+    private func cardWidth(style: PosterCardView.Style) -> CGFloat {
+        let width = metrics.cardSlotWidth(for: style, cardStyle: cardStyle, showsSeriesArtwork: showsSeriesArtwork)
+        return style == .poster && dynamicTypeSize.isAccessibilitySize
+            ? max(width, accessiblePosterWidth)
+            : width
     }
 }
 

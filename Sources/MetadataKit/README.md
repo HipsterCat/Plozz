@@ -32,6 +32,30 @@ load-bearing.
   library is enriched with a one-time burst of calls, then effectively
   none.
 - `MetadataHTTP` — internal lightweight `URLSession` transport for enrichment.
+- `DetailMetadataResolver` — fills missing cast, directors, writers, studios and
+  genres after a provider's full detail response, using the same pipeline on
+  tvOS and iOS/iPadOS. Cast and crew are separate gaps: an existing cast does not
+  hide missing directors, and adding cast never erases server crew. Source
+  changes and cancellation discard stale results. Household source preferences
+  and the current TMDB credential still apply.
+  TMDB credits use the movie, series, season or episode endpoint as appropriate;
+  an episode never inherits a whole show's directing/writing credits. Exact
+  external IDs take precedence and a failed ID lookup never falls back to a
+  different title. A title-only match must agree on title and any supplied year.
+  Season and episode cache keys remain distinct from the series and each other.
+  Child detail queries promote only explicit series IDs for show-level providers,
+  retaining season/episode numbers for scoped credits; an episode's own ID or
+  title never stands in for an unidentified show.
+  Before accepting fields or threading IDs, the pipeline rejects live or cached
+  responses that contradict a known, well-formed external ID. Namespace aliases
+  cannot override authoritative IDs; rejected matches fall through to the next
+  source without contributing metadata. Cache keys include the complete known
+  identity, so adding a stronger ID cannot reuse metadata resolved for an earlier,
+  less-identified query, even when a provider returns no IDs with its fields.
+  TMDB transport failures report provider health, rather than caching an outage
+  or revoked credential as an authoritative absence of credits.
+  Artwork, playable identity, file/stream facts and Common Sense are not filled
+  by this resolver.
 - `HeroDiscoveryProviding` — separate candidate-feed seam for TMDB,
   AniList, TheTVDB, and TVmaze. It does not call Trakt.
 - `HeroDiscoveryService` — bounded, coalesced public-feed reads, provider-level
@@ -39,6 +63,42 @@ load-bearing.
   library ownership are applied afterward, never stored in the public-feed cache.
 - `MetadataDiscoveryHTTPClient` — identifying User-Agent, explicit HTTP/decode
   failures, bounded request admission, and response-size checks for discovery.
+
+## Community skip markers
+
+`CommunitySkipMarkerService` uses IntroDB (`introdb.app`) and TheIntroDB
+[`GET /v4/media`](https://theintrodb.org/openapi.yaml), not the retired v3
+endpoint. Server markers retain priority by segment kind on TV and mobile.
+Lookups remain optional and cancellation prevents late publication.
+Both databases use `MetadataHTTP`, which sends the identifying
+`User-Agent: Plozz/1.0 (+https://github.com/thatcube/Plozz)` header.
+Request-level tests cover that header on TheIntroDB movie and episode lookups.
+
+TheIntroDB prefers TVDB identity, then TMDB/IMDb when ordering is unspecified.
+An episode's own TVDB ID is sent as `tvdb_episode_id`, never as the show's ID.
+Series IDs and explicit episode ordering come from the owning provider.
+Known TVDB orders always retain `mapping`, including with an episode ID, and
+use TVDB or IMDb addressing, never TMDB. TMDB-numbered episodes require TMDB
+addressing even when an episode ID is available. Without a compatible series
+identifier, or with an explicitly unknown order, no request is sent. Missing
+ordering retains the previous default behavior. IntroDB has no conversion
+parameter, so known non-aired orders bypass it.
+
+These constraints reflect the deployed v4 behavior, not just its published
+contract. On 2026-10-17, Futurama (`tvdb_id=73871`, `imdb_id=tt0149460`,
+`tmdb_id=615`), alternate S7E1 "Rebirth" (`tvdb_episode_id=1051911`), returned
+another episode's intro without `mapping=alternate`, despite the episode ID.
+TVDB and IMDb addressing with that mapping returned Rebirth's intro/credits;
+TMDB addressing ignored the mapping. An episode ID is therefore only a hint,
+not permission to change numbering systems or omit conversion.
+
+Finite positive runtime is sent as `duration_ms` to select the nearest release
+cluster; unknown runtime is omitted, not sent as the special zero-duration
+group. The optional episode-name hint is omitted for TMDB addressing, where the
+API ignores it. Movies never send TV-only parameters. Combined-episode files
+do not use single-episode community markers. Empty/episode-list/version-list
+responses yield no timestamps; open ends need a known runtime, and negative,
+reversed or out-of-runtime segments are discarded.
 
 ## Discovery sources
 
@@ -86,6 +146,15 @@ Already identified, owned, unsupported, and personal-media items skip this work.
 
 ## Invariants
 
+- **Portrait hero artwork is opt-in.** Compact mobile heroes prefer a
+  language-neutral portrait, then a language-neutral landscape, then usable
+  fallback artwork. TMDB and TheTVDB rank the image lists already returned by
+  their usual hero request; there is no OCR, additional endpoint, or image-download
+  fan-out. Neutral-language metadata is evidence, not a guarantee of textless
+  pixels. Providers without this metadata retain their existing hero lookup.
+  Hero-specific URL cache keys leave ordinary posters and landscape heroes
+  unchanged. Live provider preferences, library-first settings, series identity,
+  and the separate overlaid hero logo remain in force.
 - **No required user subscription or user-supplied key.** App credentials and
   keyless endpoints coexist; missing credentials disable only their provider.
 - **No UI imports.** Provider and composition logic stay outside the shells.

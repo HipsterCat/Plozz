@@ -243,15 +243,19 @@ public struct PlexAuthClient: Sendable {
             headers: deviceProfile.headers(token: authToken)
         )
         let dto = try await http.decode(PlexHomeUsersDTO.self, from: endpoint, baseURL: baseURL)
-        return dto.users.compactMap { user in
+        return dto.users.compactMap { user -> PlexHomeUser? in
             guard let id = user.uuid ?? user.id.map(String.init) else { return nil }
+            if user.protected == nil {
+                PlozzLog.auth.error("Plex Home-user metadata omitted PIN protection; leaving its requirement unknown")
+            }
             return PlexHomeUser(
                 id: id,
                 name: user.title ?? user.username ?? "Plex User",
-                requiresPIN: user.protected ?? user.hasPassword ?? false,
+                requiresPIN: user.protected ?? false,
                 isAdmin: user.admin ?? false,
                 isRestricted: user.restricted ?? false,
-                avatarURL: user.thumb.flatMap(URL.init(string:))
+                avatarURL: user.thumb.flatMap(URL.init(string:)),
+                pinRequirementVerified: user.protected != nil
             )
         }
     }
@@ -259,9 +263,9 @@ public struct PlexAuthClient: Sendable {
     /// `POST /api/v2/home/users/{uuid}/switch` — assume a Home user, returning
     /// **that user's** auth token (derived from the admin token).
     ///
-    /// `pin` must be supplied for protected users and omitted otherwise. A
-    /// missing/incorrect PIN surfaces as `AppError.unauthorized`. Plozz never
-    /// stores the PIN — it is passed straight through on each switch.
+    /// Supply `pin` to authenticate a protected user. A successful PIN-less
+    /// response may use owner authorization and does not prove PIN removal.
+    /// Plozz never stores the PIN; it is passed straight through on each switch.
     public func switchHomeUser(uuid: String, pin: String?, authToken: String) async throws -> String {
         var queryItems: [URLQueryItem] = []
         if let pin, !pin.isEmpty {

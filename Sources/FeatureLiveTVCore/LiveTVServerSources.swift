@@ -41,7 +41,7 @@ public struct LiveTVServerChannelReference: Equatable, Sendable {
 public enum LiveTVServerImportError: Error, Equatable, Sendable {
     case accountUnavailable, permissionDenied, unsupportedAPI, unsupportedPlaybackMode
     case tunerUnavailable, serviceUnavailable, invalidCatalog, invalidGuide
-    case subscriptionRequired, guideRequired
+    case subscriptionRequired, guideRequired, guideUnavailable
     case configurationNotSaved
 
     public var userDescription: LocalizedStringResource {
@@ -50,6 +50,7 @@ public enum LiveTVServerImportError: Error, Equatable, Sendable {
         case .permissionDenied: "This server account doesn't have permission to use Live TV."
         case .subscriptionRequired: "This server requires an active subscription for Live TV."
         case .guideRequired: "This server requires a configured guide before this channel can play."
+        case .guideUnavailable: "Guide unavailable"
         case .configurationNotSaved: "The discovered Live TV source couldn't be saved. Try again."
         case .unsupportedAPI: "This server doesn't support the Live TV API used by Plozz."
         case .unsupportedPlaybackMode: "This server's Live TV playback mode isn't supported."
@@ -65,7 +66,7 @@ public enum LiveTVServerImportError: Error, Equatable, Sendable {
         if error is DecodingError { return fallback == .invalidGuide ? .invalidGuide : .invalidCatalog }
         if let error = error as? AppError {
             switch error {
-            case .unauthorized, .invalidCredentials: return .accountUnavailable
+            case .unauthorized, .invalidCredentials, .accessRestricted: return .permissionDenied
             case .notFound: return .unsupportedAPI
             case .invalidResponse, .decoding: return fallback == .invalidGuide ? .invalidGuide : .invalidCatalog
             default: return fallback
@@ -81,6 +82,21 @@ public enum LiveTVServerImportError: Error, Equatable, Sendable {
         case .tunerUnavailable: return .tunerUnavailable
         case .invalidChannel: return .invalidCatalog
         case .invalidGuideWindow: return .invalidGuide
+        }
+    }
+
+    static func sanitizedGuide(_ error: any Error) -> Self {
+        if error is DecodingError { return .invalidGuide }
+        if let error = error as? AppError {
+            switch error {
+            case .invalidResponse, .decoding: return .invalidGuide
+            default: break
+            }
+        }
+        let failure = sanitized(error, fallback: .guideUnavailable)
+        switch failure {
+        case .unsupportedAPI, .serviceUnavailable: return .guideUnavailable
+        default: return failure
         }
     }
 }
@@ -123,7 +139,7 @@ public struct LiveTVServerGuideWindowStatus: Identifiable, Equatable, Sendable {
     }
 }
 
-struct LiveTVServerCatalog {
+struct LiveTVServerCatalog: Sendable {
     let authorizationID: String
     let kind: LiveTVPrototypeSource
     let channels: [LiveTVPrototypeChannel]
@@ -134,30 +150,29 @@ struct LiveTVServerCatalog {
     init(
         source: LiveTVServerSource, context: LiveTVAuthorizedServerProvider, channels: [ServerLiveTVChannel]
     ) throws {
-        guard channels.count <= LiveTVPlaylistParser.maximumEntries,
-              Set(channels.map(\.id)).count == channels.count,
+        guard Set(channels.map(\.id)).count == channels.count,
               channels.allSatisfy({ !$0.id.isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         else { throw LiveTVServerImportError.invalidCatalog }
         authorizationID = context.authorizationID
         kind = context.kind
-        self.channels = channels.enumerated().map { index, channel in
-            LiveTVPrototypeChannel(
-                id: Self.channelID(source: source, nativeID: channel.id),
+        var references: [String: LiveTVServerChannelReference] = [:]
+        references.reserveCapacity(channels.count)
+        self.channels = try channels.enumerated().map { index, channel in
+            if index.isMultiple(of: 1_000) { try Task.checkCancellation() }
+            let id = Self.channelID(source: source, nativeID: channel.id)
+            references[id] = LiveTVServerChannelReference(
+                sourceID: source.id, accountID: source.accountID,
+                authorizationID: context.authorizationID, channelID: channel.id
+            )
+            return LiveTVPrototypeChannel(
+                id: id,
                 number: Int(channel.number ?? "") ?? index + 1,
-                name: channel.name, category: channel.isRadio ? "Radio" : "Live TV",
+                name: channel.name, category: channel.groups.first ?? (channel.isRadio ? "Radio" : "Live TV"),
                 symbol: channel.isRadio ? "radio" : "tv", accent: index % 6, source: context.kind,
-                tagline: "", logoURL: channel.imageURL, configuredSourceID: source.id
+                tagline: "", logoURL: channel.imageURL, configuredSourceID: source.id, groups: channel.groups
             )
         }
-        references = Dictionary(uniqueKeysWithValues: channels.map { channel in
-            (
-                Self.channelID(source: source, nativeID: channel.id),
-                LiveTVServerChannelReference(
-                    sourceID: source.id, accountID: source.accountID,
-                    authorizationID: context.authorizationID, channelID: channel.id
-                )
-            )
-        })
+        self.references = references
         programs = []
         inlineGuideFailure = nil
         let current = channels.compactMap { channel -> ServerLiveTVProgramme? in

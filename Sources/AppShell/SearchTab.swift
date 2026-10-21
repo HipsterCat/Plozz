@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import AppRuntime
 import CoreModels
 import PlozzCoreUI
 import FeatureHome
@@ -156,9 +157,9 @@ struct SearchTab: View {
                 onSelect: { open($0) }
             )
             .navigationDestination(for: MediaItem.self) { item in
-                let provider = resolveProvider(item.sourceAccountID, in: accounts)
-                if let route = CollectionBrowseRoute(
-                    item: item, fallbackAccountID: provider.session.server.id
+                let provider = try? resolveProvider(item.sourceAccountID, in: accounts)
+                if let provider, let route = CollectionBrowseRoute(
+                    item: item, fallbackAccountID: accounts.first?.account.id
                 ) {
                     LibraryBrowseView(
                         viewModel: LibraryBrowseViewModel(
@@ -172,10 +173,10 @@ struct SearchTab: View {
                         spoilerSettings: spoilerSettings,
                         onSelect: { open($0) }
                     )
-                } else if let library = MediaFolderNavigation.library(
+                } else if let provider, let library = MediaFolderNavigation.library(
                     for: item,
                     providerKind: provider.kind,
-                    sourceAccountID: item.sourceAccountID ?? provider.session.server.id
+                    sourceAccountID: item.sourceAccountID ?? accounts.first?.account.id
                 ) {
                     MediaFolderBrowseView(
                         library: library,
@@ -183,10 +184,10 @@ struct SearchTab: View {
                         spoilerSettings: spoilerSettings,
                         onSelect: { open($0) }
                     )
-                } else {
+                } else if let model = try? detailEnvironment.makeViewModel(for: item, libraryOrigin: nil) {
                     // Discovery titles keep their request-focused detail page.
                     ItemDetailView(
-                        viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
+                        viewModel: model,
                         spoilerSettings: spoilerSettings,
                         onPlay: { requestPlay($0) },
                         onSelectChild: { open($0) },
@@ -214,6 +215,8 @@ struct SearchTab: View {
                         requestActingName: requestActingName,
                         confirmAdminRequest: confirmAdminRequest
                     )
+                } else {
+                    MediaSourceUnavailableView()
                 }
             }
             .onChange(of: pendingTitleRoute) { _, item in
@@ -274,68 +277,76 @@ struct SearchTab: View {
                 )
             }
             .navigationDestination(for: EpisodeContextRoute.self) { route in
-                ItemDetailView(
-                    viewModel: detailEnvironment.makeSeriesContextViewModel(
-                        seriesID: route.seriesID,
-                        seed: route.episode,
-                        sourceAccountID: route.sourceAccountID,
-                        originAccountID: nil
-                    ),
-                    spoilerSettings: spoilerSettings,
-                    onPlay: { requestPlay($0) },
-                    onSelectChild: { open($0) },
-                    onNavigate: { navigateToItem($0) },
-                    onSelectPerson: { person, accountID in
-                        path.append(PersonRoute(person: person, sourceAccountID: accountID))
-                    },
-                    stackDepth: detailStackDepth,
-                    heroTrailerResolver: makeHeroTrailerResolver(),
-                    initialEpisode: route.episode,
-                    seerConnected: seer.isConfigured,
-                    requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
-                    onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(
-                            item,
-                            seasons: seasons,
-                            identity: activeSeerrIdentity
-                        )
-                        return seerRequestResult(outcome, actingName: requestActingName)
-                    },
-                    requestActingName: requestActingName,
-                    confirmAdminRequest: confirmAdminRequest
-                )
+                if let model = try? detailEnvironment.makeSeriesContextViewModel(
+                    seriesID: route.seriesID,
+                    seed: route.episode,
+                    sourceAccountID: route.sourceAccountID,
+                    originAccountID: nil
+                ) {
+                    ItemDetailView(
+                        viewModel: model,
+                        spoilerSettings: spoilerSettings,
+                        onPlay: { requestPlay($0) },
+                        onSelectChild: { open($0) },
+                        onNavigate: { navigateToItem($0) },
+                        onSelectPerson: { person, accountID in
+                            path.append(PersonRoute(person: person, sourceAccountID: accountID))
+                        },
+                        stackDepth: detailStackDepth,
+                        heroTrailerResolver: makeHeroTrailerResolver(),
+                        initialEpisode: route.episode,
+                        seerConnected: seer.isConfigured,
+                        requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
+                        onRequestSeasons: { item, seasons in
+                            let outcome = await seer.request(
+                                item,
+                                seasons: seasons,
+                                identity: activeSeerrIdentity
+                            )
+                            return seerRequestResult(outcome, actingName: requestActingName)
+                        },
+                        requestActingName: requestActingName,
+                        confirmAdminRequest: confirmAdminRequest
+                    )
+                } else {
+                    MediaSourceUnavailableView()
+                }
             }
             .navigationDestination(for: SeasonContextRoute.self) { route in
-                ItemDetailView(
-                    viewModel: detailEnvironment.makeSeriesContextViewModel(
-                        seriesID: route.seriesID,
-                        seed: route.season,
-                        sourceAccountID: route.sourceAccountID,
-                        originAccountID: nil
-                    ),
-                    spoilerSettings: spoilerSettings,
-                    onPlay: { requestPlay($0) },
-                    onSelectChild: { open($0) },
-                    onNavigate: { navigateToItem($0) },
-                    onSelectPerson: { person, accountID in
-                        path.append(PersonRoute(person: person, sourceAccountID: accountID))
-                    },
-                    stackDepth: detailStackDepth,
-                    heroTrailerResolver: makeHeroTrailerResolver(),
-                    initialSeasonID: route.season.id,
-                    seerConnected: seer.isConfigured,
-                    requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
-                    onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(
-                            item,
-                            seasons: seasons,
-                            identity: activeSeerrIdentity
-                        )
-                        return seerRequestResult(outcome, actingName: requestActingName)
-                    },
-                    requestActingName: requestActingName,
-                    confirmAdminRequest: confirmAdminRequest
-                )
+                if let model = try? detailEnvironment.makeSeriesContextViewModel(
+                    seriesID: route.seriesID,
+                    seed: route.season,
+                    sourceAccountID: route.sourceAccountID,
+                    originAccountID: nil
+                ) {
+                    ItemDetailView(
+                        viewModel: model,
+                        spoilerSettings: spoilerSettings,
+                        onPlay: { requestPlay($0) },
+                        onSelectChild: { open($0) },
+                        onNavigate: { navigateToItem($0) },
+                        onSelectPerson: { person, accountID in
+                            path.append(PersonRoute(person: person, sourceAccountID: accountID))
+                        },
+                        stackDepth: detailStackDepth,
+                        heroTrailerResolver: makeHeroTrailerResolver(),
+                        initialSeasonID: route.season.id,
+                        seerConnected: seer.isConfigured,
+                        requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
+                        onRequestSeasons: { item, seasons in
+                            let outcome = await seer.request(
+                                item,
+                                seasons: seasons,
+                                identity: activeSeerrIdentity
+                            )
+                            return seerRequestResult(outcome, actingName: requestActingName)
+                        },
+                        requestActingName: requestActingName,
+                        confirmAdminRequest: confirmAdminRequest
+                    )
+                } else {
+                    MediaSourceUnavailableView()
+                }
             }
             // Inside the stack, after the destinations — see HomeTab. Outside it,
             // pushed pages never see the router.
@@ -370,12 +381,13 @@ struct SearchTab: View {
         let identitySources = self.identitySources
         let seer = self.seer
         return DetailOpenEnvironment(
-            resolveProvider: { resolveProvider($0, in: accounts) },
+            resolveProvider: { try resolveProvider($0, in: accounts) },
             resolveOptionalProvider: { resolveOptionalProvider($0, in: accounts) },
             identitySources: identitySources,
             crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
             continueWatchingSnapshot: continueWatchingSnapshot,
             ratingsProvider: ratingsProvider,
+            detailMetadataResolver: { await DetailMetadataResolver.household.resolve($0) },
             discoveryStatusRefresh: { await seer.availability(for: $0) },
             loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {

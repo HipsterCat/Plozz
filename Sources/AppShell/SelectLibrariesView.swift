@@ -66,7 +66,11 @@ struct SelectLibrariesView: View {
             Button {
                 appState.confirmLibrarySelection()
             } label: {
-                Text("Continue").frame(minWidth: 260)
+                if discovery.state.isLoading {
+                    Text("Choose later").frame(minWidth: 260)
+                } else {
+                    Text("Continue").frame(minWidth: 260)
+                }
             }
             .buttonStyle(.borderedProminent)
             .focused($focused, equals: .continueButton)
@@ -77,21 +81,29 @@ struct SelectLibrariesView: View {
         .frame(maxWidth: 900)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onExitCommand { appState.confirmLibrarySelection() }
-        .task {
-            await discovery.load(from: appState.accountsProviders.resolvedAccounts(withIDs: appState.pendingLibrarySelectionAccountIDs))
+        .task(id: appState.pendingLibrarySelectionAccountIDs) {
+            await loadLibraries()
         }
+    }
+
+    private func loadLibraries() async {
+        let ids = appState.pendingLibrarySelectionAccountIDs
+        let accounts = appState.accountsProviders.resolvedAccounts(withIDs: ids)
+        await discovery.load(from: accounts)
+        guard !Task.isCancelled, ids == appState.pendingLibrarySelectionAccountIDs,
+              accounts.count == ids.count, discovery.canSkipSelection else { return }
+        appState.confirmLibrarySelection()
     }
 
     @ViewBuilder
     private var content: some View {
         switch discovery.state {
         case .idle, .loading:
-            VStack(spacing: 16) {
-                ProgressView()
-                Text("Finding your libraries…")
-                    .font(.title3)
-                    .plozzForeground(.secondary)
-            }
+            SetupProgressCard(
+                title: "Finding your libraries",
+                detail: "Checking your connected sources for available libraries.",
+                symbol: "rectangle.stack"
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case .empty:
@@ -107,7 +119,7 @@ struct SelectLibrariesView: View {
                     .font(.title3)
                     .plozzForeground(.secondary)
                 Button {
-                    Task { await discovery.load(from: appState.accountsProviders.resolvedAccounts(withIDs: appState.pendingLibrarySelectionAccountIDs)) }
+                    Task { await loadLibraries() }
                 } label: {
                     Label("Try Again", systemImage: "arrow.clockwise")
                 }

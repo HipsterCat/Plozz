@@ -17,13 +17,13 @@ final class PrototypeLibraryGuideRequestTests: XCTestCase {
             channels: channels, generation: UUID(), revisionIDs: [UUID()], isLoaded: true
         )
         let request = try XCTUnwrap(PrototypeLibraryGuideRequest(
-            catalog: catalog, rows: rows, anchor: rows[90],
+            catalog: catalog, rows: rows, anchorIndex: 90,
             from: start, to: start.addingTimeInterval(21_600)
         ))
         XCTAssertEqual(request.channelIDs, Set((87..<100).map { "library-\($0)" }))
         XCTAssertEqual(request.range.duration, 21_600)
         XCTAssertNil(PrototypeLibraryGuideRequest(
-            catalog: catalog, rows: rows, anchor: rows[1_000],
+            catalog: catalog, rows: rows, anchorIndex: 1_000,
             from: start, to: start.addingTimeInterval(21_600)
         ))
     }
@@ -33,11 +33,11 @@ final class PrototypeLibraryGuideRequestTests: XCTestCase {
             channels: [channel("one")], generation: UUID(), revisionIDs: [], isLoaded: false
         )
         XCTAssertNil(PrototypeLibraryGuideRequest(
-            catalog: catalog, rows: [LiveTVGuideRowID(channelID: "one")], anchor: nil,
+            catalog: catalog, rows: [LiveTVGuideRowID(channelID: "one")], anchorIndex: nil,
             from: start, to: start.addingTimeInterval(3_600)
         ))
         XCTAssertNil(PrototypeLibraryGuideRequest(
-            catalog: catalog, rows: [], anchor: nil, from: start, to: start
+            catalog: catalog, rows: [], anchorIndex: nil, from: start, to: start
         ))
     }
 

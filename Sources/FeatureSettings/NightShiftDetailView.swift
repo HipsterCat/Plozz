@@ -64,49 +64,43 @@ private struct CircadianDetail: View {
     @Environment(\.locale) private var locale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
+        SettingsControlRows(nonTVSpacing: SettingsMetrics.sectionSpacing) {
             NightShiftScheduleControl(model: model)
 
             if model.settings.isEnabled {
                 // Fade governs only the on/off transition, so it's irrelevant when
                 // the tint is always on.
                 if model.settings.scheduleMode != .alwaysOn {
-                    LabeledSettingRow("Fade", labelWidth: circadianRowLabelWidth) {
-                        SettingsStepper(
-                            options: NightShiftSettingsModel.fadeOptions,
-                            selection: Binding(
-                                get: { clampedFade },
-                                set: { model.settings.fadeMinutes = $0 }
-                            ),
-                            verbatimTitle: {
-                                NightShiftSettingsModel.fadeLabel(
-                                    minutes: $0,
-                                    locale: locale
-                                )
-                            }
-                        )
-                    }
+                    SettingsStepper(
+                        options: NightShiftSettingsModel.fadeOptions,
+                        selection: Binding(
+                            get: { clampedFade },
+                            set: { model.settings.fadeMinutes = $0 }
+                        ),
+                        label: "Fade", labelWidth: circadianRowLabelWidth,
+                        verbatimTitle: {
+                            NightShiftSettingsModel.fadeLabel(minutes: $0, locale: locale)
+                        }
+                    )
                     .tvOSFocusSection()
                 }
 
-                LabeledSettingRow("Darkness", labelWidth: circadianRowLabelWidth) {
-                    SettingsStepper(
-                        options: NightShiftDimness.allCases,
-                        selection: $model.settings.dimness,
-                        onFocusChange: { model.isPreviewing = $0 },
-                        title: { $0.displayName }
-                    )
-                }
+                SettingsStepper(
+                    options: NightShiftDimness.allCases,
+                    selection: $model.settings.dimness,
+                    onFocusChange: { model.isPreviewing = $0 },
+                    label: "Darkness", labelWidth: circadianRowLabelWidth,
+                    title: { $0.displayName }
+                )
                 .tvOSFocusSection()
 
-                LabeledSettingRow("Warmth", labelWidth: circadianRowLabelWidth) {
-                    SettingsStepper(
-                        options: NightShiftWarmth.allCases,
-                        selection: $model.settings.warmth,
-                        onFocusChange: { model.isPreviewing = $0 },
-                        title: { $0.displayName }
-                    )
-                }
+                SettingsStepper(
+                    options: NightShiftWarmth.allCases,
+                    selection: $model.settings.warmth,
+                    onFocusChange: { model.isPreviewing = $0 },
+                    label: "Warmth", labelWidth: circadianRowLabelWidth,
+                    title: { $0.displayName }
+                )
                 .tvOSFocusSection()
 
                 LabeledSettingRow("Preview", labelWidth: circadianRowLabelWidth) {
@@ -137,7 +131,7 @@ private struct CircadianDetail: View {
                 Text(model.previewProgress == nil ? "Preview a day" : model.previewClockText)
                     .monospacedDigit()
             }
-            .font(.headline)
+            .font(SettingsRowMetrics.titleFont)
             .padding(.horizontal, 4)
         }
         .buttonStyle(PlozzSeasonTabStyle(isSelected: false))
@@ -182,8 +176,7 @@ private struct NightShiftScheduleControl: View {
             .tvOSFocusSection()
 
             Text(describedMode.detail)
-                .font(.callout)
-                .plozzForeground(.secondary)
+                .settingsHelperText()
                 .fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -206,20 +199,16 @@ private struct NightShiftScheduleControl: View {
         case .off, .alwaysOn:
             EmptyView()
         case .auto:
-            LabeledSettingRow("Location", labelWidth: circadianRowLabelWidth) { locationMenu }
+            locationMenu
                 .tvOSFocusSection()
         case .manual:
-            VStack(alignment: .leading, spacing: 20) {
-                LabeledSettingRow("Turns on", labelWidth: circadianRowLabelWidth) {
-                    timeStepper(minutes: model.settings.manualOnMinutes) {
-                        model.settings.manualOnMinutes = $0
-                    }
+            SettingsControlRows(nonTVSpacing: 20) {
+                timeStepper("Turns on", minutes: model.settings.manualOnMinutes) {
+                    model.settings.manualOnMinutes = $0
                 }
                 .tvOSFocusSection()
-                LabeledSettingRow("Turns off", labelWidth: circadianRowLabelWidth) {
-                    timeStepper(minutes: model.settings.manualOffMinutes) {
-                        model.settings.manualOffMinutes = $0
-                    }
+                timeStepper("Turns off", minutes: model.settings.manualOffMinutes) {
+                    model.settings.manualOffMinutes = $0
                 }
                 .tvOSFocusSection()
             }
@@ -265,23 +254,14 @@ private struct NightShiftScheduleControl: View {
     // MARK: Extras
 
     private var locationMenu: some View {
-        Menu {
+        SettingsMenuRow(title: "Location", value: Text(model.region.name)) {
             Picker("Location", selection: $model.settings.regionID) {
                 ForEach(NightShiftRegion.sortedCatalog) { region in
                     Text(region.name).tag(region.id)
                 }
             }
             .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "mappin.and.ellipse")
-                Text(model.region.name)
-                Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold))
-            }
-            .font(.headline)
-            .padding(.horizontal, 4)
         }
-        .buttonStyle(PlozzSeasonTabStyle(isSelected: false))
     }
 
     /// A ±15-minute clock stepper that wraps around midnight, reusing the shared
@@ -289,6 +269,7 @@ private struct NightShiftScheduleControl: View {
     /// control as Fade and the Skip Intervals. The arrows never disable; they
     /// nudge the manual on/off time by one step per press and wrap past midnight.
     private func timeStepper(
+        _ label: LocalizedStringResource,
         minutes: Int,
         commit: @escaping (Int) -> Void
     ) -> some View {
@@ -299,6 +280,7 @@ private struct NightShiftScheduleControl: View {
                 set: { commit($0) }
             ),
             wraps: true,
+            label: label, labelWidth: circadianRowLabelWidth,
             verbatimTitle: {
                 model.clockLabel(minutes: $0, locale: locale)
             }

@@ -79,6 +79,20 @@ public struct MediaVersionDescriptor: Codable, Hashable, Sendable {
         evaluation(against: version).score
     }
 
+    /// Automatic reuse must preserve every known part of the viewer's choice.
+    /// The looser ranking below remains useful for recommending a picker row,
+    /// but a nearby resolution or a different cut is not consent to switch.
+    public func matchesForAutomaticSelection(_ version: MediaVersion) -> Bool {
+        guard !isEmpty else { return false }
+        let candidate = Self(version: version)
+        return (edition == nil || edition == candidate.edition)
+            && (height == nil || height == candidate.height)
+            && (videoRange == nil || videoRange == candidate.videoRange)
+            && (sourceQuality == nil || sourceQuality == candidate.sourceQuality)
+            && (videoCodec == nil || videoCodec == candidate.videoCodec)
+            && (audioProfile == nil || audioProfile == candidate.audioProfile)
+    }
+
     fileprivate func evaluation(against version: MediaVersion) -> MatchEvaluation {
         var score = 0
         var technicalScore = 0

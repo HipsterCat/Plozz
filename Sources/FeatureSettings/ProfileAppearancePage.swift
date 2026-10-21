@@ -15,7 +15,7 @@ struct ProfileAppearancePage: View {
     let context: SettingsContext
     let profileID: String
 
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     private var profile: Profile? {
         context.profiles.first(where: { $0.id == profileID })

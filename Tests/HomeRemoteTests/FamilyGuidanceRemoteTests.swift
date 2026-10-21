@@ -7,11 +7,9 @@ final class FamilyGuidanceRemoteTests: XCTestCase {
         defer { app.terminate() }
         let age = app.descendants(matching: .any)["family-guidance-age-badge"].firstMatch
         XCTAssertTrue(age.isHittable)
-        XCTAssertTrue(age.label.contains("recommended age 14"))
-        XCTAssertFalse(age.label.contains("5"))
-        let icon = age.images["CommonSenseMedia"].firstMatch
-        XCTAssertEqual(icon.frame.width, 32, accuracy: 0.5)
-        XCTAssertEqual(icon.frame.height, 32, accuracy: 0.5)
+        XCTAssertEqual(age.label, "Common Sense Media, recommended age 14 and older")
+        XCTAssertGreaterThanOrEqual(age.frame.height, 32)
+        XCTAssertLessThanOrEqual(age.frame.height, 34)
         XCTAssertTrue(app.staticTexts["94%"].exists)
         XCTAssertTrue(app.staticTexts["88%"].exists)
         XCTAssertFalse(app.staticTexts["8.0"].exists)

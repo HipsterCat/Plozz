@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.1
 import PackageDescription
 import Foundation
 
@@ -34,12 +34,15 @@ let package = Package(
         .library(name: "FeatureDiscovery", targets: ["FeatureDiscovery"]),
         .library(name: "ProviderJellyfin", targets: ["ProviderJellyfin"]),
         .library(name: "ProviderSilo", targets: ["ProviderSilo"]),
+        .library(name: "ProviderIPTV", targets: ["ProviderIPTV"]),
         .library(name: "ProviderPlex", targets: ["ProviderPlex"]),
         .library(name: "ProviderKinoPubDemo", targets: ["ProviderKinoPubDemo"]),
         .library(name: "ProviderShare", targets: ["ProviderShare"]),
         .library(name: "ProviderTrailers", targets: ["ProviderTrailers"]),
         .library(name: "RatingsService", targets: ["RatingsService"]),
         .library(name: "TraktService", targets: ["TraktService"]),
+        .library(name: "CoreTrackerAuth", targets: ["CoreTrackerAuth"]),
+        .library(name: "WetrakrService", targets: ["WetrakrService"]),
         .library(name: "SeerService", targets: ["SeerService"]),
         .library(name: "SimklService", targets: ["SimklService"]),        .library(name: "AniListService", targets: ["AniListService"]),
         .library(name: "MALService", targets: ["MALService"]),
@@ -86,13 +89,14 @@ let package = Package(
         // AetherEngine — production media player engine for Apple platforms.
         // FFmpeg demuxes, VideoToolbox decodes, AVPlayer handles Dolby Atmos.
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
-        // See AGENTS.local.md › "Playback engine (AetherEngine / Plozzigen)".
+        // See docs/playback-engines.md for integration and fork corrections.
         //
-        // Pinned to upstream release 7.22.2:
-        // 0e2f5c967b5f92e692e03edf612f2753289029cf.
+        // Pinned to the playback-corrected fork at
+        // deb90eb3f740fe1ddda74301a64e3937e480877d, integrating upstream main
+        // 3721cec573478bf82bc5056417f13b76d644517b (7.42.0 plus unreleased changes).
         //
-        // Plozz no longer carries an AetherEngine fork. Everything the old
-        // `plozz-pin-*` stack existed for is upstream as of 5.23.2:
+        // Everything the old `plozz-pin-*` stack existed for is upstream
+        // as of 5.23.2:
         //   - E-AC-3 JOC / Atmos detection probe            (#214, upstream 5.21.0+)
         //   - opt-in AVAudioSession release on teardown     (#215, upstream 5.23.0+)
         //   - slow-source VOD seek recovery, no clock revert (#216, upstream 5.23.1+)
@@ -221,15 +225,44 @@ let package = Package(
         // FFmpegBuild advances to 3.6.x; see docs/playback-engines.md for the
         // intervening playback changes and HDR10+ verification limits.
         //
+        // 7.23.0 prevents a pre-seek audio buffer from entering the flushed
+        // output queue (DEC-106), which could leave a software seek silent until
+        // the clock caught up. Its subtitle packet store also appends in place
+        // instead of copying every retained packet on each addition (PERF-107).
+        // The fork also corrects ASS/SSA subtitle decoding: packets with neither
+        // a decoded end nor a source duration are not given a synthetic five-second
+        // life.
+        //
+        // The current fork retains that correction and exports the engine dynamically:
+        // LibDovi and LibTrueHD's Rust unwind personalities must stay separate
+        // from the host's Objective-C/C++ stack. Upstream 7.44.0 uses FFmpegBuild
+        // 3.9.x for DTS:X heights, removing LibDTSX from the dependency graph.
+        // LibDovi stays at 2.1.x and LibTrueHD at 3.0.x.
+        // Explicit traits preserve the formerly compiled-in features; the
+        // measurement-only TrueHDReferenceRender trait must remain excluded.
+        // Plozz opts tvOS 26+ on-demand playback into TrueHD Atmos and DTS:X rendering.
+        // Progressive segment delivery remains off.
+        // Both apps embed the engine framework and its dependency notices.
+        //
+        // AAC-LC MP4 tracks whose timestamps drift from their decoded sample
+        // clock selectively use timestamp-aware resampling (#89). Ordinary AAC
+        // and rounding-only jitter keep stream-copy; SMB and video timing do not change.
+        //
         // SMB enters AetherEngine only through Plozz's protocol-neutral custom-source
         // bridge; the engine's legacy SMB URL product is not linked.
-        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "0e2f5c967b5f92e692e03edf612f2753289029cf"),
-        // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only) and LibDovi (Dolby Vision
-        // RPU parser) are pulled in TRANSITIVELY by AetherEngine — its own manifest
-        // declares and consumes them. Plozz used to declare them directly only for
-        // the retired hybrid-engine target; no Plozz target references
-        // their products, so the direct declarations were removed (SwiftPM flagged
-        // them as unused). AetherEngine owns their version alignment.
+        .package(
+            url: "https://github.com/brandomoore/AetherEngine",
+            revision: "86af70ddfe7bcde27e06356dc7aa81e8997d43c4",
+            traits: [
+                "TrueHDObjectAudio", "DTSXObjectAudio",
+                "DualLayerDolbyVision", "DolbyVisionStillReshaping",
+            ]
+        ),
+        // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only), LibDovi (Dolby Vision
+        // RPU parser) and LibTrueHD are transitive dependencies — AetherEngine
+        // declares and consumes them. The retired hybrid-engine target needed
+        // direct FFmpegBuild/LibDovi declarations; current Plozz targets do not
+        // consume those products. AetherEngine owns their version alignment.
 
         // Sentry's official binary-only package powers the OPT-IN, off-by-default
         // crash reporter (Settings ▸ Help & Diagnostics ▸ Share Crash Reports).
@@ -257,7 +290,7 @@ let package = Package(
         // upstream as kishikawakatsumi/SMBClient#234; switch back to
         //   .package(url: "https://github.com/kishikawakatsumi/SMBClient", from: "0.3.1"),
         // once that lands.
-        .package(url: "https://github.com/thatcube/SMBClient.git", revision: "d8baadc1a4f1287ebf1e8b4702ca38bd6e237fef"),
+        .package(url: "https://github.com/thatcube/SMBClient.git", revision: "2c383ad5e5a7b3063160f6a0d00190c57e295cc3"),
 
         // swift-nio-ssh — Apple's pure-Swift SSH protocol implementation
         // (Apache-2.0), used ONLY by the isolated **MediaTransportSFTP** adapter.
@@ -330,6 +363,11 @@ let package = Package(
             dependencies: ["CoreModels", "CoreNetworking"]
         ),
         .target(
+            name: "ProviderIPTV",
+            dependencies: ["CoreModels", "CoreNetworking"],
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
+        .target(
             name: "ProviderPlex",
             dependencies: ["CoreModels", "CoreNetworking"]
         ),
@@ -376,7 +414,15 @@ let package = Package(
         ),
         .target(
             name: "TraktService",
+            dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore", "CoreTrackerAuth"]
+        ),
+        .target(
+            name: "CoreTrackerAuth",
             dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore"]
+        ),
+        .target(
+            name: "WetrakrService",
+            dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore", "CoreTrackerAuth"]
         ),
         .target(
             name: "SeerService",
@@ -414,7 +460,7 @@ let package = Package(
         ),
         .target(
             name: "FeatureAuthCore",
-            dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore", "ProviderJellyfin", "ProviderPlex", "ProviderSilo"]
+            dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore", "ProviderJellyfin", "ProviderPlex", "ProviderSilo", "ProviderIPTV"]
         ),
         .target(
             name: "FeatureAuth",
@@ -466,7 +512,7 @@ let package = Package(
         ),
         .target(
             name: "FeatureLiveTVCore",
-            dependencies: ["CoreModels"]
+            dependencies: ["CoreModels", "CoreNetworking"]
         ),
         .target(
             name: "FeatureLiveTV",
@@ -474,7 +520,7 @@ let package = Package(
         ),
         .target(
             name: "FeatureSettings",
-            dependencies: ["CoreModels", "PlozzCoreUI", "CoreNetworking", "CrashReporting", "FeatureProfiles", "TraktService", "SeerService", "SimklService", "AniListService", "MALService", "LastFmService"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "CoreNetworking", "CrashReporting", "FeatureProfiles", "TraktService", "WetrakrService", "SeerService", "SimklService", "AniListService", "MALService", "LastFmService"]
         ),
         .target(
             name: "FeatureProfiles",
@@ -487,12 +533,10 @@ let package = Package(
 
         // MARK: Sync & Setup (cross-device onboarding — feature-flagged, v1)
         //
-        // Non-secret config sync + device pairing crypto. Depends only on
-        // CoreModels; uses CryptoKit for the pairing seal (kept out of the
-        // Foundation-only CoreModels). v1 carries NON-SECRET config only.
+        // Config and encrypted credential pairing, with secret-safe diagnostics.
         .target(
             name: "FeatureSyncSetup",
-            dependencies: ["CoreModels"]
+            dependencies: ["CoreModels", "CoreNetworking"]
         ),
 
         // Non-secret config auto-sync over CloudKit (CKSyncEngine, private DB).
@@ -502,7 +546,7 @@ let package = Package(
         // Apple ID's devices. NEVER carries tokens/passwords (that's pairing).
         .target(
             name: "FeatureSyncCloud",
-            dependencies: ["CoreModels", "CoreNetworking"]
+            dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore", "TraktService"]
         ),
 
         // MARK: Music (browse + audio playback engine)
@@ -535,10 +579,12 @@ let package = Package(
         // Help & Diagnostics) AND the build shipped with a `PLOZZ_SENTRY_DSN`.
         // The Sentry config here is privacy-hardened: crash + hang captures only,
         // all automatic UI/network telemetry disabled, and a hard scrub of PII in
-        // `beforeSend`/`beforeBreadcrumb`. Depends only on Sentry + Foundation.
+        // `beforeSend`/`beforeBreadcrumb`. Only typed, non-secret app diagnostics
+        // cross the CoreModels boundary.
         .target(
             name: "CrashReporting",
             dependencies: [
+                "CoreModels",
                 .product(name: "Sentry-Static", package: "sentry-apple-binaries"),
             ]
         ),
@@ -684,6 +730,61 @@ let package = Package(
             swiftSettings: [.unsafeFlags(["-strict-concurrency=complete"])]
         ),
 
+        // libass is built from pinned upstream source to retain ARM NEON kernels.
+        // Only font/text libraries are prebuilt; no second media engine is linked.
+        .binaryTarget(
+            name: "Libfreetype",
+            url: "https://github.com/mpvkit/libass-build/releases/download/0.17.5/Libfreetype.xcframework.zip",
+            checksum: "496ca62488530e14b1e4624d20ee2b237c0bd675cd70c19da578a5768302d02d"
+        ),
+        .binaryTarget(
+            name: "Libfribidi",
+            url: "https://github.com/mpvkit/libass-build/releases/download/0.17.5/Libfribidi.xcframework.zip",
+            checksum: "bc15e097b892f2f90424e4a27ba287070cc2f98a74a4da10e6d2481d15cf5ff9"
+        ),
+        .binaryTarget(
+            name: "Libharfbuzz",
+            url: "https://github.com/mpvkit/libass-build/releases/download/0.17.5/Libharfbuzz.xcframework.zip",
+            checksum: "aa8e0b9ca0387dac74e3e93c86e34d11982bb013b28022d0e6966a8427a35b2e"
+        ),
+        .binaryTarget(
+            name: "Libunibreak",
+            url: "https://github.com/mpvkit/libass-build/releases/download/0.17.5/Libunibreak.xcframework.zip",
+            checksum: "940d9833cf4477d0a260d9f2b4066125bc0ff7bbc111ac3c90e774765b77a559"
+        ),
+        .target(
+            name: "Libass",
+            dependencies: ["Libfreetype", "Libfribidi", "Libharfbuzz", "Libunibreak"],
+            path: "Vendor/Libass",
+            exclude: [
+                "COPYING", "UPSTREAM.json", "FreeType-LICENSE.txt", "HarfBuzz-LICENSE.txt",
+                "FriBidi-LICENSE.txt", "libunibreak-LICENSE.txt"
+            ],
+            sources: [
+                "asm", "libass/c", "PlozzASSBlend.c",
+                "libass/ass.c", "libass/ass_arabic_charmap.c", "libass/ass_bitmap.c",
+                "libass/ass_bitmap_engine.c", "libass/ass_blur.c", "libass/ass_cache.c",
+                "libass/ass_coretext.c", "libass/ass_drawing.c", "libass/ass_filesystem.c",
+                "libass/ass_font.c", "libass/ass_fontselect.c", "libass/ass_library.c",
+                "libass/ass_outline.c", "libass/ass_parse.c", "libass/ass_rasterizer.c",
+                "libass/ass_render.c", "libass/ass_render_api.c", "libass/ass_shaper.c",
+                "libass/ass_string.c", "libass/ass_strtod.c", "libass/ass_utils.c"
+            ],
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("."), .headerSearchPath("libass"),
+                .headerSearchPath("dependency-headers/Libfreetype/freetype2"),
+                .headerSearchPath("dependency-headers/Libfribidi/fribidi"),
+                .headerSearchPath("dependency-headers/Libharfbuzz/harfbuzz"),
+                .headerSearchPath("dependency-headers/Libunibreak"),
+                .unsafeFlags(["-O3"])
+            ],
+            linkerSettings: [
+                .linkedFramework("CoreText"), .linkedFramework("CoreGraphics"),
+                .linkedLibrary("iconv"), .linkedLibrary("z"), .linkedLibrary("c++")
+            ]
+        ),
+
         // MARK: AetherEngine integration (native HLS-fMP4 remux engine)
         //
         // Wraps AetherEngine (the upstream media-player library) behind Plozz's
@@ -701,6 +802,7 @@ let package = Package(
                 "MediaTransportCore",
                 "FeaturePlayback",
                 .product(name: "AetherEngine", package: "AetherEngine"),
+                "Libass",
             ]
         ),
 
@@ -729,8 +831,11 @@ let package = Package(
                 "ProviderJellyfin",
                 "ProviderSilo",
                 "ProviderPlex",
+                "ProviderIPTV",
                 "ProviderShare",
-                "CoreSecureStore"
+                "CoreSecureStore",
+                "TraktService",
+                "FeatureSyncCloud"
             ]
         ),
 
@@ -785,6 +890,7 @@ let package = Package(
                 "TraktService",
                 "SeerService",
                 "SimklService",
+                "WetrakrService",
                 "AniListService",
                 "MALService",
                 "LastFmService",
@@ -840,6 +946,7 @@ let package = Package(
                 "SeerService",
                 "TraktService",
                 "SimklService",
+                "WetrakrService",
                 "AniListService",
                 "MALService",
                 "FeatureSyncSetup",
@@ -863,6 +970,10 @@ let package = Package(
             path: "Tests/TestSupportNetworking",
             swiftSettings: [.unsafeFlags(["-strict-concurrency=complete"])]
         ),
+        .target(
+            name: "TestSupportPerformance",
+            path: "Tests/TestSupportPerformance"
+        ),
 
         // MARK: Tests (pure logic, no UI required)
         .testTarget(
@@ -871,7 +982,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CoreModelsTests",
-            dependencies: ["CoreModels", "PlozzCoreUI"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "TestSupportPerformance"]
         ),
         .testTarget(
             name: "CrashReportingTests",
@@ -883,15 +994,19 @@ let package = Package(
         ),
         .testTarget(
             name: "FeatureSyncSetupTests",
-            dependencies: ["FeatureSyncSetup", "CoreModels"]
+            dependencies: ["FeatureSyncSetup", "CoreModels", "CoreNetworking"]
         ),
         .testTarget(
             name: "FeatureSyncCloudTests",
-            dependencies: ["FeatureSyncCloud", "CoreModels"]
+            dependencies: ["FeatureSyncCloud", "CoreModels", "TestSupportPerformance"]
         ),
         .testTarget(
             name: "AppRuntimeTests",
-            dependencies: ["AppRuntime", "CoreModels", "FeatureAuthCore", "CrashReporting", "FeatureHome"]
+            dependencies: [
+                "AppRuntime", "CoreModels", "FeatureAuthCore", "CrashReporting", "FeatureHomeCore",
+                .target(name: "FeatureHome", condition: .when(platforms: [.tvOS])),
+                "FeatureSyncCloud", "TestSupportPerformance"
+            ]
         ),
         .testTarget(
             name: "MediaDownloadsTests",
@@ -903,7 +1018,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CoreUITests",
-            dependencies: ["PlozzCoreUI", "CoreModels", "TopShelfKit"]
+            dependencies: ["PlozzCoreUI", "CoreModels", "TopShelfKit", "TestSupportPerformance"]
         ),
         .testTarget(
             name: "CoreNetworkingTests",
@@ -911,7 +1026,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MetadataKitTests",
-            dependencies: ["MetadataKit", "CoreModels"]
+            dependencies: ["MetadataKit", "CoreModels", "TestSupportNetworking"]
         ),
         .testTarget(
             name: "FeatureDiscoveryTests",
@@ -919,11 +1034,15 @@ let package = Package(
         ),
         .testTarget(
             name: "ProviderJellyfinTests",
-            dependencies: ["ProviderJellyfin", "ProviderPlex", "CoreModels", "CoreNetworking"]
+            dependencies: ["ProviderJellyfin", "ProviderPlex", "CoreModels", "CoreNetworking", "TestSupportPerformance"]
         ),
         .testTarget(
             name: "ProviderSiloTests",
             dependencies: ["ProviderSilo", "CoreModels", "CoreNetworking"]
+        ),
+        .testTarget(
+            name: "ProviderIPTVTests",
+            dependencies: ["ProviderIPTV", "CoreModels", "CoreNetworking", "FeatureLiveTVCore", "TestSupportPerformance"]
         ),
         .testTarget(
             name: "ProviderPlexTests",
@@ -939,7 +1058,11 @@ let package = Package(
         ),
         .testTarget(
             name: "TraktServiceTests",
-            dependencies: ["TraktService", "CoreModels", "CoreNetworking", "TestSupportNetworking"]
+            dependencies: ["TraktService", "CoreTrackerAuth", "CoreModels", "CoreNetworking", "TestSupportNetworking"]
+        ),
+        .testTarget(
+            name: "WetrakrServiceTests",
+            dependencies: ["WetrakrService", "CoreTrackerAuth", "CoreModels", "CoreNetworking", "TestSupportNetworking"]
         ),
         .testTarget(
             name: "SimklServiceTests",
@@ -981,7 +1104,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FeatureLiveTVCoreTests",
-            dependencies: ["CoreModels", "FeatureLiveTVCore"]
+            dependencies: ["CoreModels", "FeatureLiveTVCore", "TestSupportPerformance"]
         ),
         .testTarget(
             name: "FeatureLiveTVTests",
@@ -1001,11 +1124,11 @@ let package = Package(
         ),
         .testTarget(
             name: "ProviderPlaybackIntegrationTests",
-            dependencies: ["AppRuntime", "FeaturePlayback", "ProviderJellyfin", "ProviderPlex", "ProviderSilo", "CoreNetworking", "CoreModels"]
+            dependencies: ["AppRuntime", "FeaturePlayback", "FeatureAuthCore", "ProviderJellyfin", "ProviderPlex", "ProviderSilo", "CoreNetworking", "CoreModels", "TestSupportNetworking"]
         ),
         .testTarget(
             name: "ProviderShareTests",
-            dependencies: ["ProviderShare", "CoreModels", "MediaTransportCore"]
+            dependencies: ["ProviderShare", "CoreModels", "MediaTransportCore", "TestSupportPerformance"]
         ),
         .testTarget(
             name: "FeatureSettingsTests",
@@ -1018,7 +1141,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MediaTransportHTTPTests",
-            dependencies: ["MediaTransportHTTP", "MediaTransportCore", "TestSupportNetworking"],
+            dependencies: ["MediaTransportHTTP", "MediaTransportCore", "TestSupportNetworking", "TestSupportPerformance"],
             swiftSettings: [.unsafeFlags(["-strict-concurrency=complete"])]
         ),
         .testTarget(
@@ -1038,6 +1161,7 @@ let package = Package(
                 "MediaTransportHTTP",
                 "MediaTransportWebDAV",
                 "TestSupportNetworking",
+                "TestSupportPerformance",
             ],
             swiftSettings: [.unsafeFlags(["-strict-concurrency=complete"])]
         ),
@@ -1084,6 +1208,10 @@ let package = Package(
                 "CoreModels",
                 "EnginePlozzigen",
                 "MediaTransportCore",
+                "MediaTransportHTTP",
+                "MediaTransportWebDAV",
+                "TestSupportNetworking",
+                "TestSupportPerformance",
                 .product(name: "AetherEngine", package: "AetherEngine"),
             ]
         ),

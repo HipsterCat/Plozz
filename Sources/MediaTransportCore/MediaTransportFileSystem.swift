@@ -70,6 +70,15 @@ public protocol MediaTransportBrowsing: Sendable {
 public protocol MediaTransportFileSystem: MediaTransportBrowsing {
     func validate() async throws
     func probe() async throws -> MediaTransportProbe
+    /// May perform bounded I/O to establish a locator identity. Ordinary stat
+    /// remains metadata-only, including for nonseekable sidecars and artwork.
+    func statForOpening(relativePath: String) async throws -> RemoteFileEntry
     func readSmallFile(relativePath: String, maximumBytes: Int) async throws -> Data
     func openSource(for locator: NetworkFileLocator) async throws -> MediaTransportSourceLease
+}
+
+public extension MediaTransportFileSystem {
+    func statForOpening(relativePath: String) async throws -> RemoteFileEntry {
+        try await stat(relativePath: relativePath)
+    }
 }

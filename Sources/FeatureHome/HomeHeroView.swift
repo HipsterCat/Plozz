@@ -132,6 +132,7 @@ struct HomeHeroView: View {
     @Environment(\.plozzPinnedSidebarInteraction) private var pinnedSidebarInteraction
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.seasonRequestContextID) private var seasonRequestContextID
+    @Environment(\.plozzArtworkPolicy) var artworkPolicy
 
     /// The index of the slide currently fronted.
     /// Internal (not private) so the artwork extension in a sibling file can center
@@ -257,13 +258,6 @@ struct HomeHeroView: View {
     /// Changes only when the curated hero identity set changes. Drives the
     /// low-resolution all-slide preview warm without restarting it on every page.
     @State private var artworkSetToken = 0
-    /// Best resolved hero backdrop URL per item id. For episode/season slides
-    /// this is the **series-level** hero art (correct show, high-res — matching
-    /// the detail page), resolved via ``ArtworkRouter`` and preloaded for the
-    /// current slide and its neighbours so a page never animates a placeholder.
-    /// Internal (not private) so the artwork extension in a sibling file can read
-    /// and populate the resolved-art cache; still owned only by this view.
-    @State var resolvedBackdrop: [String: URL] = [:]
 
     /// Pending "resume auto-advance" work, scheduled after each remote input and
     /// cancelled/rescheduled by the next one, so the carousel only starts counting
@@ -274,6 +268,7 @@ struct HomeHeroView: View {
     private static let resumeAfterIdle: Double = 2.5
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.heroArtworkDisplayState) private var displayedArtwork
     /// Read so the imperative UIKit foreground's plain-`String` title can be
     /// resolved with the in-app language override rather than the device's
     /// system locale. `HomeHeroView`'s body re-evaluates whenever this
@@ -546,6 +541,7 @@ struct HomeHeroView: View {
                 }
             }
         }
+        .environment(\.plozzArtworkArea, artworkPolicy.heroPolicy.area)
         .opacity(heroVisible ? 1 : 0)
         .trackHeroExposure(
             item: current,
@@ -596,7 +592,7 @@ struct HomeHeroView: View {
         // `count` alone would leave `index` pointing at a *different* show —
         // fronted with no slide and stale art (the "wrong image / instant appear"
         // bug). Key on identity: preserve the fronted item if it survived the
-        // swap, else clamp, then prune resolved art and re-resolve.
+        // swap, else clamp, then restart artwork warming.
         .onChange(of: items.map(\.id)) { oldIDs, newIDs in
             guard oldIDs != newIDs else { return }
             artworkSetToken &+= 1
@@ -612,7 +608,6 @@ struct HomeHeroView: View {
             }
             HeroFocusDiagnostics.emit("items SET-SWAP count \(oldIDs.count)->\(newIDs.count) index \(oldIdx)->\(index) frontedSurvived=\(frontedSurvived) | \(hfState())")
             let present = Set(newIDs)
-            resolvedBackdrop = resolvedBackdrop.filter { present.contains($0.key) }
             trailerSourceCache = trailerSourceCache.filter { present.contains($0.key) }
             noFastTrailerIDs.formIntersection(present)
             // Clamp the logical selection to the fronted slide's button count so it
@@ -691,14 +686,16 @@ struct HomeHeroView: View {
         // Keep only the fronted slide's current warm pass alive. Rapid paging
         // cancels the old five-slide window before it can keep downloading and
         // decoding artwork the user has already skipped.
-        .task(id: ArtworkResolutionKey(slideToken: slideToken, index: index)) {
+        .task(id: ArtworkResolutionKey(
+            slideToken: slideToken, index: index, policyIdentity: artworkPolicy.heroPolicy.identity
+        )) {
             await resolveArtwork(around: index)
         }
         // A cheap 768px preview for every configured hero slide makes even a
         // 20-item fly-through immediate. This task survives page changes; all work
         // stays behind the shared background limiter and full hero art still has
         // foreground priority.
-        .task(id: artworkSetToken) {
+        .task(id: ArtworkPrewarmKey(setToken: artworkSetToken, policyIdentity: artworkPolicy.heroPolicy.identity)) {
             await warmHeroPreviews()
         }
         // Every schedule already on disk, published before a single request — a
@@ -720,7 +717,7 @@ struct HomeHeroView: View {
         // network fetch plus decode/analysis. Warm them in likely paging order so
         // each slide arrives with its final identity instead of replacing a settled
         // text title. The shared limiter keeps this behind foreground artwork.
-        .task(id: artworkSetToken) {
+        .task(id: ArtworkPrewarmKey(setToken: artworkSetToken, policyIdentity: artworkPolicy.heroPolicy.identity)) {
             await warmHeroLogos()
         }
         // Fast/local trailers only: resolution and the three-second still-image
@@ -882,6 +879,10 @@ struct HomeHeroView: View {
                 alignsArtworkToLeadingEdge: navigationStyle == .rail,
                 scrimOpacity: isFrontmost ? 1 : 0
             )
+            .heroArtworkSource(
+                id: item.id,
+                isActive: isFrontmost
+            )
         } else {
             Color.clear.frame(width: w, height: height)
         }
@@ -1026,7 +1027,7 @@ struct HomeHeroView: View {
                 HeroLogoArtwork(
                     references: item.artworkReferences(for: .logo),
                     asyncFallbackURL: logoFallback(for: item),
-                    backgroundSample: backgroundSample(for: item),
+                    displayedArtworkID: item.id,
                     // The logo is sized from a shared hero box, not from this
                     // hero's own button row — the pill set changes per slide, and
                     // the detail page's column is wider again. See
@@ -1180,7 +1181,7 @@ struct HomeHeroView: View {
                 neighbours: foregroundNeighbours(for: item),
                 logoFallbacks: foregroundLogoFallbacks(for: item),
                 logoReferences: foregroundLogoReferences(for: item),
-                backgroundSamplers: foregroundBackgroundSamplers(for: item),
+                backgroundSample: displayedArtwork?.sample(for: item.id),
                 metadataVisible: metadataVisible,
                 width: HomeHeroLayout.screenWidth,
                 height: HomeHeroLayout.screenHeight - Self.contentBottomInset
@@ -1389,29 +1390,6 @@ struct HomeHeroView: View {
         var result: [String: [ArtworkReference]] = [:]
         for target in targets where result[target.id] == nil {
             result[target.id] = target.artworkReferences(for: .logo)
-        }
-        return result
-    }
-
-    /// Backdrop colour samplers for the current slide plus its prepared neighbours,
-    /// keyed by itemID. Mirrors the SwiftUI hero's `backgroundSample(for:)` so the
-    /// imperative UIKit hero decides a logo's legibility halo from the same backdrop
-    /// sample. Bounded to the same window the coordinator prepares.
-    private func foregroundBackgroundSamplers(
-        for item: MediaItem
-    ) -> [String: @Sendable () async -> HeroBackgroundSample?] {
-        var targets: [MediaItem] = [item]
-        if items.count > 1 {
-            let current = items.firstIndex(where: { $0.id == item.id }) ?? index
-            let previous = (current - 1 + items.count) % items.count
-            let next = (current + 1) % items.count
-            for i in [previous, next] where items.indices.contains(i) { targets.append(items[i]) }
-        }
-        var result: [String: @Sendable () async -> HeroBackgroundSample?] = [:]
-        for target in targets where result[target.id] == nil {
-            if let sampler = backgroundSample(for: target) {
-                result[target.id] = sampler
-            }
         }
         return result
     }
@@ -2543,6 +2521,12 @@ struct HomeHeroView: View {
     private struct ArtworkResolutionKey: Equatable {
         let slideToken: Int
         let index: Int
+        let policyIdentity: String
+    }
+
+    private struct ArtworkPrewarmKey: Equatable {
+        let setToken: Int
+        let policyIdentity: String
     }
 }
 

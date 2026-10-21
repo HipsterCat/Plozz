@@ -29,16 +29,19 @@ struct PrototypeBrowser: View {
     let openControls: () -> Void
     let openSources: () -> Void
     let openGuideTime: () -> Void
-    let openToolbar: () -> Void
+    let openToolbar: (() -> Void)?
     let isLoading: Bool
     let loadFailed: Bool
     let reload: () -> Void
+    var openChannelManagement: (() -> Void)?
     var hideChannel: ((LiveTVPrototypeChannel, LiveTVGuideRowID) -> Void)?
     var selectionAction: LocalizedStringResource?
     var selectedChannelIDs: Set<String> = []
     var libraryCatalog: PrototypeLibraryCatalogRevision?
     var loadLibraryGuide: ((Set<String>, DateInterval) -> Void)?
     var openLibraryItem: ((LibraryChannelItem) -> Void)?
+    var leadingExit: (() -> Void)?
+    var isEmbeddedInPlayer = false
     @State private var scrollID: LiveTVGuideRowID?
     @State private var pendingFocus: PrototypeBrowseFocus?
     @State private var restorationFallback: PrototypeBrowseFocus?
@@ -53,11 +56,15 @@ struct PrototypeBrowser: View {
     @State private var timeline = PrototypeTimelineScroll()
     #if os(tvOS)
     @State private var nativeScroll = PrototypeGuideScrollController()
+    @ScaledMetric(relativeTo: .subheadline) private var nativeRowHeight = PrototypeLayout.rowHeight
+    @ScaledMetric(relativeTo: .caption) private var nativeSectionFontSize = PrototypeLayout.sectionFontSize
     #endif
     @FocusState private var focused: PrototypeBrowseFocus?
+    @FocusState private var recoveryFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.layoutDirection) private var layoutDirection
 
     var body: some View {
         let guideRequest = serverGuideRequest
@@ -90,6 +97,7 @@ struct PrototypeBrowser: View {
                         Text("Check your connection or open Sources to review what needs attention.")
                     } actions: {
                         Button("Retry", action: reload).buttonStyle(PrototypeButtonStyle())
+                            .focused($recoveryFocused)
                         Button("Sources", action: openSources).buttonStyle(PrototypeButtonStyle())
                     }
                 } else if model.channels.isEmpty {
@@ -99,13 +107,20 @@ struct PrototypeBrowser: View {
                         Text("Your enabled sources haven't provided any channels. Open Sources to check their status or add another source.")
                     } actions: {
                         Button("Refresh channels", action: reload).buttonStyle(PrototypeButtonStyle())
+                            .focused($recoveryFocused)
                         Button("Sources", action: openSources).buttonStyle(PrototypeButtonStyle())
                     }
                 } else if allChannelsHidden {
                     ContentUnavailableView {
                         Label("All channels are hidden", systemImage: "eye.slash")
                     } description: {
-                        Text("Restore channels in Settings > Live TV > Hidden channels.")
+                        Text("Your channels are still saved. Review Hidden channels to show them again.")
+                    } actions: {
+                        if let openChannelManagement {
+                            Button("Manage channels", action: openChannelManagement)
+                                .buttonStyle(PrototypeButtonStyle())
+                                .focused($recoveryFocused)
+                        }
                     }
                 } else if model.visibleChannels.isEmpty {
                     ContentUnavailableView {
@@ -130,7 +145,12 @@ struct PrototypeBrowser: View {
                     let gatesFocus = (railActive && restrictDirectionalEntry)
                         || isRestoringFocus || requiresContentFocusHandoff
                     PrototypeNativeGuideList(
-                        rows: model.guideRowIDs, scrollController: nativeScroll,
+                        rows: model.guideRowIDs,
+                        rowHeight: PrototypeLayout.rowHeight(for: geometry.size.width, scaledHeight: nativeRowHeight)
+                            + PrototypeLayout.rowGap,
+                        sectionHeight: PrototypeLayout.guideSectionLabelHeight(fontSize: nativeSectionFontSize)
+                            + PrototypeLayout.smallGap + PrototypeLayout.sectionLabelGap,
+                        scrollController: nativeScroll,
                         scrolled: { row, offset in
                             if scrollID != row { scrollID = row }
                             let fade = PrototypeScrollFade(before: offset)
@@ -155,7 +175,8 @@ struct PrototypeBrowser: View {
                                     focusPolicy: rowFocusPolicy(for: row))
                             }
                         },
-                        horizontalNavigation: useNativeNavigation
+                        horizontalNavigation: useNativeNavigation,
+                        leadingExit: leadingExit
                     ) { row in
                         if let entry = model.guideEntry(for: row) {
                             guideRow(
@@ -247,15 +268,26 @@ struct PrototypeBrowser: View {
                 timeline.offset = value
             }
         }
-        .padding([.leading, .top], PrototypeLayout.guideInset)
+        .padding(.leading, PrototypeLayout.guideInset)
+        #if os(iOS)
+        .padding(.top, isEmbeddedInPlayer ? 0 : PrototypeLayout.guideInset)
+        #else
+        .padding(.top, PrototypeLayout.guideInset)
+        #endif
         .padding(.trailing, PrototypeLayout.guideTrailingInset)
-        .background { PrototypeGuideSurface() }
+        .background {
+            #if os(iOS)
+            if !isEmbeddedInPlayer { PrototypeGuideSurface() }
+            #else
+            PrototypeGuideSurface()
+            #endif
+        }
         .clipShape(PrototypeLayout.guideShape)
         #if os(tvOS)
         .focusSection()
-        .onExitCommand {
-            if !isRestoringFocus { openToolbar() }
-        }
+        .onExitCommand(perform: openToolbar.map { action in
+            { if !isRestoringFocus { action() } }
+        })
         #endif
         .onChange(of: confirmedFocus, initial: true) { _, target in
             hasFocus = target != nil
@@ -292,6 +324,12 @@ struct PrototypeBrowser: View {
             if restoring, restorationTarget == nil {
                 focusRestored(restoreFocusRequest)
             }
+        }
+        .onChange(of: restoreFocusRequest) { _, request in
+            guard isPresented, !isLoading, model.channels.isEmpty else { return }
+            recoveryFocused = true
+            railActive = false
+            focusRestored(request)
         }
         .onChange(of: model.guideChannels) { _, rows in
             if rows.isEmpty, isRestoringFocus {
@@ -428,7 +466,7 @@ struct PrototypeBrowser: View {
                 returnTarget: returnTarget,
                 favorite: model.favoriteIDs.contains(channel.id),
                 playing: model.playingChannelID == channel.id,
-                toggleFavorite: { model.toggleFavorite(channel.id) },
+                toggleFavorite: { model.toggleFavoriteWithFeedback(channel.id) },
                 tune: { tune(entry.id) }, details: details, controls: openControls,
                 top: { goToTop(scrollTo: scrollTo) }, goToNow: goToNow,
                 focusChanged: confirmFocus, sources: openSources, guideTime: openGuideTime,
@@ -461,8 +499,8 @@ struct PrototypeBrowser: View {
         guard !guideSources.isEmpty else { return nil }
         return PrototypeServerGuideRequest(
             rows: model.guideRowIDs,
-            anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
-            references: imports.serverChannelReferences.filter { guideSources.contains($0.value.sourceID) },
+            anchorIndex: guideAnchorIndex,
+            references: imports.serverChannelReferences, enabledSourceIDs: guideSources,
             from: dataRange.start, to: dataRange.end
         )
     }
@@ -471,11 +509,15 @@ struct PrototypeBrowser: View {
         timeAnchor.addingTimeInterval(guideOffset)
     }
 
+    private var guideAnchorIndex: Int? {
+        model.guideRowIndex(near: scrollID ?? confirmedFocus?.rowID ?? selectedRowID)
+    }
+
     private var cachedGuideRequest: PrototypeGuideWindowRequest? {
         guard isPresented, scenePhase == .active, imports.supportsDurableCatalog else { return nil }
         return PrototypeGuideWindowRequest(
             rows: model.guideRowIDs,
-            anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
+            anchorIndex: guideAnchorIndex,
             from: dataRange.start, to: dataRange.end,
             sources: imports.guideSources, enabledSourceIDs: imports.enabledSourceIDs,
             mappings: imports.mappingOverrides
@@ -486,7 +528,7 @@ struct PrototypeBrowser: View {
         guard isPresented, scenePhase == .active, let libraryCatalog, !libraryCatalog.channels.isEmpty else { return nil }
         return PrototypeLibraryGuideRequest(
             catalog: libraryCatalog, rows: model.guideRowIDs,
-            anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
+            anchorIndex: guideAnchorIndex,
             from: dataRange.start, to: dataRange.end
         )
     }
@@ -504,7 +546,7 @@ struct PrototypeBrowser: View {
 
     private var allChannelsHidden: Bool {
         guard model.visibleChannels.isEmpty else { return false }
-        let hidden = model.hiddenChannelIDs
+        let hidden = model.effectiveHiddenChannelIDs
         return !model.channels.isEmpty && model.channels.allSatisfy { hidden.contains($0.id) }
     }
 
@@ -728,7 +770,11 @@ struct PrototypeGuideSectionLabel: View {
             .foregroundStyle(palette.secondaryText)
             .lineLimit(1).minimumScaleFactor(0.8)
             .padding(.horizontal, PrototypeLayout.rowInset)
+            #if os(tvOS)
+            .frame(height: PrototypeLayout.guideSectionLabelHeight(fontSize: fontSize), alignment: .leading)
+            #else
             .frame(minHeight: PrototypeLayout.sectionLabelHeight, alignment: .leading)
+            #endif
             .accessibilityAddTraits(.isHeader)
     }
 }

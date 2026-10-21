@@ -4,6 +4,7 @@ import RatingsService
 import TraktService
 import SeerService
 import SimklService
+import WetrakrService
 import AniListService
 import MALService
 import LastFmService
@@ -17,6 +18,7 @@ struct SyncServices {
     let ratingsProvider: any ExternalRatingsProviding
     let trakt: TraktService
     let simkl: SimklService
+    let wetrakr: WetrakrService
     let seer: SeerService
     let anilist: AniListService
     let mal: MALService

@@ -33,6 +33,7 @@ extension PlozziOSAppModel: UniversalWatchlistHost {
         let candidates: [(any WatchlistDestination)?] = [
             traktService.watchlistDestination,
             simklService.watchlistDestination,
+            wetrakrService.watchlistDestination,
             anilistService.watchlistDestination,
             malService.watchlistDestination,
         ]

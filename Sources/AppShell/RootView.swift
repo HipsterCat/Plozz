@@ -33,7 +33,7 @@ enum HomeRuntimeScope {
 
     static func accountScopeKey(_ accounts: [Account]) -> String {
         accounts
-            .map { "\($0.id)#\($0.credentialRevision.rawValue.uuidString)" }
+            .map(\.connectionScopeKey)
             .sorted()
             .joined(separator: "|")
     }
@@ -64,15 +64,17 @@ enum HomeRuntimeScope {
 /// Top-level view that renders one screen per `SessionState`.
 public struct RootView: View {
     @State private var appState: AppState
+    @State private var providerSetupRouter = ManagedProviderSetupRouter()
     @State private var showSyncReceive = false
     @State private var showSyncReceiveFromSettings = false
-    /// A just-set-up profile whose PIN is being chosen.
-    /// Identifies the server awaiting an identity choice, for `.fullScreenCover(item:)`.
-    private struct PendingIdentityAccount: Identifiable { let id: String }
-
+    @State private var showSyncErasure = false
+    @State private var showsMarkerPreview = false
     /// Library discovery for the setup step's cover.
     @State private var setupLibraries = ProfileSetupLibrariesLoader()
     @State private var showSyncSend = false
+    @State private var rootPresentation = RootPresentationCoordinator()
+    @State private var startupNotesPrepared = false
+    @State private var presentedSetupOffer: SyncPairingRendezvous?
     /// Home's view model, owned here because this is the highest view whose
     /// identity is genuinely stable for the signed-in session. Kept out of the
     /// tab tree so a `TabView` re-host cannot discard it mid-load; see
@@ -96,10 +98,9 @@ public struct RootView: View {
     /// Appearance) and injected as `\.plozzReduceTransparency`. `tvOS Default`
     /// follows this OS value; `On` forces glass; `Off` forces solid.
     @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
-    /// Whether this device, playing whatever is playing, can afford glass.
+    /// Retained playback classification for HDR-compensated presentation.
     ///
-    /// Owned here so a change reaches every surface at once, and injected so the
-    /// player can raise and lower it without reaching back up through the app.
+    /// Owned here so players can balance their presentation state across handoffs.
     @State private var glassPerformance = GlassPerformanceModel()
     /// Window-level black veil that survives the player's dismiss into Home so it
     /// can cover the TV's *physical* HDR/DV → SDR panel switch (which on some TVs
@@ -129,6 +130,9 @@ public struct RootView: View {
         featureIntroductionStore: (any FeatureIntroductionStoring)? = nil
     ) {
         _appState = State(initialValue: appState ?? Self.makeAppState())
+        #if DEBUG && os(tvOS)
+        _showsMarkerPreview = State(initialValue: PlayerSkipMarkerPreview.isRequested())
+        #endif
         self.featureIntroductionStore =
             featureIntroductionStore ?? FeatureIntroductionStore()
     }
@@ -287,6 +291,193 @@ public struct RootView: View {
         pendingFeatureIntroduction = nil
     }
 
+    private var presentationRequests: [RootPresentationCoordinator.Destination] {
+        var requests: [RootPresentationCoordinator.Destination] = []
+        let flow = appState.profileFlow
+        if flow.pendingLockedProfile != nil || flow.pendingParentalSwitch != nil
+            || (flow.pendingSetupProfile == nil && appState.plexHomeUsers.pendingPlexPINRequest != nil) {
+            requests.append(.accessGate)
+        }
+        if flow.pendingIdentityAccountID != nil { requests.append(.serverIdentity) }
+        if flow.pendingLockOfferProfile != nil { requests.append(.profileLock) }
+        if flow.isPickingAppearanceForNewProfile { requests.append(.profileAppearance) }
+        if pendingFeatureIntroduction != nil { requests.append(.introduction) }
+        if releaseNotes.hasPendingStartupNotes { requests.append(.releaseNotes) }
+        if showSyncSend || rootPresentation.active == .sendSetup
+            || (startupPresentationReady && nextFeatureIntroduction == nil && startupNotesPrepared
+                && appState.cloudSyncUI.pendingSyncSetupOffer != nil) {
+            requests.append(.sendSetup)
+        }
+        if showSyncReceive || showSyncReceiveFromSettings { requests.append(.receiveSetup) }
+        if showSyncErasure { requests.append(.syncErasure) }
+        if providerSetupRouter.addressAccount != nil { requests.append(.serverAddresses) }
+        if startupPresentationReady && nextFeatureIntroduction == nil && startupNotesPrepared,
+           appState.cloudSyncUI.pendingServerPrompt != nil {
+            requests.append(.newServer)
+        }
+        return requests
+    }
+
+    private func rootPresentationDidDismiss() {
+        switch rootPresentation.active {
+        case .accessGate:
+            if rootPresentation.wasDismissedByUser {
+                appState.profileFlow.cancelProfileLockPrompt()
+                appState.profileFlow.cancelParentalSwitch()
+                appState.plexHomeUsers.dismissPlexPINIfPresented()
+            }
+        case .serverIdentity:
+            if rootPresentation.wasDismissedByUser, let id = appState.profileFlow.pendingIdentityAccountID {
+                appState.profileFlow.declineIdentityPrompt(for: id)
+            }
+        case .profileLock:
+            if rootPresentation.wasDismissedByUser { appState.profileFlow.dismissLockOffer() }
+        case .introduction:
+            if let introduction = pendingFeatureIntroduction {
+                featureIntroductionStore.markCompleted(introduction)
+            }
+            pendingFeatureIntroduction = nil
+            isDismissingFeatureIntroduction = false
+        case .releaseNotes:
+            releaseNotes.dismissStartupNotes()
+        case .profileAppearance:
+            appState.finishNewProfileAppearanceSelection()
+            appState.profileFlow.presentPostAppearanceStep()
+        case .sendSetup:
+            showSyncSend = false
+            if let offer = presentedSetupOffer { appState.declineSyncSetupOffer(offer) }
+            presentedSetupOffer = nil
+            appState.isPresentingSyncSetup = false
+        case .receiveSetup:
+            showSyncReceive = false
+            showSyncReceiveFromSettings = false
+            appState.refreshPendingSyncedServers()
+        case .syncErasure:
+            showSyncErasure = false
+        case .serverAddresses:
+            providerSetupRouter.addressAccount = nil
+        case .newServer:
+            if rootPresentation.wasDismissedByUser { appState.clearPendingServerPrompt() }
+        case nil:
+            break
+        }
+        // Re-evaluate after the source callbacks, not from the pre-dismissal queue.
+        rootPresentation.didDismiss()
+        updateRootPresentation()
+    }
+
+    private func updateRootPresentation() {
+        let requests = presentationRequests
+        if rootPresentation.active == nil, requests.first == .sendSetup {
+            presentedSetupOffer = showSyncSend ? nil : appState.cloudSyncUI.pendingSyncSetupOffer
+            appState.isPresentingSyncSetup = true
+        }
+        rootPresentation.update(requests)
+    }
+
+    @ViewBuilder
+    private var rootPresentationContent: some View {
+        switch rootPresentation.active {
+        case .accessGate:
+            ProfileAccessGateView(appState: appState)
+        case .serverIdentity:
+            if let id = appState.profileFlow.pendingIdentityAccountID {
+                ProfileServerIdentityPromptView(
+                    appState: appState, accountID: id,
+                    onFinish: { appState.profileFlow.resolveIdentityPrompt(for: id) },
+                    onDecline: { appState.profileFlow.declineIdentityPrompt(for: id) }
+                )
+            }
+        case .profileLock:
+            if let profile = appState.profileFlow.pendingLockOfferProfile {
+                ProfileLockOfferView(
+                    profile: profile, syncEnabled: SyncSetupFeatureFlag().isEnabled,
+                    validatePlexPIN: { await appState.plexHomeUsers.validatePlexPIN($0, forProfile: profile.id) },
+                    onComplete: {
+                        appState.setLock($0, forProfile: profile.id)
+                        appState.profileFlow.dismissLockOffer()
+                    },
+                    onSkip: { appState.profileFlow.dismissLockOffer() }
+                )
+            }
+        case .introduction:
+            if let introduction = pendingFeatureIntroduction {
+                switch introduction {
+                case .navigationStyles:
+                    SelectNavigationStyleView(appState: appState) { dismissFeatureIntroduction(introduction) }
+                case .homeLayout:
+                    SelectHomeLayoutView(hero: appState.profileSettings.heroSettingsModel) {
+                        dismissFeatureIntroduction(introduction)
+                    }
+                default:
+                    EmptyView()
+                }
+            }
+        case .releaseNotes:
+            ReleaseNotesStartupView(model: releaseNotes)
+        case .profileAppearance:
+            NewProfileAppearanceFlowView(
+                appState: appState, deviceColorScheme: systemColorScheme,
+                onComplete: {
+                    completeAppearanceIntroductions()
+                    appState.finishNewProfileAppearanceSelection()
+                }
+            )
+        case .sendSetup:
+            SyncSetupSendView(
+                appState: appState,
+                offer: presentedSetupOffer,
+                onClose: rootPresentation.dismiss
+            )
+        case .receiveSetup:
+            SyncSetupReceiveView(appState: appState, onClose: rootPresentation.dismiss)
+        case .syncErasure:
+            AppLanguageScope(model: appState.profileSettings.appLanguageModel) {
+                SyncEraseDataView(
+                    profileID: appState.profilesModel.activeProfileID,
+                    isAllowed: !appState.profilesModel.activeProfile.isKids
+                        && !appState.profileFlow.managementRequiresParentalPIN,
+                    status: SyncStatusProvider { Self.syncStatusPresentation(appState.cloudSyncStatus) },
+                    erase: { appState.eraseCloudSyncData() }
+                )
+            }
+            .plozzDialogSurface()
+        case .serverAddresses:
+            if let account = providerSetupRouter.addressAccount {
+                let profileID = appState.profilesModel.activeProfileID
+                ServerAddressesView(
+                    account: account, store: appState.accountsProviders.accountStore,
+                    isAuthorized: {
+                        appState.profilesModel.activeProfileID == profileID
+                            && !appState.profileFlow.managementRequiresParentalPIN
+                    },
+                    onChanged: { appState.accountsProviders.reloadAccounts(updatingServerAddressesFor: account.id) }
+                )
+                .plozzDialogSurface()
+            }
+        case .newServer:
+            if let descriptor = appState.cloudSyncUI.pendingServerPrompt {
+                VStack(spacing: 24) {
+                    Text("New server from your other device").font(.title2.bold())
+                    Text("“\(descriptor.serverName)” is set up on another device. Sign in to watch it here — your login stays private to each device. You can also find it later under Settings ▸ iCloud Sync.")
+                        .multilineTextAlignment(.center)
+                    HStack(spacing: 24) {
+                        Button("Set Up") {
+                            appState.clearPendingServerPrompt()
+                            setUpPendingServer(descriptor)
+                        }
+                        Button("Ignore", role: .destructive) { appState.ignorePendingSyncedServer(descriptor.id) }
+                        Button("Not Now", role: .cancel) { appState.clearPendingServerPrompt() }
+                    }
+                }
+                .padding(60).frame(maxWidth: 1100)
+                .plozzDialogSurface()
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
     private func makeLibraryChannelCompletionHandler(
         profileID: String
     ) -> @MainActor @Sendable (MediaItem, UUID) throws -> Void {
@@ -324,19 +515,17 @@ public struct RootView: View {
         }
     }
 
+    @ViewBuilder
+    private var markerPreview: some View {
+        #if DEBUG && os(tvOS)
+        PlayerMarkerLibraryPreview(appState: appState) { showsMarkerPreview = false }
+        #endif
+    }
+
     public var body: some View {
         let _ = plozzPrintChanges { Self._printChanges() }
-        // Read the PIN request HERE so the @Observable system registers it
-        // as a dependency of body. The sheet's Binding closures aren't
-        // tracked, so without this body never re-evaluates when the request
-        // clears and the sheet stays up after a successful PIN.
-        // Profile setup renders Plex PIN entry inside its own full-page flow.
-        // Letting this root-level cover compete with the setup cover tears the
-        // latter down and briefly exposes Home between "Watching as" and the PIN.
-        let pinRequest = appState.profileFlow.pendingSetupProfile == nil
-            ? appState.plexHomeUsers.pendingPlexPINRequest
-            : nil
-        return Group {
+        let requests = presentationRequests
+        return ZStack {
             // Profile setup outranks the global session machine. Add-user auth
             // temporarily moves that machine to `.onboarding`, but setup must
             // remain mounted underneath so its exact NavigationStack path
@@ -358,7 +547,7 @@ public struct RootView: View {
                     onAppearanceSelected: completeAppearanceIntroductions
                 )
             } else {
-                switch appState.state {
+                switch appState.rootPresentationState {
             case .launching:
                 LaunchView()
 
@@ -371,15 +560,14 @@ public struct RootView: View {
                     onSetUpFromAnotherDevice: canReturnToApp ? nil : { showSyncReceive = true },
                     onAppearanceSelected: completeAppearanceIntroductions
                 )
-                .fullScreenCover(isPresented: $showSyncReceive) {
-                    SyncSetupReceiveView(appState: appState) { showSyncReceive = false }
-                }
 
             case .ready:
                 ZStack {
                 if appState.profileFlow.isChoosingProfile {
                     ProfileSelectionView(appState: appState, canCancel: appState.profileFlow.isProfileSelectionCancelable)
                         .transition(.opacity)
+                } else if showsMarkerPreview, !appState.profilesModel.activeProfile.isKids {
+                    markerPreview
                 } else {
                     // Rendered even when `homeAccounts` is EMPTY. Switching the
                     // last server off used to skip this whole branch, so the
@@ -414,9 +602,10 @@ public struct RootView: View {
                     let createProfileForSetup: (ProfileDraft) -> Void = { draft in
                         appState.createProfileForSetup(draft, isKids: false)
                     }
+
                     let debugActions = DebugSettingsActions(
                         resetToFirstRun: { appState.resetToFirstRunForDebugging() },
-                        eraseICloud: { appState.eraseEverythingFromICloudForDebugging() }
+                        reviewSyncErasure: { showSyncErasure = true }
                     )
                     let syncRepairActions = SyncRepairActions(
                         redownload: { appState.redownloadCloudSync() },
@@ -440,6 +629,7 @@ public struct RootView: View {
                             ratingsProvider: appState.ratingsProvider,
                             trakt: appState.traktService,
                             simkl: appState.simklService,
+                            wetrakr: appState.wetrakrService,
                             seer: appState.seerService,
                             anilist: appState.anilistService,
                             mal: appState.malService,
@@ -452,40 +642,14 @@ public struct RootView: View {
                         audioController: appState.audioController,
                         homeLayoutStore: HomeLayoutStore(namespace: appState.profilesModel.activeNamespace),
                         homeContentStore: HomeContentStore(namespace: appState.profilesModel.activeNamespace),
-                        navigationLibrariesSnapshotStore: NavigationLibrariesSnapshotStore(namespace: appState.profilesModel.activeNamespace),
+                        watchlistHasItems: { appState.navigationWatchlistHasItems },
                         mediaItemActionHandler: appState.mediaItemActionHandler,
                         enqueueWatchMutation: { appState.enqueueWatchMutation($0) },
                         completeLibraryChannelPlayback: makeLibraryChannelCompletionHandler(
                             profileID: appState.profilesModel.activeProfileID
                         ),
                         isLiveTVProfileAuthorized: { appState.isLiveTVProfileAuthorized },
-                        // These bridge closures are `@Sendable` (the player may invoke
-                        // them off the main actor), but every `appState` watch method is
-                        // `@MainActor`-isolated. Hop to the main actor so the calls are
-                        // data-race-safe. The hop is semantically free: each method's real
-                        // work is already async (an enqueue+drain on the reconciler actor),
-                        // and the reconciler's newest-wins `capturedAt` clock tolerates the
-                        // ordering.
-                        watchBridge: WatchOutboxBridge(
-                            beginLiveSession: { accountID, itemID in
-                                Task { @MainActor in
-                                    appState.beginLiveWatchSession(accountID: accountID, itemID: itemID)
-                                }
-                            },
-                            finishPlayback: { accountID, itemID, watchedPercent, mutation, item in
-                                Task { @MainActor in
-                                    appState.finishLiveWatchSession(accountID: accountID, itemID: itemID, watchedPercent: watchedPercent, mutation: mutation, item: item)
-                                }
-                            },
-                            checkpoint: { mutation in
-                                Task { @MainActor in
-                                    appState.checkpointWatchState(mutation: mutation)
-                                }
-                            },
-                            crossServerSync: { [namespace = appState.profilesModel.activeNamespace] in
-                                PlaybackSettingsStore.currentSyncAcrossServers(namespace: namespace)
-                            }
-                        ),
+                        watchBridge: appState.makePlaybackWatchBridge(),
                         pendingWatchMutations: { await appState.pendingWatchMutations() },
                         appliedWatchRecency: { await appState.appliedWatchRecency() },
                         displayAccounts: appState.accountsProviders.accounts,
@@ -567,7 +731,10 @@ public struct RootView: View {
                         // subscribed the ROOT of the app to a model that ticks
                         // through every sync, and a root re-render dirties every
                         // view below it — the widest possible invalidation.
-                        syncStatusSummary: SyncStatusProvider {
+                        syncStatusSummary: SyncStatusProvider(inventory: {
+                            guard let sync = appState.cloudSync else { throw CocoaError(.featureUnsupported) }
+                            return try await sync.dataInventory()
+                        }) {
                             Self.syncStatusPresentation(appState.cloudSyncStatus)
                         },
                         onSyncNow: { appState.syncCloudNow() },
@@ -598,10 +765,28 @@ public struct RootView: View {
             }
             }
         }
+        .modifier(AccountSetupOverlay(
+            appState: appState, deviceColorScheme: systemColorScheme,
+            onAppearanceSelected: completeAppearanceIntroductions
+        ))
         .background { AppBackground(palette: resolvedPalette) }
         .environment(\.themePalette, resolvedPalette)
+        .environment(\.managedProviderSetupRouter, providerSetupRouter)
+        .onChange(of: appState.profilesModel.activeProfileID) { _, _ in
+            providerSetupRouter.addressAccount = nil
+        }
+        .onChange(of: providerSetupRouter.request?.id) { _, _ in
+            guard let request = providerSetupRouter.request else { return }
+            providerSetupRouter.request = nil
+            appState.addAccount(provider: .iptv, playlist: request.playlist, iptvAccount: request.account)
+        }
+        .environment(\.gradientBackgroundsEnabled, appState.profileSettings.themeModel.gradientEnabled)
         .environment(\.familyGuidanceProvider, appState.familyGuidance)
         .environment(\.detailHeaderSettings, appState.profileSettings.detailPageModel)
+        .environment(
+            \.versionPickerAudioLanguage,
+            appState.profileSettings.playbackModel.settings.audioLanguagePreference.explicitLanguageCode
+        )
         // `dynamicTypeSize` is read here on purpose: PlozzMetrics samples its
         // typography once at construction, so this dependency is what makes the
         // whole table rebuild when the reader changes their text size. Without it
@@ -614,8 +799,16 @@ public struct RootView: View {
             )
         )
         .environment(\.plozzCardStyle, appState.profileSettings.cardStyleModel.style)
+        .environment(\.plozzCardCaptionSettings, appState.profileSettings.cardStyleModel.captions)
+        .environment(
+            \.plozzContinueWatchingPlaybackDetails,
+            appState.profileSettings.homeLibraryVisibilityModel.continueWatchingPlaybackDetails
+        )
+        .environment(\.plozzArtworkSettings, appState.profileSettings.cardStyleModel.artwork)
+        .environment(\.plozzArtworkProviders, appState.metadataProviderSettingsModel.settings)
         .environment(\.plozzCardFocusStyle, appState.profileSettings.cardStyleModel.focusStyle)
         .environment(\.plozzWatchStatusIndicator, appState.profileSettings.watchStatusIndicatorModel.indicator)
+        .environment(\.plozzShowsUnwatchedEpisodeCount, appState.profileSettings.watchStatusIndicatorModel.showsUnwatchedEpisodeCount)
         // Read by the corner mark on a card whose title isn't in the library:
         // connected turns "not yours" into "you can ask for this". Injected here
         // rather than passed down because the mark is drawn beneath every row,
@@ -629,15 +822,6 @@ public struct RootView: View {
             \.plozzReduceTransparency,
             appState.profileSettings.transparencyModel.preference.reducesTransparency(
                 systemReduceTransparency: systemReduceTransparency
-            )
-        )
-        // The same, plus performance — read by panels and cards, whose backdrop
-        // sample is the whole reason the frame rate suffers.
-        .environment(
-            \.plozzReducePanelGlass,
-            appState.profileSettings.transparencyModel.preference.reducesTransparency(
-                systemReduceTransparency: systemReduceTransparency,
-                performance: glassPerformance.budget
             )
         )
         // So a hairline tuned against an SDR backdrop can compensate for SDR
@@ -659,184 +843,40 @@ public struct RootView: View {
             presenter: appState.transientStatusPresenter,
             palette: resolvedPalette
         )
-        // One cover for the whole access gate. Two separate covers dismissed the
-        // profile PIN to Home, then presented the Plex PIN — flashing Home as if
-        // access had been granted. This cover stays opaque and switches its
-        // content in place.
-        .fullScreenCover(isPresented: Binding(
-            get: {
-                appState.profileFlow.pendingLockedProfile != nil
-                    || appState.profileFlow.pendingParentalSwitch != nil
-                    || pinRequest != nil
-            },
-            set: { presented in
-                if !presented {
-                    appState.profileFlow.cancelProfileLockPrompt()
-                    appState.profileFlow.cancelParentalSwitch()
-                    appState.plexHomeUsers.dismissPlexPINIfPresented()
-                }
-            }
-        )) {
-            ProfileAccessGateView(appState: appState)
-        }
-        // Turning a server ON for a profile asks the same question setup asks:
-        // who does this profile watch as there? Without it the watchlist reads
-        // that server as the account owner and quietly shows their list in, say,
-        // a child's profile. Backing out declines rather than consenting.
-        .fullScreenCover(item: Binding(
-            get: { appState.profileFlow.pendingIdentityAccountID.map(PendingIdentityAccount.init(id:)) },
-            set: { if $0 == nil { appState.profileFlow.declineIdentityPrompt(for: appState.profileFlow.pendingIdentityAccountID ?? "") } }
-        )) { pending in
-            ProfileServerIdentityPromptView(
-                appState: appState,
-                accountID: pending.id,
-                onFinish: { appState.profileFlow.resolveIdentityPrompt(for: pending.id) },
-                onDecline: { appState.profileFlow.declineIdentityPrompt(for: pending.id) }
-            )
-        }
         // Resumes setup that was abandoned part-way — quit mid-flow, or synced
         // from a device where it was never finished. The gate is persisted, so a
         // profile left behind it would otherwise never import a watchlist at all.
         .task { appState.profileFlow.resumeSetupIfNeeded() }
-        // Last onboarding step stays full-screen. An alert here exposed Home
-        // underneath an unrelated setup question, making the flow feel finished
-        // before it actually was.
-        .fullScreenCover(
-            item: Binding(
-                get: { appState.profileFlow.pendingLockOfferProfile },
-                set: { if $0 == nil { appState.profileFlow.dismissLockOffer() } }
-            )
-        ) { profile in
-            ProfileLockOfferView(
-                profile: profile,
-                syncEnabled: SyncSetupFeatureFlag().isEnabled,
-                validatePlexPIN: {
-                    await appState.plexHomeUsers.validatePlexPIN(
-                        $0,
-                        forProfile: profile.id
-                    )
-                },
-                onComplete: { lock in
-                    appState.setLock(lock, forProfile: profile.id)
-                    appState.profileFlow.dismissLockOffer()
-                },
-                onSkip: { appState.profileFlow.dismissLockOffer() }
-            )
-        }
         .task(id: featureIntroductionStartupReady) {
             if featureIntroductionStartupReady {
                 pendingFeatureIntroduction = nextFeatureIntroduction
             }
         }
-        .fullScreenCover(
-            item: $pendingFeatureIntroduction,
-            onDismiss: { isDismissingFeatureIntroduction = false }
-        ) { introduction in
-            switch introduction {
-            case .navigationStyles:
-                SelectNavigationStyleView(
-                    appState: appState,
-                    onContinue: {
-                        dismissFeatureIntroduction(introduction)
-                    }
-                )
-            case .homeLayout:
-                SelectHomeLayoutView(
-                    hero: appState.profileSettings.heroSettingsModel,
-                    onContinue: {
-                        dismissFeatureIntroduction(introduction)
-                    }
-                )
-            default:
-                EmptyView()
-            }
-        }
         .task(id: releaseNotesStartupReady) {
             if releaseNotesStartupReady {
                 releaseNotes.prepareForStartup()
+                startupNotesPrepared = true
             }
         }
-        .fullScreenCover(
+        .onChange(of: requests, initial: true) { _, _ in
+            updateRootPresentation()
+        }
+        .plozzFullScreenCover(
             isPresented: Binding(
-                get: { releaseNotes.hasPendingStartupNotes },
-                set: { presented in
-                    if !presented {
-                        releaseNotes.dismissStartupNotes()
-                    }
-                }
+                get: { rootPresentation.isPresented },
+                set: { if !$0 { rootPresentation.dismiss() } }
             ),
-            onDismiss: { releaseNotes.dismissStartupNotes() }
+            onDismiss: rootPresentationDidDismiss
         ) {
-            ReleaseNotesStartupView(model: releaseNotes)
-        }
-        // One-time appearance flow for a profile just created in-app. The app has
-        // already switched profiles, so all choices write to its namespace.
-        .fullScreenCover(
-            isPresented: Binding(
-                get: { appState.profileFlow.isPickingAppearanceForNewProfile },
-                set: { newValue in
-                    if !newValue { appState.finishNewProfileAppearanceSelection() }
-                }
-            ),
-            onDismiss: { appState.profileFlow.presentPostAppearanceStep() }
-        ) {
-            NewProfileAppearanceFlowView(
-                appState: appState,
-                deviceColorScheme: systemColorScheme,
-                onComplete: {
-                    completeAppearanceIntroductions()
-                    appState.finishNewProfileAppearanceSelection()
-                }
-            )
-        }
-        .fullScreenCover(isPresented: $showSyncSend) {
-            SyncSetupSendView(appState: appState) { showSyncSend = false }
-        }
-        .fullScreenCover(isPresented: $showSyncReceiveFromSettings) {
-            SyncSetupReceiveView(appState: appState) {
-                showSyncReceiveFromSettings = false
-                appState.refreshPendingSyncedServers()
-            }
-        }
-        .alert(
-            "New server from your other device",
-            isPresented: Binding(
-                get: { appState.cloudSyncUI.pendingServerPrompt != nil },
-                set: { if !$0 { appState.clearPendingServerPrompt() } }
-            ),
-            presenting: appState.cloudSyncUI.pendingServerPrompt
-        ) { descriptor in
-            Button("Set Up") {
-                appState.clearPendingServerPrompt()
-                setUpPendingServer(descriptor)
-            }
-            Button("Ignore", role: .destructive) {
-                appState.ignorePendingSyncedServer(descriptor.id)
-            }
-            Button("Not Now", role: .cancel) {
-                appState.clearPendingServerPrompt()
-            }
-        } message: { descriptor in
-            Text("“\(descriptor.serverName)” is set up on another device. Sign in to watch it here — your login stays private to each device. You can also find it later under Settings ▸ iCloud Sync.")
-        }
-        .alert(
-            syncSetupOfferTitle,
-            isPresented: Binding(
-                // Presentation is driven purely by pendingSyncSetupOffer; the two
-                // buttons own confirm/decline, so the setter must NOT have a side
-                // effect (that would double-fire and race the button action). tvOS
-                // routes the Menu button to the .cancel role, so decline still runs.
-                get: { appState.cloudSyncUI.pendingSyncSetupOffer != nil },
-                set: { _ in }
-            ),
-            presenting: appState.cloudSyncUI.pendingSyncSetupOffer
-        ) { _ in
-            Button("Set Up") { appState.confirmSyncSetupOffer() }
-            Button("Not Now", role: .cancel) { appState.declineSyncSetupOffer() }
-        } message: { _ in
-            Text(syncSetupOfferServerName != nil
-                 ? "Sign this device in to “\(syncSetupOfferServerName!)”."
-                 : "Send your servers and sign-in so it’s ready to watch.")
+            rootPresentationContent
+                .environment(\.themePalette, resolvedPalette)
+                .environment(\.gradientBackgroundsEnabled, appState.profileSettings.themeModel.gradientEnabled)
+                .environment(\.colorScheme, resolvedPalette.isLight ? .light : .dark)
+                .environment(\.plozzReduceTransparency,
+                    appState.profileSettings.transparencyModel.preference.reducesTransparency(
+                        systemReduceTransparency: systemReduceTransparency
+                    ))
+                .environment(appState.profilesModel)
         }
         .task {
             while case .launching = appState.state {
@@ -860,6 +900,22 @@ public struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: MainThreadStallProbe.contextDidChange)) { _ in
             crashReporting.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PlayerMarkerPreviewRequest.notification)) { _ in
+            if PlayerMarkerPreviewRequest.isAvailable, DeveloperModeModel.shared.isEnabled,
+               !appState.profilesModel.activeProfile.isKids {
+                showsMarkerPreview = true
+            }
+        }
+        .onChange(of: DeveloperModeModel.shared.isEnabled) { _, enabled in
+            if !enabled { showsMarkerPreview = false }
+        }
+        .onChange(of: appState.state, initial: true) { _, _ in
+            #if DEBUG && os(tvOS)
+            if PlayerMarkerPreviewRequest.isRequested() {
+                HandoffDiagnostics.emit("player MARKER_PREVIEW_ROUTE requested=\(showsMarkerPreview) \(MarkerPreviewLibrarySource.gateSummary(appState))")
+            }
+            #endif
         }
         // Scene-phase side effects live in a zero-size child, NOT here.
         //
@@ -894,6 +950,11 @@ public struct RootView: View {
             )
         )
         .onOpenURL { appState.handle(url: $0) }
+        .externalPlayerSupport(
+            context: { appState.externalPlaybackContext() },
+            legacySettings: { appState.profileSettings.playbackModel.settings.externalPlayer },
+            onProgress: { try await appState.finishExternalPlayback($0) }
+        )
         // Window-level HDR/DV exit veil: a black layer above Home that the player
         // raises (via the injected `DisplayVeilModel`) just before it dismisses, so
         // black survives the dismiss and keeps covering the screen through the TV's
@@ -917,6 +978,7 @@ public struct RootView: View {
         // model is rebuilt on profile switch by AppState, so each profile gets its
         // own tint without re-architecting this call site.
         .installNightShiftOverlay(appState.profileSettings.nightShiftModel)
+        .modifier(ReducedMotion())
     }
 
     /// Keeps status reads inside the leaf view that renders them. Reading the
@@ -928,7 +990,8 @@ public struct RootView: View {
             summary: status.summary,
             isSyncing: status.phase == .syncing,
             itemCount: status.syncedRecordCount,
-            accountTag: status.accountTag
+            accountTag: status.accountTag,
+            isRecovering: status.isRecovering
         )
     }
 }
@@ -1134,9 +1197,25 @@ private struct OnboardingPageContent: View {
                 deviceID: appState.accountsProviders.deviceID,
                 canReturnToApp: canReturnToApp,
                 initialProvider: appState.pendingOnboardingProvider,
+                initialIPTVPlaylist: appState.pendingIPTVPlaylist,
+                reconnectingIPTV: appState.pendingIPTVAccount.map {
+                    $0.session(token: appState.accountsProviders.accountStore.token(for: $0.id) ?? "")
+                },
                 signedInServers: appState.signedInServers,
                 onMediaBrowserServerSelected: { server in appState.selectServer(server) },
                 onPlexAuthenticated: { session in appState.didAuthenticatePlex(session) },
+                onIPTVAuthenticated: { [profileID = appState.profilesModel.activeProfileID,
+                                       previous = appState.pendingIPTVAccount] session in
+                    guard appState.profilesModel.activeProfileID == profileID,
+                          previous.map({ original in
+                              appState.accountsProviders.accounts.contains {
+                                  $0.id == original.id && $0.credentialRevision == original.credentialRevision
+                              }
+                          }) != false,
+                          appState.didAuthenticate(session, activateIPTVAccount: previous == nil) else {
+                        throw IPTVAuthViewModel.CompletionError.persistence
+                    }
+                },
                 onPlexAuthenticatedMany: { sessions in appState.didAuthenticatePlexMany(sessions) },
                 onShareConfigured: { draft in
                     appState.didConfigureShare(
@@ -1193,10 +1272,7 @@ private struct OnboardingPageContent: View {
 
                 },
                 onCancel: { appState.cancelAuthentication() },
-                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice,
-                onStandalonePlayback: AppState.isStandalonePlaybackAvailable && !canReturnToApp
-                    ? { _ = appState.enterStandalonePlayback() }
-                    : nil
+                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice
             )
 
         case let .authenticating(server):
@@ -1265,13 +1341,43 @@ private struct OnboardingPageContent: View {
     }
 }
 
-/// Keeps every detour from new-profile setup inside the setup cover.
-///
-/// Selecting a PIN-protected Plex user used to ask the ROOT to present another
-/// cover, which replaced the setup cover and exposed Home during the hand-off.
-/// Adding another user changed the session state underneath the unchanged setup
-/// cover, so its auth screen existed but could never be seen. One full-page
-/// switch here handles both: PIN, add-account onboarding, then back to Libraries.
+/// In-app authentication covers navigation instead of destroying its current path.
+struct AccountSetupOverlay: ViewModifier {
+    let appState: AppState
+    let deviceColorScheme: ColorScheme
+    var onAppearanceSelected: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        content
+            .disabled(appState.presentsAccountSetupOverApp)
+            .accessibilityHidden(appState.presentsAccountSetupOverApp)
+            .overlay {
+                if appState.presentsAccountSetupOverApp {
+                    ZStack {
+                        AppBackground(palette: ThemePalette.palette(
+                            for: appState.profileSettings.themeModel.theme,
+                            systemColorScheme: deviceColorScheme
+                        )).ignoresSafeArea()
+                        switch appState.state {
+                        case let .onboarding(step, canReturnToApp):
+                            OnboardingFlowView(
+                                appState: appState, step: step, canReturnToApp: canReturnToApp,
+                                deviceColorScheme: deviceColorScheme,
+                                onAppearanceSelected: onAppearanceSelected
+                            )
+                        case let .failed(error, _):
+                            FailureView(message: error.userMessage) { appState.retry() }
+                        default:
+                            EmptyView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+    }
+}
+
+/// Keeps PIN and add-account detours inside the new-profile setup cover.
 private struct ProfileSetupFlowView: View {
     let appState: AppState
     let profile: Profile
@@ -1521,29 +1627,30 @@ private struct PlexPINEntryView: View {
     let onCancel: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var isSubmitting: Bool = false
 
     var body: some View {
-        // Track the request directly so a successful switch (which clears
-        // pendingPlexPINRequest on AppState) re-evaluates THIS view and triggers
-        // the onChange-based dismiss below. Belt-and-suspenders dismissal that
-        // does NOT rely on the outer cover binding tracking anything — call
-        // dismiss() ourselves from inside the cover.
         let pendingRequest = appState.plexHomeUsers.pendingPlexPINRequest
         return PINEntryScaffold(
             title: "Enter your Plex PIN",
             name: Text(verbatim: userName),
             errorMessage: appState.plexHomeUsers.plexPINError,
-            isSubmitting: isSubmitting,
+            isSubmitting: appState.plexHomeUsers.isSubmittingPlexPIN,
+            availability: pendingRequest == nil ? .checking : appState.plexHomeUsers.plexPINEntryAvailability,
+            onRetry: {
+                guard let pendingRequest, appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest else { return }
+                appState.plexHomeUsers.retryPlexPINRequirement()
+            },
             sequenceStep: sequenceStep,
             onSubmit: { pin in
-                // Flip isSubmitting so the user sees a spinner rather than "four
-                // dots and nothing happens" while the network round-trip runs.
+                guard appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest,
+                      appState.plexHomeUsers.plexPINEntryAvailability == .available else { return }
                 PlozzLog.auth.debug("PIN auto-submit at 4 digits")
-                isSubmitting = true
                 onSubmit(pin)
             },
-            onCancel: onCancel
+            onCancel: {
+                guard let pendingRequest, appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest else { return }
+                onCancel()
+            }
         ) {
             PINBadge {
                 if let url = avatarURLString.flatMap(URL.init(string:)) {
@@ -1561,16 +1668,9 @@ private struct PlexPINEntryView: View {
             }
             .frame(width: PINLayout.badgeSize, height: PINLayout.badgeSize)
         }
-        .onChange(of: appState.plexHomeUsers.plexPINError) { _, newValue in
-            // Wrong-PIN response: drop the submitting state so the user can retry
-            // (the scaffold clears the entered digits off the same signal).
-            if newValue != nil { isSubmitting = false }
-        }
+        .id([pendingRequest?.id, pendingRequest?.accountID, pendingRequest?.homeUserID])
         .onChange(of: pendingRequest?.id) { _, newValue in
-            // The cover's outer Binding tracking has been flaky on tvOS — call
-            // dismiss() directly from inside the cover when AppState clears the
-            // pending request (success path). This is the authoritative signal
-            // that the PIN was accepted.
+            // Both a successful switch and a cancelled proposal dismiss the cover.
             if newValue == nil, dismissOnSuccess {
                 PlozzLog.auth.debug("pendingPlexPINRequest cleared — calling dismiss()")
                 dismiss()

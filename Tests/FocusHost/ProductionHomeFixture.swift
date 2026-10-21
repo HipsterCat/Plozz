@@ -5,9 +5,27 @@ import notify
 import FeatureHome
 import FeatureHomeCore
 import MetadataKit
+import Observation
 import SwiftUI
 import UIKit
 @testable import AppShell
+
+@MainActor
+@Observable
+fileprivate final class HeldHomeArtworkState {
+    static let shared = HeldHomeArtworkState()
+    var started = 0
+    var completed = 0
+}
+
+private actor HeldHomeArtworkLoader: ArtworkNetworkFileLoading {
+    func loadArtwork(_ reference: NetworkArtworkReference, maximumBytes: Int) async throws -> Data {
+        await MainActor.run { HeldHomeArtworkState.shared.started += 1 }
+        try await Task.sleep(for: .seconds(300))
+        await MainActor.run { HeldHomeArtworkState.shared.completed += 1 }
+        return Data()
+    }
+}
 
 struct ProductionHomeFixture: View {
     @State private var fixture: ProductionHomeState?
@@ -18,6 +36,7 @@ struct ProductionHomeFixture: View {
     @State private var expectedNativeDestination: NavigationRailDestination?
     @State private var prematureNativeHomeFocusCount = 0
     @State private var nativeSidebarFocus = NavigationDestinationFocusHandoff()
+    @State private var nativeFocusHistory: [String] = []
 
     private var isPinned: Bool { ProcessInfo.processInfo.arguments.contains("--pinned-home") }
     /// `--focus-style=<name>` picks a card focus style; native system focus otherwise.
@@ -103,6 +122,18 @@ struct ProductionHomeFixture: View {
                 .overlay(alignment: .topTrailing) {
                     VStack {
                         Text("Production Home ready")
+                        if ProcessInfo.processInfo.arguments.contains("--partial-home-failure") {
+                            Text(verbatim: fixture.resumePublication.isWaiting ? "waiting" : "ready")
+                                .accessibilityIdentifier("home-resume-publication")
+                            Text(verbatim: nativeFocusHistory.joined(separator: "|"))
+                                .accessibilityIdentifier("home-native-focus-history")
+                        }
+                        if ProcessInfo.processInfo.arguments.contains("--held-home-artwork") {
+                            Text(verbatim: "\(HeldHomeArtworkState.shared.started)")
+                                .accessibilityIdentifier("home-held-artwork-started")
+                            Text(verbatim: "\(HeldHomeArtworkState.shared.completed)")
+                                .accessibilityIdentifier("home-held-artwork-completed")
+                        }
                         if ProcessInfo.processInfo.arguments.contains("--library-detail-sequence") {
                             Text(verbatim: "\(libraryPath.count)")
                                 .accessibilityIdentifier("detail-sequence-route-depth")
@@ -117,6 +148,10 @@ struct ProductionHomeFixture: View {
                             Text(verbatim: fixture.model.loadingRows.contains(.recentlyAdded) ? "pending" : "ready")
                                 .accessibilityIdentifier("home-fixture-latest-state")
                         }
+                        if ProcessInfo.processInfo.arguments.contains("--showcase-discover-fixture") {
+                            Text(verbatim: fixture.discoveryLoad.isReady ? "ready" : "pending")
+                                .accessibilityIdentifier("home-fixture-discover-state")
+                        }
                     }
                     .font(.caption2)
                     .allowsHitTesting(false)
@@ -126,7 +161,17 @@ struct ProductionHomeFixture: View {
             }
         }
         .environment(\.plozzCardFocusStyle, Self.focusStyle)
+        .environment(\.gradientBackgroundsEnabled, !ProcessInfo.processInfo.arguments.contains("--gradient-off"))
+        .environment(\.themePalette, ProcessInfo.processInfo.arguments.contains("--gradient-black") ? .pureBlack : .dark)
         .environment(\.plozzCardStyle, ProcessInfo.processInfo.arguments.contains("--framed-cards") ? .framed : .borderless)
+        .onReceive(NotificationCenter.default.publisher(for: UIFocusSystem.didUpdateNotification)) { notification in
+            guard ProcessInfo.processInfo.arguments.contains("--partial-home-failure"),
+                  let context = notification.userInfo?[UIFocusSystem.focusUpdateContextUserInfoKey]
+                    as? UIFocusUpdateContext,
+                  let item = context.nextFocusedItem as? NSObject,
+                  let label = item.accessibilityLabel else { return }
+            nativeFocusHistory.append(label)
+        }
         .task {
             guard fixture == nil else { return }
             fixture = await ProductionHomeState.load()
@@ -184,6 +229,7 @@ private struct ProductionHomeContent: View {
                         heroTrailerController: fixture.trailer,
                         heroIsFrontmost: isActive && path.isEmpty,
                         heroRuntime: fixture.runtime,
+                        heroFeaturedProvider: { limit in await fixture.featuredContent(limit: limit) },
                         heroArtworkProvider: { $0.backdropURL },
                         heroArtworkValidator: { _ in true },
                         navigationStyle: isPinned
@@ -253,6 +299,22 @@ private final class ProductionHomeActions: MediaItemActionHandling {
 }
 
 @MainActor
+@Observable
+private final class ProductionDiscoveryLoadState {
+    var isReady = false
+}
+
+@MainActor @Observable
+private final class ProductionResumePublicationState {
+    var isWaiting = false
+}
+
+private actor ProductionHomeReadCounter {
+    private var count = 0
+    func next() -> Int { count += 1; return count }
+}
+
+@MainActor
 private final class ProductionHomeState {
     let model: HomeViewModel
     let library: LibraryBrowseViewModel
@@ -265,6 +327,8 @@ private final class ProductionHomeState {
     let runtime = HomeHeroRuntimeState()
     let chrome = NavigationChromeModel()
     let actions = ProductionHomeActions()
+    let discoveryLoad = ProductionDiscoveryLoadState()
+    let resumePublication = ProductionResumePublicationState()
     private let provider: ProductionHomeProvider
     private var details: [String: ItemDetailViewModel] = [:]
 
@@ -296,11 +360,35 @@ private final class ProductionHomeState {
                 )
             }
         }
+        let partialFailure = ProcessInfo.processInfo.arguments.contains("--partial-home-failure")
+        var accounts = [ResolvedAccount(account: account, provider: provider)]
+        if partialFailure {
+            accounts = (0..<5).map { index in
+                var source = provider
+                source.isOffline = index == 4
+                let account = Account(
+                    id: "home-fixture-\(index)", server: source.session.server,
+                    userID: "fixture", userName: "Fixture", deviceID: "fixture"
+                )
+                return ResolvedAccount(account: account, provider: source)
+            }
+        }
+        let reads = ProductionHomeReadCounter()
+        let resumePublication = self.resumePublication
         model = HomeViewModel(
-            accounts: [ResolvedAccount(account: account, provider: provider)],
+            accounts: accounts,
             layoutStore: InMemoryHomeLayoutStore(),
             contentStore: InMemoryHomeContentStore(),
-            currentVisibility: { visibility.visibility }
+            currentVisibility: { visibility.visibility },
+            recentlyAppliedRecency: {
+                // Four successful detail feeds reconcile before the merged row.
+                if partialFailure, await reads.next() > 4 {
+                    await MainActor.run { resumePublication.isWaiting = true }
+                    await provider.waitForResumePublication()
+                    await MainActor.run { resumePublication.isWaiting = false }
+                }
+                return [:]
+            }
         )
         var settings = heroSettings.settings
         settings.isEnabled = !ProcessInfo.processInfo.arguments.contains("--hero-disabled-home")
@@ -309,6 +397,7 @@ private final class ProductionHomeState {
         settings.trailersEnabled = false
         // Settings persist between launches, so every launch picks its layout.
         settings.style = ProcessInfo.processInfo.arguments.contains("--immersive-home") ? .followsFocus : .carousel
+        settings.showsDiscoverRow = ProcessInfo.processInfo.arguments.contains("--showcase-discover-fixture")
         heroSettings.settings = settings
         background.settings.homeTrailerEnabled = false
         if trailerURL != nil { background.settings.detailMode = .trailer }
@@ -321,10 +410,24 @@ private final class ProductionHomeState {
         return model
     }
 
+    func featuredContent(limit: Int) async -> [MediaItem] {
+        guard ProcessInfo.processInfo.arguments.contains("--showcase-discover-fixture") else { return [] }
+        let items = await provider.featuredContent(limit: limit)
+        discoveryLoad.isReady = true
+        return items
+    }
+
     static func load() async -> ProductionHomeState {
         let settingsStore = MetadataProviderSettingsStore()
         var settings = settingsStore.load()
         settings.preferOnlineArtwork = false
+        if ProcessInfo.processInfo.arguments.contains("--held-home-artwork") {
+            settings = .init(
+                orderMode: .custom,
+                disabledOrder: MetadataSourceAttribution.all.map(\.source.rawValue)
+            )
+            ArtworkImageCache.shared.configure(networkFileService: ArtworkNetworkFileService(loader: HeldHomeArtworkLoader()))
+        }
         settingsStore.save(settings)
         let poster = await artwork(name: "poster", size: CGSize(width: 240, height: 360), color: .systemIndigo)
         let backdrop = await artwork(name: "backdrop", size: CGSize(width: 960, height: 540), color: .systemBlue)
@@ -346,6 +449,13 @@ private final class ProductionHomeState {
         let state = ProductionHomeState(poster: poster, backdrop: backdrop, logo: logo, trailerURL: trailerURL)
         if ProcessInfo.processInfo.arguments.contains("--cached-home-hero") {
             state.model.cacheHeroItems([state.provider.heroSeed], for: state.heroSettings.settings)
+            await state.model.waitForHeroPersistence()
+        }
+        if ProcessInfo.processInfo.arguments.contains("--cached-showcase-discover") {
+            var discovery = state.heroSettings.settings
+            discovery.isEnabled = true
+            discovery.sources = [.featured]
+            state.model.cacheHeroItems([state.provider.heroSeed], for: discovery)
             await state.model.waitForHeroPersistence()
         }
         if ProcessInfo.processInfo.arguments.contains("--slow-home-load")
@@ -429,6 +539,21 @@ private final class ProductionHomeState {
             ? [url] + (0..<150).map { ProductionHomeProvider.artworkURL(url, index: $0) }
             : [url]
         for reference in references {
+            let referenceBytes: Data
+            if ProcessInfo.processInfo.arguments.contains("--gradient-performance"),
+               let value = URLComponents(url: reference, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "fixture-item" })?.value,
+               let index = Int(value) {
+                let tinted = UIGraphicsImageRenderer(size: size).image { context in
+                    image.draw(in: CGRect(origin: .zero, size: size))
+                    context.cgContext.setBlendMode(.color)
+                    UIColor(hue: CGFloat(index % 12) / 12, saturation: 0.8, brightness: 0.7, alpha: 1).setFill()
+                    context.fill(CGRect(origin: .zero, size: size))
+                }
+                referenceBytes = tinted.pngData() ?? bytes
+            } else {
+                referenceBytes = bytes
+            }
             for variant in ArtworkImageVariant.allCases {
                 let requestURL = variant.requestURL(for: reference)
                 let response = HTTPURLResponse(
@@ -436,7 +561,7 @@ private final class ProductionHomeState {
                     headerFields: ["Content-Type": "image/png", "Cache-Control": "max-age=3600"]
                 )!
                 cache.storeCachedResponse(
-                    CachedURLResponse(response: response, data: bytes), for: URLRequest(url: requestURL)
+                    CachedURLResponse(response: response, data: referenceBytes), for: URLRequest(url: requestURL)
                 )
             }
         }
@@ -453,12 +578,23 @@ private struct ProductionHomeProvider: MediaProvider {
     let poster: URL
     let backdrop: URL
     let logo: URL
+    var isOffline = false
+    private let heldArtworkRevision = CredentialRevision()
     private let progressiveGate = ProductionHomeRowsGate()
     private let recentGate = ProductionHomeRowsGate(notificationKey: "PLOZZ_HOME_RECENT_RELEASE_NOTIFICATION")
+    private let discoverGate = ProductionHomeRowsGate(notificationKey: "PLOZZ_HOME_DISCOVER_RELEASE_NOTIFICATION")
+    private let resumePublicationGate = ProductionHomeRowsGate(notificationKey: "PLOZZ_HOME_RESUME_PUBLICATION_NOTIFICATION")
     private var rowCount: Int {
         ProcessInfo.processInfo.arguments.contains("--home-performance-fixture") ? 75 : 24
     }
     var heroSeed: MediaItem { movie(rowCount + 10) }
+
+    func waitForResumePublication() async { await resumePublicationGate.wait() }
+
+    func featuredContent(limit: Int) async -> [MediaItem] {
+        await discoverGate.wait()
+        return Array((rowCount..<(rowCount * 2)).prefix(limit).map(movie))
+    }
 
     static func artworkURL(_ base: URL, index: Int) -> URL {
         base.appending(queryItems: [URLQueryItem(name: "fixture-item", value: String(index))])
@@ -479,8 +615,11 @@ private struct ProductionHomeProvider: MediaProvider {
     private func movie(_ index: Int) -> MediaItem {
         let poster = reference(self.poster, index: index)
         let backdrop = reference(self.backdrop, index: index)
+        let namespace = ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix("--home-artwork-cache-namespace=") }
+            .map { String($0.dropFirst("--home-artwork-cache-namespace=".count)) + "-" } ?? ""
         var item = MediaItem(
-            id: "home-movie-\(index)", title: "Fixture movie \(index)",
+            id: "\(namespace)home-movie-\(index)", title: "Fixture movie \(index)",
             kind: ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture") ? .series : .movie,
             posterURL: poster, backdropURL: backdrop
         )
@@ -490,6 +629,29 @@ private struct ProductionHomeProvider: MediaProvider {
         item.runtime = 7200
         item.resumePosition = index < rowCount ? 1800 : nil
         item.overview = "A locally supplied movie for measuring the production Home view."
+        if ProcessInfo.processInfo.arguments.contains("--held-home-artwork") {
+            item.posterURL = nil
+            item.backdropURL = nil
+            item.heroBackdropURL = nil
+            item.logoURL = nil
+            do {
+                let reference = ArtworkReference.networkFile(try NetworkArtworkReference(
+                    accountID: "home-fixture", credentialRevision: heldArtworkRevision,
+                    catalogArtworkID: "held-\(index)",
+                    representation: RemoteFileRepresentation(
+                        size: 1_024,
+                        identity: RemoteFileIdentity(kind: .modificationTime, modifiedAt: .distantPast),
+                        consistency: .changeDetecting
+                    ),
+                    sourceRevision: "held", dimensions: ArtworkDimensions(width: 960, height: 540)
+                ))
+                item.artworkSelections = [ArtworkPlacement.poster, .detailBackdrop, .homeHero, .logo].map {
+                    .init(placement: $0, references: [reference])
+                }
+            } catch {
+                preconditionFailure("Invalid held artwork fixture: \(error)")
+            }
+        }
         return item
     }
 
@@ -503,6 +665,7 @@ private struct ProductionHomeProvider: MediaProvider {
         if ProcessInfo.processInfo.arguments.contains("--progressive-home-load") {
             await progressiveGate.wait()
         }
+        if isOffline { throw AppError.serverUnreachable }
         if ProcessInfo.processInfo.arguments.contains("--empty-home-resume") { return [] }
         try await holdForSlowLoad()
         let items = Array((0..<rowCount).prefix(limit).map(movie))

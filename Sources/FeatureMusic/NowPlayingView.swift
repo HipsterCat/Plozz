@@ -37,9 +37,13 @@ public struct NowPlayingView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.layoutDirection) private var layoutDirection
     @State private var scrubModel = MusicScrubModel()
+    #if canImport(UIKit)
+    @State private var wakeLease = DisplayWakeLease()
+    #endif
 
     /// Prominent colors of the current track's artwork, driving the morphing
     /// liquid background. Recomputed whenever the track changes.
@@ -342,7 +346,9 @@ public struct NowPlayingView: View {
         .onChange(of: focus) { _, _ in
             if controlsVisible { scheduleHide() }
         }
-        .task(id: controller.currentTrack?.id) { await loadArtworkPalette() }
+        .task(id: "\(controller.currentTrack?.id ?? "")|\(artworkPolicy.forArea(.music).identity)") {
+            await loadArtworkPalette()
+        }
         // Re-evaluate the lyrics-panel layout only on a *definitive* result (or a
         // toggle change), holding it steady through `.loading` so the artwork
         // doesn't fly to center and snap back between two songs that both have
@@ -536,7 +542,7 @@ public struct NowPlayingView: View {
     /// lyrics keep scrolling and artwork stays up during long, hands-off listens.
     private func setIdleTimerDisabled(_ disabled: Bool) {
         #if canImport(UIKit)
-        UIApplication.shared.isIdleTimerDisabled = disabled
+        wakeLease.keepAwake(disabled)
         #endif
     }
 
@@ -735,15 +741,22 @@ public struct NowPlayingView: View {
     /// background. Clears to the neutral field when there's no artwork.
     private func loadArtworkPalette() async {
         #if canImport(UIKit)
-        guard let url = controller.currentTrack?.artworkURL else {
+        guard let track = controller.currentTrack else {
             artworkPalette = []
             return
         }
-        guard let image = await ArtworkImageCache.shared.image(for: url) else { return }
+        guard let selected = await MusicArtworkFallback.resolveTrack(
+            track, policy: artworkPolicy.forArea(.music)
+        ), !Task.isCancelled else {
+            if !Task.isCancelled { artworkPalette = [] }
+            return
+        }
+        let image = selected.image
         let colors = await Task.detached(priority: .utility) {
             ArtworkColorExtractor.palette(from: image, maxColors: 5)
         }.value
-        guard controller.currentTrack?.artworkURL == url else { return }
+        guard !Task.isCancelled, controller.currentTrack?.id == track.id,
+              controller.currentTrack?.sourceAccountID == track.sourceAccountID else { return }
         artworkPalette = colors
         #endif
     }
@@ -826,12 +839,18 @@ public struct NowPlayingView: View {
 
             // Centre group — symmetric, so play/pause lands on the screen centre.
             HStack(spacing: 28) {
-                transportButton(icon: "backward.end.fill") { controller.previous() }
+                transportButton(icon: "backward.end.fill") {
+                    controller.previous()
+                    if controller.hasActivePlayback { TouchFeedback.shared.emit(.impact) }
+                }
                     .focused($focus, equals: .previous)
 
                 playPauseButton
 
-                transportButton(icon: "forward.end.fill") { controller.next() }
+                transportButton(icon: "forward.end.fill") {
+                    controller.next()
+                    if controller.hasActivePlayback { TouchFeedback.shared.emit(.impact) }
+                }
                     .focused($focus, equals: .next)
             }
 

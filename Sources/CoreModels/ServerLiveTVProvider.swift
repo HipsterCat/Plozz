@@ -3,7 +3,14 @@ import Foundation
 /// Optional capability of an authenticated media provider. Discovery never
 /// opens a tuner; playback is a separate, explicitly owned operation.
 public protocol ServerLiveTVProviding: Sendable {
+    /// Read an already committed lineup without authentication, refresh, guide requests, or tuning.
+    func cachedLiveTVCatalog() async throws -> ServerLiveTVCatalogSnapshot?
     func liveTVAvailability() async throws -> ServerLiveTVAvailability
+    /// Explicit source refreshes must not reuse an adapter's still-fresh channel catalog.
+    func refreshLiveTVAvailability() async throws -> ServerLiveTVAvailability
+    /// Complete already-started startup guide discovery after publishing saved channels.
+    /// Returns nil when no capability update is needed; must not start another catalog download.
+    func completeLiveTVGuideDiscovery() async throws -> Bool?
     func liveTVChannels() async throws -> [ServerLiveTVChannel]
     /// A window of at most 48 hours and 2,000 provider-local channel IDs.
     /// Prefer visible channels: some servers expose only per-channel/day EPG
@@ -14,6 +21,33 @@ public protocol ServerLiveTVProviding: Sendable {
         to: Date
     ) async throws -> [ServerLiveTVProgramme]
     func openLiveTVChannel(id: String) async throws -> any LiveTVStreamLease
+}
+
+public extension ServerLiveTVProviding {
+    func cachedLiveTVCatalog() async throws -> ServerLiveTVCatalogSnapshot? { nil }
+    func completeLiveTVGuideDiscovery() async throws -> Bool? { nil }
+
+    func refreshLiveTVAvailability() async throws -> ServerLiveTVAvailability {
+        try await liveTVAvailability()
+    }
+}
+
+/// Identifies one refresh across channel/window batches without sharing failures
+/// with another refresh, account, or authorization. Providers own any scoped state.
+public final class ServerLiveTVGuideRefreshScope: Sendable {
+    @TaskLocal public static var current: ServerLiveTVGuideRefreshScope?
+
+    public init() {}
+}
+
+public struct ServerLiveTVCatalogSnapshot: Sendable {
+    public let channels: [ServerLiveTVChannel]
+    public let supportsGuide: Bool
+
+    public init(channels: [ServerLiveTVChannel], supportsGuide: Bool) {
+        self.channels = channels
+        self.supportsGuide = supportsGuide
+    }
 }
 
 public struct ServerLiveTVAvailability: Equatable, Sendable {
@@ -30,7 +64,7 @@ public struct ServerLiveTVAvailability: Equatable, Sendable {
 
     public let status: Status
     public let channelCount: Int
-    /// Describes adapter support, not whether this server has populated its EPG.
+    /// Whether this source configuration exposes a guide lookup, not whether its EPG has listings.
     public let supportsGuide: Bool
 
     public var hasChannels: Bool { channelCount > 0 }
@@ -52,6 +86,7 @@ public struct ServerLiveTVChannel: Hashable, Identifiable, Sendable {
     /// Credential-free artwork only; never a tuner or playback URL.
     public let imageURL: URL?
     public let isRadio: Bool
+    public let groups: [String]
     public let currentProgramme: ServerLiveTVProgramme?
 
     public init(
@@ -60,6 +95,7 @@ public struct ServerLiveTVChannel: Hashable, Identifiable, Sendable {
         number: String? = nil,
         imageURL: URL? = nil,
         isRadio: Bool = false,
+        groups: [String] = [],
         currentProgramme: ServerLiveTVProgramme? = nil
     ) {
         self.id = id
@@ -67,6 +103,7 @@ public struct ServerLiveTVChannel: Hashable, Identifiable, Sendable {
         self.number = number
         self.imageURL = imageURL
         self.isRadio = isRadio
+        self.groups = groups
         self.currentProgramme = currentProgramme
     }
 }

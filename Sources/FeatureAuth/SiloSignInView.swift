@@ -17,9 +17,10 @@ public struct SiloSignInView: View {
     private let server: MediaServer
     private let onCancel: () -> Void
 
-    public init(server: MediaServer, deviceID: String,
+    public init(server: MediaServer, deviceID: String, verificationOnly: Bool = false,
                 onAuthenticated: @escaping (UserSession) -> Void, onCancel: @escaping () -> Void) {
-        self.init(viewModel: SiloAuthViewModel(server: server, deviceID: deviceID, onAuthenticated: onAuthenticated),
+        self.init(viewModel: SiloAuthViewModel(server: server, deviceID: deviceID,
+                                             verificationOnly: verificationOnly, onAuthenticated: onAuthenticated),
                   server: server, onCancel: onCancel)
     }
 
@@ -208,7 +209,7 @@ private struct SiloPairingCard: View {
                 SiloPairingInstructions(
                     code: code, verificationURL: verificationURL, expiresAt: expiresAt, lifetime: lifetime
                 ) {
-                    SiloMatchPhrase(match: match)
+                    SiloMatchPhrase(match: code)
                 }
                 .padding(.horizontal, 36)
                 .padding(.vertical, 32)
@@ -242,7 +243,7 @@ private struct SiloPairingCard: View {
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                 }
-                SiloMatchPhrase(match: match)
+                SiloMatchPhrase(match: code)
                 DisclosureGroup("Use another device") {
                     VStack(spacing: 24) {
                         SiloPairingQRCode(url: approvalURL, size: 220)
@@ -300,25 +301,21 @@ private struct SiloPairingInstructions<Footer: View>: View {
                     #endif
             }
             HStack(spacing: 24) {
-                Text(code)
-                    #if os(tvOS)
-                    .font(.plozzCode(size: 64))
-                    #else
-                    .font(.largeTitle.monospaced().bold())
-                    #endif
-                    .lineLimit(1).minimumScaleFactor(0.6)
+                ConnectionCodeView(code, size: codeSize)
                     .accessibilityLabel("Sign-in code: \(code)")
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-                    .background {
-                        RoundedRectangle(cornerRadius: PlozzTheme.Metrics.Radius.panel)
-                            .fill(Color.black.opacity(palette.isLight ? 0.06 : 0.26))
-                    }
                 LinkCodeExpiryCountdown(expiresAt: expiresAt, lifetime: lifetime, size: 88, showsMinutes: true)
             }
             .fixedSize(horizontal: false, vertical: true)
             footer()
         }
+    }
+
+    private var codeSize: CGFloat? {
+        #if os(tvOS)
+        64
+        #else
+        nil
+        #endif
     }
 
     private static func displayAddress(_ url: URL) -> String {

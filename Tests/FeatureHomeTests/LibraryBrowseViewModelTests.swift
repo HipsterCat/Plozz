@@ -4,9 +4,24 @@ import CoreModels
 
 @MainActor
 final class LibraryBrowseViewModelTests: XCTestCase {
+    func testLibraryCaptionScopesDistinguishContainersFromTheirContents() {
+        let expected: [(LibraryContentMode, CardCaptionView)] = [
+            (.recommended, .recommended), (.titles, .browse),
+            (.collections, .collections), (.playlists, .playlists)
+        ]
+        for (mode, view) in expected {
+            XCTAssertEqual(LibraryBrowseScope.library.cardCaptionView(for: mode), view)
+            XCTAssertEqual(LibraryBrowseScope.collectionMembers.cardCaptionView(for: mode), .browse)
+            XCTAssertEqual(LibraryBrowseScope.playlistMembers.cardCaptionView(for: mode), .browse)
+        }
+    }
+
     private func makeVM(itemCount: Int, pageSize: Int = 10) -> (LibraryBrowseViewModel, FakeMediaProvider) {
         let provider = FakeMediaProvider(allItems: makeItems(itemCount))
-        let vm = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, pageSize: pageSize)
+        let vm = LibraryBrowseViewModel(
+            provider: provider, containerID: "lib1", containerKind: .movie,
+            pageSize: pageSize, initialContentMode: .titles
+        )
         return (vm, provider)
     }
 
@@ -72,6 +87,43 @@ final class LibraryBrowseViewModelTests: XCTestCase {
         XCTAssertEqual(vm.item(at: 0)?.id, "scanned0")
     }
 
+    func testRetryRepeatsFailedBackgroundRefreshWithoutReplacingSlots() async throws {
+        let (vm, provider) = makeVM(itemCount: 10)
+        await vm.loadFirstPageIfNeeded()
+        let slot = try XCTUnwrap(vm.slot(at: 0))
+        let generation = vm.contentGeneration
+        provider.alwaysFail = true
+        await vm.refreshAfterCatalogChange()
+        XCTAssertNotNil(vm.pageError)
+        XCTAssertEqual(vm.state.value, 10)
+        let requests = provider.requestedPages.count
+        provider.alwaysFail = false
+        provider.allItems[0].title = "Refreshed"
+        await vm.retryFailedPages()
+        XCTAssertGreaterThan(provider.requestedPages.count, requests)
+        XCTAssertNil(vm.pageError)
+        XCTAssertTrue(vm.slot(at: 0) === slot)
+        XCTAssertEqual(slot.item?.title, "Refreshed")
+        XCTAssertEqual(vm.contentGeneration, generation)
+    }
+
+    func testCancelledRefreshRetryRemainsRetryableAndClearsQueryMessage() async {
+        let (vm, provider) = makeVM(itemCount: 10)
+        await vm.loadFirstPageIfNeeded()
+        provider.pageHooks[0] = { throw LibraryQueryFailure.changedInventory }
+        await vm.refreshAfterCatalogChange()
+        XCTAssertNotNil(vm.queryMessage)
+        provider.pageHooks[0] = { throw CancellationError() }
+        await vm.retryFailedPages()
+        XCTAssertNotNil(vm.pageError)
+        let requests = provider.requestedPages.count
+        provider.pageHooks[0] = nil
+        await vm.retryFailedPages()
+        XCTAssertGreaterThan(provider.requestedPages.count, requests)
+        XCTAssertNil(vm.pageError)
+        XCTAssertNil(vm.queryMessage)
+    }
+
     func testWatchMutationUpdatesLoadedGridSlotInPlace() async {
         let item = MediaItem(id: "movie", title: "Movie", kind: .movie)
         let provider = FakeMediaProvider(allItems: [item])
@@ -116,6 +168,66 @@ final class LibraryBrowseViewModelTests: XCTestCase {
         )
 
         XCTAssertFalse(vm.item(at: 0)?.isPlayed ?? false)
+    }
+
+    func testCountRefreshWaitsForConfirmedContainerWrite() async throws {
+        for kind in [MediaItemKind.series, .season] {
+            for played in [false, true] {
+                let item = MediaItem(
+                    id: "show", title: "Show", kind: kind,
+                    unwatchedEpisodeCount: played ? 8 : 0, isPlayed: !played,
+                    sourceAccountID: "a")
+                let provider = FakeMediaProvider(allItems: [item])
+                let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+                let vm = LibraryBrowseViewModel(
+                    provider: provider, containerID: "library", containerKind: kind,
+                    defaults: defaults, sourceAccountID: "a", initialContentMode: .titles)
+                await vm.loadFirstPageIfNeeded()
+                let slot = try XCTUnwrap(vm.slot(at: 0))
+                let requests = provider.requestedPages.count
+                let optimistic = MediaItemMutation(
+                    itemIDs: ["show"], scopedItemIDs: ["a:show"], played: played, item: item)
+                vm.applyWatchedState(optimistic)
+                // Negative observation window: the server deliberately still has
+                // pre-write state, so no count-only refresh may run yet.
+                try await Task.sleep(for: .milliseconds(100))
+                XCTAssertEqual(provider.requestedPages.count, requests)
+                XCTAssertEqual(slot.item?.isPlayed, played)
+                XCTAssertEqual(slot.item?.unwatchedEpisodeCount, played ? 0 : nil)
+
+                var authoritative = optimistic.applied(to: item)
+                authoritative.unwatchedEpisodeCount = played ? 0 : 8
+                provider.allItems = [authoritative]
+                let confirmed = try XCTUnwrap(MediaItemMutation(confirmedWatchMutation: WatchMutation(
+                    capturedAt: Date(), canonicalMediaID: "show", played: played,
+                    targets: [.init(accountID: "a", itemID: "show")], kind: kind)))
+                vm.applyWatchedState(confirmed)
+                await waitUntil {
+                    provider.requestedPages.count > requests
+                        && slot.item?.unwatchedEpisodeCount == authoritative.unwatchedEpisodeCount
+                }
+                XCTAssertEqual(slot.item?.isPlayed, played)
+                XCTAssertTrue(vm.slot(at: 0) === slot)
+                vm.cancelPendingQuery()
+            }
+        }
+    }
+
+    func testOtherAccountConfirmationDoesNotRefreshContainerCounts() async throws {
+        let item = MediaItem(id: "show", title: "Show", kind: .series, unwatchedEpisodeCount: 8)
+        let provider = FakeMediaProvider(allItems: [item])
+        let vm = LibraryBrowseViewModel(
+            provider: provider, containerID: "library", containerKind: .series,
+            sourceAccountID: "a", initialContentMode: .titles)
+        await vm.loadFirstPageIfNeeded()
+        let requests = provider.requestedPages.count
+        vm.applyWatchedState(try XCTUnwrap(MediaItemMutation(confirmedWatchMutation: WatchMutation(
+            capturedAt: Date(), canonicalMediaID: "show", played: true,
+            targets: [.init(accountID: "b", itemID: "show")], kind: .series))))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(provider.requestedPages.count, requests)
+        XCTAssertEqual(vm.item(at: 0)?.unwatchedEpisodeCount, 8)
+        vm.cancelPendingQuery()
     }
 
     func testItemAppearedLoadsOwningPage() async {
@@ -344,7 +456,7 @@ final class LibraryBrowseViewModelTests: XCTestCase {
 
     func testSetSortReloadsFirstPageWithNewSortAndResetsPaging() async {
         let provider = FakeMediaProvider(allItems: makeItems(100))
-        let vm = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, pageSize: 10, defaults: isolatedDefaults())
+        let vm = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, pageSize: 10, defaults: isolatedDefaults(), initialContentMode: .titles)
         await vm.loadFirstPage()
         await vm.itemAppeared(at: 20) // load a later page so paging state is non-trivial
 
@@ -362,7 +474,7 @@ final class LibraryBrowseViewModelTests: XCTestCase {
 
     func testSetSortToCurrentValueIsNoOp() async {
         let provider = FakeMediaProvider(allItems: makeItems(50))
-        let vm = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, pageSize: 10, defaults: isolatedDefaults())
+        let vm = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, pageSize: 10, defaults: isolatedDefaults(), initialContentMode: .titles)
         await vm.loadFirstPage()
         let requestsBefore = provider.requestedPages.count
 
@@ -371,20 +483,21 @@ final class LibraryBrowseViewModelTests: XCTestCase {
         XCTAssertEqual(provider.requestedPages.count, requestsBefore, "Re-applying the same sort does not reload")
     }
 
-    func testSortPersistsAndIsRestoredPerContainerKind() async {
+    func testSortPersistsAndIsRestoredPerLibrary() async {
         let defaults = isolatedDefaults()
         let chosen = CoreModels.SortDescriptor(field: .communityRating, direction: .descending)
 
         let provider = FakeMediaProvider(allItems: makeItems(10))
-        let vm = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, defaults: defaults)
+        let vm = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, defaults: defaults, initialContentMode: .titles)
         await vm.setSort(chosen)
 
-        // A fresh VM for the same kind restores the persisted choice.
-        let restored = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, defaults: defaults)
+        // A fresh Browse model for the same library restores its choice.
+        let restored = LibraryBrowseViewModel(provider: provider, containerID: "lib1", containerKind: .movie, defaults: defaults, initialContentMode: .titles)
         XCTAssertEqual(restored.sort, chosen)
 
-        // A different kind keeps its own default.
-        let otherKind = LibraryBrowseViewModel(provider: provider, containerID: "lib2", containerKind: .series, defaults: defaults)
+        let otherLibrary = LibraryBrowseViewModel(provider: provider, containerID: "lib2", containerKind: .movie, defaults: defaults, initialContentMode: .titles)
+        XCTAssertEqual(otherLibrary.sort, .default)
+        let otherKind = LibraryBrowseViewModel(provider: provider, containerID: "lib2", containerKind: .series, defaults: defaults, initialContentMode: .titles)
         XCTAssertEqual(otherKind.sort, .default)
     }
 

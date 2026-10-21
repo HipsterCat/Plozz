@@ -49,6 +49,14 @@ public struct SettingsRowLabel<Secondary: View, Trailing: View>: View {
     private let secondary: Secondary
     private let trailing: Trailing
 
+    private var titleFont: Font {
+        #if os(tvOS)
+        SettingsRowMetrics.titleFont
+        #else
+        .callout.weight(.medium)
+        #endif
+    }
+
     /// Row label that is app COPY — the common case, so literals work unchanged.
     public init(
         icon: String?,
@@ -83,7 +91,7 @@ public struct SettingsRowLabel<Secondary: View, Trailing: View>: View {
             // TITLE line, not the two-line block. The trailing accessory stays in
             // the outer HStack (default center), so the chevron keeps centering on
             // the full row height.
-            HStack(alignment: .rowTitleIcon, spacing: 16) {
+            HStack(alignment: .rowTitleIcon, spacing: SettingsRowMetrics.iconTitleSpacing) {
                 if let assetIcon {
                     // Custom (non–SF Symbol) glyph from the asset catalog. It's
                     // rendered as a TEMPLATE so it inherits the same tint / focus
@@ -95,18 +103,18 @@ public struct SettingsRowLabel<Secondary: View, Trailing: View>: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 22, height: 22)
-                        .frame(width: 30, height: 30)
+                        .frame(width: SettingsRowMetrics.iconColumnWidth, height: SettingsRowMetrics.iconColumnWidth)
                         .settingsRowIcon()
                         .alignmentGuide(.rowTitleIcon) { $0[VerticalAlignment.center] }
                 } else if let icon {
                     Image(systemName: icon)
                         .font(.system(size: 22, weight: .regular))
-                        .frame(width: 30, height: 30)
+                        .frame(width: SettingsRowMetrics.iconColumnWidth, height: SettingsRowMetrics.iconColumnWidth)
                         .settingsRowIcon()
                         .alignmentGuide(.rowTitleIcon) { $0[VerticalAlignment.center] }
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    title.font(.callout.weight(.medium))
+                    title.font(titleFont)
                         .alignmentGuide(.rowTitleIcon) { $0[VerticalAlignment.center] }
                     secondary
                 }
@@ -115,7 +123,7 @@ public struct SettingsRowLabel<Secondary: View, Trailing: View>: View {
             trailing
         }
         .padding(.vertical, 12)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SettingsRowMetrics.horizontalPadding)
         .contentShape(Rectangle())
     }
 }

@@ -144,6 +144,7 @@ public final class DetailTransitionSourceReference {
     weak var view: UIView?
     weak var nativeArtworkView: UIView?
     var itemKey = ""
+    var artworkPolicy: ArtworkPresentationPolicy?
     var cornerRadius: CGFloat = 0
     var isFocused: Bool?
     weak var focusRequester: (any DetailTransitionFocusRequesting)?
@@ -312,6 +313,7 @@ public struct DetailTransitionSourceAnchor: UIViewRepresentable {
     public func updateUIView(_ view: UIView, context: Context) {
         reference.view = view
         reference.itemKey = itemKey
+        reference.artworkPolicy = context.environment.plozzArtworkPolicy.forArea(.details)
         reference.cornerRadius = cornerRadius
         reference.isFocused = isFocused
         context.coordinator.focus = focus
@@ -475,7 +477,9 @@ public enum DetailTransitionNavigation {
             sourceCornerRadius: geometry?.cornerRadius ?? 0, screen: screen
         )
         pending[key] = entry
-        entry.overlay.destination.image = cachedDestinationArtwork(for: item)
+        entry.overlay.destination.image = source?.artworkPolicy.flatMap {
+            cachedDestinationArtwork(for: item, policy: $0)
+        }
         entry.start()
         // A direct-play route must never leave a prepared navigation cover behind.
         entry.expiry = Task { @MainActor [weak entry] in
@@ -507,7 +511,8 @@ public enum DetailTransitionNavigation {
               let window = activeWindow, let entry = pending[ObjectIdentifier(window)],
               entry.itemKey == item.stablePresentationID,
               entry.overlay.destination.image == nil, entry.backdropRequest == nil else { return }
-        guard let request = DetailBackdropArtworkRequest(item: item) else { return }
+        guard let policy = entry.source?.artworkPolicy,
+              let request = DetailBackdropArtworkRequest(item: item, policy: policy) else { return }
         entry.backdropRequest = request
         entry.backdropDelivery = Task { @MainActor [weak entry] in
             guard let artwork = await request.task.value, !Task.isCancelled else { return }
@@ -516,9 +521,9 @@ public enum DetailTransitionNavigation {
         }
     }
 
-    private static func cachedDestinationArtwork(for item: MediaItem) -> UIImage? {
+    private static func cachedDestinationArtwork(for item: MediaItem, policy: ArtworkPresentationPolicy) -> UIImage? {
         guard item.kind == .movie || item.kind == .series else { return nil }
-        let source = DetailBackdropArtworkSource(item: item)
+        let source = DetailBackdropArtworkSource(item: item, policy: policy)
         if let prepared = ArtworkSeedMemo.prepared(for: source.key, variant: .heroBackdrop)
             ?? ArtworkSeedMemo.prepared(for: source.previewKey, variant: .heroPreview) {
             return prepared.image
@@ -637,6 +642,9 @@ public final class TVDetailEntranceSession {
     public private(set) var stage = DetailEntranceStage.artwork
     public private(set) var isClosing = false
     public private(set) var blocksNavigation = true
+    public var isBackdropShadingVisible: Bool {
+        foregroundSequenceStarted || stage == .complete
+    }
     /// Retained only for the return transition, never as the detail backdrop.
     private(set) var returnArtwork: DetailTransitionSurface?
     @ObservationIgnored private var returnBackground: DetailTransitionSurface?
@@ -673,7 +681,7 @@ public final class TVDetailEntranceSession {
     @ObservationIgnored private var backdropResolvedAt: CFTimeInterval?
     @ObservationIgnored private var artworkLandedAt: CFTimeInterval?
     @ObservationIgnored private var pageAppearedAt: CFTimeInterval?
-    @ObservationIgnored private var foregroundSequenceStarted = false
+    private var foregroundSequenceStarted = false
     @ObservationIgnored private var revealsEpisodesLast = false
     @ObservationIgnored private weak var navigationChrome: NavigationChromeModel?
     @ObservationIgnored private let chromeToken = UUID()

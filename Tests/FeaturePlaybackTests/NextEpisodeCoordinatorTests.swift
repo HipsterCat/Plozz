@@ -120,6 +120,28 @@ final class NextEpisodeCoordinatorTests: XCTestCase {
         XCTAssertEqual(host.resolveCallCount, 0, "window closed → no prefetch")
     }
 
+    func testSiloNeverOpensAnIdleSessionBeforeHandoff() async {
+        let (sut, host, engine, provider) = makeSUT(providerKind: .silo)
+        host.currentEngineKind = .plozzigen
+        host.authoritativeRange = .dolbyVision
+        host.resolveResult = prefetched(itemID: "next-1", engineKind: .plozzigen)
+        engine.duration = 1_000
+        for position in [900.0, 910, 955, 966, 999] {
+            engine._currentTime = position
+            sut.startNextEpisodePrefetch(trigger: "eager")
+            sut.maybeStartWindowedNextPrefetch()
+            await Task.yield()
+        }
+        let prepared = await sut.prepareHandoff(to: host.nextEpisodeCandidate!)
+        XCTAssertNil(prepared, "Even HDR must resolve in the incoming player, not retain an idle Silo grant.")
+        XCTAssertNil(sut.consumePrefetchedNext(matching: "next-1"))
+        XCTAssertEqual(host.resolveCallCount, 0)
+        XCTAssertEqual(engine.stopCount, 0)
+        await sut.releaseOrphanedPrefetchIfNeeded()
+        let stops = await provider.stopReports
+        XCTAssertTrue(stops.isEmpty, "No speculative session was opened or orphaned.")
+    }
+
     // MARK: - consume / release
 
     func testConsumePrefetchHitClearsAndReturns() async {
@@ -203,14 +225,14 @@ final class NextEpisodeCoordinatorTests: XCTestCase {
         XCTAssertTrue(sut.shouldPreserveDisplayMode(forNext: prepared))
     }
 
-    func testInFlightNextIsJoinedInsteadOfOpeningAnotherSession() async {
+    func testInFlightNextIsJoinedInsteadOfOpeningAnotherSession() async throws {
         let gate = HandoffProbeGate()
         let (sut, host, _, _) = makeSUT(providerKind: .jellyfin, probe: { _ in await gate.wait() })
         host.currentEngineKind = .plozzigen
         host.authoritativeRange = .dolbyVision
         host.resolveResult = prefetched(itemID: "next-1", engineKind: .plozzigen)
         sut.startNextEpisodePrefetch(trigger: "test")
-        await gate.waitUntilEntered()
+        try await gate.waitUntilEntered()
         let selection = Task { await sut.prepareHandoff(to: host.nextEpisodeCandidate!) }
         await Task.yield()
         await gate.release()
@@ -239,14 +261,14 @@ final class NextEpisodeCoordinatorTests: XCTestCase {
         XCTAssertEqual(stops.count, 1)
     }
 
-    func testCancelledJoinReleasesTheInFlightNextSessionOnce() async {
+    func testCancelledJoinReleasesTheInFlightNextSessionOnce() async throws {
         let gate = HandoffProbeGate()
         let (sut, host, _, provider) = makeSUT(providerKind: .jellyfin, probe: { _ in await gate.wait() })
         host.currentEngineKind = .plozzigen
         host.authoritativeRange = .dolbyVision
         host.resolveResult = prefetched(itemID: "next-1", engineKind: .plozzigen)
         sut.startNextEpisodePrefetch(trigger: "test")
-        await gate.waitUntilEntered()
+        try await gate.waitUntilEntered()
         let selection = Task { await sut.prepareHandoff(to: host.nextEpisodeCandidate!) }
         await Task.yield()
         selection.cancel()
@@ -271,7 +293,7 @@ final class NextEpisodeCoordinatorTests: XCTestCase {
         XCTAssertFalse(sut.shouldPreserveDisplayMode(forNext: prepared))
     }
 
-    func testCancelledOnDemandProbeReleasesTheUnadoptedSession() async {
+    func testCancelledOnDemandProbeReleasesTheUnadoptedSession() async throws {
         let gate = HandoffProbeGate()
         let (sut, host, engine, provider) = makeSUT(providerKind: .jellyfin, probe: { _ in await gate.wait() })
         host.currentEngineKind = .plozzigen
@@ -280,7 +302,7 @@ final class NextEpisodeCoordinatorTests: XCTestCase {
         let selection = Task {
             await sut.prepareHandoff(to: MediaItem(id: "previous", title: "Previous", kind: .episode))
         }
-        await gate.waitUntilEntered()
+        try await gate.waitUntilEntered()
         selection.cancel()
         await gate.release()
         let prepared = await selection.value
@@ -369,7 +391,7 @@ final class NextEpisodeCoordinatorTests: XCTestCase {
         XCTAssertTrue(engine.isPaused)
     }
 
-    func testPausedPictureAtZeroCannotCompleteAResumedStartup() async {
+    func testDisplayedPausedPictureDoesNotShowTheCenterSpinnerDuringAResumeSeek() async {
         let (sut, _, engine, _) = makeSUT()
         engine.isPaused = true
         engine.preventsDisplaySleep = false
@@ -377,8 +399,26 @@ final class NextEpisodeCoordinatorTests: XCTestCase {
         engine._currentTime = 0
         sut.beginAwaitingFirstFrame(resumeClock: 425.7)
         try? await Task.sleep(for: .milliseconds(150))
-        XCTAssertTrue(sut.awaitingFirstFrame)
+        XCTAssertFalse(sut.awaitingFirstFrame, "The center indicator is only for an absent picture, not seek completion")
         sut.clearFirstFrameWait()
+    }
+
+    func testRewindBeforeInitialResumeFinishesClearsCenterSpinnerWhenPictureArrives() async {
+        let (sut, _, engine, _) = makeSUT()
+        engine.preventsDisplaySleep = true
+        engine._currentTime = 134
+        sut.beginAwaitingFirstFrame(resumeClock: 134)
+        engine._currentTime = 0
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(sut.awaitingFirstFrame, "An optimistic seek clock alone is not a picture")
+        engine.hasPresentedVideoFrame = true
+        engine._currentTime = 0.5
+        await waitUntil { !sut.awaitingFirstFrame }
+        XCTAssertFalse(sut.awaitingFirstFrame, "Do not wait another 134 seconds to cross the old resume position")
+        engine.hasPresentedVideoFrame = false
+        engine.preventsDisplaySleep = false
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertFalse(sut.awaitingFirstFrame, "Later seek/buffer delays must not rearm the startup overlay")
     }
 
     /// Regression: on the Plozzigen/custom-source path the engine reports
@@ -584,23 +624,32 @@ private final class UpNextSpyEngine: VideoEngine {
 }
 
 private actor HandoffProbeGate {
-    private var entered = false
+    private enum WaitError: Error { case probeDidNotStart }
+    private let entered = XCTestExpectation(description: "handoff probe entered")
+    private var released = false
     private var continuation: CheckedContinuation<SourceDynamicRange?, Never>?
 
     func wait() async -> SourceDynamicRange? {
-        entered = true
-        return await withCheckedContinuation { continuation = $0 }
+        if released {
+            entered.fulfill()
+            return .dolbyVision
+        }
+        return await withCheckedContinuation {
+            continuation = $0
+            entered.fulfill()
+        }
     }
 
-    func waitUntilEntered() async {
-        for _ in 0..<1_000 {
-            if entered { return }
-            await Task.yield()
+    func waitUntilEntered() async throws {
+        let result = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
+        guard result == .completed else {
+            release()
+            throw WaitError.probeDidNotStart
         }
-        XCTFail("Probe did not start.")
     }
 
     func release() {
+        released = true
         continuation?.resume(returning: .dolbyVision)
         continuation = nil
     }

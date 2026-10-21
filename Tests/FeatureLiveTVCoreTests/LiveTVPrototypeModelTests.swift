@@ -5,6 +5,136 @@ import XCTest
 
 @MainActor
 final class LiveTVPrototypeModelTests: XCTestCase {
+    func testCategorySelectionInLargeCatalogDoesNotRescanEveryChannel() async throws {
+        let channels = await Task.detached {
+            (0..<100_000).map { index in
+                LiveTVPrototypeChannel(
+                    id: "large-\(index)", number: index, name: "Channel \(index)",
+                    category: "Group \(index % 100)", symbol: "tv", accent: 0,
+                    source: .iptv, tagline: ""
+                )
+            }
+        }.value
+        let model = LiveTVPrototypeModel(channels: channels)
+        let start = ContinuousClock.now
+        for category in 0..<20 {
+            model.category = "Group \(category)"
+            XCTAssertEqual(model.visibleChannels.count, 1_000)
+            XCTAssertEqual(model.visibleChannels.first?.number, category)
+            XCTAssertEqual(model.visibleChannels.last?.number, 99_900 + category)
+        }
+        let elapsed = start.duration(to: .now)
+        print("Live TV category selection: channels=100000 selections=20 elapsed=\(elapsed)")
+        XCTAssertLessThan(elapsed, .milliseconds(500),
+                          "Repeated category changes must use the catalogue index, not normalize every channel again")
+    }
+
+    func testHundredThousandImportedChannelsRemainBrowsableInBothSortOrders() async throws {
+        let channels = await Task.detached {
+            (0..<100_000).map { index in
+                LiveTVPrototypeChannel(
+                    id: "large-\(index)", number: index + 1,
+                    name: "Channel \(100_000 - index)", category: "Group \(index % 80)",
+                    symbol: "tv", accent: 0, source: .iptv, tagline: "",
+                    language: "English", country: "US"
+                )
+            }
+        }.value
+        for count in [10_000, 100_000] {
+            for sort in [LiveTVPrototypeSort.channelNumber, .name] {
+                let model = LiveTVPrototypeModel(channels: [])
+                model.sort = sort
+                let input = Array(channels.prefix(count))
+                try model.replaceCatalog(channels: input, programs: [])
+                XCTAssertEqual(model.channels.count, count)
+                XCTAssertEqual(model.visibleChannels.count, count)
+                XCTAssertEqual(model.guideChannels.count, count)
+                XCTAssertEqual(model.categories.count, 80)
+                XCTAssertEqual(model.languages, ["English"])
+                XCTAssertEqual(model.countries, ["US"])
+                XCTAssertEqual(Set(model.guideRowIDs.map(\.channelID)), Set(input.map(\.id)))
+                for (left, right) in zip(model.visibleChannels, model.visibleChannels.dropFirst()) {
+                    if sort == .name { XCTAssertLessThan(left.name, right.name) }
+                    else { XCTAssertLessThan(left.number, right.number) }
+                }
+            }
+        }
+    }
+
+    func testPreparedBrowseKeysPreserveRelevanceTieBreaksAndMetadataFacets() throws {
+        let channels = [
+            LiveTVPrototypeChannel(
+                id: "b", number: 7, name: "cafe", category: "Sports", symbol: "tv", accent: 0,
+                source: .iptv, tagline: "", language: " English / German ", country: " CA / DE "
+            ),
+            LiveTVPrototypeChannel(
+                id: "a", number: 7, name: " Café ", category: "International", symbol: "tv", accent: 0,
+                source: .iptv, tagline: "", language: "English;Français", country: "US, CA",
+                groups: ["News", "Europe"]
+            ),
+            LiveTVPrototypeChannel(
+                id: "c", number: 1, name: "cafe 7", category: "News", symbol: "tv", accent: 0,
+                source: .iptv, tagline: ""
+            ),
+            LiveTVPrototypeChannel(
+                id: "d", number: 99, name: "7 network", category: "Sports", symbol: "tv", accent: 0,
+                source: .iptv, tagline: "", language: " English / German ", country: " CA / DE "
+            )
+        ]
+        let model = LiveTVPrototypeModel(channels: [])
+        try model.replaceCatalog(channels: channels, programs: [])
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["c", "a", "b", "d"])
+        XCTAssertEqual(model.categories, ["Europe", "News", "Sports"])
+        XCTAssertEqual(model.languages, ["English", "Français", "German"])
+        XCTAssertEqual(model.countries, ["CA", "DE", "US"])
+
+        model.sort = .name
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["d", "a", "b", "c"])
+        model.query = "7"
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["a", "b", "d", "c"])
+        model.query = ""
+        model.language = "francais"
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["a"])
+        model.language = nil
+        model.country = " de "
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["d", "b"])
+        model.country = nil
+        XCTAssertTrue(model.hideChannel(channels[1]))
+        XCTAssertEqual(model.categories, ["News", "Sports"])
+        XCTAssertEqual(model.languages, ["English", "German"])
+        XCTAssertEqual(model.countries, ["CA", "DE"])
+    }
+
+    func testCategoryIndexPreservesNormalizedGroupsAndTracksCatalogMutations() throws {
+        let store = HiddenChannelsFixtureStore()
+        let grouped = LiveTVPrototypeChannel(
+            id: "grouped", number: 3, name: "Grouped", category: "Unused", symbol: "tv", accent: 0,
+            source: .iptv, tagline: "", groups: ["News", " NEWS ", "Néws", "Sports"]
+        )
+        let model = LiveTVPrototypeModel(channels: hiddenChannelFixtures + [grouped], preferencesStore: store)
+        model.category = " news "
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["news", "grouped"], "Aliases must not duplicate a channel")
+        model.setScanHiddenChannelIDs(["news"])
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["grouped"])
+        model.setScanHiddenChannelIDs([])
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["news", "grouped"])
+        XCTAssertTrue(model.hideChannel(grouped))
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["news"])
+        store.value = store.value.restoringAllChannels()
+        model.reloadPreferences()
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["news", "grouped"])
+        XCTAssertTrue(model.setMetadataOverride(.init(category: "Movies"), channelID: "grouped"))
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["news"])
+        model.category = "movies"
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["grouped"])
+        try model.replaceChannels(Array(hiddenChannelFixtures.reversed()))
+        XCTAssertTrue(model.visibleChannels.isEmpty)
+        model.category = "sports"
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["sports"])
+        model.category = nil
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["news", "sports"])
+    }
+
     func testConfiguredCatalogUsesOnlySuppliedChannelsAndListings() throws {
         let channel = LiveTVPrototypeChannel(
             id: "configured-channel", number: 1, name: "Configured channel", category: "News",
@@ -598,12 +728,13 @@ final class LiveTVPrototypeModelTests: XCTestCase {
         XCTAssertEqual(model.favoriteIDs, [channels[0].id])
     }
 
-    func testGuideIdentityIndexTracksFiltersFavoritesRecentsAndHiddenChannels() {
+    func testGuideIdentityIndexTracksFiltersFavoritesRecentsAndHiddenChannels() throws {
         let model = LiveTVPrototypeModel(channels: hiddenChannelFixtures)
         func assertIndex() {
             XCTAssertEqual(model.guideRowIDs, model.guideChannels.map(\.id))
-            for entry in model.guideChannels {
+            for (index, entry) in model.guideChannels.enumerated() {
                 XCTAssertEqual(model.guideEntry(for: entry.id), entry)
+                XCTAssertEqual(model.guideRowIndex(near: entry.id), index)
                 XCTAssertEqual(
                     model.guideRow(for: entry.channel.id, preferring: entry.section), entry.id)
             }
@@ -624,6 +755,77 @@ final class LiveTVPrototypeModelTests: XCTestCase {
         XCTAssertTrue(model.hideChannel(first))
         assertIndex()
         XCTAssertNil(model.guideRow(for: first.id))
+        model.sort = .name
+        assertIndex()
+        try model.replaceChannels(Array(model.channels.reversed()))
+        assertIndex()
+        try model.replaceChannels([])
+        assertIndex()
+        XCTAssertTrue(model.guideRowIDs.isEmpty)
+        XCTAssertNil(model.channel(id: first.id))
+        XCTAssertNil(model.guideEntry(for: .init(channelID: first.id)))
+        XCTAssertNil(model.guideRowIndex(near: .init(channelID: first.id)))
+    }
+
+    func testRemovedGuideSectionIndexUsesTheFirstRemainingOccurrence() {
+        let model = LiveTVPrototypeModel(channels: hiddenChannelFixtures)
+        let id = hiddenChannelFixtures[0].id
+        model.toggleFavorite(id)
+        model.tune(id)
+        XCTAssertTrue(model.recordWatched(id))
+        let recent = LiveTVGuideRowID(channelID: id, section: .recent)
+        let favorite = LiveTVGuideRowID(channelID: id, section: .favorites)
+        XCTAssertEqual(model.guideRowIndex(near: recent), 0)
+        XCTAssertEqual(model.guideRowIndex(near: favorite), 1)
+        model.showsRecentChannels = false
+        XCTAssertEqual(model.guideRowIndex(near: recent), model.guideRowIndex(near: favorite))
+        model.toggleFavorite(id)
+        XCTAssertEqual(model.guideRowIndex(near: favorite), model.guideRowIndex(near: .init(channelID: id)))
+        model.query = "no-matches"
+        XCTAssertNil(model.guideRowIndex(near: recent))
+        XCTAssertNil(model.guideRowIndex(near: nil))
+    }
+
+    func testCatalogIndicesPreservePayloadsAndRejectInvalidReplacementsAtomically() throws {
+        let original = hiddenChannelFixtures
+        let model = LiveTVPrototypeModel(channels: original)
+        let replacement = LiveTVPrototypeChannel(
+            id: original[1].id, number: 3, name: "Replacement channel", category: "Movies",
+            symbol: "film", accent: 2, source: .plex, tagline: "Replacement",
+            logoURL: URL(string: "https://example.test/logo.png"),
+            streamURL: URL(string: "https://example.test/stream.m3u8"),
+            guideID: "replacement-guide", guideName: "Replacement guide",
+            httpHeaders: ["User-Agent": "Plozz-Test"], playlistSourceID: "replacement-source",
+            language: "French", country: "CA", groups: ["Movies", "International"]
+        )
+        let channels = [replacement, original[0]]
+        try model.replaceCatalog(channels: channels, programs: [])
+        for sort in [LiveTVPrototypeSort.channelNumber, .name] {
+            model.sort = sort
+            XCTAssertEqual(model.visibleChannels, [original[0], replacement])
+            for channel in channels {
+                XCTAssertEqual(model.channel(id: channel.id), channel)
+                XCTAssertEqual(model.guideEntry(for: .init(channelID: channel.id))?.channel, channel)
+            }
+        }
+
+        let rows = model.guideChannels
+        let revision = model.catalogRevision
+        XCTAssertThrowsError(try model.replaceCatalog(channels: [replacement, replacement], programs: []))
+        XCTAssertThrowsError(try model.replaceCatalog(channels: [original[0]], programs: [
+            .init(id: "orphan", channelID: replacement.id, title: "Orphan", subtitle: "",
+                  start: model.now, end: model.now.addingTimeInterval(1_800))
+        ]))
+        XCTAssertEqual(model.channels, channels)
+        XCTAssertEqual(model.catalogRevision, revision)
+        XCTAssertEqual(model.guideChannels, rows)
+        XCTAssertEqual(model.channel(id: replacement.id), replacement)
+        XCTAssertEqual(model.guideEntry(for: .init(channelID: replacement.id))?.channel, replacement)
+
+        try model.replaceCatalog(channels: [original[0]], programs: [])
+        XCTAssertNil(model.channel(id: replacement.id))
+        XCTAssertNil(model.guideEntry(for: .init(channelID: replacement.id)))
+        XCTAssertEqual(model.channel(id: original[0].id), original[0])
     }
 
     func testFailedMultiviewSaveRetriesWithoutErasingConcurrentFavorites() {

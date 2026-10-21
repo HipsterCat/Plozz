@@ -17,6 +17,8 @@ public struct PlozzGlassCardModifier: ViewModifier {
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzNativeFocusSurface) private var nativeSurface
+    @Environment(\.plozzRestingCardSurface) private var restingSurface
+    @Environment(\.plozzGradientCardSurface) private var gradientSurface
 
     public init(cornerRadius: CGFloat, isFocused: Bool, glassAtRest: Bool = true) {
         self.cornerRadius = cornerRadius
@@ -76,41 +78,39 @@ public struct PlozzGlassCardModifier: ViewModifier {
                 }
                 .clipShape(shape)
         } else if #available(iOS 26.0, tvOS 26.0, *) {
-            // Glass drawn as a BACKGROUND underlay (see `glassUnderlay`), NOT
-            // wrapped around the content — the latter hangs on tvOS 27 focus.
-            //
-            // Focus → real refractive Liquid Glass (one card at a time, tinted).
-            // At rest → the shared *opaque* elevation surface (``raised``), NOT a
-            // frosted `.ultraThinMaterial`. Material composites differently per
-            // platform (gray on iPad, near-black on tvOS) and differently again
-            // under Reduce Transparency, which made the same card look inconsistent
-            // across devices. Using the deterministic `raised` fill + border makes a
-            // resting card pixel-consistent everywhere and ties media cards into the
-            // same surface system as content cards. `glassAtRest: false` opts the
-            // densest grids out entirely (bare artwork at rest).
+            // Keep live glass on the focused card only. Resting information cards
+            // can opt into the gradient wash instead of the solid raised surface.
             content
                 .background {
                     if isFocused {
                         glassUnderlay()
                     } else if glassAtRest {
-                        shape.fill(palette.raised.fill)
+                        shape.fill(restingSurface.fill)
                     }
                 }
                 .overlay {
-                    if !isFocused && glassAtRest, let border = palette.raised.border {
-                        shape.strokeBorder(border, lineWidth: palette.raised.borderWidth)
+                    if !isFocused && glassAtRest, let border = restingSurface.border {
+                        shape.strokeBorder(border, lineWidth: restingSurface.borderWidth)
                     }
                 }
                 .clipShape(shape)
         } else {
             // Pre-Liquid-Glass fallback: opaque lift on focus, light translucent
-            // wash at rest.
+            // wash at rest. Gradient-backed controls share the same surface on
+            // older systems without changing the ordinary fallback.
+            let idleSurface = gradientSurface ? restingSurface : SurfaceStyle(
+                fill: Color.primary.opacity(0.07),
+                border: Color.primary.opacity(0.10)
+            )
             content
                 .background {
-                    shape.fill(isFocused ? palette.liftSurface : Color.primary.opacity(0.07))
+                    shape.fill(isFocused ? palette.liftSurface : idleSurface.fill)
                 }
                 .overlay {
-                    shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+                    shape.strokeBorder(
+                        isFocused ? Color.primary.opacity(0.10) : (idleSurface.border ?? .clear),
+                        lineWidth: isFocused ? 1 : idleSurface.borderWidth
+                    )
                 }
                 .clipShape(shape)
         }
@@ -281,6 +281,7 @@ public struct PlozzFocusableCardModifier: ViewModifier {
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzCardFocusStyle) private var focusStyle
+    @Environment(\.plozzRestingCardSurface) private var restingSurface
 
     public init(
         cornerRadius: CGFloat,
@@ -345,10 +346,7 @@ public struct PlozzFocusableCardModifier: ViewModifier {
                     .shadow(color: .black.opacity(0.30), radius: 18, y: 9)
             }
         } else if case .filled = variant {
-            // Standardized raised surface from the shared elevation table — matches
-            // settings groups everywhere. Dark lifts lighter (borderless), OLED
-            // stays black with a hairline, Light is white with a soft shadow.
-            let style = palette.raised
+            let style = restingSurface
             shape
                 .fill(style.fill)
                 .overlay {

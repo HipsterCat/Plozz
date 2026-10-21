@@ -1,4 +1,5 @@
 #if os(iOS)
+import CoreUI
 import SwiftUI
 import UIKit
 
@@ -20,7 +21,9 @@ public struct PlayerOptionsMenuButton: UIViewRepresentable {
         let button = PlayerOptionsMenuControl(type: .system)
         button.setImage(UIImage(systemName: "slider.horizontal.3",
                                 withConfiguration: UIImage.SymbolConfiguration(textStyle: .title3)), for: .normal)
-        button.tintColor = .white
+        button.tintColor = context.environment.playerControlTint
+        // Scope the native media menu's light labels to its owner, never the player or sheets.
+        button.overrideUserInterfaceStyle = .dark
         button.showsMenuAsPrimaryAction = true
         button.isContextMenuInteractionEnabled = true
         button.preferredMenuElementOrder = .fixed
@@ -30,6 +33,7 @@ public struct PlayerOptionsMenuButton: UIViewRepresentable {
 
     public func updateUIView(_ uiView: UIButton, context: Context) {
         guard let button = uiView as? PlayerOptionsMenuControl else { return }
+        button.tintColor = context.environment.playerControlTint
         button.menuProvider = makeMenu
         button.onPresentationChange = onPresentationChange
         button.accessibilityLabel = String(localized: "Playback options", locale: locale) // l10n:content - UIKit accessibility boundary; updated with the current environment locale.

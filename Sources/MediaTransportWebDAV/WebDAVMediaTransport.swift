@@ -186,9 +186,8 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
 
     func probe() async throws -> MediaTransportProbe {
         // Transport-level capabilities. Per-file seekability is not asserted
-        // here (probe has no file argument) — it is enforced at `openSource`
-        // via a range probe that requires a strong ETag, so a file without one
-        // is rejected there rather than being falsely advertised as seekable.
+        // here (probe has no file argument) — openSource requires a strong ETag
+        // or Last-Modified from the actual GET representation.
         MediaTransportProbe(
             capabilities: try MediaTransportCapabilities(
                 supportsList: true,
@@ -214,8 +213,7 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
             )
             // Skip an individual entry that can't be represented (e.g. a
             // malformed path) rather than aborting the whole directory scan.
-            // A file lacking a strong ETag is NOT skipped — it lists fine and
-            // only becomes unplayable at `openSource`.
+            // Missing validators do not prevent directory browsing.
             return entries.compactMap { try? remoteFileEntry(from: $0) }
         } catch {
             throw mapWebDAVError(error)
@@ -233,6 +231,46 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
                 trustPolicy: trustPolicy
             )
             return try remoteFileEntry(from: entry)
+        } catch {
+            throw mapWebDAVError(error)
+        }
+    }
+
+    func statForOpening(relativePath: String) async throws -> RemoteFileEntry {
+        try await openingMetadata(relativePath: relativePath).entry
+    }
+
+    private func openingMetadata(
+        relativePath: String
+    ) async throws -> (entry: RemoteFileEntry, probe: RangeProbeResult?) {
+        let file = try await stat(relativePath: relativePath)
+        do {
+            guard file.kind == .file, file.strongETag == nil, file.modifiedAt == nil else {
+                return (file, nil)
+            }
+            // Some DAV listings omit validators that GET supplies. Learn a real
+            // identity, rather than persisting a fabricated timestamp or ETag.
+            let absolute = try absolutePath(forRelative: relativePath)
+            guard let url = root.origin.url(path: absolute) else {
+                throw MediaTransportError.invalidInput(reason: "could not build WebDAV URL")
+            }
+            let probe = try await probeFile(url)
+            // A delivery resource's ETag cannot identify the stable DAV path.
+            // Without DAV metadata, only that exact resource is comparable
+            // across opens; signed delivery URLs must not become locator state.
+            guard probe.resourceURL.absoluteString == url.absoluteString else {
+                throw MediaTransportError.unsupportedRange(
+                    reason: "redirected WebDAV files require a stable DAV metadata validator"
+                )
+            }
+            guard file.size == nil || file.size == probe.totalLength else {
+                throw MediaTransportError.sourceChanged(reason: "WebDAV size changed during stat")
+            }
+            let entry = try RemoteFileEntry(
+                relativePath: file.relativePath, kind: .file, size: probe.totalLength,
+                modifiedAt: probe.lastModified, strongETag: probe.etag?.rawValue, mimeType: file.mimeType
+            )
+            return (entry, probe)
         } catch {
             throw mapWebDAVError(error)
         }
@@ -265,13 +303,11 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
               locator.credentialRevision == credentialRevision else {
             throw MediaTransportError.invalidInput(reason: "locator session mismatch")
         }
-        // WebDAV seek safety rests entirely on `If-Match` against a strong
-        // ETag; a representation without one cannot be revalidated per read, so
-        // it is not playable (it still lists/stats fine).
-        guard locator.representation.identity.kind == .strongETag,
-              let expectedETag = locator.representation.identity.value else {
+        guard locator.representation.consistency == .changeDetecting,
+              locator.representation.identity.kind == .strongETag
+                || locator.representation.identity.kind == .modificationTime else {
             throw MediaTransportError.unsupportedRange(
-                reason: "WebDAV playback requires a strong-ETag representation"
+                reason: "WebDAV playback requires an ETag or modification-time representation"
             )
         }
         let absolute = try absolutePath(forRelative: locator.relativePath)
@@ -279,16 +315,35 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
             throw MediaTransportError.invalidInput(reason: "could not build WebDAV URL")
         }
         do {
-            let probe = try await client.probeRange(
-                root: root,
-                url: url,
-                sessionKey: sessionKey,
-                credential: credential,
-                trustPolicy: trustPolicy
-            )
-            guard probe.etag.rawValue == expectedETag,
-                  probe.totalLength == locator.representation.size else {
+            // Revalidate the stable DAV identity before opening a delivery grant.
+            // This also protects resumed downloads whose locator was persisted.
+            let metadata = try await openingMetadata(relativePath: locator.relativePath)
+            let current = metadata.entry
+            let identity = locator.representation.identity
+            let identityMatches = identity.kind == .strongETag
+                ? current.strongETag == identity.value
+                : current.modifiedAt == identity.modifiedAt
+            guard current.kind == .file, identityMatches, current.size == locator.representation.size else {
+                throw MediaTransportError.sourceChanged(reason: "WebDAV metadata changed since locator creation")
+            }
+            let probe: RangeProbeResult
+            if let discovered = metadata.probe {
+                probe = discovered
+            } else {
+                probe = try await probeFile(url)
+            }
+            guard probe.totalLength == locator.representation.size else {
                 throw MediaTransportError.sourceChanged(reason: "WebDAV representation changed since scan")
+            }
+            // A delivery host can use a different validator namespace. Only
+            // compare DAV/GET validators when they describe the same origin.
+            if TransportOrigin(url: probe.resourceURL) == root.origin {
+                if identity.kind == .strongETag, let etag = probe.etag, etag.rawValue != identity.value {
+                    throw MediaTransportError.sourceChanged(reason: "WebDAV GET ETag changed")
+                }
+                if identity.kind == .modificationTime, let date = probe.lastModified, date != identity.modifiedAt {
+                    throw MediaTransportError.sourceChanged(reason: "WebDAV GET modification time changed")
+                }
             }
             let source = WebDAVByteSource(
                 client: client,
@@ -301,6 +356,12 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
         } catch {
             throw mapWebDAVError(error)
         }
+    }
+
+    private func probeFile(_ url: URL) async throws -> RangeProbeResult {
+        try await client.probeRange(
+            root: root, url: url, sessionKey: sessionKey, credential: credential, trustPolicy: trustPolicy
+        )
     }
 
     // MARK: - Path helpers

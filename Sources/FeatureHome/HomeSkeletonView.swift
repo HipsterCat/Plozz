@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import CoreModels
 import PlozzCoreUI
-import FeatureHomeCore
 
 /// A 1:1 placeholder for the Home screen shown while content loads. It renders
 /// the *same* row structure the loaded view will (driven by a `[HomeRowKind]`
@@ -31,6 +31,7 @@ struct HomeSkeletonView: View {
     /// Mirrors the profile's Continue Watching artwork choice, so the placeholder
     /// reserves a caption only when the real card will draw one.
     var continueWatchingShowsSeriesArtwork: Bool = true
+    var continueWatchingLayout: ContinueWatchingCardLayout = .landscape
     /// How long loading must persist before the skeleton fades in.
     var appearDelay: Duration = .milliseconds(150)
 
@@ -94,7 +95,8 @@ struct HomeSkeletonView: View {
             ForEach(rows, id: \.kind) { row in
                 HomeSkeletonRowView(
                     row: row,
-                    continueWatchingShowsSeriesArtwork: continueWatchingShowsSeriesArtwork
+                    continueWatchingShowsSeriesArtwork: continueWatchingShowsSeriesArtwork,
+                    continueWatchingLayout: continueWatchingLayout
                 )
             }
         }
@@ -105,10 +107,13 @@ struct HomeSkeletonView: View {
 /// and the cached-launch path, where only volatile Continue Watching waits for
 /// live server data while the cached hero and stable rows are already visible.
 struct HomeSkeletonRowView: View {
+    @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
+    @Environment(\.plozzContinueWatchingCaptionsHidden) private var continueWatchingCaptionsHidden
+    @Environment(\.plozzContinueWatchingCaptionsHiddenWithArtworkTitle) private var continueWatchingArtworkCaptionsHidden
     let row: HomeRowLayout
-    /// Whether Continue Watching is in its caption-less series-artwork mode, so
-    /// the placeholder matches the card that is about to replace it.
+    /// Matches the loaded card's series-artwork shape and Recommended caption default.
     var continueWatchingShowsSeriesArtwork: Bool = true
+    var continueWatchingLayout: ContinueWatchingCardLayout = .landscape
     /// Mirrors `MediaRowView`: the navigation inset lives INSIDE the scroll
     /// content, so the placeholder's first card lands exactly where the real one
     /// will.
@@ -186,17 +191,18 @@ struct HomeSkeletonRowView: View {
         }
     }
 
-    /// Continue Watching's series-artwork cards carry their text on the artwork
-    /// and draw no caption, so their placeholders must not reserve one either.
     private func showsCaption(for kind: HomeRowKind) -> Bool {
-        !(kind == .continueWatching && continueWatchingShowsSeriesArtwork)
+        if kind == .continueWatching {
+            return !(usesSeriesArtwork(kind) ? continueWatchingArtworkCaptionsHidden : continueWatchingCaptionsHidden)
+        }
+        return kind == .libraries || !captionsHidden
     }
 
-    /// Continue Watching and the Libraries tiles use the wide landscape card;
-    /// every other row uses portrait posters — matching the real Home.
+    /// Matches the selected Continue Watching layout and each other row's fixed shape.
     private func cardStyle(for kind: HomeRowKind) -> SkeletonCardView.Style {
         switch kind {
-        case .continueWatching, .libraries: return .landscape
+        case .continueWatching: return continueWatchingLayout == .portrait ? .poster : .landscape
+        case .libraries: return .landscape
         case .watchlist, .recentlyAdded: return .poster
         }
     }

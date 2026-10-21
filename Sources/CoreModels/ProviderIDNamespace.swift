@@ -17,6 +17,7 @@ public enum ProviderIDNamespace: String, Codable, Hashable, Sendable, CaseIterab
     /// the only strong id a Plex Discover / Watchlist row carries, since the Discover
     /// fetch omits the external `Guid` array.
     case plexGuid
+    case wetrakr
 
     case seriesImdb
     case seriesTmdb
@@ -44,6 +45,7 @@ public enum ProviderIDNamespace: String, Codable, Hashable, Sendable, CaseIterab
         case .myAnimeList: return "Mal"
         case .aniDB: return "AniDB"
         case .plexGuid: return "PlexGuid"
+        case .wetrakr: return "Wetrakr"
         case .seriesImdb: return "SeriesImdb"
         case .seriesTmdb: return "SeriesTmdb"
         case .seriesTvdb: return "SeriesTvdb"
@@ -74,6 +76,7 @@ public enum ProviderIDNamespace: String, Codable, Hashable, Sendable, CaseIterab
         case .myAnimeList: return ["myanimelist", "myanimelistid", "mal"]
         case .aniDB: return ["anidb", "anidbid"]
         case .plexGuid: return ["plexguid"]
+        case .wetrakr: return ["wetrakr", "wetrakrid"]
 
         case .seriesImdb: return ["seriesimdb"]
         case .seriesTmdb: return ["seriestmdb", "seriesthemoviedb"]

@@ -144,6 +144,43 @@ public struct MediaItemSourceIdentity: Hashable, Sendable {
     }
 }
 
+/// Metadata-only identity borrowed from a structurally recognized catalog title.
+/// It contains neither artwork URLs nor a playable provider route.
+public struct ArtworkLookupSubject: Codable, Hashable, Sendable {
+    public let id: String
+    public let kind: MediaItemKind
+    public let title: String // l10n:content - catalog media title, not application copy
+    public let parentTitle: String?
+    public let productionYear: Int?
+    public let seasonNumber: Int?
+    public let episodeNumber: Int?
+    public let seriesID: String?
+    public let providerIDs: [String: String]
+    public let genres: [String]
+    public let tags: [String]
+    public let allowsTitleBasedMetadataMatching: Bool
+
+    public init?(catalog item: MediaItem) {
+        guard [.movie, .video, .series, .season, .episode].contains(item.kind) else { return nil }
+        id = item.id
+        kind = item.kind
+        title = item.title
+        parentTitle = item.parentTitle
+        productionYear = item.productionYear
+        seasonNumber = item.seasonNumber
+        episodeNumber = item.episodeNumber
+        seriesID = item.seriesID
+        providerIDs = item.providerIDs
+        genres = item.genres
+        tags = item.tags
+        allowsTitleBasedMetadataMatching = item.allowsTitleBasedMetadataMatching
+    }
+
+    fileprivate var isSupported: Bool {
+        [.movie, .video, .series, .season, .episode].contains(kind)
+    }
+}
+
 /// A provider-agnostic media item.
 ///
 /// Providers map their native item shapes onto this type so feature code never
@@ -156,6 +193,9 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// Provider-owned folder route for inspecting this title's original files.
     /// Addressed on `sourceAccountID`, independently of playback source selection.
     public var fileBrowserContainerID: String?
+    /// Catalog-qualified metadata identity for artwork on a physical folder.
+    /// This never changes the folder's navigation or playback identity.
+    public var artworkLookupSubject: ArtworkLookupSubject?
     public var stablePresentationID: String {
         if let watchlistAliasID {
             return "watchlist:\(watchlistAliasID)"
@@ -181,6 +221,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public var episodeNumber: Int?
     /// Inclusive final episode when the server explicitly identifies a combined file.
     public var episodeNumberEnd: Int?
+    public var episodeOrdering: EpisodeOrdering?
     public var productionYear: Int?
 
     /// The day the title was first released — a movie's premiere or an episode's
@@ -197,6 +238,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// midnight and must be **formatted in UTC** — rendering it in the device's
     /// zone shifts a release west of Greenwich back a day.
     public var releaseDate: Date?
+    public var librarySortValues: LibrarySortValues?
 
     /// The content/age-classification certificate, e.g. `TV-14`, `PG-13`, `R`.
     /// Provider-native string (Jellyfin `OfficialRating`); `nil` when unrated or
@@ -240,6 +282,9 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public var resumePosition: TimeInterval?
     /// Fractional watched progress in `0...1`, if the backend reports it.
     public var playedPercentage: Double?
+    /// Provider/library-reported unfinished episodes for a series or season.
+    /// `nil` means unknown; never infer this from rounded progress or online metadata.
+    public var unwatchedEpisodeCount: Int?
     public var isPlayed: Bool
     /// Whether this profile has completed the title before, independent of its
     /// current resume/completion state. A Plex rewatch can be both historically
@@ -271,6 +316,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// External/critical ratings (IMDb, Rotten Tomatoes, …), in their native
     /// scales. May be enriched asynchronously after the item first loads.
     public var ratings: [ExternalRating]
+    /// The server selected the complete display list, including an intentional empty list.
+    public var usesProviderRatings: Bool
 
     /// External database identifiers (e.g. `["Imdb": "tt0111161", "Tmdb": "278"]`),
     /// used by enrichment services to look up additional ratings/metadata.
@@ -347,6 +394,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// resource be re-signed by its actual account after persistence strips
     /// credentials, even when playback has been retargeted elsewhere.
     public var artworkSourceAccountIDsByURL: [String: String]
+
+    /// URL-specific attribution when artwork shares a field or comes from another
+    /// copy of a title. Neither case may inherit unrelated field provenance.
+    public var artworkMetadataSourcesByURL: [String: MetadataSource] = [:]
 
     /// The sole artwork account when every known URL shares one, otherwise nil.
     public var artworkSourceAccountID: String? {
@@ -432,6 +483,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// back-compatible default so older cached JSON still decodes.
     public var sources: [MediaSourceRef]
 
+    /// Exact source identities rejected by loaded evidence. Sparse cached
+    /// membership must not restore these peers in detail or watch actions.
+    public var rejectedSourceIDs: Set<String>
+
     /// When the title was last played on the source server, used as the
     /// most-recent-wins tiebreaker when folding watch-state across servers (and
     /// to order Continue Watching). `nil` when the provider doesn't report it.
@@ -470,6 +525,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         seasonNumber: Int? = nil,
         episodeNumber: Int? = nil,
         episodeNumberEnd: Int? = nil,
+        episodeOrdering: EpisodeOrdering? = nil,
         productionYear: Int? = nil,
         releaseDate: Date? = nil,
         officialRating: String? = nil,
@@ -484,6 +540,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         runtime: TimeInterval? = nil,
         resumePosition: TimeInterval? = nil,
         playedPercentage: Double? = nil,
+        unwatchedEpisodeCount: Int? = nil,
         isPlayed: Bool = false,
         hasBeenPlayed: Bool? = nil,
         posterURL: URL? = nil,
@@ -493,6 +550,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         fallbackArtworkURL: URL? = nil,
         logoURL: URL? = nil,
         ratings: [ExternalRating] = [],
+        usesProviderRatings: Bool = false,
         providerIDs: [String: String] = [:],
         discoverySources: [HeroDiscoverySource] = [],
         discoveryURLs: [String: URL] = [:],
@@ -514,12 +572,14 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         isFavorite: Bool = false,
         selectedVersionID: String? = nil,
         sources: [MediaSourceRef] = [],
+        rejectedSourceIDs: Set<String> = [],
         lastPlayedAt: Date? = nil,
         selectedSourceAccountID: String? = nil,
         explicitSourceSelection: Bool = false,
         scheduledAirDate: Date? = nil,
         scheduledAirDateHasTime: Bool = false,
-        showsScheduledReleaseTime: Bool = false
+        showsScheduledReleaseTime: Bool = false,
+        librarySortValues: LibrarySortValues? = nil
     ) {
         self.scheduledAirDate = scheduledAirDate
         self.scheduledAirDateHasTime = scheduledAirDateHasTime
@@ -535,8 +595,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
         self.episodeNumberEnd = episodeNumberEnd
+        self.episodeOrdering = episodeOrdering
         self.productionYear = productionYear
         self.releaseDate = releaseDate
+        self.librarySortValues = librarySortValues
         self.officialRating = officialRating
         self.familyGuidance = familyGuidance
         self.genres = genres
@@ -549,6 +611,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.runtime = runtime
         self.resumePosition = resumePosition
         self.playedPercentage = playedPercentage
+        self.unwatchedEpisodeCount = unwatchedEpisodeCount
         self.isPlayed = isPlayed
         self.hasBeenPlayed = hasBeenPlayed ?? isPlayed
         self.posterURL = posterURL
@@ -558,6 +621,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.fallbackArtworkURL = fallbackArtworkURL
         self.logoURL = logoURL
         self.ratings = ratings
+        self.usesProviderRatings = usesProviderRatings
         self.providerIDs = providerIDs
         self.discoverySources = HeroDiscoverySource.normalized(discoverySources)
         self.discoveryURLs = HeroDiscoverySource.validatedURLs(discoveryURLs)
@@ -579,6 +643,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.isFavorite = isFavorite
         self.selectedVersionID = selectedVersionID
         self.sources = sources
+        self.rejectedSourceIDs = rejectedSourceIDs
         self.lastPlayedAt = lastPlayedAt
         self.selectedSourceAccountID = selectedSourceAccountID
         self.explicitSourceSelection = explicitSourceSelection
@@ -600,23 +665,25 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// about the title. Listing the keys explicitly keeps `Encodable` synthesis
     /// in sync with the custom `init(from:)` below.
     private enum CodingKeys: String, CodingKey {
-        case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber, episodeNumberEnd
-        case fileBrowserContainerID
+        case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber, episodeNumberEnd, episodeOrdering
+        case fileBrowserContainerID, artworkLookupSubject
         case originalTitle
         case productionYear, releaseDate, officialRating, genres, people, studios, tags, taglines
+        case librarySortValues
         case familyGuidance
-        case seriesID, seasonID, runtime, resumePosition, playedPercentage, isPlayed, hasBeenPlayed
+        case seriesID, seasonID, runtime, resumePosition, playedPercentage, unwatchedEpisodeCount, isPlayed, hasBeenPlayed
         case posterURL, seriesPosterURL, backdropURL, heroBackdropURL
         case fallbackArtworkURL, logoURL, ratings, providerIDs, metadataProvenance
+        case usesProviderRatings
         case discoverySources
         case discoveryURLs
         case allowsTitleBasedMetadataMatching
         case artworkSelections, mediaInfo
         case availability, locallyValidatedPlayableSource
         case downloadProgress
-        case sourceAccountID, artworkSourceAccountIDsByURL
+        case sourceAccountID, artworkSourceAccountIDsByURL, artworkMetadataSourcesByURL
         case additionalSourceAccountIDs, versions, edition, isMergedTitle, isFavorite
-        case sources, lastPlayedAt, libraryID
+        case sources, rejectedSourceIDs, lastPlayedAt, libraryID
         case scheduledAirDate, scheduledAirDateHasTime, showsScheduledReleaseTime
     }
 
@@ -642,8 +709,11 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         seasonNumber = try container.decodeIfPresent(Int.self, forKey: .seasonNumber)
         episodeNumber = try container.decodeIfPresent(Int.self, forKey: .episodeNumber)
         episodeNumberEnd = try container.decodeIfPresent(Int.self, forKey: .episodeNumberEnd)
+        episodeOrdering = try container.decodeIfPresent(String.self, forKey: .episodeOrdering)
+            .map { EpisodeOrdering(rawValue: $0) ?? .unknown }
         productionYear = try container.decodeIfPresent(Int.self, forKey: .productionYear)
         releaseDate = try container.decodeIfPresent(Date.self, forKey: .releaseDate)
+        librarySortValues = try container.decodeIfPresent(LibrarySortValues.self, forKey: .librarySortValues)
         officialRating = try container.decodeIfPresent(String.self, forKey: .officialRating)
         familyGuidance = try container.decodeIfPresent(FamilyGuidanceSummary.self, forKey: .familyGuidance)
         genres = try container.decodeIfPresent([String].self, forKey: .genres) ?? []
@@ -656,6 +726,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         runtime = try container.decodeIfPresent(TimeInterval.self, forKey: .runtime)
         resumePosition = try container.decodeIfPresent(TimeInterval.self, forKey: .resumePosition)
         playedPercentage = try container.decodeIfPresent(Double.self, forKey: .playedPercentage)
+        unwatchedEpisodeCount = try container.decodeIfPresent(Int.self, forKey: .unwatchedEpisodeCount)
         isPlayed = try container.decodeIfPresent(Bool.self, forKey: .isPlayed) ?? false
         hasBeenPlayed = try container.decodeIfPresent(Bool.self, forKey: .hasBeenPlayed) ?? isPlayed
         posterURL = try container.decodeIfPresent(URL.self, forKey: .posterURL)
@@ -665,6 +736,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         fallbackArtworkURL = try container.decodeIfPresent(URL.self, forKey: .fallbackArtworkURL)
         logoURL = try container.decodeIfPresent(URL.self, forKey: .logoURL)
         ratings = try container.decodeIfPresent([ExternalRating].self, forKey: .ratings) ?? []
+        usesProviderRatings = try container.decodeIfPresent(Bool.self, forKey: .usesProviderRatings) ?? false
         providerIDs = try container.decodeIfPresent([String: String].self, forKey: .providerIDs) ?? [:]
         discoverySources = HeroDiscoverySource.normalized(
             (try container.decodeIfPresent([String].self, forKey: .discoverySources) ?? [])
@@ -728,9 +800,14 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         downloadProgress = try container.decodeIfPresent(Double.self, forKey: .downloadProgress)
         mediaInfo = try container.decodeIfPresent(MediaSourceMetadata.self, forKey: .mediaInfo)
         sourceAccountID = try container.decodeIfPresent(String.self, forKey: .sourceAccountID)
+        artworkLookupSubject = try container.decodeIfPresent(ArtworkLookupSubject.self, forKey: .artworkLookupSubject)
         artworkSourceAccountIDsByURL = try container.decodeIfPresent(
             [String: String].self,
             forKey: .artworkSourceAccountIDsByURL
+        ) ?? [:]
+        artworkMetadataSourcesByURL = try container.decodeIfPresent(
+            [String: MetadataSource].self,
+            forKey: .artworkMetadataSourcesByURL
         ) ?? [:]
         additionalSourceAccountIDs = try container.decodeIfPresent([String].self, forKey: .additionalSourceAccountIDs) ?? []
         scheduledAirDate = try container.decodeIfPresent(Date.self, forKey: .scheduledAirDate)
@@ -741,6 +818,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         versions = try container.decodeIfPresent([MediaVersion].self, forKey: .versions) ?? []
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         sources = try container.decodeIfPresent([MediaSourceRef].self, forKey: .sources) ?? []
+        rejectedSourceIDs = try container.decodeIfPresent(Set<String>.self, forKey: .rejectedSourceIDs) ?? []
         edition = try container.decodeIfPresent(String.self, forKey: .edition)
         isMergedTitle = try container.decodeIfPresent(Bool.self, forKey: .isMergedTitle)
             ?? (sources.count > 1)
@@ -762,22 +840,65 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         }
     }
 
-    /// Ordered explicit candidates followed by source-compatible legacy URL
-    /// fallbacks for the requested presentation role.
-    public func artworkReferences(for placement: ArtworkPlacement) -> [ArtworkReference] {
+    /// Library candidates only. Persisted external URLs resolve through the
+    /// metadata provider chain, rather than masquerading as server artwork.
+    /// Library-first heroes restore the server-selected backdrop or primary sidecar.
+    public func artworkReferences(
+        for placement: ArtworkPlacement,
+        preferringLibrarySelection: Bool = false
+    ) -> [ArtworkReference] {
         var references = artworkSelections
             .first(where: { $0.placement == placement })?
             .references ?? []
+        let legacy = legacyArtworkURLs(for: placement)
+            .filter { metadataArtworkSource(for: $0) == nil }
+            .map(ArtworkReference.remote)
+        references = libraryArtworkReferences(references)
         if placement == .homeHero || placement == .detailBackdrop {
+            if preferringLibrarySelection {
+                // Home keeps the primary sidecar; Details may have been reordered
+                // for variety. Server URL fields retain the server-selected image.
+                let primaryLocal = artworkSelections.first { $0.placement == .homeHero }?
+                    .references.filter { if case .networkFile = $0 { true } else { false } } ?? []
+                let local = references.filter { if case .networkFile = $0 { true } else { false } }
+                references = primaryLocal + local + legacy + references
+            }
             references = references.filter { reference in
                 guard case .networkFile(let network) = reference else { return true }
                 guard let dimensions = network.dimensions else { return false }
                 return dimensions.aspectRatio <= 3
             }
         }
-        references.append(contentsOf: legacyArtworkURLs(for: placement).map(ArtworkReference.remote))
+        references.append(contentsOf: legacy)
         var seen = Set<ArtworkReference>()
         return references.filter { seen.insert($0).inserted }
+    }
+
+    public var artworkLookupItem: MediaItem {
+        guard kind == .folder, let subject = artworkLookupSubject, subject.isSupported else { return self }
+        var copy = self
+        copy.artworkLookupSubject = nil
+        copy.id = subject.id
+        copy.kind = subject.kind
+        copy.title = subject.title
+        copy.parentTitle = subject.parentTitle
+        copy.productionYear = subject.productionYear
+        copy.seasonNumber = subject.seasonNumber
+        copy.episodeNumber = subject.episodeNumber
+        copy.seriesID = subject.seriesID
+        copy.providerIDs = subject.providerIDs
+        copy.genres = subject.genres
+        copy.tags = subject.tags
+        copy.allowsTitleBasedMetadataMatching = subject.allowsTitleBasedMetadataMatching
+        return copy
+    }
+
+    public var supportsExternalArtworkLookup: Bool {
+        switch kind {
+        case .folder: artworkLookupSubject?.isSupported == true
+        case .collection, .unknown: false
+        default: true
+        }
     }
 
     /// Series-only artwork for episode cards and system playback surfaces.
@@ -790,10 +911,64 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         let urls = prefersPortrait
             ? [seriesPosterURL, fallbackArtworkURL]
             : [fallbackArtworkURL, seriesPosterURL]
-        let remote = urls.compactMap { $0.map(ArtworkReference.remote) }
-        let ordered = prefersPortrait ? local + remote : remote + local
+        let remote = urls.compactMap(libraryArtworkURL).map(ArtworkReference.remote)
+        // A share's URL fields can contain external enrichment. Its actual
+        // sidecar must precede those URLs, even on landscape, series-only surfaces.
+        let sidecars = local.filter { if case .networkFile = $0 { true } else { false } }
+        let ordered = prefersPortrait ? local + remote : sidecars + remote + local
         var seen = Set<ArtworkReference>()
-        return ordered.filter { seen.insert($0).inserted }
+        return libraryArtworkReferences(ordered).filter { seen.insert($0).inserted }
+    }
+
+    public func libraryArtworkURL(_ url: URL?) -> URL? {
+        guard let url, metadataArtworkSource(for: url) == nil else { return nil }
+        return url
+    }
+
+    public func libraryArtworkReferences(_ references: [ArtworkReference]) -> [ArtworkReference] {
+        references.filter {
+            guard case .remote(let url) = $0 else { return true }
+            return metadataArtworkSource(for: url) == nil
+        }
+    }
+
+    /// Cached external candidates retain their source so disabling or reordering
+    /// providers applies even when the share catalog already holds an image.
+    public func metadataArtworkURLs(for placement: ArtworkPlacement) -> [SourcedValue<URL>] {
+        let explicit: [URL] = artworkSelections.first { $0.placement == placement }?.references.compactMap {
+            if case .remote(let url) = $0 { return url }
+            return nil
+        } ?? []
+        var seen = Set<URL>()
+        return (explicit + legacyArtworkURLs(for: placement)).filter { seen.insert($0).inserted }.compactMap { url in
+            metadataArtworkSource(for: url).map { SourcedValue(value: url, source: $0) }
+        }
+    }
+
+    public func artworkMetadataSource(for url: URL) -> MetadataSource? {
+        if let source = artworkMetadataSourcesByURL[SyncURLSanitizer.sanitize(url).absoluteString] {
+            return source
+        }
+        let fields: [(URL?, MetadataField)] = [
+            (posterURL, .posterURL), (seriesPosterURL, .posterURL),
+            (backdropURL, .backdropURL), (heroBackdropURL, .backdropURL),
+            (fallbackArtworkURL, .backdropURL), (logoURL, .logoURL)
+        ]
+        return fields.compactMap { candidate, field -> MetadataSource? in
+            candidate == url ? metadataProvenance[field]?.source : nil
+        }.first
+    }
+
+    public mutating func recordArtworkMetadataSource(_ source: MetadataSource, for url: URL) {
+        artworkMetadataSourcesByURL[SyncURLSanitizer.sanitize(url).absoluteString] = source
+    }
+
+    private func metadataArtworkSource(for url: URL) -> MetadataSource? {
+        let librarySources: Set<MetadataSource> = [
+            .server, .localNFO, .localArtwork, .embedded, .filename, .generated
+        ]
+        guard let source = artworkMetadataSource(for: url), !librarySources.contains(source) else { return nil }
+        return source
     }
 
     private func legacyArtworkURLs(for placement: ArtworkPlacement) -> [URL] {
@@ -1047,6 +1222,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         }
         copy.resumePosition = source.resumePosition
         copy.playedPercentage = source.playedPercentage
+        copy.unwatchedEpisodeCount = source.unwatchedEpisodeCount
         copy.isPlayed = source.isPlayed
         copy.hasBeenPlayed = source.hasBeenPlayed
         copy.isFavorite = source.isFavorite
@@ -1184,6 +1360,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
                 accountID: account, itemID: copy.id, libraryID: copy.libraryID,
                 kind: copy.kind, versions: copy.versions, edition: copy.edition,
                 resumePosition: copy.resumePosition, playedPercentage: copy.playedPercentage,
+                unwatchedEpisodeCount: copy.unwatchedEpisodeCount,
                 isPlayed: copy.isPlayed, hasBeenPlayed: copy.hasBeenPlayed,
                 isFavorite: copy.isFavorite, lastPlayedAt: copy.lastPlayedAt
             )
@@ -1371,6 +1548,11 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     /// Server library name qualifying a derived collection-list library.
     public var collectionSourceTitle: String?
 
+    /// A Plozz-created server-wide directory, not a source of playable library media.
+    public var isServerCollectionDirectory: Bool {
+        kind == .collection && synthesizedName == .collections && collectionSourceTitle == nil
+    }
+
     public var localizedTitle: LocalizedStringResource? {
         if synthesizedName == .collections, let collectionSourceTitle {
             return "Collections in \(collectionSourceTitle)"
@@ -1379,6 +1561,9 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     }
     public var kind: MediaItemKind
     public var imageURL: URL?
+
+    /// Whether this collection directory has entries; nil means not established.
+    public var hasCollections: Bool?
 
     /// Whether this library holds **music** (Plex "artist" sections, Jellyfin
     /// "music" collections). Music has its own dedicated tab, so a music library
@@ -1411,6 +1596,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
         synthesizedName: SynthesizedName? = nil,
         collectionSourceTitle: String? = nil,
         imageURL: URL? = nil,
+        hasCollections: Bool? = nil,
         isMusic: Bool = false,
         sourceAccountID: String? = nil,
         additionalSourceAccountIDs: [String] = [],
@@ -1422,6 +1608,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
         self.collectionSourceTitle = collectionSourceTitle
         self.kind = kind
         self.imageURL = imageURL
+        self.hasCollections = hasCollections
         self.isMusic = isMusic
         self.sourceAccountID = sourceAccountID
         self.additionalSourceAccountIDs = additionalSourceAccountIDs
@@ -1466,7 +1653,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, title, kind, imageURL, isMusic, sourceAccountID
         case additionalSourceAccountIDs, sourceContainerIDByAccount
-        case synthesizedName, collectionSourceTitle
+        case synthesizedName, collectionSourceTitle, hasCollections
     }
 
     /// Custom decoding so the cross-server fields (added after libraries were
@@ -1480,6 +1667,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
         collectionSourceTitle = try container.decodeIfPresent(String.self, forKey: .collectionSourceTitle)
         kind = try container.decode(MediaItemKind.self, forKey: .kind)
         imageURL = try container.decodeIfPresent(URL.self, forKey: .imageURL)
+        hasCollections = try container.decodeIfPresent(Bool.self, forKey: .hasCollections)
         isMusic = try container.decodeIfPresent(Bool.self, forKey: .isMusic) ?? false
         sourceAccountID = try container.decodeIfPresent(String.self, forKey: .sourceAccountID)
         additionalSourceAccountIDs = try container.decodeIfPresent([String].self, forKey: .additionalSourceAccountIDs) ?? []

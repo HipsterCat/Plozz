@@ -65,11 +65,8 @@ public struct ExtendedArtworkGeometry: Equatable, Sendable {
 /// it is the same image flipped and faded out — the way a photograph sitting on
 /// a polished surface reflects into it.
 ///
-/// A blurred fill (the obvious alternative, and what the platform's own app
-/// does) has to smear the picture's *whole* lower half to cover the same band,
-/// so the thing it extends is also the thing it destroys. A mirror only ever
-/// touches pixels the picture was going to end on anyway, so at a glance the
-/// card reads as one uninterrupted image with a soft bottom.
+/// Portrait cards can progressively blur only the mirrored band, leaving the
+/// complete original picture sharp. Landscape retains its unblurred reflection.
 ///
 /// Takes the picture as a ready-made view rather than loading one, so the card
 /// and its reflection are two layers over ONE decode (see ``FallbackAsyncImage``,
@@ -80,6 +77,7 @@ public struct ExtendedArtworkFill<Picture: View>: View {
     private let picture: Picture
     private let artworkAspectRatio: CGFloat
     private let sideCrop: CGFloat
+    private let progressivelyBlursReflection: Bool
 
     /// - Parameters:
     ///   - picture: the image to lay in, sized by this view. Callers with a
@@ -89,11 +87,13 @@ public struct ExtendedArtworkFill<Picture: View>: View {
     public init(
         picture: Picture,
         artworkAspectRatio: CGFloat = 16.0 / 9.0,
-        sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop
+        sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop,
+        progressivelyBlursReflection: Bool = false
     ) {
         self.picture = picture
         self.artworkAspectRatio = artworkAspectRatio
         self.sideCrop = sideCrop
+        self.progressivelyBlursReflection = progressivelyBlursReflection
     }
 
     public var body: some View {
@@ -138,11 +138,6 @@ public struct ExtendedArtworkFill<Picture: View>: View {
     /// row is (all but a couple of points of) the picture's last row and the two
     /// meet with no seam of their own, then washed out downward into the black it
     /// stands on.
-    ///
-    /// Left deliberately **unblurred**. A blur would be a full-band GPU filter on
-    /// every card of a rail that scrolls, and it would also have to sample the
-    /// transparency just past the mirror line, which puts a bright hairline along
-    /// the exact edge the effect depends on being invisible.
     private func reflection(_ geometry: ExtendedArtworkGeometry, width: CGFloat) -> some View {
         // Clear, NOT black. A black base is what made the hairline dark — and so
         // worst on pale artwork, where it had the most to contrast with. The
@@ -159,10 +154,33 @@ public struct ExtendedArtworkFill<Picture: View>: View {
                     .scaleEffect(x: 1, y: -1)
             }
             .overlay {
+                if progressivelyBlursReflection {
+                    reflectionBlur(geometry, radius: geometry.reflectionHeight * 0.12, from: 0, to: 0.55)
+                    reflectionBlur(geometry, radius: geometry.reflectionHeight * 0.32, from: 0.2, to: 1)
+                }
+            }
+            .overlay {
                 LinearGradient(
                     gradient: ExtendedArtworkWash.gradient,
                     startPoint: .top,
                     endPoint: .bottom
+                )
+            }
+    }
+
+    private func reflectionBlur(
+        _ geometry: ExtendedArtworkGeometry, radius: CGFloat, from start: CGFloat, to end: CGFloat
+    ) -> some View {
+        // Crossfade increasing blur levels only inside the reflection. Both masks
+        // start transparent, preserving the sharp poster and its seamless join.
+        Color.clear
+            .overlay(alignment: .top) {
+                sizedPicture(geometry).scaleEffect(x: 1, y: -1).blur(radius: radius)
+            }
+            .mask {
+                LinearGradient(
+                    stops: ArtworkGradientRamp.stops(peak: 1, from: start, to: end),
+                    startPoint: .top, endPoint: .bottom
                 )
             }
     }
@@ -172,12 +190,14 @@ extension ExtendedArtworkFill where Picture == ArtworkFillImage {
     public init(
         image: Image,
         artworkAspectRatio: CGFloat = 16.0 / 9.0,
-        sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop
+        sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop,
+        progressivelyBlursReflection: Bool = false
     ) {
         self.init(
             picture: ArtworkFillImage(image),
             artworkAspectRatio: artworkAspectRatio,
-            sideCrop: sideCrop
+            sideCrop: sideCrop,
+            progressivelyBlursReflection: progressivelyBlursReflection
         )
     }
 }
@@ -189,11 +209,20 @@ enum ExtendedArtworkBitmap {
         let source: ObjectIdentifier
         let size: CGSize
         let scale: CGFloat
+        let artworkAspectRatio: CGFloat
+        let sideCrop: CGFloat
+        let progressivelyBlursReflection: Bool
 
-        init(image: UIImage, size: CGSize, scale: CGFloat) {
+        init(
+            image: UIImage, size: CGSize, scale: CGFloat, artworkAspectRatio: CGFloat, sideCrop: CGFloat,
+            progressivelyBlursReflection: Bool
+        ) {
             source = ObjectIdentifier(image)
             self.size = size
             self.scale = scale
+            self.artworkAspectRatio = artworkAspectRatio
+            self.sideCrop = sideCrop
+            self.progressivelyBlursReflection = progressivelyBlursReflection
         }
 
         override var hash: Int {
@@ -202,12 +231,17 @@ enum ExtendedArtworkBitmap {
             hasher.combine(size.width)
             hasher.combine(size.height)
             hasher.combine(scale)
+            hasher.combine(artworkAspectRatio)
+            hasher.combine(sideCrop)
+            hasher.combine(progressivelyBlursReflection)
             return hasher.finalize()
         }
 
         override func isEqual(_ object: Any?) -> Bool {
             guard let other = object as? CacheKey else { return false }
             return source == other.source && size == other.size && scale == other.scale
+                && artworkAspectRatio == other.artworkAspectRatio && sideCrop == other.sideCrop
+                && progressivelyBlursReflection == other.progressivelyBlursReflection
         }
     }
 
@@ -231,9 +265,15 @@ enum ExtendedArtworkBitmap {
     private struct Content: View {
         let image: UIImage
         let size: CGSize
+        let artworkAspectRatio: CGFloat
+        let sideCrop: CGFloat
+        let progressivelyBlursReflection: Bool
 
         var body: some View {
-            ExtendedArtworkFill(image: Image(uiImage: image))
+            ExtendedArtworkFill(
+                image: Image(uiImage: image), artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+                progressivelyBlursReflection: progressivelyBlursReflection
+            )
                 .frame(width: size.width, height: size.height)
                 .clipped()
         }
@@ -242,20 +282,31 @@ enum ExtendedArtworkBitmap {
     // Reuse one view graph; callers retain their immutable bitmap, not the renderer.
     private static var renderer: ImageRenderer<Content>?
 
-    static func render(image: UIImage, size: CGSize, scale: CGFloat) -> UIImage? {
+    static func render(
+        image: UIImage, size: CGSize, scale: CGFloat,
+        artworkAspectRatio: CGFloat = 16.0 / 9.0,
+        sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop,
+        progressivelyBlursReflection: Bool = false
+    ) -> UIImage? {
         guard size.width.isFinite, size.height.isFinite, scale.isFinite,
               size.width > 0, size.height > 0, scale > 0,
               image.size.width > 0, image.size.height > 0 else {
             PlozzLog.app.error("Unable to prepare extended artwork with invalid rendering dimensions")
             return nil
         }
-        let key = CacheKey(image: image, size: size, scale: scale)
+        let key = CacheKey(
+            image: image, size: size, scale: scale, artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+            progressivelyBlursReflection: progressivelyBlursReflection
+        )
         // Lazy rows recreate coordinators. Share the finished pixels without
         // retaining source images or accepting a recycled object identifier.
         if let cached = cache.object(forKey: key), cached.source === image {
             return cached.bitmap
         }
-        let content = Content(image: image, size: size)
+        let content = Content(
+            image: image, size: size, artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+            progressivelyBlursReflection: progressivelyBlursReflection
+        )
         let active: ImageRenderer<Content>
         if let renderer {
             renderer.content = content
@@ -266,7 +317,18 @@ enum ExtendedArtworkBitmap {
         }
         active.scale = scale
         active.isOpaque = true
-        guard let result = active.uiImage else {
+        #if os(tvOS)
+        var rendered: UIImage?
+        active.render(rasterizationScale: scale) { _, draw in
+            rendered = NativePosterArtworkBitmap.image(
+                source: nil, size: size, scale: scale, backgroundColor: .clear,
+                clipsToArtwork: false, drawOverlay: draw
+            )
+        }
+        #else
+        let rendered = active.uiImage
+        #endif
+        guard let result = rendered else {
             PlozzLog.app.error("Unable to render extended artwork")
             return nil
         }
@@ -286,6 +348,15 @@ enum ExtendedArtworkBitmap {
 /// drift apart. Everything here is a fraction of the card, so it holds at any
 /// display density.
 public enum ContinueWatchingCardShape {
+    /// Preserve the entire 2:3 poster, then reserve a reflected band for playback details.
+    public static let portraitAspectRatio: CGFloat =
+        (2.0 / 3.0) / (1 + PlozzTheme.Metrics.continueWatchingPortraitReflectionShare)
+
+    public static let portraitGeometry = ExtendedArtworkGeometry(
+        slot: CGSize(width: portraitAspectRatio, height: 1),
+        artworkAspectRatio: 2.0 / 3.0, sideCrop: 0
+    )
+
     /// Width ÷ height of the whole card, derived from how much reflection it
     /// should show (``PlozzTheme/Metrics/continueWatchingReflectionShare``)
     /// rather than picked as a magic number.

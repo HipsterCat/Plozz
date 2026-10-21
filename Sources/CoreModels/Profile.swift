@@ -27,6 +27,9 @@ public struct Profile: Codable, Hashable, Identifiable, Sendable {
     public var colorIndex: Int
     /// When the profile was created — used for stable ordering.
     public var createdAt: Date
+    /// Local recovery marker when a cloud deletion arrives before its replacement
+    /// profile. Retained across restart, but excluded from ProfileSyncDTO.
+    var pendingSyncedDeletion: Bool? = nil
     /// Optional `Account.id` this profile is *backed by* (e.g. a signed-in Plex
     /// or Jellyfin account). Seeds the name/avatar and narrows the active set;
     /// `nil` for a plain app-owned profile.
@@ -127,9 +130,8 @@ public struct Profile: Codable, Hashable, Identifiable, Sendable {
     /// It rides a profile record because there is no household-level sync record,
     /// and adding a `SyncRecordKind` would be unsafe: an older peer can't parse an
     /// unknown kind, drops it from its captured set, and capture is authoritative
-    /// — so the first old device to sync would delete the household's PIN. The
-    /// first profile always exists and can't be deleted, which makes it a stable
-    /// anchor.
+    /// — so the first old device to sync would delete the household's PIN.
+    /// Deleting that anchor moves the revisioned PIN to the first survivor.
     ///
     /// Read it through ``ProfilesModel/parentalPIN``; nothing should reach for
     /// this field directly.
@@ -152,9 +154,9 @@ public struct Profile: Codable, Hashable, Identifiable, Sendable {
     /// can't be switched off from inside. Synced, for the same reason the lock
     /// is: a restriction that applied on one device wouldn't be a restriction.
     ///
-    /// NOTE: this restricts *settings*, not *content* — Plozz has no maturity
-    /// filtering yet, so a Kids Profile still sees everything its libraries
-    /// contain. Named for what it will grow into, but don't oversell it in copy.
+    /// External Home Discovery is always disabled, independently of the Parental
+    /// PIN. Library content still follows the selected server user's access;
+    /// this flag is not an app-wide maturity-rating filter.
     ///
     /// Optional purely for migration: profiles encoded before this field existed
     /// decode as `nil`, and the synthesized encoder omits `nil` rather than
@@ -293,6 +295,8 @@ public struct Profile: Codable, Hashable, Identifiable, Sendable {
     /// Narrowing at the point of USE satisfies both: an account that isn't signed
     /// in has nothing to import from, so it can't leak and mustn't gate; the
     /// question stays on the record and starts gating the moment it arrives.
+    /// Callers must also narrow to providers that support identity selection:
+    /// sync records questions for unknown accounts that may arrive as non-Plex.
     public func awaitsIdentity(amongAccounts accountIDs: some Collection<String>) -> Bool {
         let pending = pendingIdentityAccountIDs
         guard !pending.isEmpty else { return false }
@@ -739,6 +743,9 @@ public struct PlexHomeUserBinding: Codable, Hashable, Sendable {
     public var name: String
     public var avatarURL: String?
     public var requiresPIN: Bool?
+    /// Older clients could infer PIN removal from a token-only switch response.
+    /// A missing marker requires revalidation before treating a binding as unprotected.
+    public var pinRequirementVerified: Bool?
     /// Whether this is a **managed** Plex Home user — one created inside someone
     /// else's Plex account, with no email or login of its own.
     ///
@@ -758,12 +765,14 @@ public struct PlexHomeUserBinding: Codable, Hashable, Sendable {
         name: String,
         avatarURL: String? = nil,
         requiresPIN: Bool? = nil,
-        isManaged: Bool? = nil
+        isManaged: Bool? = nil,
+        pinRequirementVerified: Bool? = true
     ) {
         self.homeUserID = homeUserID
         self.name = name
         self.avatarURL = avatarURL
         self.requiresPIN = requiresPIN
+        self.pinRequirementVerified = pinRequirementVerified
         self.isManaged = isManaged
     }
 }
@@ -804,7 +813,8 @@ extension Profile {
             homeUserID: id,
             name: plexHomeUserName ?? "",
             avatarURL: plexHomeUserAvatarURL,
-            requiresPIN: plexHomeUserRequiresPIN
+            requiresPIN: plexHomeUserRequiresPIN,
+            pinRequirementVerified: nil
         )
     }
 
@@ -826,7 +836,8 @@ extension Profile {
                 homeUserID: legacyID,
                 name: copy.plexHomeUserName ?? "",
                 avatarURL: copy.plexHomeUserAvatarURL,
-                requiresPIN: copy.plexHomeUserRequiresPIN
+                requiresPIN: copy.plexHomeUserRequiresPIN,
+                pinRequirementVerified: nil
             )
         }
         if let binding {

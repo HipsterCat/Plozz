@@ -3,14 +3,199 @@ import CoreModels
 @testable import PlozzCoreUI
 @testable import FeatureHome
 import FeatureHomeCore
+@testable import HeroUI
 import MetadataKit
 import Observation
 import SwiftUI
 import UIKit
+import Vision
 import XCTest
 
 @MainActor
 final class DetailTransitionVisualRegressionTests: XCTestCase {
+    func testProductionDetailHeroRemainsFullyVisible() async throws {
+        let scene = try await activeScene()
+        let artwork = try await seedArtwork(color: .blue)
+        let logo = try await seedArtwork(color: .red, size: CGSize(width: 500, height: 200), padding: 10)
+        for kind in [MediaItemKind.movie, .series] {
+            do {
+                var provider = TransitionShowProvider(artwork: artwork, logo: logo, episodeCount: 12)
+                var item = provider.show
+                item.kind = kind
+                item.overview = String(repeating: "A longer description with enough text to fill the hero. ", count: 6)
+                provider.detailItem = item
+                let model = TransitionShowModel(provider: provider)
+                let host = TransitionShowController(rootView: TransitionShowRoot(
+                    model: model, artworkSettings: ArtworkSettings(preference: .library)
+                ))
+                let previous = scene.windows.first(where: \.isKeyWindow)
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                defer {
+                    model.detail.suspendEnrichment()
+                    window.isHidden = true
+                    window.rootViewController = nil
+                    previous?.makeKeyAndVisible()
+                }
+                model.path.append(1)
+                try await waitUntil {
+                    model.detail.state.value?.childrenLoaded == true
+                        && self.verticalScroll(in: host.view) != nil
+                }
+                try await Task.sleep(for: .seconds(3))
+                let page = try XCTUnwrap(verticalScroll(in: host.view))
+                let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+                let play = try XCTUnwrap(focusTargets(in: page).first {
+                    (40...100).contains($0.frame.height) && $0.frame.width > 100
+                })
+                host.target = play
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                try await waitUntil {
+                    system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(play)
+                }
+                host.target = nil
+                try await Task.sleep(for: .milliseconds(600))
+                let shot = XCTAttachment(image: DetailTransitionSnapshot.image(of: window))
+                shot.name = "detail-geometry-\(kind)-reduced-\(UIAccessibility.isReduceMotionEnabled)"
+                shot.lifetime = .keepAlways
+                add(shot)
+                XCTAssertEqual(page.contentOffset.y + page.adjustedContentInset.top, 0, accuracy: 1,
+                               "Initial focus must not crop the \(kind) hero.")
+                let bounds = try redArtworkBounds(in: window)
+                XCTAssertGreaterThan(bounds.minY, 300, "The complete title must remain above the lower-third metadata.")
+                XCTAssertGreaterThan(bounds.height, 100)
+                XCTAssertEqual(bounds.width / bounds.height, 2.5, accuracy: 0.03,
+                               "The title artwork must preserve its uncropped aspect ratio.")
+                if kind == .series {
+                    assertEpisodeArtworkSpacing(in: renderedKeylineSnapshot(in: window), y: 1070)
+                }
+            }
+        }
+    }
+
+    func testHomeBackdropUsesOnlyOpacityAnimationWithReduceMotion() async throws {
+        try XCTSkipUnless(UIAccessibility.isReduceMotionEnabled, "Run with system Reduce Motion enabled.")
+        let scene = try await activeScene()
+        let first = try await seedArtwork(color: .blue)
+        let second = try await seedArtwork(color: .red)
+        let model = MotionBackdropFixture(first: first, second: second)
+        let host = UIHostingController(rootView: MotionBackdropView(model: model))
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        func container(in view: UIView) -> HeroWipeContainerView? {
+            if let container = view as? HeroWipeContainerView { return container }
+            return view.subviews.lazy.compactMap { container(in: $0) }.first
+        }
+        try await waitUntil { container(in: host.view)?.frontImage != nil }
+        model.showsSecond = true
+        var paths: [String] = []
+        func sample(_ layer: CALayer) {
+            for key in layer.animationKeys() ?? [] {
+                if let animation = layer.animation(forKey: key) as? CAPropertyAnimation,
+                   let path = animation.keyPath {
+                    paths.append(path)
+                }
+            }
+            layer.sublayers?.forEach(sample)
+        }
+        let deadline = ContinuousClock.now + .milliseconds(650)
+        while ContinuousClock.now < deadline {
+            if let layer = container(in: host.view)?.layer { sample(layer) }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(paths.contains("opacity"), "Changing artwork must use the non-spatial dissolve.")
+        XCTAssertFalse(paths.contains { path in
+            ["position", "bounds", "transform"].contains { path.hasPrefix($0) }
+        }, "No wipe/position/scale animations: \(Set(paths))")
+        XCTAssertEqual(container(in: host.view)?.subviews.count, 1, "Finished artwork must release outgoing pages.")
+    }
+
+    func testProductionMovieAndSeriesTintTheirInformationBackgroundFromArtwork() async throws {
+        func backgrounds(in view: UIView) -> [NativeGradientCardFill.View] {
+            (view as? NativeGradientCardFill.View).map { [$0] } ?? view.subviews.flatMap { backgrounds(in: $0) }
+        }
+        let scene = try await activeScene()
+        for kind in [MediaItemKind.movie, .series] {
+            let artwork = try await seedArtwork(color: kind == .movie ? .red : .blue)
+            var provider = TransitionShowProvider(artwork: artwork)
+            var item = provider.show
+            item.kind = kind
+            item.genres = ["Drama"]
+            item.productionYear = 2020
+            provider.detailItem = item
+            let model = TransitionShowModel(provider: provider)
+            let host = TransitionShowController(rootView: TransitionShowRoot(model: model))
+            let previous = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            window.backgroundColor = UIColor(ThemePalette.dark.backgroundBase)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                model.trailer.stop()
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKeyAndVisible()
+            }
+            model.path.append(1)
+            try await waitUntil { model.detail.state.value?.childrenLoaded == true }
+            try await Task.sleep(for: .seconds(2))
+            try await focusLowestDetailControl(in: window, host: host)
+            for phase in ["initial", "disabled", "reenabled", "uncovered"] {
+                if phase == "uncovered" {
+                    model.stackDepth.pageAppeared(model.coveredPageID)
+                    try await Task.sleep(for: .milliseconds(300))
+                    model.stackDepth.pageDismissed(model.coveredPageID)
+                }
+                let enabled = phase != "disabled"
+                model.gradientEnabled = enabled
+                try await Task.sleep(for: .seconds(1))
+                let image = DetailTransitionSnapshot.image(of: window)
+                let sample = try XCTUnwrap(image.cgImage?.cropping(to:
+                    CGRect(x: 1900, y: 1000, width: 1, height: 1)))
+                var bytes = [UInt8](repeating: 0, count: 4)
+                try bytes.withUnsafeMutableBytes {
+                    let context = try XCTUnwrap(CGContext(
+                        data: $0.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                    ))
+                    context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "production-detail-gradient-\(kind)-\(phase)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                if enabled {
+                    let fills = backgrounds(in: window).filter {
+                        $0.convert($0.bounds, to: window).intersects(window.bounds) && !$0.bounds.isEmpty
+                    }
+                    XCTAssertFalse(fills.isEmpty)
+                    XCTAssertTrue(fills.allSatisfy { !$0.isHidden && $0.layer.contents != nil },
+                                  "Production detail cards must paint the shared gradient, not the flat fallback.")
+                    let tintDifference = Int(bytes[0]) - Int(bytes[2])
+                    XCTAssertGreaterThan(kind == .movie ? tintDifference : -tintDifference, 8,
+                                         "\(kind) must tint the information-band gutter, not just its hero image: \(bytes)")
+                } else {
+                    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                    XCTAssertTrue(UIColor(ThemePalette.dark.informationSurface).getRed(&r, green: &g, blue: &b, alpha: &a))
+                    for (actual, expected) in zip(bytes, [r, g, b, a]) {
+                        XCTAssertLessThanOrEqual(abs(Int(actual) - Int((expected * 255).rounded())), 2)
+                    }
+                }
+            }
+        }
+    }
+
     func testProductionDetailStopsTrailerAfterReturningToNonHeroRoot() async throws {
         try await withTrailerFixture { model, video in
             model.path.append(1)
@@ -201,6 +386,14 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
     }
 
     func testProductionShowDoesNotScrollIntoEpisodesWhileTheHeroEnters() async throws {
+        try await assertProductionHeroEntrance(episodeContext: false)
+    }
+
+    func testProductionEpisodeContextOpensOnHero() async throws {
+        try await assertProductionHeroEntrance(episodeContext: true)
+    }
+
+    private func assertProductionHeroEntrance(episodeContext: Bool) async throws {
         let settingsStore = MetadataProviderSettingsStore()
         let originalSettings = settingsStore.load()
         var settings = originalSettings
@@ -209,9 +402,9 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
         defer { settingsStore.save(originalSettings) }
         let scene = try await activeScene()
         let artwork = try await seedArtwork()
-        let provider = TransitionShowProvider(artwork: artwork)
+        let provider = TransitionShowProvider(artwork: artwork, episodeCount: 12)
         let model = TransitionShowModel(provider: provider)
-        let host = UIHostingController(rootView: TransitionShowRoot(model: model))
+        let host = UIHostingController(rootView: TransitionShowRoot(model: model, directEntry: episodeContext))
         let previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
@@ -219,27 +412,45 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
         window.makeKeyAndVisible()
         host.view.layoutIfNeeded()
         defer {
+            model.detail.suspendEnrichment()
             window.isHidden = true
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
         try await Task.sleep(for: .milliseconds(300))
-        DetailTransitionNavigation.prepare(for: provider.show, in: window, source: nil)
+        DetailTransitionNavigation.prepare(
+            for: episodeContext ? provider.episode : provider.show, in: window, source: nil
+        )
         let cover = try XCTUnwrap(window.subviews.compactMap { $0 as? DetailTransitionOverlay }.first)
         model.path.append(1)
         try await waitUntil {
             model.detail.state.value?.childrenLoaded == true && self.verticalScroll(in: host.view) != nil
         }
-        try await Task.sleep(for: .milliseconds(700))
+        try await waitUntil { cover.destination.image != nil }
         XCTAssertNotNil(cover.destination.image, "Use the actual backdrop resolved by the production hero.")
         let scroll = try XCTUnwrap(verticalScroll(in: host.view))
         XCTAssertEqual(scroll.contentOffset.y + scroll.adjustedContentInset.top, 0, accuracy: 2,
                        "The artwork pause must not move into the episode browser.")
-        try await Task.sleep(for: .milliseconds(1400))
+        try await waitUntil { cover.superview == nil }
+        try await Task.sleep(for: .seconds(2))
         XCTAssertEqual(scroll.contentOffset.y + scroll.adjustedContentInset.top, 0, accuracy: 2,
-                       "A whole-show open must stay on its hero when controls finish appearing.")
+                       "Show and episode-context opens must stay on the hero when controls finish appearing.")
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        let focused = try XCTUnwrap(system.focusedItem)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
+        let image = renderedKeylineSnapshot(in: window)
+        try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+        let actionTitle = String(localized: model.detail.playButtonTitle(for: provider.episode))
+        let playText = try XCTUnwrap(request.results?.first {
+            $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(actionTitle) == true
+        }).boundingBox
+        let playCenter = CGPoint(x: playText.midX * image.size.width, y: (1 - playText.midY) * image.size.height)
+        XCTAssertTrue(try XCTUnwrap(focusFrame(focused, in: window)).contains(playCenter),
+                      "Actual native focus must enclose the rendered Play label, not an episode or tab: \(focused)")
         let shot = XCTAttachment(image: DetailTransitionSnapshot.image(of: window))
-        shot.name = "production-series-entrance"
+        shot.name = "production-series-entrance-episode-\(episodeContext)"
         shot.lifetime = .keepAlways
         add(shot)
     }
@@ -265,7 +476,8 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             let provider = TransitionShowProvider(artwork: artwork, logo: logo, episodeCount: 12)
             let model = TransitionShowModel(provider: provider)
             let host = TransitionShowController(rootView: TransitionShowRoot(
-                model: model, focusStyle: style, directEntry: configuration.directEntry
+                model: model, focusStyle: style, directEntry: configuration.directEntry,
+                artworkSettings: ArtworkSettings(preference: .library)
             ))
             let previous = scene.windows.first(where: \.isKeyWindow)
             let window = UIWindow(windowScene: scene)
@@ -310,7 +522,9 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             while ContinuousClock.now < deadline {
                 if !browsedDuringReveal, offsets.count >= 3,
                    let next = episodeFocusTargets(in: page).first(where: {
-                       ObjectIdentifier($0) != system.focusedItem.map(ObjectIdentifier.init)
+                       guard ObjectIdentifier($0) != system.focusedItem.map(ObjectIdentifier.init),
+                             let frame = focusFrame($0, in: window) else { return false }
+                       return frame.minX > 500 && frame.maxX < window.bounds.maxX - 80
                    }) {
                     host.target = next
                     system.requestFocusUpdate(to: host)
@@ -352,15 +566,20 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             XCTAssertLessThanOrEqual(bounds.maxY, 273, "The compact logo must remain above Seasons.")
 
             let seasonSnapshot = renderedKeylineSnapshot(in: window)
-            let seasonEdge = try leadingPixel(
+            let seasonAligned = XCTAttachment(image: seasonSnapshot)
+            seasonAligned.name = "production-season-keylines-\(scenario)"
+            seasonAligned.lifetime = .keepAlways
+            add(seasonAligned)
+            let seasonEdge = try leadingSurfacePixel(
                 in: seasonSnapshot, region: CGRect(x: 60, y: 310, width: 240, height: 10)
-            ) { r, g, b in r > 12 && r < 90 && abs(Int(r) - Int(g)) < 4 && abs(Int(r) - Int(b)) < 4 }
+            )
             let seasonAboutEdge = try leadingPixel(
                 in: seasonSnapshot, region: CGRect(x: 0, y: 975, width: 300, height: 60)
             ) { r, g, b in r > 230 && g > 230 && b > 230 }
             let season = try XCTUnwrap(focusTargets(in: page).first {
                 (100...250).contains($0.frame.width) && (40...90).contains($0.frame.height)
             })
+            let browseOffset = episodeRail.contentOffset.x
             host.target = season
             system.requestFocusUpdate(to: host)
             system.updateFocusIfNeeded()
@@ -369,11 +588,13 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
                     && host.settledFocusItemID == ObjectIdentifier(season)
             }
             host.target = nil
-            let rail = try XCTUnwrap(episodeScroll(in: page))
-            rail.setContentOffset(CGPoint(x: -rail.adjustedContentInset.left, y: rail.contentOffset.y), animated: false)
+            // Re-entry keeps the remembered card at its existing visible position.
             window.layoutIfNeeded()
             let restingSnapshot = try await restingEpisodeSnapshot(in: window)
-            let episodeEdge = try episodeArtworkSpan(in: restingSnapshot).lowerBound
+            XCTAssertEqual(episodeRail.contentOffset.x, browseOffset, accuracy: 1,
+                           "Returning to Seasons must not move the browsed episode to the leading edge.")
+            assertEpisodeArtworkSpacing(in: restingSnapshot, y: 510)
+            let episodeEdge = try XCTUnwrap(episodeArtworkSpan(in: restingSnapshot)).lowerBound
             let aboutEdge = try leadingPixel(
                 in: restingSnapshot, region: CGRect(x: 0, y: 975, width: 300, height: 60)
             ) { r, g, b in r > 230 && g > 230 && b > 230 }
@@ -385,10 +606,234 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             aligned.name = "production-series-keylines-\(scenario)"
             aligned.lifetime = .keepAlways
             add(aligned)
-            let seasonAligned = XCTAttachment(image: seasonSnapshot)
-            seasonAligned.name = "production-season-keylines-\(scenario)"
-            seasonAligned.lifetime = .keepAlways
-            add(seasonAligned)
+
+            for _ in 0..<3 {
+                try await focusLowestDetailControl(in: window, host: host)
+                host.target = nil
+                XCTAssertGreaterThan(page.contentOffset.y + page.adjustedContentInset.top, 1,
+                                     "Exercise a real scroll into the lower information sections.")
+                host.target = season
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                try await waitUntil {
+                    system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(season)
+                }
+                host.target = nil
+                try await Task.sleep(for: .milliseconds(1200))
+                XCTAssertEqual(episodeRail.contentOffset.x, browseOffset, accuracy: 1,
+                               "Details round trips must retain the episode row's horizontal position.")
+                XCTAssertEqual(page.contentOffset.y + page.adjustedContentInset.top, 0, accuracy: 1,
+                               "Returning from Details must restore the browser's full stage.")
+                XCTAssertTrue(page.isScrollEnabled, "No completed return may leave scrolling disabled.")
+                XCTAssertEqual(system.focusedItem.map(ObjectIdentifier.init), ObjectIdentifier(season),
+                               "Returning focus must settle without bouncing between the hero and browser.")
+            }
+        }
+    }
+
+    func testRelatedReturnsDirectlyToVisibleEpisodeWithoutSeasonFocus() async throws {
+        let settingsStore = MetadataProviderSettingsStore()
+        let original = settingsStore.load()
+        var settings = original
+        settings.preferOnlineArtwork = false
+        settingsStore.save(settings)
+        defer { settingsStore.save(original) }
+        let scene = try await activeScene()
+        let artwork = try await seedArtwork()
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        for style in CardFocusStyle.allCases {
+            let scenario = "\(style)-reduce-motion-\(reduceMotion)"
+            let provider = TransitionShowProvider(artwork: artwork, episodeCount: 12)
+            let related = ["Family Guy", "South Park", "BoJack Horseman"].enumerated().map { index, title in
+                MediaItem(id: "related-\(index)", title: title, kind: .series,
+                          posterURL: artwork, providerIDs: ["Tmdb": "\(100 + index)"])
+            }
+            let store = RelatedTitlesStore(directory: nil)
+            await store.store(RelatedTitlesRecord(
+                seedKey: MetadataQuery(provider.show).seriesScoped.enrichmentCacheKey,
+                titles: related.map {
+                    RelatedTitle(title: $0.title, year: nil, kind: .series,
+                                 providerIDs: $0.providerIDs, posterURL: artwork, source: .tmdb)
+                },
+                refreshedAt: Date()
+            ))
+            let loader = RelatedTitlesLoader(
+                resolver: RelatedTitlesResolver(providers: []), store: store,
+                search: { _, _ in related }
+            )
+            let model = TransitionShowModel(provider: provider, relatedTitlesLoader: loader)
+            let host = TransitionShowController(rootView: TransitionShowRoot(model: model, focusStyle: style))
+            let previous = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                model.detail.suspendEnrichment()
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKeyAndVisible()
+            }
+            host.view.layoutIfNeeded()
+            DetailTransitionNavigation.prepare(for: provider.show, in: window, source: nil)
+            model.path.append(1)
+            try await waitUntil {
+                model.detail.seasonEpisodes["season"]?.count == 12 && loader.entries.count == 3
+                    && self.episodeScroll(in: host.view) != nil
+            }
+            try await Task.sleep(for: .seconds(3))
+            let page = try XCTUnwrap(verticalScroll(in: host.view))
+            let rail = try XCTUnwrap(episodeScroll(in: page))
+            let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+            let episode = try XCTUnwrap(episodeFocusTarget(in: page))
+            host.target = episode
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            try await waitUntil { system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(episode) }
+            host.target = nil
+            try await Task.sleep(for: .milliseconds(1200))
+            let horizontalOffset = rail.contentOffset.x
+
+            for roundTrip in 0..<3 {
+                let bottom = page.contentSize.height - page.bounds.height + page.adjustedContentInset.bottom
+                page.setContentOffset(CGPoint(x: 0, y: min(900, bottom)), animated: false)
+                try await Task.sleep(for: .milliseconds(300))
+                let posters = focusTargets(in: page).filter {
+                    (180...300).contains($0.frame.width) && (300...550).contains($0.frame.height)
+                }.sorted { $0.frame.minX < $1.frame.minX }
+                XCTAssertGreaterThanOrEqual(posters.count, 2)
+                let southPark = try XCTUnwrap(posters.dropFirst().first)
+                host.target = southPark
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                try await waitUntil {
+                    system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(southPark)
+                        && host.settledFocusItemID == ObjectIdentifier(southPark)
+                }
+                host.target = nil
+                XCTAssertGreaterThan(page.contentOffset.y + page.adjustedContentInset.top, 100)
+                let departure = (page.layer.presentation() ?? page.layer).bounds.minY
+                let started = CACurrentMediaTime()
+                var motion: [(time: TimeInterval, y: CGFloat)] = [(0, departure)]
+                host.target = episode
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                try await waitUntil {
+                    system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(episode)
+                }
+                host.target = nil
+                while CACurrentMediaTime() - started < 1.2 {
+                    motion.append((CACurrentMediaTime() - started,
+                                   (page.layer.presentation() ?? page.layer).bounds.minY))
+                    try await Task.sleep(for: .milliseconds(16))
+                }
+                let trace = XCTAttachment(string: motion.map { "t=\($0.time), y=\($0.y)" }.joined(separator: "\n"))
+                trace.name = "related-episode-motion-\(scenario)-\(roundTrip)"
+                trace.lifetime = .keepAlways
+                add(trace)
+                let top = -page.adjustedContentInset.top
+                let distance = departure - top
+                let moving = motion.filter { $0.y > top + distance * 0.05 && $0.y < departure - distance * 0.05 }
+                if reduceMotion {
+                    XCTAssertTrue(motion.filter { $0.time >= 0.15 }.allSatisfy { abs($0.y - top) <= 1 },
+                                  "Reduce Motion must not animate the full-page return.")
+                } else {
+                    XCTAssertGreaterThanOrEqual(moving.count, 8,
+                                                "\(style): the return must render intermediate positions, not jump.")
+                    if let first = moving.first, let last = moving.last {
+                        XCTAssertGreaterThanOrEqual(last.time - first.time, 0.3,
+                                                    "\(style): the visible return must not inherit the short focus-effect timing.")
+                        XCTAssertLessThanOrEqual(last.time - first.time, 0.6,
+                                                 "\(style): returning up must not linger longer than a row transition.")
+                    }
+                }
+                let screenshot = XCTAttachment(image: renderedKeylineSnapshot(in: window))
+                screenshot.name = "related-episode-return-\(scenario)-\(roundTrip)"
+                screenshot.lifetime = .keepAlways
+                add(screenshot)
+                XCTAssertEqual(page.contentOffset.y + page.adjustedContentInset.top, 0, accuracy: 1,
+                               "\(style): a direct return from Related must reveal the browser without visiting Seasons.")
+                XCTAssertEqual(rail.contentOffset.x, horizontalOffset, accuracy: 1)
+                XCTAssertTrue(window.bounds.contains(try XCTUnwrap(focusFrame(episode, in: window))),
+                              "The actual focused episode must be fully onscreen.")
+                XCTAssertTrue(page.isScrollEnabled)
+                XCTAssertEqual(system.focusedItem.map(ObjectIdentifier.init), ObjectIdentifier(episode))
+
+                if roundTrip == 2, !reduceMotion {
+                    let first = try XCTUnwrap(moving.first)
+                    let last = try XCTUnwrap(moving.last)
+                    try await assertRapidEpisodeRelatedNavigation(
+                        episode: episode, related: southPark, page: page,
+                        window: window, host: host, style: style,
+                        upwardDuration: last.time - first.time
+                    )
+                }
+            }
+        }
+    }
+
+    private func assertRapidEpisodeRelatedNavigation(
+        episode: any UIFocusItem, related: any UIFocusItem, page: UIScrollView,
+        window: UIWindow, host: TransitionShowController, style: CardFocusStyle,
+        upwardDuration: TimeInterval
+    ) async throws {
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        let started = CACurrentMediaTime()
+        var downwardMotion: [(time: TimeInterval, y: CGFloat)] = [
+            (0, (page.layer.presentation() ?? page.layer).bounds.minY)
+        ]
+        host.target = related
+        system.requestFocusUpdate(to: host)
+        system.updateFocusIfNeeded()
+        while CACurrentMediaTime() - started < 0.8 {
+            downwardMotion.append((CACurrentMediaTime() - started,
+                                   (page.layer.presentation() ?? page.layer).bounds.minY))
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        let downwardTrace = XCTAttachment(string: downwardMotion.map { "t=\($0.time), y=\($0.y)" }.joined(separator: "\n"))
+        downwardTrace.name = "episode-related-downward-motion-\(style)"
+        downwardTrace.lifetime = .keepAlways
+        add(downwardTrace)
+        let departure = try XCTUnwrap(downwardMotion.first).y
+        let arrival = try XCTUnwrap(downwardMotion.last).y
+        XCTAssertGreaterThan(arrival - departure, 100, "Down must reveal Related without manually scrolling.")
+        let moving = downwardMotion.filter {
+            $0.y > departure + (arrival - departure) * 0.05
+                && $0.y < arrival - (arrival - departure) * 0.05
+        }
+        let first = try XCTUnwrap(moving.first)
+        let last = try XCTUnwrap(moving.last)
+        XCTAssertEqual(upwardDuration, last.time - first.time, accuracy: 0.15,
+                       "\(style): Up and Down must have comparable visible animation time.")
+        for milliseconds in [0, 30, 80, 150, 300] {
+            for finishesOnEpisode in [false, true] {
+                var trace: [String] = []
+                for step in 0..<9 {
+                    let target = step.isMultiple(of: 2) == finishesOnEpisode ? episode : related
+                    host.target = target
+                    system.requestFocusUpdate(to: host)
+                    system.updateFocusIfNeeded()
+                    trace.append("step=\(step), target=\(target === episode ? "episode" : "related"), accepted=\(system.focusedItem === target), offset=\(page.contentOffset.y), enabled=\(page.isScrollEnabled)")
+                    if milliseconds > 0 { try await Task.sleep(for: .milliseconds(milliseconds)) }
+                }
+                host.target = nil
+                try await Task.sleep(for: .milliseconds(1200))
+                let target = finishesOnEpisode ? episode : related
+                let label = "\(style)-\(milliseconds)ms-\(finishesOnEpisode ? "up" : "down")"
+                let attachment = XCTAttachment(string: trace.joined(separator: "\n"))
+                attachment.name = "rapid-episode-related-\(label)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                XCTAssertEqual(system.focusedItem.map(ObjectIdentifier.init), ObjectIdentifier(target), label)
+                XCTAssertTrue(window.bounds.contains(try XCTUnwrap(focusFrame(target, in: window))),
+                              "\(label): the page must reveal the row that actually received focus.")
+                XCTAssertTrue(page.isScrollEnabled, "\(label): a departed browser must release its scroll guard.")
+                if finishesOnEpisode {
+                    XCTAssertEqual(page.contentOffset.y + page.adjustedContentInset.top, 0, accuracy: 1, label)
+                } else {
+                    XCTAssertGreaterThan(page.contentOffset.y + page.adjustedContentInset.top, 100, label)
+                }
+            }
         }
     }
 
@@ -440,6 +885,19 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
         episodeFocusTargets(in: view).first
     }
 
+    private func focusFrame(_ item: any UIFocusItem, in view: UIView) -> CGRect? {
+        if let item = item as? UIView { return item.convert(item.bounds, to: view) }
+        var parent = item.parentFocusEnvironment
+        while let environment = parent {
+            if let container = environment.focusItemContainer {
+                let coordinates: any UICoordinateSpace = view
+                return coordinates.convert(item.frame, from: container.coordinateSpace)
+            }
+            parent = environment.parentFocusEnvironment
+        }
+        return nil
+    }
+
     private func episodeFocusTargets(in view: UIView) -> [any UIFocusItem] {
         focusTargets(in: view).filter {
             (300...700).contains($0.frame.width) && (200...600).contains($0.frame.height)
@@ -475,41 +933,122 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
 
     private func restingEpisodeSnapshot(in window: UIWindow) async throws -> UIImage {
         let deadline = ContinuousClock.now + .seconds(3)
-        var previous: ClosedRange<CGFloat>?
+        var previous: [ClosedRange<CGFloat>]?
         var stableSamples = 0
         while ContinuousClock.now < deadline {
             let snapshot = renderedKeylineSnapshot(in: window)
-            let range = try episodeArtworkSpan(in: snapshot)
-            let width = range.upperBound - range.lowerBound + 1
+            let spans = try horizontalPixelSpans(
+                in: snapshot, region: CGRect(x: 0, y: 510, width: 1920, height: 2)
+            ) { r, g, b in b > 150 && r < 50 && g < 80 }
+                .filter { $0.lowerBound > 0 && $0.upperBound < 1919 }
             // Native/custom focus paint outlives the focus callback. Check its
             // resting width, not its x-position, so a misaligned card still fails.
             let restingWidth = EpisodeColumnCard.artworkSize.width
-            if (restingWidth - 2...restingWidth).contains(width), range == previous {
+            if spans.count >= 3,
+               spans.allSatisfy({ abs($0.upperBound - $0.lowerBound + 1 - restingWidth) <= 2 }),
+               spans == previous {
                 stableSamples += 1
                 if stableSamples == 2 { return snapshot }
             } else {
                 stableSamples = 0
             }
-            previous = range
+            previous = spans
             try await Task.sleep(for: .milliseconds(25))
         }
+        let attachment = XCTAttachment(image: renderedKeylineSnapshot(in: window))
+        attachment.name = "production-resting-episode-timeout"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         XCTFail("Episode focus paint did not return to its resting width: \(String(describing: previous)).")
         throw AppError.notFound
     }
 
-    private func leadingPixel(
-        in snapshot: UIImage, region: CGRect, matching: (UInt8, UInt8, UInt8) -> Bool
+    private func leadingSurfacePixel(
+        in snapshot: UIImage, region: CGRect,
+        file: StaticString = #filePath, line: UInt = #line
     ) throws -> CGFloat {
-        try XCTUnwrap(horizontalPixelSpans(in: snapshot, region: region, matching: matching).first).lowerBound
+        let reference = try XCTUnwrap(snapshot.cgImage?.cropping(to: CGRect(
+            x: region.minX, y: region.midY, width: 1, height: 1
+        )))
+        var background = [UInt8](repeating: 0, count: 4)
+        try background.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(
+                data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(reference, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        // The native pill picks up the artwork gradient. Its painted edge is
+        // lighter than the adjacent backdrop, but no longer necessarily gray.
+        return try leadingPixel(in: snapshot, region: region, file: file, line: line) { r, g, b in
+            Int(r) >= Int(background[0]) + 5
+                && Int(g) >= Int(background[1]) + 5
+                && Int(b) >= Int(background[2]) + 5
+        }
     }
 
-    private func episodeArtworkSpan(in snapshot: UIImage) throws -> ClosedRange<CGFloat> {
+    func testSurfaceKeylineSamplingRetainsMisalignmentOnNeutralAndColoredBackdrops() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        for background in [[CGFloat(0), 0, 0], [14, 14, 16], [27, 27, 66]] {
+            for offset in [CGFloat.zero, 4] {
+                let snapshot = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 1080), format: format).image { context in
+                    UIColor(red: background[0] / 255, green: background[1] / 255, blue: background[2] / 255, alpha: 1).setFill()
+                    context.fill(CGRect(x: 0, y: 0, width: 640, height: 1080))
+                    UIColor(red: (background[0] + 10) / 255, green: (background[1] + 10) / 255,
+                            blue: (background[2] + 10) / 255, alpha: 1).setFill()
+                    context.fill(CGRect(x: 80 + offset, y: 300, width: 160, height: 40))
+                }
+                let edge = try leadingSurfacePixel(
+                    in: snapshot, region: CGRect(x: 60, y: 310, width: 240, height: 10)
+                )
+                XCTAssertEqual(edge, 80 + offset, accuracy: 1)
+            }
+        }
+    }
+
+    private func leadingPixel(
+        in snapshot: UIImage, region: CGRect,
+        file: StaticString = #filePath, line: UInt = #line,
+        matching: (UInt8, UInt8, UInt8) -> Bool
+    ) throws -> CGFloat {
+        try XCTUnwrap(
+            horizontalPixelSpans(in: snapshot, region: region, matching: matching).first,
+            "No matching rendered pixels in \(region).", file: file, line: line
+        ).lowerBound
+    }
+
+    private func episodeArtworkSpan(in snapshot: UIImage) throws -> ClosedRange<CGFloat>? {
         let spans = try horizontalPixelSpans(
             in: snapshot, region: CGRect(x: 60, y: 510, width: 540, height: 40)
         ) { r, g, b in b > 150 && r < 50 && g < 80 }
-        return try XCTUnwrap(spans.max {
+        return spans.max {
             $0.upperBound - $0.lowerBound < $1.upperBound - $1.lowerBound
-        })
+        }
+    }
+
+    private func assertEpisodeArtworkSpacing(
+        in snapshot: UIImage, y: CGFloat, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        do {
+            let spans = try horizontalPixelSpans(
+                in: snapshot, region: CGRect(x: 0, y: y, width: 1920, height: 2)
+            ) { r, g, b in b > 150 && r < 50 && g < 80 }
+                .filter { $0.lowerBound > 0 && $0.upperBound < 1919 }
+            XCTAssertGreaterThanOrEqual(spans.count, 3, "Expected separate, fully visible episode cards: \(spans)",
+                                       file: file, line: line)
+            for span in spans {
+                XCTAssertEqual(span.upperBound - span.lowerBound + 1, EpisodeColumnCard.artworkSize.width,
+                               accuracy: 2, "Resting artwork must not expand into its neighboring card.",
+                               file: file, line: line)
+            }
+            for (left, right) in zip(spans, spans.dropFirst()) {
+                XCTAssertGreaterThanOrEqual(right.lowerBound - left.upperBound - 1, 38,
+                                            "Episode artwork must retain its 40pt gap.", file: file, line: line)
+            }
+        } catch {
+            XCTFail("Unable to measure episode artwork: \(error)", file: file, line: line)
+        }
     }
 
     private func horizontalPixelSpans(
@@ -559,7 +1098,7 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
                 UIColor.white.setFill()
                 context.fill(CGRect(x: 81, y: 990, width: 20, height: 20))
             }
-            let artwork = try episodeArtworkSpan(in: snapshot)
+            let artwork = try XCTUnwrap(episodeArtworkSpan(in: snapshot))
             let about = try leadingPixel(
                 in: snapshot, region: CGRect(x: 0, y: 975, width: 300, height: 60)
             ) { r, g, b in r > 230 && g > 230 && b > 230 }
@@ -950,6 +1489,29 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.verticalScroll(in: $0) }.first
     }
 
+    private func focusLowestDetailControl(in window: UIWindow, host: TransitionShowController) async throws {
+        let scroll = try XCTUnwrap(verticalScroll(in: window))
+        try await waitUntil { scroll.isScrollEnabled }
+        let bottom = max(-scroll.adjustedContentInset.top,
+                         scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        scroll.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+        try await Task.sleep(for: .milliseconds(300))
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        let target = try XCTUnwrap(focusTargets(in: scroll).filter {
+            guard let frame = focusFrame($0, in: window) else { return false }
+            return window.bounds.intersects(frame)
+        }.max {
+            (focusFrame($0, in: window)?.minY ?? 0) < (focusFrame($1, in: window)?.minY ?? 0)
+        })
+        host.target = target
+        system.requestFocusUpdate(to: host)
+        system.updateFocusIfNeeded()
+        try await waitUntil {
+            system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(target)
+                && host.settledFocusItemID == ObjectIdentifier(target)
+        }
+    }
+
     private func seedArtwork(
         color: UIColor = .blue, size: CGSize = CGSize(width: 320, height: 180), padding: CGFloat = 0
     ) async throws -> URL {
@@ -1115,13 +1677,14 @@ private final class TransitionShowModel {
     let coveredPageID = UUID()
     let homeRecede = HomeHeroRecedeModel()
     var showsHomeHero = true
+    var gradientEnabled = true
     @ObservationIgnored var resolveTrailer: HeroTrailerResolving = { _ in nil }
     let background = HeroBackgroundSettingsModel(store: InMemoryHeroBackgroundSettingsStore(
         HeroBackgroundSettings(homeTrailerEnabled: false, detailMode: .off)
     ))
     var path: [Int] = []
 
-    init(provider: TransitionShowProvider) {
+    init(provider: TransitionShowProvider, relatedTitlesLoader: RelatedTitlesLoader? = nil) {
         self.provider = provider
         detail = ItemDetailViewModel(
             provider: provider, itemID: provider.show.id,
@@ -1133,7 +1696,8 @@ private final class TransitionShowModel {
             sourceAccountID: "transition-fixture",
             onlineTrailerResolver: { _ in [] },
             playableVideoIDResolver: { _ in nil },
-            trailerCache: TrailerResolutionCache()
+            trailerCache: TrailerResolutionCache(),
+            relatedTitlesLoader: relatedTitlesLoader
         )
     }
 }
@@ -1164,6 +1728,7 @@ private struct TransitionShowRoot: View {
     @Bindable var model: TransitionShowModel
     var focusStyle: CardFocusStyle = .system
     var directEntry = false
+    var artworkSettings: ArtworkSettings = .default
 
     var body: some View {
         TabView {
@@ -1196,6 +1761,10 @@ private struct TransitionShowRoot: View {
             }
         }
         .tabViewStyle(.tabBarOnly)
+        .environment(\.themePalette, .dark)
+        .environment(\.gradientBackgroundsEnabled, model.gradientEnabled)
+        .environment(\.plozzArtworkSettings, artworkSettings)
+        .modifier(ReducedMotion())
     }
 }
 
@@ -1222,10 +1791,36 @@ private final class TransitionShowController: UIHostingController<TransitionShow
     }
 }
 
+@MainActor @Observable
+private final class MotionBackdropFixture {
+    let first: URL
+    let second: URL
+    var showsSecond = false
+
+    init(first: URL, second: URL) {
+        self.first = first
+        self.second = second
+    }
+}
+
+private struct MotionBackdropView: View {
+    let model: MotionBackdropFixture
+
+    var body: some View {
+        HomeHeroBackdrop(
+            urls: [model.showsSecond ? model.second : model.first],
+            asyncFallbackURL: nil, slideID: model.showsSecond ? "second" : "first",
+            forward: true, width: 1920, height: 1080, scrimTone: .black
+        )
+        .environment(\.plozzArtworkSettings, ArtworkSettings(preference: .library))
+    }
+}
+
 private struct TransitionShowProvider: MediaProvider {
     let artwork: URL
     var logo: URL?
     var episodeCount = 1
+    var detailItem: MediaItem?
     var kind: ProviderKind { .jellyfin }
     var session: UserSession {
         UserSession(server: MediaServer(id: "transition-fixture", name: "Fixture",
@@ -1233,6 +1828,7 @@ private struct TransitionShowProvider: MediaProvider {
                     userID: "fixture", userName: "Fixture", deviceID: "fixture", accessToken: "")
     }
     var show: MediaItem {
+        if let detailItem { return detailItem }
         var item = MediaItem(id: "show", title: "Transition Show", kind: .series)
         item.sourceAccountID = "transition-fixture"
         item.posterURL = artwork
@@ -1267,6 +1863,7 @@ private struct TransitionShowProvider: MediaProvider {
     func latest(limit: Int) async throws -> [MediaItem] { [] }
     func item(id: String) async throws -> MediaItem { id == "show" ? show : episode }
     func children(of itemID: String) async throws -> [MediaItem] {
+        if show.kind == .movie { return [] }
         try await Task.sleep(for: .milliseconds(100))
         if itemID == "show" { return [season] }
         return (0..<episodeCount).map { index in

@@ -95,6 +95,7 @@ public final class ProfileSettingsModel {
     /// True when settings models were injected by the caller (tests) and so must
     /// not be rebuilt on profile switch.
     public let usesInjectedModels: Bool
+    private let allowsDiscovery: @MainActor () -> Bool
 
     /// Builds the per-profile settings facet. When the caller supplies any settings
     /// model, all models are treated as injected (test path) and never rebuilt on
@@ -105,6 +106,7 @@ public final class ProfileSettingsModel {
     /// none — build every model scoped to `namespace` exactly as before.
     public init(
         namespace ns: String?,
+        allowsDiscovery: @escaping @MainActor () -> Bool = { true },
         subtitleBehaviorModel: SubtitleBehaviorModel? = nil,
         subtitleStyleModel: SubtitleStyleModel? = nil,
         spoilerModel: SpoilerSettingsModel? = nil,
@@ -143,6 +145,7 @@ public final class ProfileSettingsModel {
             || transparencyModel != nil || heroSettingsModel != nil
             || nightShiftModel != nil
         self.usesInjectedModels = injected
+        self.allowsDiscovery = allowsDiscovery
 
         // Single source of truth for constructing all sub-models: injected models
         // are used as-is, the rest are built scoped to `ns`. `rebuild(namespace:)`
@@ -179,6 +182,7 @@ public final class ProfileSettingsModel {
         self.audioPolicyModel = models.audioPolicyModel
         self.appLanguageModel = models.appLanguageModel
         self.themeModel = models.themeModel
+        models.heroModels.home.setDiscoveryPolicy(allowsDiscovery)
         self.heroModels = models.heroModels
         self.diagnosticsModel = models.diagnosticsModel
         self.musicPlayerModel = models.musicPlayerModel
@@ -207,6 +211,7 @@ public final class ProfileSettingsModel {
         appLanguageModel = models.appLanguageModel
         themeModel = models.themeModel
         heroModels = models.heroModels
+        heroModels.home.setDiscoveryPolicy(allowsDiscovery)
         diagnosticsModel = models.diagnosticsModel
         musicPlayerModel = models.musicPlayerModel
         homeLibraryVisibilityModel = models.homeLibraryVisibilityModel
@@ -298,12 +303,15 @@ public final class ProfileSettingsModel {
             uiDensityModel: uiDensityModel ?? UIDensitySettingsModel(store: UIDensitySettingsStore(namespace: ns)),
             cardStyleModel: cardStyleModel ?? CardStyleSettingsModel(
                 store: CardStyleSettingsStore(namespace: ns),
-                focusStore: CardFocusStyleSettingsStore(namespace: ns)
+                focusStore: CardFocusStyleSettingsStore(namespace: ns),
+                captionStore: CardCaptionSettingsStore(namespace: ns),
+                artworkStore: ArtworkSettingsStore(namespace: ns)
             ),
             watchStatusIndicatorModel: watchStatusIndicatorModel ?? WatchStatusIndicatorSettingsModel(store: WatchStatusIndicatorSettingsStore(namespace: ns)),
             navigationStyleModel: navigationStyleModel ?? NavigationStyleSettingsModel(
                 store: NavigationStyleSettingsStore(namespace: ns),
-                layoutStore: NavigationLibraryLayoutStore(namespace: ns)
+                layoutStore: NavigationLibraryLayoutStore(namespace: ns),
+                librariesSnapshotStore: NavigationLibrariesSnapshotStore(namespace: ns)
             ),
             transparencyModel: transparencyModel ?? TransparencyPreferenceModel(store: TransparencyPreferenceStore(namespace: ns)),
             nightShiftModel: nightShiftModel ?? NightShiftSettingsModel(store: NightShiftSettingsStore(namespace: ns))

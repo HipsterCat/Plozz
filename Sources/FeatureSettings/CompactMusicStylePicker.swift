@@ -33,7 +33,7 @@ struct MusicPlayerStyleDetail: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
+        VStack(alignment: .leading, spacing: controlSpacing) {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(MusicPlayerAppearance.pickerOrder) { style in
                     PreviewCard(
@@ -68,6 +68,14 @@ struct MusicPlayerStyleDetail: View {
                 break
             }
         }
+    }
+
+    private var controlSpacing: CGFloat {
+        #if os(tvOS)
+        SettingsFormMetrics.illustratedGroupSpacing
+        #else
+        28
+        #endif
     }
 }
 #endif

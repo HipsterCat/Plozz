@@ -25,6 +25,14 @@ public struct SettingsOptionPicker<Option: Hashable>: View {
     /// calibration preview on while a Darkness/Warmth chip is focused.
     @FocusState private var focusedOption: Option?
 
+    private var titleFont: Font {
+        #if os(tvOS)
+        SettingsRowMetrics.titleFont
+        #else
+        .headline
+        #endif
+    }
+
     /// - Parameters:
     ///   - options: The selectable values, left-to-right.
     ///   - selection: The current selection; tapping a chip writes it back.
@@ -63,7 +71,7 @@ public struct SettingsOptionPicker<Option: Hashable>: View {
                                 Image(systemName: "checkmark.circle.fill")
                             }
                         }
-                        .font(.headline)
+                        .font(titleFont)
                         .padding(.horizontal, 4)
                     }
                     .buttonStyle(PlozzSeasonTabStyle(isSelected: selection == option))

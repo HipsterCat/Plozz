@@ -13,6 +13,7 @@ class FixtureServer:
         self.token = "synthetic-" + uuid.uuid4().hex
         self.media_requests = 0
         self.cleanup_requests = 0
+        self.plex_sessions = set()
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -129,9 +130,22 @@ class FixtureServer:
                                    ]}]}]
                     }]}})
                 elif endpoint.endswith("/decision"):
+                    session = query.get("session")
+                    if not session:
+                        self.send_error(400)
+                        return
+                    owner.plex_sessions.add(session)
                     self.reply({"MediaContainer": {"generalDecisionCode": 1001, "transcodeDecisionCode": 1001,
                                                    "Metadata": [{"Media": [{"container": "mp4", "videoCodec": codec}]}]}})
+                elif endpoint.endswith("/universal/ping"):
+                    session = query.get("session")
+                    if session not in owner.plex_sessions or self.headers.get("X-Plex-Session-Identifier") != session:
+                        self.send_error(404)
+                        return
+                    self.reply({})
                 elif endpoint.endswith("/ActiveEncodings") or endpoint.endswith("/universal/stop"):
+                    if endpoint.endswith("/universal/stop"):
+                        owner.plex_sessions.discard(query.get("session"))
                     owner.cleanup_requests += 1
                     self.reply({})
                 elif endpoint.endswith(".m3u8"):

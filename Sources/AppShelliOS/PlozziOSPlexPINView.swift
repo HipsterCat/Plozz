@@ -9,8 +9,7 @@ struct PlozziOSPlexPINView: View {
     let request: PlexHomeUsersModel.PlexPINRequest
     var sequenceStep: PINSequenceStep? = nil
     var dismissOnSuccess = true
-
-    @State private var isSubmitting = false
+    var onCancel: () -> Void = {}
 
     var body: some View {
         let pendingRequest = model.pendingPlexPINRequest
@@ -18,15 +17,23 @@ struct PlozziOSPlexPINView: View {
             title: "Enter your Plex PIN",
             name: Text(verbatim: request.homeUserName),
             errorMessage: model.plexPINError,
-            isSubmitting: isSubmitting,
+            isSubmitting: model.isSubmittingPlexPIN,
+            availability: pendingRequest == nil ? .checking : model.plexPINEntryAvailability,
+            onRetry: {
+                guard model.pendingPlexPINRequest == request else { return }
+                model.retryPlexPINRequirement()
+            },
             sequenceStep: sequenceStep,
             onSubmit: { pin in
-                isSubmitting = true
+                guard model.pendingPlexPINRequest == request,
+                      model.plexPINEntryAvailability == .available else { return }
                 model.submitPlexPIN(pin)
             },
             onCancel: {
+                guard model.pendingPlexPINRequest == request else { return }
+                onCancel()
                 model.cancelPlexPIN()
-                if dismissOnSuccess { dismiss() }
+                if dismissOnSuccess, model.pendingPlexPINRequest == nil { dismiss() }
             }
         ) {
             PINBadge {
@@ -48,9 +55,8 @@ struct PlozziOSPlexPINView: View {
                 }
             }
         }
-        .onChange(of: model.plexPINError) { _, error in
-            if error != nil { isSubmitting = false }
-        }
+        .id([request.id, request.accountID, request.homeUserID])
+        .interactiveDismissDisabled(pendingRequest != nil)
         .onChange(of: pendingRequest?.id) { _, requestID in
             if requestID == nil, dismissOnSuccess {
                 dismiss()

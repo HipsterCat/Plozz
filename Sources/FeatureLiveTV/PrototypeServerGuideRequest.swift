@@ -14,14 +14,15 @@ struct PrototypeServerGuideRequest: Equatable {
 
     init?(
         rows: [LiveTVGuideRowID],
-        anchor: LiveTVGuideRowID?,
+        anchorIndex: Int?,
         references: [String: LiveTVServerChannelReference],
+        enabledSourceIDs: Set<String>,
         from: Date,
         to: Date
     ) {
-        let channels = Self.nearbyChannelIDs(rows: rows, anchor: anchor, limit: Self.rowLimit)
+        let channels = Self.nearbyChannelIDs(rows: rows, anchorIndex: anchorIndex, limit: Self.rowLimit)
             .compactMap { id -> Channel? in
-                guard let reference = references[id] else { return nil }
+                guard let reference = references[id], enabledSourceIDs.contains(reference.sourceID) else { return nil }
                 return Channel(id: id, reference: reference)
             }
         guard !channels.isEmpty else { return nil }
@@ -31,12 +32,10 @@ struct PrototypeServerGuideRequest: Equatable {
     }
 
     static func nearbyChannelIDs(
-        rows: [LiveTVGuideRowID], anchor: LiveTVGuideRowID?, limit: Int
+        rows: [LiveTVGuideRowID], anchorIndex: Int?, limit: Int
     ) -> [String] {
         guard !rows.isEmpty, limit > 0 else { return [] }
-        let center = anchor.flatMap { anchor in
-            rows.firstIndex(of: anchor) ?? rows.firstIndex { $0.channelID == anchor.channelID }
-        } ?? 0
+        let center = anchorIndex.flatMap { rows.indices.contains($0) ? $0 : nil } ?? 0
         let lower = max(0, min(center - 3, rows.count - limit))
         let upper = min(rows.count, lower + limit)
         var seen = Set<String>()

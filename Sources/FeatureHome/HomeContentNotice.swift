@@ -17,6 +17,7 @@ public enum HomeContentNotice: Equatable, Sendable {
     case allServersSwitchedOff
     /// Servers are on, but every library inside them is hidden from Home.
     case allLibrariesHidden
+    case noHomeRows
 
     var message: LocalizedStringResource {
         switch self {
@@ -38,6 +39,8 @@ public enum HomeContentNotice: Equatable, Sendable {
                 defaultValue: "Every library is hidden from Home. Turn one back on in Settings › Libraries.",
                 comment: "Shown on Home when the profile has hidden every library from the Home screen."
             )
+        case .noHomeRows:
+            return "No Home rows to show. Choose rows in Settings > Customize Home > Rows on Home."
         }
     }
 }

@@ -7,6 +7,11 @@ public enum LiveTVSourceStorage {
         KeychainStore(service: "com.plozz.liveTV.catalog")
     }
 
+    /// Explicit household erasure, including source data for profiles not loaded here.
+    public static func eraseAllSources() throws {
+        try KeychainStore(service: "com.plozz.liveTV.sources").removeAll()
+    }
+
     public static func store(namespace: String? = nil) -> LiveTVSourcesStore {
         LiveTVSourcesStore(
             secureStore: KeychainStore(service: "com.plozz.liveTV.sources"),

@@ -128,12 +128,12 @@ final class LiveChannelPlayerModelTests: XCTestCase {
 
     func testLiveFailureCopyDoesNotAskPublicChannelViewersToSignInAgain() {
         let messages: [(AppError, String)] = [
-            (.notFound, "playlist link may be outdated"),
-            (.unauthorized, "provider refused access"),
+            (.notFound, "could not find this stream"),
+            (.unauthorized, "did not authorize access"),
             (.serverUnreachable, "streaming server"),
             (.invalidResponse, "playlist or video data"),
             (.decoding, "could not decode"),
-            (.rateLimited(retryAfter: nil), "Wait before trying again"),
+            (.rateLimited(retryAfter: nil), "limiting requests"),
             (.unknown("https://example.invalid/?token=fixture-secret"), "could not start playback")
         ]
         for (error, expected) in messages {
@@ -251,7 +251,7 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         let model = makeModel(engine: engine, clock: clock)
         defer { model.stop() }
         var updates: [LiveTVPlaybackUpdate] = []
-        model.setSessionReporting(.init(id: UUID(), update: { updates.append($0) }, failed: {}))
+        model.setSessionReporting(.init(id: UUID(), update: { updates.append($0) }, failed: { _ in }))
         await model.start()
         XCTAssertTrue(updates.isEmpty)
         engine.liveSnapshot.firstFrameReady = true
@@ -276,12 +276,12 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         defer { model.stop() }
         var original: [LiveTVPlaybackUpdate.State] = []
         var replacement: [LiveTVPlaybackUpdate.State] = []
-        model.setSessionReporting(.init(id: UUID(), update: { original.append($0.state) }, failed: {}))
+        model.setSessionReporting(.init(id: UUID(), update: { original.append($0.state) }, failed: { _ in }))
         await model.start()
         await model.changeSource(
             channelID: "",
             streamURL: URL(string: "https://example.invalid/channel.m3u8")!,
-            reporting: .init(id: UUID(), update: { replacement.append($0.state) }, failed: {})
+            reporting: .init(id: UUID(), update: { replacement.append($0.state) }, failed: { _ in })
         )
         XCTAssertEqual(engine.liveLoads, 2)
         XCTAssertEqual(original, [.started])
@@ -293,7 +293,7 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         let model = makeModel(engine: engine)
         defer { model.stop() }
         var updates: [LiveTVPlaybackUpdate.State] = []
-        let reporting = LiveChannelSessionReporting(id: UUID(), update: { updates.append($0.state) }, failed: {})
+        let reporting = LiveChannelSessionReporting(id: UUID(), update: { updates.append($0.state) }, failed: { _ in })
         model.setSessionReporting(reporting)
         await model.start()
         await model.changeSource(
@@ -310,7 +310,7 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         let engine = LiveEngineSpy()
         let model = makeModel(engine: engine)
         var failures = 0
-        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { failures += 1 }))
+        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { _ in failures += 1 }))
         await model.start()
         engine.onFailure?(.serverUnreachable)
         engine.onFailure?(.serverUnreachable)
@@ -320,10 +320,29 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         XCTAssertEqual(failures, 1)
 
         let stopped = makeModel(engine: LiveEngineSpy())
-        stopped.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { failures += 1 }))
+        stopped.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { _ in failures += 1 }))
         await stopped.start()
         stopped.stop()
         XCTAssertEqual(failures, 1)
+    }
+
+    func testSessionFailureCapturesEvidenceBeforeEngineStop() async throws {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        var reported: LiveChannelFailureReport?
+        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { reported = $0 }))
+        await model.start()
+        let attempt = try XCTUnwrap(PlaybackFailureDiagnostics().begin(
+            layer: .liveEngine, content: .live, captureForPresentation: true
+        ))
+        attempt.fail(stage: .load, reason: .authentication, engineFailure: .sourceRefused, httpStatus: 403)
+        engine.livePlaybackFailureDiagnostic = attempt.diagnostic
+        engine.onFailure?(.unauthorized)
+        XCTAssertNil(engine.livePlaybackFailureDiagnostic)
+        XCTAssertEqual(reported?.failure, .engine(.unauthorized))
+        XCTAssertEqual(reported?.diagnostic?.httpStatus, 403)
+        XCTAssertTrue(String(localized: try XCTUnwrap(reported?.message)).contains("HTTP 403"))
     }
 
     func testPlayingIntentWithoutFirstFrameKeepsStartupCover() async {
@@ -338,6 +357,33 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         model.refreshFromEngine()
         XCTAssertEqual(model.phase, .playing)
         XCTAssertFalse(model.showsActivityIndicator)
+    }
+
+    func testWrappedFailureAndEndCaptureEvidenceBeforeStoppingTheDecoder() async throws {
+        for ended in [false, true] {
+            let decoder = LiveEngineSpy()
+            let wrapper = LibraryLiveChannelEngine(engine: decoder)
+            let model = LiveChannelPlayerModel(
+                engine: wrapper, streamURL: URL(string: "https://example.invalid/live.m3u8")!
+            )
+            defer { model.stop() }
+            var reports: [LiveChannelFailureReport] = []
+            model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { reports.append($0) }))
+            await model.start()
+            let attempt = try XCTUnwrap(PlaybackFailureDiagnostics().begin(
+                layer: .liveEngine, content: .live, captureForPresentation: true
+            ))
+            attempt.fail(stage: .load, reason: .authentication, engineFailure: .sourceRefused, httpStatus: 403)
+            decoder.livePlaybackFailureDiagnostic = attempt.diagnostic
+            let finish = ended ? decoder.onEnded : { decoder.onFailure?(.unauthorized) }
+            finish?()
+            finish?()
+            XCTAssertNil(decoder.livePlaybackFailureDiagnostic)
+            XCTAssertEqual(reports.count, 1)
+            XCTAssertEqual(reports.first?.failure, ended ? .ended : .engine(.unauthorized))
+            XCTAssertEqual(reports.first?.diagnostic?.httpStatus, 403)
+            await wrapper.drainTransport()
+        }
     }
 
     func testPlaylistHeadersSurviveLiveLoadRetryAndSourceReset() async {
@@ -699,6 +745,210 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         XCTAssertTrue(model.isAtLiveEdge)
     }
 
+    func testWindowSeekStacksPressesAndCommitsOnce() async throws {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        engine.liveSnapshot.seekableRange = 0...600
+        engine.liveSnapshot.position = 598
+        engine.liveSnapshot.behindLiveSeconds = 2
+        model.refreshFromEngine()
+        XCTAssertTrue(model.canSeekWindow)
+        XCTAssertEqual(model.seekWindowSeconds, 600)
+
+        model.seek(by: -10)
+        model.seek(by: -10)
+        model.seek(by: -10)
+        // The timeline follows the presses before the engine is asked.
+        XCTAssertEqual(model.behindLiveSeconds, 32, accuracy: 0.001)
+        XCTAssertFalse(model.isAtLiveEdge)
+        XCTAssertEqual(engine.genericSeekCount, 0)
+
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(engine.genericSeekCount, 1)
+        XCTAssertEqual(try XCTUnwrap(engine.lastSeekTarget), 568, accuracy: 0.001)
+        XCTAssertEqual(engine.goLiveCount, 0)
+    }
+
+    func testScrubPreviewFromAnEndedAttemptIsDiscarded() async throws {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        engine.liveSnapshot.seekableRange = 0...600
+        model.refreshFromEngine()
+        var pending: CheckedContinuation<CGImage?, Never>?
+        engine.onScrubThumbnail = {
+            await withCheckedContinuation { pending = $0 }
+        }
+        let requested = Task { await model.scrubThumbnail(behindLive: 20, maxWidth: 640) }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while pending == nil, ContinuousClock.now < deadline { await Task.yield() }
+        guard let pending else {
+            requested.cancel()
+            XCTFail("The preview request did not reach the engine")
+            return
+        }
+        let frame = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }.cgImage)
+        model.stop()
+        pending.resume(returning: frame)
+        let image = await requested.value
+        XCTAssertNil(image, "An outgoing source's image must never reach the next presentation")
+    }
+
+    func testTouchRewindStartsFromActualLiveHoldbackAndKeepsPendingTarget() async throws {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        engine.liveSnapshot.seekableRange = 0...600
+        engine.liveSnapshot.position = 590
+        engine.liveSnapshot.behindLiveSeconds = 10
+        model.refreshFromEngine()
+        XCTAssertEqual(model.behindLiveSeconds, 0, "The live badge hides normal stream delay.")
+        XCTAssertEqual(model.seekPosition, 590)
+
+        let gestures = PlayerTouchGestureState()
+        defer { gestures.cancel() }
+        let window = try XCTUnwrap(model.seekableWindow)
+        let floor = LiveChannelPlayerModel.windowSeekTarget(window.lowerBound, window: window)
+        for expected in [585.0, 580.0] {
+            let target = try XCTUnwrap(gestures.seek(
+                by: -5, from: model.seekPosition, within: floor...window.upperBound
+            ))
+            XCTAssertEqual(target, expected)
+            model.seek(behindLive: window.upperBound - target)
+            XCTAssertEqual(model.seekPosition, expected)
+        }
+        XCTAssertEqual(gestures.skip?.seconds, -10)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(engine.genericSeekCount, 1)
+        XCTAssertEqual(try XCTUnwrap(engine.lastSeekTarget), 580)
+        XCTAssertEqual(engine.goLiveCount, 0)
+    }
+
+    func testWindowSeekPastTheEdgeGoesLive() async throws {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        engine.liveSnapshot.seekableRange = 0...600
+        engine.liveSnapshot.position = 500
+        engine.liveSnapshot.behindLiveSeconds = 100
+        model.refreshFromEngine()
+
+        model.seek(by: 200)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(engine.goLiveCount, 1)
+        XCTAssertEqual(engine.genericSeekCount, 0)
+    }
+
+    func testReplacementChannelDoesNotWaitForOrLoseItsSeekToThePreviousChannel() async throws {
+        let engine = LiveEngineSpy()
+        engine.liveSnapshot.seekableRange = 0...600
+        engine.liveSnapshot.position = 500
+        engine.liveSnapshot.behindLiveSeconds = 100
+        engine.suspendsSeeks = true
+        let model = makeModel(engine: engine)
+        defer { engine.resumeAllSeeks(); model.stop() }
+        await model.start()
+        model.seek(by: -10)
+        try await waitForSeekCount(1, engine: engine)
+        await model.changeSource(channelID: "replacement", streamURL: try XCTUnwrap(URL(string: "https://fixture.invalid/b.m3u8")))
+        model.seek(by: -20)
+        try await waitForSeekCount(2, engine: engine)
+        XCTAssertEqual(engine.lastSeekTarget, 480)
+        engine.resumeSeek(1)
+        await Task.yield()
+        model.seek(by: -10)
+        try await Task.sleep(for: LiveChannelPlayerModel.seekCommitDelay + .milliseconds(100))
+        XCTAssertEqual(engine.genericSeekCount, 2, "The retired seek cannot clear the new worker's ownership.")
+        engine.resumeSeek(2)
+        try await waitForSeekCount(3, engine: engine)
+        XCTAssertEqual(engine.lastSeekTarget, 470)
+    }
+
+    func testGoLiveAndRewindUseOneWorkerAndKeepTheLatestIntent() async throws {
+        for liveFirst in [false, true] {
+            let engine = LiveEngineSpy()
+            engine.liveSnapshot.seekableRange = 0...600
+            engine.liveSnapshot.position = 500
+            engine.liveSnapshot.behindLiveSeconds = 100
+            engine.suspendsSeeks = true
+            let model = makeModel(engine: engine)
+            defer { engine.resumeAllSeeks(); model.stop() }
+            await model.start()
+            let first = Task {
+                if liveFirst { await model.goLive() }
+                else { model.seek(by: -10) }
+            }
+            try await waitForSeekCount(1, engine: engine)
+            if liveFirst { model.seek(by: -20) }
+            else { await model.goLive() }
+            try await Task.sleep(for: LiveChannelPlayerModel.seekCommitDelay + .milliseconds(100))
+            XCTAssertEqual(engine.genericSeekCount + engine.goLiveCount, 1)
+            engine.resumeSeek(1)
+            try await waitForSeekCount(2, engine: engine)
+            XCTAssertEqual(engine.maximumConcurrentSeeks, 1)
+            XCTAssertEqual(engine.genericSeekCount, 1)
+            XCTAssertEqual(engine.goLiveCount, 1)
+            engine.resumeSeek(2)
+            await first.value
+        }
+    }
+
+    func testTemporaryInactivityKeepsOwnershipOfAnOutstandingSeek() async throws {
+        let engine = LiveEngineSpy()
+        engine.liveSnapshot.seekableRange = 0...600
+        engine.liveSnapshot.position = 500
+        engine.liveSnapshot.behindLiveSeconds = 100
+        engine.suspendsSeeks = true
+        let model = makeModel(engine: engine)
+        defer { engine.resumeAllSeeks(); model.stop() }
+        await model.start()
+        model.seek(by: -10)
+        try await waitForSeekCount(1, engine: engine)
+        model.handleScenePhase(.inactive)
+        model.handleScenePhase(.active)
+        model.seek(by: -20)
+        try await Task.sleep(for: LiveChannelPlayerModel.seekCommitDelay + .milliseconds(100))
+        XCTAssertEqual(engine.genericSeekCount, 1)
+        engine.resumeSeek(1)
+        try await waitForSeekCount(2, engine: engine)
+        XCTAssertEqual(engine.maximumConcurrentSeeks, 1)
+    }
+
+    private func waitForSeekCount(_ count: Int, engine: LiveEngineSpy) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while engine.genericSeekCount + engine.goLiveCount < count, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(engine.genericSeekCount + engine.goLiveCount, count)
+    }
+
+    func testPlaylistHoldbackIsNotASeekWindow() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        model.refreshFromEngine()
+        XCTAssertFalse(model.canSeekWindow)
+        XCTAssertNil(model.seekWindowSeconds)
+        model.seek(by: -10)
+        XCTAssertTrue(model.isAtLiveEdge)
+    }
+
+    func testWindowSeekStaysClearOfTheOldestSegment() throws {
+        let window = try XCTUnwrap(LiveSeekableWindow(ranges: [(start: 1_000, duration: 600)]))
+        XCTAssertEqual(LiveChannelPlayerModel.windowSeekTarget(0, window: window), 1_006)
+        XCTAssertEqual(LiveChannelPlayerModel.windowSeekTarget(1_300, window: window), 1_300)
+        XCTAssertEqual(LiveChannelPlayerModel.windowSeekTarget(9_999, window: window), 1_600)
+    }
+
     func testPauseDuringGoLiveDoesNotResumeAtCompletion() async {
         let engine = LiveEngineSpy()
         let model = makeModel(engine: engine)
@@ -795,6 +1045,38 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         XCTAssertFalse(model.showsActivityIndicator)
     }
 
+    func testFailurePollingWaitsForBoundedDiagnosticCaptureBeforeStoppingTheEngine() async throws {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        var report: LiveChannelFailureReport?
+        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { report = $0 }))
+        await model.start()
+        engine.liveSnapshot.phase = .failed
+        engine.isCapturingLiveFailureDiagnostic = true
+        model.refreshFromEngine()
+        XCTAssertNil(report)
+        let attempt = try XCTUnwrap(PlaybackFailureDiagnostics().begin(
+            layer: .liveEngine, content: .live, captureForPresentation: true
+        ))
+        attempt.fail(
+            stage: .playback, domain: .avfoundation, code: -11850,
+            evidence: .init(nativeCapture: .captured,
+                            nativeErrors: [.init(domain: "CoreMediaErrorDomain", code: -12939)])
+        )
+        engine.livePlaybackFailureDiagnostic = attempt.diagnostic
+        engine.isCapturingLiveFailureDiagnostic = false
+        engine.status = .failed(.invalidResponse)
+        model.refreshFromEngine()
+        XCTAssertEqual(report?.diagnostic?.evidence?.nativeErrors.first?.code, -12939)
+        XCTAssertEqual(model.failureReport, report, "The visible interruption retains the same report as the guide.")
+        XCTAssertNil(engine.livePlaybackFailureDiagnostic, "Capture must precede teardown.")
+        engine.status = .ready
+        engine.liveSnapshot.phase = .loading
+        await model.retry()
+        XCTAssertNil(model.failureReport, "The next attempt starts with fresh diagnostic evidence.")
+    }
+
     func testManualRetriesAreBounded() async {
         let engine = LiveEngineSpy()
         let model = makeModel(engine: engine)
@@ -843,6 +1125,79 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         await model.requestRetune()?.value
         XCTAssertEqual(engine.liveLoads, 2)
         XCTAssertEqual(model.phase, .playing)
+    }
+
+    func testSustainedAdvancingPlaybackRestoresAutomaticRetunes() async {
+        let clock = LiveTestClock()
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine, clock: clock)
+        defer { model.stop() }
+        await model.start()
+        for tick in 0..<3 {
+            clock.now = Double(tick) * 20
+            engine.onLiveSourceReset?()
+            await model.requestRetune()?.value
+        }
+        model.refreshFromEngine()
+        for _ in 0..<300 {
+            clock.now += 1
+            engine.liveSnapshot.position += 1
+            model.refreshFromEngine()
+        }
+        engine.onLiveSourceReset?()
+        await model.requestRetune()?.value
+        XCTAssertTrue(engine.loadedURLs.allSatisfy { $0 == engine.loadedURLs.first })
+        XCTAssertEqual(engine.liveLoads, 5)
+        XCTAssertEqual(model.phase, .playing)
+        XCTAssertEqual(model.manualRetryCount, 0)
+    }
+
+    func testPauseInactivityBufferingAndSeekingDiscardHealthyRecoveryCredit() async {
+        for interruption in ["pause", "inactive", "buffering", "seek"] {
+            let clock = LiveTestClock()
+            let engine = LiveEngineSpy()
+            let model = makeModel(engine: engine, clock: clock)
+            defer { model.stop() }
+            await model.start()
+            for tick in 0..<3 {
+                clock.now = Double(tick) * 20
+                engine.onLiveSourceReset?()
+                await model.requestRetune()?.value
+            }
+            model.refreshFromEngine()
+            for _ in 0..<299 {
+                clock.now += 1
+                engine.liveSnapshot.position += 1
+                model.refreshFromEngine()
+            }
+            switch interruption {
+            case "pause":
+                model.togglePlayPause()
+                model.togglePlayPause()
+            case "inactive":
+                model.handleScenePhase(.inactive)
+                model.handleScenePhase(.active)
+            case "buffering":
+                engine.liveSnapshot.phase = .rebuffering
+                model.refreshFromEngine()
+                engine.liveSnapshot.phase = .playing
+            default:
+                engine.liveSnapshot.behindLiveSeconds = 40
+                model.refreshFromEngine()
+                XCTAssertTrue(model.canGoLive)
+                await model.goLive()
+                XCTAssertEqual(engine.goLiveCount, 1)
+            }
+            for _ in 0..<2 {
+                clock.now += 1
+                engine.liveSnapshot.position += 1
+                model.refreshFromEngine()
+            }
+            engine.onLiveSourceReset?()
+            XCTAssertNil(model.requestRetune(), interruption)
+            XCTAssertEqual(model.phase, .failed(.recoveryExhausted), interruption)
+            XCTAssertEqual(engine.liveLoads, 4, interruption)
+        }
     }
 
     func testSourceResetWhilePausedWaitsForUserResume() async {
@@ -1349,6 +1704,8 @@ private struct LiveFullscreenHarness: View {
 
 @MainActor
 final class LiveEngineSpy: LiveChannelEngine {
+    var livePlaybackFailureDiagnostic: PlaybackFailureDiagnostic?
+    var isCapturingLiveFailureDiagnostic = false
     let outputView = UIView()
     var liveSnapshot = LiveChannelEngineSnapshot(
         phase: .playing, firstFrameReady: true, position: 100,
@@ -1387,6 +1744,7 @@ final class LiveEngineSpy: LiveChannelEngine {
     var recoverableProgrammeIssue: LibraryChannelError?
     var onLoad: (@MainActor () async -> Void)?
     var onGoLive: (@MainActor () -> Void)?
+    var onScrubThumbnail: (@MainActor () async -> CGImage?)?
     var loadedInputs: [LiveChannelInput] = []
     var inputLoadError: Error?
     var watching = false
@@ -1403,6 +1761,10 @@ final class LiveEngineSpy: LiveChannelEngine {
     var stopCount = 0
     var goLiveCount = 0
     var genericSeekCount = 0
+    var suspendsSeeks = false
+    private var seekContinuations: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var concurrentSeeks = 0
+    var maximumConcurrentSeeks = 0
     var outputPolicy = LiveChannelOutputPolicy()
     var onOutputPolicy: (@MainActor (LiveChannelOutputPolicy) -> Void)?
     var supportsConcurrentPlayback: Bool { true }
@@ -1443,20 +1805,46 @@ final class LiveEngineSpy: LiveChannelEngine {
     func resumeLoad(_ loadNumber: Int) {
         loadContinuations.removeValue(forKey: loadNumber)?.resume()
     }
+    func liveScrubThumbnail(secondsIntoWindow seconds: TimeInterval, maxWidth: Int) async -> CGImage? {
+        await onScrubThumbnail?()
+    }
     func load(request: PlaybackRequest, startPosition: TimeInterval) async { vodLoads += 1 }
     func play() { playCount += 1; isPaused = false }
     func pause() { pauseCount += 1; isPaused = true }
     func stop() {
         stopCount += 1
+        livePlaybackFailureDiagnostic = nil
         status = .idle
         onLoad = nil
         onGoLive = nil
     }
-    func seek(to seconds: TimeInterval) async { genericSeekCount += 1 }
+    var lastSeekTarget: TimeInterval?
+    func seek(to seconds: TimeInterval) async {
+        genericSeekCount += 1
+        lastSeekTarget = seconds
+        await waitForSeek()
+    }
     func seekToLiveEdge() async {
         goLiveCount += 1
         onGoLive?()
+        await waitForSeek()
         liveSnapshot.behindLiveSeconds = 0
+    }
+    private func waitForSeek() async {
+        concurrentSeeks += 1
+        maximumConcurrentSeeks = max(maximumConcurrentSeeks, concurrentSeeks)
+        defer { concurrentSeeks -= 1 }
+        if suspendsSeeks {
+            let id = genericSeekCount + goLiveCount
+            await withCheckedContinuation { seekContinuations[id] = $0 }
+        }
+    }
+    func resumeSeek(_ id: Int) { seekContinuations.removeValue(forKey: id)?.resume() }
+    func resumeAllSeeks() {
+        suspendsSeeks = false
+        let continuations = Array(seekContinuations.values)
+        seekContinuations.removeAll()
+        for continuation in continuations { continuation.resume() }
     }
     func selectAudioTrack(_ track: MediaTrack?) { currentAudioTrackID = track?.id }
     func selectSubtitleTrack(_ track: MediaTrack?) { selectedSubtitleID = track?.id }

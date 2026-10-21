@@ -5,6 +5,7 @@ import MALService
 import SimklService
 import SwiftUI
 import TraktService
+import WetrakrService
 
 struct PlozziOSTrackerSettingsView: View {
     let appModel: PlozziOSAppModel
@@ -30,6 +31,11 @@ struct PlozziOSTrackerSettingsView: View {
             SettingsSectionGroup(verbatim: "Simkl") {
                 SimklSettingsContent(service: appModel.simklService)
             }
+            if appModel.wetrakrService.isConfigured {
+                SettingsSectionGroup(verbatim: "WeTrakr") {
+                    WetrakrSettingsContent(service: appModel.wetrakrService)
+                }
+            }
 
             SettingsSectionGroup(verbatim: "AniList") {
                 AniListSettingsContent(service: appModel.anilistService)
@@ -44,9 +50,10 @@ struct PlozziOSTrackerSettingsView: View {
         .task {
             async let trakt: Void = appModel.traktService.refreshStatus()
             async let simkl: Void = appModel.simklService.refreshStatus()
+            async let wetrakr: Void = appModel.wetrakrService.refreshStatus()
             async let anilist: Void = appModel.anilistService.refreshStatus()
             async let mal: Void = appModel.malService.refreshStatus()
-            _ = await (trakt, simkl, anilist, mal)
+            _ = await (trakt, simkl, wetrakr, anilist, mal)
         }
     }
 }
@@ -54,15 +61,38 @@ struct PlozziOSTrackerSettingsView: View {
 private struct TraktSettingsContent: View {
     let service: TraktService
     @Environment(\.openURL) private var openURL
+    @State private var browser = TrackerBrowserAuthorization()
+    @State private var confirmingReconnect = false
 
     var body: some View {
+        Group {
+            content
+        }
+        .confirmationDialog("Reconnect Trakt for this profile?", isPresented: $confirmingReconnect, titleVisibility: .visible) {
+            Button("Reconnect Trakt", role: .destructive, action: connect)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Try Retry first. Reconnecting replaces this profile's Trakt connection on all your Plozz devices. Other profiles are not affected.")
+        }
+        .onChange(of: service.phase) { _, _ in
+            confirmingReconnect = false
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch service.phase {
-        case .unknown:
+        case .unknown, .savingConnection:
             loadingStatus
         case .unavailable:
             unavailableStatus
         case .disconnected:
             connectButton
+        case .authorizing:
+            loadingStatus
+            Button("Cancel", role: .cancel) {
+                service.cancelConnect()
+            }
         case let .connecting(userCode, verificationURL, _):
             Text("Enter this code on Trakt:")
                 .plozzForeground(.secondary)
@@ -85,11 +115,90 @@ private struct TraktSettingsContent: View {
         case let .error(message):
             errorStatus(message)
             connectButton
+        case let .syncError(message, canReconnect):
+            errorStatus(message)
+            Button("Retry") {
+                Task { await service.refreshStatus() }
+            }
+            if canReconnect {
+                Button("Reconnect Trakt") { confirmingReconnect = true }
+            }
         }
     }
 
     private var connectButton: some View {
-        Button("Connect Trakt") {
+        Button("Connect Trakt", action: connect)
+    }
+
+    private func connect() {
+        if #available(iOS 17.4, *),
+           Bundle.main.bundleIdentifier == "com.thatcube.Plozz" {
+            service.connect { url, callback in
+                try await browser.authorize(url: url, callback: callback)
+            }
+        } else {
+            service.connect()
+        }
+    }
+}
+
+private struct WetrakrSettingsContent: View {
+    let service: WetrakrService
+    @Environment(\.openURL) private var openURL
+    @State private var browser = TrackerBrowserAuthorization()
+    @State private var confirmingReconnect = false
+
+    var body: some View {
+        Group { content }
+            .confirmationDialog("Reconnect WeTrakr for this profile?", isPresented: $confirmingReconnect, titleVisibility: .visible) {
+                Button("Reconnect WeTrakr", role: .destructive, action: connect)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Try Retry first. Reconnecting replaces this profile's WeTrakr connection on all your Plozz devices. Other profiles are not affected.")
+            }
+            .onChange(of: service.phase) { _, _ in confirmingReconnect = false }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch service.phase {
+        case .unknown, .savingConnection:
+            loadingStatus
+        case .unavailable:
+            unavailableStatus
+        case .disconnected:
+            Button("Connect WeTrakr", action: connect)
+        case .authorizing:
+            loadingStatus
+            Button("Cancel", role: .cancel) { service.cancelConnect() }
+        case let .connecting(code, verificationURL, _):
+            Text("Enter this code on WeTrakr:")
+                .plozzForeground(.secondary)
+            Text(code)
+                .font(.title2.monospaced().weight(.semibold))
+                .textSelection(.enabled)
+            if let url = URL(string: verificationURL) {
+                Button("Open WeTrakr") { openURL(url) }
+            }
+            Button("Cancel", role: .cancel) { service.cancelConnect() }
+        case let .connected(username):
+            connectedStatus(username: username)
+            Button("Disconnect", role: .destructive) { Task { await service.disconnect() } }
+        case let .error(message):
+            errorStatus(message)
+            Button("Connect WeTrakr", action: connect)
+        case let .syncError(message, canReconnect):
+            errorStatus(message)
+            Button("Retry") { Task { await service.refreshStatus() } }
+            if canReconnect {
+                Button("Reconnect WeTrakr") { confirmingReconnect = true }
+            }
+        }
+    }
+
+    private func connect() {
+        if #available(iOS 17.4, *), Bundle.main.bundleIdentifier == "com.thatcube.Plozz" {
+            service.connect { url, callback in try await browser.authorize(url: url, callback: callback) }
+        } else {
             service.connect()
         }
     }

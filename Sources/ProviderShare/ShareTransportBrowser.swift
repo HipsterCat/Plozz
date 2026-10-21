@@ -36,6 +36,12 @@ actor ShareTransportBrowser {
         }
     }
 
+    func statForOpening(_ path: String) async throws -> RemoteFileEntry {
+        try await enqueue { fileSystem in
+            try await fileSystem.statForOpening(relativePath: path)
+        }
+    }
+
     func readFile(_ path: String, maximumBytes: Int = 16 * 1_024 * 1_024) async throws -> Data {
         try await enqueue { fileSystem in
             try await fileSystem.readSmallFile(

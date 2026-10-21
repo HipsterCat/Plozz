@@ -28,7 +28,7 @@ struct SharePlaybackSourceService: Sendable {
     }
 
     func networkFileLocator(for relativePath: String) async throws -> NetworkFileLocator {
-        let entry = try await store.stat(relativePath: relativePath)
+        let entry = try await store.statForOpening(relativePath: relativePath)
         guard entry.kind == .file, let size = entry.size else {
             throw MediaTransportError.protocolViolation(
                 reason: "network file lacks a stable size"

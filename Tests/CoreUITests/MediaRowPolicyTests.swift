@@ -5,34 +5,167 @@ import CoreModels
 @testable import PlozzCoreUI
 
 final class MediaRowPolicyTests: XCTestCase {
-    func testOverlappingWindowsScheduleEachLogoOnlyOncePerTraversal() throws {
-        let reference = ArtworkReference.remote(try XCTUnwrap(URL(string: "https://example.test/logo.png")))
-        var history = MediaRowLogoPrefetchHistory()
-        var scheduled = 0
-        for index in 0..<5 {
-            for candidate in MediaRowPrefetchWindow.indices(
-                from: index, direction: 1, count: 75,
-                lookahead: MediaRowPrefetchWindow.fullArtworkLookahead
-            ) {
-                if history.shouldPrefetch(id: "item-\(candidate)", references: [reference]) {
-                    scheduled += 1
-                }
-            }
+    func testQueuedPreviewDoesNotRepeatURLComparison() {
+        var prefetchedIDs = Set<String>()
+        var comparisons = 0
+        func isDistinct() -> Bool {
+            comparisons += 1
+            return true
         }
-        XCTAssertEqual(scheduled, 13, "Five entering cards have overlapping nine-item windows, not 45 distinct logo jobs.")
-        history = MediaRowLogoPrefetchHistory()
-        XCTAssertTrue(history.shouldPrefetch(id: "item-4", references: [reference]))
+
+        XCTAssertTrue(MediaArtworkPrefetchPolicy.claimPreview(
+            for: "first", prefetchedIDs: &prefetchedIDs, isDistinct: isDistinct()
+        ))
+        for _ in 0..<20 {
+            XCTAssertFalse(MediaArtworkPrefetchPolicy.claimPreview(
+                for: "first", prefetchedIDs: &prefetchedIDs, isDistinct: isDistinct()
+            ))
+        }
+        XCTAssertEqual(comparisons, 1)
+        XCTAssertEqual(prefetchedIDs, ["first"])
+
+        XCTAssertTrue(MediaArtworkPrefetchPolicy.claimPreview(
+            for: "second", prefetchedIDs: &prefetchedIDs, isDistinct: isDistinct()
+        ))
+        prefetchedIDs.removeAll(keepingCapacity: true)
+        XCTAssertTrue(MediaArtworkPrefetchPolicy.claimPreview(
+            for: "first", prefetchedIDs: &prefetchedIDs, isDistinct: isDistinct()
+        ))
+        XCTAssertEqual(comparisons, 3, "Reset/reversal must allow the same artwork to warm again.")
     }
 
-    func testLogoPrefetchAllowsChangedReferencesAndSeparateItems() throws {
-        let first = ArtworkReference.remote(try XCTUnwrap(URL(string: "https://example.test/first.png")))
-        let changed = ArtworkReference.remote(try XCTUnwrap(URL(string: "https://example.test/changed.png")))
-        var history = MediaRowLogoPrefetchHistory()
-        XCTAssertTrue(history.shouldPrefetch(id: "item", references: []))
-        XCTAssertTrue(history.shouldPrefetch(id: "item", references: [first]))
-        XCTAssertFalse(history.shouldPrefetch(id: "item", references: [first]))
-        XCTAssertTrue(history.shouldPrefetch(id: "item", references: [changed]))
-        XCTAssertTrue(history.shouldPrefetch(id: "other", references: [changed]))
+    func testRejectedPreviewDoesNotPreventLaterEligibleArtwork() throws {
+        var prefetchedIDs = Set<String>()
+        for width in [200, 320, 2000] {
+            let url = try XCTUnwrap(URL(
+                string: "https://jellyfin.example.test/Items/one/Images/Primary?maxWidth=\(width)"
+            ))
+            let claimed = MediaArtworkPrefetchPolicy.claimPreview(
+                for: "same-item", prefetchedIDs: &prefetchedIDs,
+                isDistinct: ArtworkImageVariant.posterPreview.hasDistinctRequestURL(from: .posterCard, for: url)
+            )
+            XCTAssertEqual(claimed, width == 2000)
+            XCTAssertEqual(prefetchedIDs.isEmpty, width != 2000)
+        }
+    }
+
+    func testPreviewAdmissionPreservesLegacyQueueAcrossURLKindsAndResets() throws {
+        let urls = try [
+            "https://jellyfin.example.test/Items/one/Images/Primary?maxWidth=2000",
+            "https://emby.example.test/Items/one/Images/Primary?maxWidth=2000",
+            "https://plex.example.test/photo/:/transcode?url=%2Flibrary%2Fmetadata%2F1%2Fthumb&width=2000&height=3000",
+            "https://image.tmdb.org/t/p/original/one.jpg",
+            "https://jellyfin.example.test/Items/one/Images/Primary?maxWidth=200",
+            "https://example.test/unresizable.jpg",
+            "file:///tmp/fixture-poster.jpg"
+        ].map { try XCTUnwrap(URL(string: $0)) }
+        var actualIDs = Set<String>()
+        var legacyIDs = Set<String>()
+        for traversal in [Array(urls.indices), Array(urls.indices.reversed())] {
+            actualIDs.removeAll()
+            legacyIDs.removeAll()
+            var actualQueue: [Int] = []
+            var legacyQueue: [Int] = []
+            for _ in 0..<3 {
+                for index in traversal {
+                    let id = String(index)
+                    if ArtworkImageVariant.posterPreview.hasDistinctRequestURL(from: .posterCard, for: urls[index]),
+                       legacyIDs.insert(id).inserted {
+                        legacyQueue.append(index)
+                    }
+                    if MediaArtworkPrefetchPolicy.claimPreview(
+                        for: id, prefetchedIDs: &actualIDs,
+                        isDistinct: ArtworkImageVariant.posterPreview.hasDistinctRequestURL(from: .posterCard, for: urls[index])
+                    ) {
+                        actualQueue.append(index)
+                    }
+                }
+            }
+            XCTAssertEqual(actualQueue, legacyQueue)
+            XCTAssertEqual(actualIDs, legacyIDs)
+            XCTAssertEqual(actualQueue.count, 4)
+        }
+    }
+
+    @MainActor
+    func testOverlappingWindowsScheduleEachPresentationOnlyOnce() async throws {
+        let window = ArtworkPrefetchWindow(limiter: ConcurrencyLimiter(limit: 16))
+        defer { window.cancelAll() }
+        let probe = PrefetchProbe()
+        for index in 0..<5 {
+            let requests = MediaRowPrefetchWindow.indices(
+                from: index, direction: 1, count: 75,
+                lookahead: MediaRowPrefetchWindow.fullArtworkLookahead
+            ).map { candidate in
+                ArtworkPrefetchWindow.Request(id: "item-\(candidate)") {
+                    await probe.start("item-\(candidate)")
+                }
+            }
+            window.update(requests)
+            try await waitForPrefetch { await probe.started.count == 9 + index }
+        }
+        let started = await probe.started
+        XCTAssertEqual(started.count, 13, "Overlapping windows must not restart completed preparation.")
+    }
+
+    @MainActor
+    func testReversalCancelsObsoleteQueuedArtworkWithoutWaitingForIt() async throws {
+        let window = ArtworkPrefetchWindow(limiter: ConcurrencyLimiter(limit: 1))
+        defer { window.cancelAll() }
+        let probe = PrefetchProbe()
+        window.update((0..<9).map { index in
+            .init(id: "old-\(index)") { await probe.hold("old-\(index)") }
+        })
+        try await waitForPrefetch { await probe.started.count == 1 }
+        window.update([.init(id: "new-policy") { await probe.start("new-policy") }])
+        try await waitForPrefetch { await probe.started.contains("new-policy") }
+        let started = await probe.started
+        XCTAssertEqual(started.count, 2, "Cancelled queued jobs must never start.")
+    }
+
+    @MainActor
+    func testHeldBackgroundMetadataDoesNotOccupyForegroundPermits() async throws {
+        let probe = PrefetchProbe()
+        let background = Task {
+            await ArtworkSession.resolveArtwork(background: true) {
+                await probe.hold("background")
+                return nil
+            }
+        }
+        defer { background.cancel() }
+        try await waitForPrefetch { await probe.started.contains("background") }
+        let foreground = Task {
+            await ArtworkSession.resolveArtwork(background: false) {
+                await probe.start("foreground")
+                return nil
+            }
+        }
+        defer { foreground.cancel() }
+        try await waitForPrefetch { await probe.started.contains("foreground") }
+        background.cancel()
+        _ = await background.value
+        _ = await foreground.value
+    }
+
+    @MainActor
+    private func waitForPrefetch(_ condition: () async -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !(await condition()), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let satisfied = await condition()
+        XCTAssertTrue(satisfied)
+    }
+
+    private actor PrefetchProbe {
+        var started: [String] = []
+
+        func start(_ id: String) { started.append(id) }
+
+        func hold(_ id: String) async {
+            started.append(id)
+            try? await Task.sleep(for: .seconds(60))
+        }
     }
 
     func testPrefetchWindowFollowsRightwardTraversal() {

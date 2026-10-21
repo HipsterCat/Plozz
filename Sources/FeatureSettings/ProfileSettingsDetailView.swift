@@ -27,7 +27,7 @@ struct ProfileSettingsDetailView: View {
     /// set here can say when it's device-only.
     let syncEnabled: Bool
 
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     /// Read live from the context so the page reflects edits made on it (a lock
     /// added, a rename) without needing its own copy to be invalidated.
@@ -59,6 +59,7 @@ struct ProfileSettingsDetailView: View {
                         subtitle: "How this profile looks, and who can open it."
                     )
                     actionsPanel(profile)
+                        .settingsWorkspaceEntry()
                 }
             }
             .frame(maxWidth: PlozzTheme.Metrics.settingsContentMaxWidth, alignment: .leading)
@@ -89,39 +90,38 @@ struct ProfileSettingsDetailView: View {
     /// set). The page it replaced held a status line and a button that opened the
     /// real screen, which was two presses of nothing.
     private func actionsPanel(_ profile: Profile) -> some View {
-        SettingsPanel {
             ProfileActionsList(
-                profile: profile,
-                syncEnabled: syncEnabled,
-                offersPlexPINReuse: profile.playsAsPINProtectedPlexUser,
-                hasParentalPIN: context.hasParentalPIN,
-                // Sealed only when this profile is BOTH a Kids Profile and the
-                // one currently open: a grown-up editing a child's profile from
-                // their own is exactly who should be able to change it.
-                restrictedActionsSealed: profile.isKids
-                    && context.activeProfile.id == profileID
-                    && context.hasParentalPIN
-                    && !context.isParentalUnlocked,
-                // Pushed on the OUTER Settings stack. Declaring a second
-                // `navigationDestination` from a page that stack already pushed
-                // is what froze this screen — see `SettingsContext.pushRoute`.
-                onEditAppearance: { context.pushRoute(.profileAppearance(profileID: profileID)) },
-                onEditLock: { context.pushRoute(.profileLockSetup(profileID: profileID)) },
-                onCreateParentalPIN: { context.pushRoute(.parentalPINSetup) },
-                onSetLock: { context.onSetProfileLock(profileID, $0) },
-                onSetKids: { context.onSetKidsProfile(profileID, $0) },
-                onSetParentalPIN: context.onSetParentalPIN,
-                validatePlexPIN: {
-                    await context.validatePlexPIN($0, profileID)
-                },
-                onDelete: canDelete ? { context.onDeleteProfile(profileID) } : nil,
-                isUnlocked: context.isProfileUnlocked(profileID),
-                onUnlock: { context.onProfileUnlocked(profileID) }
-            )
-            .tvOSFocusSection()
-        }
+            profile: profile,
+            syncEnabled: syncEnabled,
+            offersPlexPINReuse: profile.playsAsPINProtectedPlexUser,
+            hasParentalPIN: context.hasParentalPIN,
+            // Sealed only when this profile is BOTH a Kids Profile and the
+            // one currently open: a grown-up editing a child's profile from
+            // their own is exactly who should be able to change it.
+            restrictedActionsSealed: profile.isKids
+                && context.activeProfile.id == profileID
+                && context.hasParentalPIN
+                && !context.isParentalUnlocked,
+            groupsActions: true,
+            automaticSignIn: context.automaticSignIn,
+            // Pushed on the OUTER Settings stack. Declaring a second
+            // `navigationDestination` from a page that stack already pushed
+            // is what froze this screen — see `SettingsContext.pushRoute`.
+            onEditAppearance: { context.pushRoute(.profileAppearance(profileID: profileID)) },
+            onEditLock: { context.pushRoute(.profileLockSetup(profileID: profileID)) },
+            onCreateParentalPIN: { context.pushRoute(.parentalPINSetup) },
+            onSetLock: { context.onSetProfileLock(profileID, $0) },
+            onSetKids: { context.onSetKidsProfile(profileID, $0) },
+            onSetParentalPIN: context.onSetParentalPIN,
+            validatePlexPIN: {
+                await context.validatePlexPIN($0, profileID)
+            },
+            onDelete: canDelete ? { context.onDeleteProfile(profileID) } : nil,
+            isUnlocked: context.isProfileUnlocked(profileID),
+            onUnlock: { context.onProfileUnlocked(profileID) }
+        )
+        .tvOSFocusSection()
     }
-
 
 }
 #endif

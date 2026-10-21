@@ -70,14 +70,20 @@ public struct NavigationLibrariesDetailView: View {
         let visible = all.filter { scope.homeVisibility.isEnabled($0.key) }
         #if os(iOS)
         let keys = NavigationDestinationDefaults.iOS
+        let automaticallyHiddenDestinations = NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
         #else
         let keys = NavigationRailPlan.customizableKeys(
             visibleLibraries: includesIndividualLibraries ? visible : [], style: navigation.style
         )
+        let automaticallyHiddenDestinations = NavigationRailPlan.automaticallyHiddenLibraryKeys(
+            visibleLibraries: visible, style: navigation.style
+        )
         #endif
         let available = keys.filter { !excludedKeys.contains($0) }
         let titles = Self.rowsByKey(visible: visible)
-        let sections = navigation.librarySections(available: available)
+        let sections = navigation.librarySections(
+            available: available, automaticallyHiddenKeys: automaticallyHiddenDestinations
+        )
         #if os(iOS)
         let overflow = UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
             ? NavigationDestinationDefaults.iPhoneOverflowKeys(visible: sections.enabled) : []
@@ -99,7 +105,11 @@ public struct NavigationLibrariesDetailView: View {
                     if overflow.contains(key) { row.detail = Text("In More") }
                     return row
                 },
-                onChange: { navigation.applyLibrarySections($0, available: available) }
+                onChange: {
+                    navigation.applyLibrarySections(
+                        $0, available: available, automaticallyHiddenKeys: automaticallyHiddenDestinations
+                    )
+                }
             )
 
             Text(Self.footnote)
@@ -169,13 +179,13 @@ public struct NavigationLibrariesDetailView: View {
     #if os(iOS)
     private static let footnote = LocalizedStringResource(
         "navigationArrangement.footnote.iOS",
-        defaultValue: "Drag to reorder. Hold to hide or show.",
+        defaultValue: "Drag to reorder. Hold to hide or show. Unused pages hide automatically unless you show them.",
         comment: "Instructions for arranging iPhone and iPad navigation tabs."
     )
     #else
     private static let footnote = LocalizedStringResource(
         "navigationArrangement.footnote",
-        defaultValue: "Press and hold an item to hide, show, or move it. Hiding a shortcut doesn't remove its content. Settings always stays visible.",
+        defaultValue: "Press and hold an item to hide, show, or move it. Unused pages hide automatically unless you show them. Settings always stays visible.",
         comment: "Instructions and the always-visible Settings safety rule for navigation customization."
     )
     #endif

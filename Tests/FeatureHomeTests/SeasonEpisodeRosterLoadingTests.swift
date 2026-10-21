@@ -125,7 +125,7 @@ final class SeasonEpisodeRosterLoadingTests: XCTestCase {
         XCTAssertEqual(calls.count, 0)
     }
 
-    func testDetailOpenEnvironmentThreadsRosterLoaderIntoViewModel() async {
+    func testDetailOpenEnvironmentThreadsRosterLoaderIntoViewModel() async throws {
         let show = series("show", tmdbID: 101)
         let roster = makeRoster(tmdbID: 101, seasonNumber: 1, episodeIDs: [11])
         let provider = FakeMediaProvider(allItems: [show])
@@ -137,7 +137,7 @@ final class SeasonEpisodeRosterLoadingTests: XCTestCase {
             loadSeasonEpisodeRoster: { _, _ in .loaded(roster) }
         )
 
-        let vm = environment.makeViewModel(for: show, libraryOrigin: nil)
+        let vm = try environment.makeViewModel(for: show, libraryOrigin: nil)
         await vm.loadSeasonEpisodeRoster(for: 1)
 
         XCTAssertEqual(vm.seasonEpisodeRosterState(for: 1), .loaded(roster))
@@ -145,7 +145,7 @@ final class SeasonEpisodeRosterLoadingTests: XCTestCase {
 
     func testSourceSwitchRejectsLateRosterWithoutErasingNewerSameSeasonState() async {
         let firstShow = series("show-a", tmdbID: 101)
-        let secondShow = series("show-b", tmdbID: 202)
+        let secondShow = series("show-b", tmdbID: 101)
         let firstProvider = FakeMediaProvider(allItems: [firstShow], accountID: "a")
         let secondProvider = FakeMediaProvider(allItems: [secondShow], accountID: "b")
         firstProvider.childrenByParent = ["show-a": []]
@@ -153,7 +153,7 @@ final class SeasonEpisodeRosterLoadingTests: XCTestCase {
         let oldGate = RosterAsyncGate()
         let calls = RosterCallLog()
         let oldRoster = makeRoster(tmdbID: 101, seasonNumber: 1, episodeIDs: [11])
-        let newRoster = makeRoster(tmdbID: 202, seasonNumber: 1, episodeIDs: [21])
+        let newRoster = makeRoster(tmdbID: 101, seasonNumber: 1, episodeIDs: [21])
         let vm = ItemDetailViewModel(
             provider: firstProvider,
             itemID: firstShow.id,

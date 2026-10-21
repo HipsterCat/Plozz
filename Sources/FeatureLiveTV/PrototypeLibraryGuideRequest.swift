@@ -33,12 +33,12 @@ struct PrototypeLibraryGuideRequest: Equatable {
 
     init?(
         catalog: PrototypeLibraryCatalogRevision, rows: [LiveTVGuideRowID],
-        anchor: LiveTVGuideRowID?, from: Date, to: Date
+        anchorIndex: Int?, from: Date, to: Date
     ) {
         guard from < to, catalog.isLoaded else { return nil }
         let allowed = Set(catalog.channels.map(\.id))
         let nearby = PrototypeServerGuideRequest.nearbyChannelIDs(
-            rows: rows, anchor: anchor, limit: PrototypeGuideWindowRequest.rowLimit
+            rows: rows, anchorIndex: anchorIndex, limit: PrototypeGuideWindowRequest.rowLimit
         )
         let channelIDs = Set(nearby).intersection(allowed)
         guard !channelIDs.isEmpty else { return nil }

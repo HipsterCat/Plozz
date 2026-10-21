@@ -30,6 +30,148 @@ private struct ResumeMutationApplier: WatchMutationApplying {
 }
 
 final class JellyfinStreamingQualityTests: XCTestCase {
+    func testCompatibleServerRenditionsKeepVideoCopyAndTheServersAudioDecision() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            for quality in [StreamingQuality.original, .hd720] {
+                for audioCopy in ["true", "false"] {
+                    let (provider, http) = fixture(kind: kind, rendition: true)
+                    http.stubSequence(pathSuffix: "/Items/movie/PlaybackInfo", jsons: ["""
+                    {"PlaySessionId":"session","MediaSources":[{
+                      "Id":"version","Container":"mkv","SupportsDirectPlay":false,"SupportsDirectStream":true,
+                      "Bitrate":1500000,
+                      "TranscodingUrl":"/Videos/movie/master.m3u8?VideoCodec=h264&AudioCodec=aac&AllowVideoStreamCopy=true&AllowAudioStreamCopy=\(audioCopy)&VideoBitrate=1300000&AudioBitrate=96000",
+                      "MediaStreams":[
+                        {"Index":0,"Type":"Video","Codec":"h264","Width":1280,"Height":720},
+                        {"Index":2,"Type":"Audio","Codec":"aac","IsDefault":true}
+                      ]}]}
+                    """])
+                    let request = try await provider.playbackInfo(
+                        for: "movie", mediaSourceID: "version", forceTranscode: false,
+                        streaming: .init(quality: quality)
+                    )
+                    guard case .authenticatedHTTP(let locator) = request.playbackSource else {
+                        return XCTFail("Expected server HLS")
+                    }
+                    let query = locator.resource.queryItems
+                    XCTAssertEqual(query.first { $0.name == "AllowVideoStreamCopy" }?.value, "true")
+                    XCTAssertEqual(query.first { $0.name == "AllowAudioStreamCopy" }?.value, audioCopy)
+                    XCTAssertEqual(query.first { $0.name == "VideoBitrate" }?.value, "1300000")
+                    XCTAssertEqual(query.first { $0.name == "AudioBitrate" }?.value, "96000")
+                    XCTAssertEqual(query.first { $0.name == "AudioStreamIndex" }?.value, "2")
+                    XCTAssertFalse(query.contains { ["h264-rangetype", "h264-videorange"].contains($0.name) })
+                    XCTAssertTrue(request.isTranscoding, "Server HLS still routes to the native engine")
+                    XCTAssertEqual(request.streamingOptions?.quality, quality)
+                    XCTAssertEqual(http.sentPaths.filter { $0.hasSuffix("/PlaybackInfo") }.count, 1)
+                }
+            }
+        }
+    }
+
+    func testCompatibleHEVCIsNotChangedToH264WhenTheServerOffersBoth() throws {
+        let source = try JSONDecoder().decode(MediaSourceInfo.self, from: Data("""
+        {"TranscodingUrl":"/master.m3u8?VideoCodec=hevc,h264&AudioCodec=eac3&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true",
+         "MediaStreams":[{"Index":0,"Type":"Video","Codec":"hevc","BitDepth":10}]}
+        """.utf8))
+        let query = try XCTUnwrap(URLComponents(string: source.boundedTranscodingURL(
+            .init(quality: .original), supportsHEVC: true
+        ))?.queryItems)
+        XCTAssertEqual(query.first { $0.name == "VideoCodec" }?.value, "hevc")
+        XCTAssertEqual(query.first { $0.name == "AudioCodec" }?.value, "eac3")
+        XCTAssertEqual(query.first { $0.name == "AllowVideoStreamCopy" }?.value, "true")
+        XCTAssertEqual(query.first { $0.name == "AllowAudioStreamCopy" }?.value, "true")
+    }
+
+    func testExplicitForceServerIncompatibilityAndBitmapBurnInCannotUseVideoCopy() throws {
+        let source = try JSONDecoder().decode(MediaSourceInfo.self, from: Data("""
+        {"TranscodingUrl":"/master.m3u8?VideoCodec=h264&AudioCodec=aac&AllowVideoStreamCopy=true",
+         "MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"}]}
+        """.utf8))
+        var burned = StreamingPlaybackOptions(quality: .original)
+        burned.subtitleTrack = .init(id: 3, kind: .subtitle, displayTitle: "Bitmap", codec: "pgssub")
+        for (options, forced) in [
+            (StreamingPlaybackOptions(quality: .original, forceTranscoding: true), false),
+            (.init(quality: .original), true),
+            (burned, false),
+            (.init(quality: .hd720), false)
+        ] {
+            let query = try XCTUnwrap(URLComponents(string: source.boundedTranscodingURL(
+                options, supportsHEVC: true, forceVideoTranscode: forced
+            ))?.queryItems)
+            XCTAssertEqual(query.first { $0.name == "AllowVideoStreamCopy" }?.value, "false")
+        }
+        let incompatible = try JSONDecoder().decode(MediaSourceInfo.self, from: Data("""
+        {"TranscodingUrl":"/master.m3u8?VideoCodec=h264&AllowVideoStreamCopy=false",
+         "MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"}]}
+        """.utf8))
+        XCTAssertTrue(try incompatible.boundedTranscodingURL(
+            .init(quality: .original), supportsHEVC: true
+        ).contains("AllowVideoStreamCopy=false"))
+    }
+
+    func testOriginalQualityTranscodesKeepPreviewSourceWithoutPlaybackFallback() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let (provider, _) = fixture(kind: kind, rendition: true)
+            let request = try await provider.playbackInfo(
+                for: "movie", mediaSourceID: "version", forceTranscode: true,
+                streaming: .init(quality: .original, forceTranscoding: true)
+            )
+            XCTAssertTrue(request.isTranscoding)
+            XCTAssertNil(request.originalFileSource)
+            XCTAssertNil(request.localRemuxSource)
+            guard case .authenticatedHTTP(let source) = request.scrubStillSource else {
+                return XCTFail("An original-quality transcode needs a preview-only original")
+            }
+            XCTAssertEqual(source.provider, kind)
+            XCTAssertEqual(source.mediaSourceID, "version")
+            XCTAssertEqual(source.deliveryMode, .directFile)
+        }
+    }
+
+    func testOrdinaryServerFallbackReportsAuthoredASSBurnIn() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let (provider, http) = fixture(kind: kind, rendition: true)
+            http.stubSequence(pathSuffix: "/Items/movie/PlaybackInfo", jsons: ["""
+            {"PlaySessionId":"session","MediaSources":[{
+              "Id":"version","Container":"mkv","SupportsDirectPlay":false,
+              "TranscodingUrl":"/Videos/movie/master.m3u8?VideoCodec=hevc&SubtitleMethod=Encode&SubtitleStreamIndex=3",
+              "MediaStreams":[
+                {"Index":0,"Type":"Video","Codec":"av1","Width":1920,"Height":1080},
+                {"Index":1,"Type":"Audio","Codec":"opus","IsDefault":true},
+                {"Index":3,"Type":"Subtitle","Codec":"ass","IsDefault":true,"IsTextSubtitleStream":true}
+              ]}]}
+            """])
+            let request = try await provider.playbackInfo(
+                for: "movie", mediaSourceID: "version", forceTranscode: true
+            )
+            XCTAssertTrue(request.isTranscoding)
+            XCTAssertNil(request.streamingOptions, "Exercise the ordinary TV fallback, not bounded streaming")
+            XCTAssertEqual(request.burnedInSubtitleTrackID, 3)
+            XCTAssertNotNil(request.subtitleTracks.first?.deliverySource,
+                            "Keep the sidecar selectable after rebuilding without burn-in")
+        }
+    }
+
+    func testBurnInRequiresExplicitEncodeAndAValidSubtitleIndex() throws {
+        let cases: [(String, Int?)] = [
+            ("SubtitleMethod=Encode&SubtitleStreamIndex=3", 3),
+            ("subtitlemethod=encode&subtitlestreamindex=3", 3),
+            ("SubtitleMethod=Encode&SubtitleStreamIndexes=4", 4),
+            ("SubtitleMethod=Encode&SubtitleStreamIndex=-1", nil),
+            ("SubtitleMethod=Encode&SubtitleStreamIndex=invalid", nil),
+            ("SubtitleMethod=Encode", nil),
+            ("SubtitleStreamIndex=3", nil),
+            ("SubtitleMethod=External&SubtitleStreamIndex=3", nil),
+            ("SubtitleMethod=Embed&SubtitleStreamIndex=3", nil)
+        ]
+        for (query, expected) in cases {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "TranscodingUrl": "/Videos/movie/master.m3u8?\(query)"
+            ])
+            let source = try JSONDecoder().decode(MediaSourceInfo.self, from: data)
+            XCTAssertEqual(source.burnedInSubtitleTrackID, expected, query)
+        }
+    }
+
     func testCustom1080pAt2000KbpsConstrainsJellyfinAndEmbyWithoutForcingCodec() async throws {
         let quality = try StreamingQuality.custom(maximumHeight: 1080, bitrateKbps: 2_000)
         for kind in [ProviderKind.jellyfin, .emby] {
@@ -366,6 +508,7 @@ final class JellyfinStreamingQualityTests: XCTestCase {
             XCTAssertEqual(locator.resource.queryItems.first { $0.name == "SubtitleStreamIndexes" }?.value, "-1")
             XCTAssertFalse(locator.resource.queryItems.contains { $0.name == "ManifestSubtitles" })
             XCTAssertNotNil(request.subtitleTracks.first { $0.id == 2 }?.deliverySource)
+            XCTAssertNil(request.burnedInSubtitleTrackID, "Use the final bounded URL, not the server's stale decision")
             XCTAssertEqual(request.streamingOptions?.subtitleTrack?.id, 2)
             XCTAssertEqual(http.queryItems(forPathSuffix: "/PlaybackInfo")?.first { $0.name == "SubtitleStreamIndex" }?.value, "-1")
             XCTAssertEqual(http.queryItems(forPathSuffix: "/PlaybackInfo")?.first { $0.name == "SubtitleMethod" }?.value, "External")
@@ -566,5 +709,18 @@ final class JellyfinStreamingQualityTests: XCTestCase {
             )
             XCTFail("Wrong source should fail")
         } catch is StreamingQualityError {} catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testOrdinaryPlaybackCannotSubstituteAnUnavailableSelectedVersion() async {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let (provider, http) = fixture(kind: kind, rendition: true)
+            do {
+                _ = try await provider.playbackInfo(for: "movie", mediaSourceID: "missing", forceTranscode: false)
+                XCTFail("A disappeared source must not silently play another version.")
+            } catch let error as StreamingQualityError {
+                XCTAssertEqual(error, .sourceUnavailable)
+            } catch { XCTFail("Unexpected error: \(error)") }
+            XCTAssertEqual(http.method(forPathSuffix: "/Videos/ActiveEncodings"), .delete)
+        }
     }
 }

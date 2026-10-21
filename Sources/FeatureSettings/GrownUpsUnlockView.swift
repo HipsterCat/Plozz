@@ -12,20 +12,35 @@ import SwiftUI
 /// profile Edit button ended up doing nothing. Pushing uses the navigation stack
 /// this page already lives in.
 ///
-/// On success it pops itself, so the person lands back on the settings list with
-/// the previously-sealed rows now present — no extra tap to "continue".
+/// Pushed prompts pop on success. The workspace instead opens the selected
+/// protected section in place.
 struct GrownUpsUnlockView: View {
     let context: SettingsContext
+    var onCancel: (() -> Void)?
+    var onUnlock: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var errorMessage: LocalizedStringResource?
+    #if os(tvOS)
+    @Environment(\.settingsInWorkspace) private var inWorkspace
+    #endif
 
     var body: some View {
         ParentalPINView(
             errorMessage: errorMessage,
+            isCompact: usesCompactLayout,
             onSubmit: submit,
-            onCancel: { dismiss() }
+            onCancel: { if let onCancel { onCancel() } else { dismiss() } }
         )
+        .settingsWorkspaceEntry()
+    }
+
+    private var usesCompactLayout: Bool {
+        #if os(tvOS)
+        inWorkspace
+        #else
+        false
+        #endif
     }
 
     private func submit(_ pin: String) {
@@ -35,7 +50,7 @@ struct GrownUpsUnlockView: View {
         }
         errorMessage = nil
         context.onParentalUnlock()
-        dismiss()
+        if let onUnlock { onUnlock() } else { dismiss() }
     }
 }
 #endif

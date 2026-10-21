@@ -4,6 +4,37 @@ import CoreModels
 
 @MainActor
 final class HomeAggregatorTests: XCTestCase {
+    func testServerBatchDiagnosticsPreserveEmbeddedFailuresAndCancellation() async throws {
+        let definitions = ["good", "bad"].map {
+            HomeServerRowDefinition(
+                accountID: "private-account", serverName: "Private server", providerKind: .jellyfin,
+                section: ServerHomeSection(id: $0, kind: .recommendations)
+            )
+        }
+        var visibility = HomeLibraryVisibility()
+        visibility.rowCustomization = HomeRowCustomization(
+            defaults: .custom, order: definitions.map(\.id), shown: Set(definitions.map(\.id)),
+            serverRows: definitions
+        )
+        for (failure, expected): (AppError?, PerformanceDiagnostics.Outcome) in [
+            (.serverUnreachable, .failed), (.cancelled, .cancelled), (nil, .failed)
+        ] {
+            PerformanceDiagnostics.shared.start()
+            defer { PerformanceDiagnostics.shared.stop() }
+            var results: [String: Result<[MediaItem], AppError>] = ["good": .success([item("kept")])]
+            if let failure { results["bad"] = .failure(failure) }
+            let provider = AggregatorStub(serverResults: results)
+            let account = resolved("private-account", user: "Private user", server: "Private server",
+                                   kind: .jellyfin, provider: provider)
+            let content = await HomeAggregator().unmergedContent(from: [account], visibility: visibility)
+            XCTAssertEqual(content.serverRows.first { $0.definition.section.id == "good" }?.items.first?.id, "kept")
+            XCTAssertNotNil(content.serverRows.first { $0.definition.section.id == "bad" }?.failure)
+            let snapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+            let records = snapshot.recent + snapshot.slow
+            XCTAssertTrue(records.contains { $0.operation == .homeFetch && $0.outcome == expected })
+        }
+    }
+
     func testInterleaveRoundRobinPreservesGroupOrder() {
         let merged = HomeAggregator.interleave([["a1", "a2", "a3"], ["b1"], ["c1", "c2"]])
         XCTAssertEqual(merged, ["a1", "b1", "c1", "a2", "c2", "a3"])
@@ -83,6 +114,27 @@ final class HomeAggregatorTests: XCTestCase {
         XCTAssertEqual(libraries.map(\.key), ["acct-plex:L1", "acct-plex:L2", "acct-jelly:L1"])
         // Same underlying library id on two accounts stays distinct via the key.
         XCTAssertEqual(Set(libraries.map(\.key)).count, 3)
+    }
+
+    func testLibrarySelectionSkipsOnlySuccessfullyDiscoveredChannelsOnlyIPTV() async {
+        let live = resolved("live", user: "IPTV", server: "Playlist", kind: .iptv,
+                            provider: AggregatorStub(libraries: []))
+        let vod = resolved("vod", user: "IPTV", server: "On demand", kind: .iptv,
+                           provider: AggregatorStub(libraries: [library("movies", "Movies")]))
+        let offline = resolved("offline", user: "IPTV", server: "Offline", kind: .iptv,
+                               provider: AggregatorStub.failing())
+        let emptyServer = resolved("empty", user: "Viewer", server: "Server", kind: .jellyfin,
+                                   provider: AggregatorStub(libraries: []))
+        let cases: [([ResolvedAccount], Bool)] = [
+            ([live], true), ([live, live], true), ([vod], false), ([live, vod], false),
+            ([offline], false), ([live, offline], false), ([emptyServer], false),
+            ([live, emptyServer], false), ([], false)
+        ]
+        for (accounts, expected) in cases {
+            let result = await HomeAggregator().libraryDiscovery(from: accounts)
+            XCTAssertEqual(result.canSkipSelection(for: accounts), expected,
+                           "Accounts: \(accounts.map(\.account.id))")
+        }
     }
 
     func testContentNeverMergesSameTitleLibraryTilesAcrossAccounts() async {
@@ -402,17 +454,20 @@ private final class AggregatorStub: MediaProvider, @unchecked Sendable {
     private let stubbedContinueWatching: [MediaItem]
     private let stubbedLatest: [MediaItem]
     private let shouldFail: Bool
+    private let serverResults: [String: Result<[MediaItem], AppError>]
 
     init(
         libraries: [MediaLibrary] = [],
         continueWatching: [MediaItem] = [],
         latest: [MediaItem] = [],
-        shouldFail: Bool = false
+        shouldFail: Bool = false,
+        serverResults: [String: Result<[MediaItem], AppError>] = [:]
     ) {
         self.stubbedLibraries = libraries
         self.stubbedContinueWatching = continueWatching
         self.stubbedLatest = latest
         self.shouldFail = shouldFail
+        self.serverResults = serverResults
         self.session = UserSession(
             server: MediaServer(id: "s", name: "Home", baseURL: URL(string: "http://host")!, provider: .jellyfin),
             userID: "u", userName: "User", deviceID: "d", accessToken: "TOKEN"
@@ -434,6 +489,12 @@ private final class AggregatorStub: MediaProvider, @unchecked Sendable {
     func latest(limit: Int) async throws -> [MediaItem] {
         if shouldFail { throw AppError.serverUnreachable }
         return stubbedLatest
+    }
+
+    func serverHomeItems(
+        sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>
+    ) async -> [String: Result<[MediaItem], AppError>] {
+        serverResults
     }
 
     func item(id: String) async throws -> MediaItem { throw AppError.notFound }

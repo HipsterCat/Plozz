@@ -174,6 +174,11 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         let load: ImageLoad
     }
 
+    private enum ImageRegistration {
+        case cached(UIImage)
+        case waiting(ImageWaiter, isNew: Bool)
+    }
+
     /// Cancellation-aware bridge around ImageIO's synchronous thumbnail decode.
     /// Cancelling before this operation starts removes it from the queue entirely;
     /// cancelling after it starts resumes the async caller immediately and discards
@@ -359,10 +364,10 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         }
         super.init()
         cache.delegate = self
-        // Decoded landscape/poster thumbnails are small; cap retained pixels so the
-        // cache stays bounded on long seasons (NSCache evicts under memory pressure
-        // regardless).
-        cache.totalCostLimit = 96 * 1024 * 1024
+        // Cap retained pixels so the cache stays bounded on long seasons (NSCache
+        // evicts under memory pressure regardless). The budget holds a returning
+        // Browse traversal at 2x on Apple TV 4K.
+        cache.totalCostLimit = ArtworkMemoryBudget.current.decodedBytes
         // Belt-and-suspenders: NSCache already evicts under pressure, but a decoded
         // poster/hero wall can spike the footprint faster than that fires. Purge the
         // decoded cache on a real memory warning so we shed the biggest reclaimable
@@ -518,11 +523,16 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         background: Bool,
         expectedBackgroundGeneration: UInt64? = nil
     ) async -> UIImage? {
-        guard let waiter = registerWaiter(
+        guard let registration = registerWaiter(
             for: key,
             background: background,
             expectedBackgroundGeneration: expectedBackgroundGeneration
         ) else { return nil }
+        let waiter: ImageWaiter
+        switch registration {
+        case let .cached(image): return image
+        case let .waiting(registered, _): waiter = registered
+        }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 install(continuation, for: waiter)
@@ -586,14 +596,29 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
     }
 
     private func prefetch(key: CacheKey) -> Task<Void, Never>? {
+        guard let request = prefetchRequest(for: key) else { return nil }
+        return Task.detached(priority: .utility) { [warmLimiter] in
+            _ = await warmLimiter.runUnlessCancelled {
+                await request.prepare()
+            }
+        }
+    }
+
+    /// Prepared work for an owned lookahead window, which acquires the warm permit.
+    public func prefetchRequest(
+        for url: URL,
+        variant: ArtworkImageVariant = .original
+    ) -> ArtworkPrefetchWindow.Request? {
+        prefetchRequest(for: CacheKey(url: url, variant: variant))
+    }
+
+    private func prefetchRequest(for key: CacheKey) -> ArtworkPrefetchWindow.Request? {
         guard let generation = lock.withLock({
             backgroundWorkAllowed ? backgroundGeneration : nil
         }) else { return nil }
-        return Task.detached(priority: .utility) { [self] in
-            await warmLimiter.run {
-                guard !Task.isCancelled else { return }
-                _ = await image(for: key, background: true, expectedBackgroundGeneration: generation)
-            }
+        return ArtworkPrefetchWindow.Request(id: "\(key.cacheKey)|generation:\(generation)") { [self] in
+            guard !Task.isCancelled else { return }
+            _ = await image(for: key, background: true, expectedBackgroundGeneration: generation)
         }
     }
 
@@ -742,12 +767,16 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         for key: CacheKey,
         background: Bool,
         expectedBackgroundGeneration: UInt64?
-    ) -> ImageWaiter? {
-        let registration = lock.withLock { () -> (waiter: ImageWaiter, isNew: Bool)? in
+    ) -> ImageRegistration? {
+        let registration = lock.withLock { () -> ImageRegistration? in
+            guard !Task.isCancelled else { return nil }
             guard !background || backgroundWorkAllowed else { return nil }
             if let expectedBackgroundGeneration,
                expectedBackgroundGeneration != backgroundGeneration { return nil }
             guard networkArtworkIsAdmittedLocked(for: key) else { return nil }
+            // Admission can follow an arbitrarily long warm-queue wait. Serialize
+            // this lookup with store/registration so a completed foreground load wins.
+            if let image = cache.object(forKey: key.cacheKey)?.image { return .cached(image) }
             let waiterID = UUID()
             if let existing = inFlight[key] {
                 if !background {
@@ -755,7 +784,7 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
                     existing.decodeJob?.promote(to: Self.decodeQueueFG)
                 }
                 existing.waiterIsForeground[waiterID] = !background
-                return (ImageWaiter(id: waiterID, key: key, load: existing), false)
+                return .waiting(ImageWaiter(id: waiterID, key: key, load: existing), isNew: false)
             }
             let load = ImageLoad(networkInvalidationToken: networkInvalidationToken(for: key))
             load.waiterIsForeground[waiterID] = !background
@@ -768,13 +797,13 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
                 self.finishLoad(load, for: key, with: image)
             }
             inFlight[key] = load
-            return (ImageWaiter(id: waiterID, key: key, load: load), true)
+            return .waiting(ImageWaiter(id: waiterID, key: key, load: load), isNew: true)
         }
         guard let registration else { return nil }
-        if registration.isNew {
-            installDeadline(for: registration.waiter.load, key: key)
+        if case let .waiting(waiter, isNew: true) = registration {
+            installDeadline(for: waiter.load, key: key)
         }
-        return registration.waiter
+        return registration
     }
 
     private func installDeadline(for load: ImageLoad, key: CacheKey) {

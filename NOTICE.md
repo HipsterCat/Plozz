@@ -9,42 +9,56 @@ obligations Plozz must meet to ship it.
 
 ## TL;DR
 
-The bundled FFmpeg is a **decode-only, LGPL-3.0** build — no `--enable-gpl` (so
+The bundled FFmpeg is a **decode-only, LGPL-2.1-or-later** build — no `--enable-gpl` (so
 no GPL-only codecs such as x264/x265) and nothing "nonfree/unredistributable".
 It is App-Store-redistributable, subject to the LGPL relink / source-offer /
 attribution duties below. FFmpeg's `libav*` libraries ship as xcframeworks
-embedded in the app bundle as frameworks (`Libavcodec.framework`,
-`Libavformat.framework`, `Libavutil.framework`, `Libswscale.framework`,
-`Libavfilter.framework`, `Libswresample.framework`, …).
+embedded in the app bundle as frameworks (`AetherLibavcodec.framework`,
+`AetherLibavformat.framework`, `AetherLibavutil.framework`, `AetherLibswscale.framework`,
+`AetherLibavfilter.framework`, `AetherLibswresample.framework`, …).
 
 ## What ships, and where it comes from
 
 | Component | Source (pinned) | License |
 |---|---|---|
-| AetherEngine (media engine; "Plozzigen") | `github.com/thatcube/AetherEngine` @ `82871715…` | per upstream |
-| FFmpeg `libav*` (demux / decode / thin HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `1.0.3` (FFmpeg **n8.1.x**) | **LGPL-3.0** |
+| AetherEngine (media engine; "Plozzigen") | `github.com/brandomoore/AetherEngine` @ `4b7552a06c4cf646bb94eb7eb273946f8b916a70` (7.34.1 + fork fixes) | LGPL-3.0 with Apple Store exception |
+| FFmpeg `libav*` (demux / decode / thin HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `3.7.0` (FFmpeg **n8.1.3**) | **LGPL-2.1-or-later** |
 | dav1d (AV1 software decoder, separate xcframework) | bundled by FFmpegBuild | BSD-2-Clause (permissive) |
-| libdovi (Dolby Vision RPU parser) | `github.com/superuser404notfound/LibDovi` @ `1.0.2` | per upstream |
+| libdovi (Dolby Vision RPU parser) | `github.com/superuser404notfound/LibDovi` @ `2.1.0` | MIT |
 
-Plozz's own `Package.swift` declares **only** AetherEngine; FFmpegBuild and
-LibDovi are its transitive dependencies (AetherEngine owns their version
+Plozz's own `Package.swift` declares **only** AetherEngine for this stack;
+FFmpegBuild, LibDovi and LibTrueHD are its transitive dependencies (AetherEngine owns their version
 alignment). The concrete pins live in the committed root `Package.resolved`.
 `tools/generate-project.sh` copies that canonical lock into generated Xcode
 projects at
 `Plozz.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
 
+## Engine linkage and LibTrueHD
+
+The pinned fork exports AetherEngine dynamically to separate its two Rust decoder
+runtimes from Plozz's Objective-C/C++ unwind table. Both apps embed and sign
+`AetherEngine.framework`; FFmpeg remains in separate dynamic frameworks.
+
+[LibTrueHD 2.2.0](https://github.com/superuser404notfound/LibTrueHD/tree/2.2.0)
+is linked into the engine even when its object-audio mode is off. Its C API and
+Apple packaging are MIT, copyright Quick104 and Vincent Herbst; the compiled
+truehd and oamd crates are Apache-2.0, copyright Rainbaby and contributors.
+Both apps ship its unmodified `LICENSE`, `LICENSE-APACHE` and `NOTICE` as
+`LibTrueHDLicense.txt`, `LibTrueHDApacheLicense.txt` and `LibTrueHDNotices.txt`.
+The shared acknowledgements page credits the library and exact source tag.
+
 ## FFmpeg license facts
 
-Upstream FFmpeg `libav*` is LGPL-2.1-or-later; FFmpegBuild ships an **LGPL-3.0**
-decode-only build (its `LICENSE` is GNU LGPL v3, and its README states
-"LGPL-3.0, same as upstream FFmpeg. App Store compatible when linked
-dynamically"). The build is scoped to demux + decode + a thin HLS-fMP4 mux for
+Upstream FFmpeg `libav*` and FFmpegBuild 3.7.0 are **LGPL-2.1-or-later**.
+The build enables neither `--enable-gpl` nor `--enable-version3`; the exact
+component licenses and notices live in the release's `LICENSES/` directory.
+The build is scoped to demux + decode + a thin HLS-fMP4 mux for
 the AVPlayer bridge — **no CLI binaries, no network/protocol stack, and no GPL
 or nonfree components** — so there is no GPL/nonfree taint to redistribution.
 
 ## LGPL obligations (what Plozz must satisfy to ship)
 
-LGPL-3.0 is App-Store-compatible but imposes **relink**, **source-offer**, and
+The bundled LGPL libraries impose **relink**, **source-offer**, and
 **attribution** duties:
 
 1. **Dynamic-link / relink ability.** FFmpeg is distributed as xcframeworks
@@ -61,7 +75,7 @@ LGPL-3.0 is App-Store-compatible but imposes **relink**, **source-offer**, and
 3. **Attribution + license texts.** The in-app **Settings → Acknowledgements**
    screen (`FeatureSettings/IntegrationsDetailView.swift`, `AttributionsDetailView`)
    credits FFmpeg, libdovi, and the other bundled components. Ship FFmpeg's
-   LGPL-3.0 license text (and any bundled dependency notices) there and/or in a
+   LGPL-2.1 license text (and any bundled dependency notices) there and/or in a
    `THIRD_PARTY_LICENSES` file in the bundle.
 4. **No GPL/nonfree creep.** Keep the FFmpeg build decode-only: never adopt a
    `--enable-gpl` / `--enable-nonfree` FFmpeg (no x264/x265, etc.). This is owned
@@ -75,7 +89,7 @@ build is clean LGPL (no GPL, no nonfree):
 ```bash
 # In the built FFmpeg framework (SwiftPM checkout / DerivedData artifact):
 grep -E 'define (FFMPEG_LICENSE|CONFIG_NONFREE|CONFIG_GPL|CONFIG_VERSION3) ' <path>/config.h
-# Expect: FFMPEG_LICENSE "LGPL version 3 or later", CONFIG_NONFREE 0, CONFIG_GPL 0
+# Expect: FFMPEG_LICENSE "LGPL version 2.1 or later", CONFIG_NONFREE 0, CONFIG_GPL 0, CONFIG_VERSION3 0
 ```
 
 Authoritative build details (FFmpeg version, configure flags, dependency

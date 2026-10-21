@@ -2,6 +2,7 @@
 import SwiftUI
 import PlozzCoreUI
 import CoreModels
+import MetadataKit
 
 /// The Cast tab's card: a row of the people on screen.
 ///
@@ -12,6 +13,24 @@ import CoreModels
 /// fixed stage that the reveal transform moves as a unit, so anything that
 /// changed its height would make the whole transport jump.
 struct CastPanelView: View {
+    static func creditArtworkSource(
+        for item: MediaItem, policy: ArtworkPresentationPolicy
+    ) -> MediaArtworkSource {
+        MediaArtworkSource(
+            item: item, placement: item.kind == .episode ? .seriesPoster : .poster,
+            policy: policy.forArea(.playback)
+        )
+    }
+
+    static func creditArtworkLookup(for item: MediaItem, router: ArtworkRouter = .shared) async -> URL? {
+        await ArtworkSession.artworkResolveLimiter.run {
+            guard !Task.isCancelled else { return nil }
+            return await router.artworkURL(
+                for: item, placements: [item.kind == .episode ? .seriesPoster : .poster]
+            )
+        }
+    }
+
     @Environment(\.playerCardMetrics) private var metrics
     let model: PlayerControlsModel
     @FocusState.Binding var focus: PlayerControls.FocusSlot?
@@ -31,8 +50,8 @@ struct CastPanelView: View {
     @Binding var closeRequest: Int
     /// Whether the card this panel fills is open.
     ///
-    /// Used to shed the row's glass BEFORE the card parks. Every face wears a
-    /// live `glassEffect`, so translating the row off-screen means moving ~20
+    /// Used to shed the row's glass BEFORE the card parks. Realized faces wear a
+    /// live `glassEffect`, so translating the row off-screen means moving their
     /// backdrop blurs over Dolby Vision video — the same per-frame offscreen
     /// cost this player already refuses to pay for shadows, and why leaving from
     /// Cast stuttered while leaving from Info did not, despite identical code.
@@ -431,10 +450,12 @@ struct CastPanelView: View {
                         focused: false,
                         cornerRadius: metrics.panelCornerRadius - 6,
                         focusScale: 1,
-                        pressScale: 0.98
+                        pressScale: 0.98,
+                        mediaGlass: true
                     ))
                     .disabled(isFaceDisabled(index))
                     .focused($focus, equals: .castMember(index))
+                    .accessibilityIdentifier("player-cast-face-\(person.id)")
                     .id(Self.faceID(person))
                     // Its rectangle in the panel's space, so a drill — if this
                     // layout ever grows one — has somewhere to start.
@@ -459,15 +480,9 @@ struct CastPanelView: View {
 
     private var faceRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            // NOT lazy. A LazyHStack builds only what is on screen, and coming
-            // back from a person's details rebuilds this row from offset zero —
-            // so restoring focus to a face you had scrolled to targeted a view
-            // that did not exist yet. With nothing to hold it, the focus engine
-            // fell back to the nearest candidate, the Info tab. That is the
-            // "Back sends me to Info" bug, and why it only happened after
-            // scrolling. Capped at 20 faces, so building them all is cheap —
-            // and the artwork loads lazily regardless.
-            HStack(spacing: metrics.columnSpacing) {
+            // The row stays mounted beneath the detail, retaining its viewport
+            // and return target without realizing every offscreen glass card.
+            LazyHStack(spacing: metrics.columnSpacing) {
                 ForEach(Array(people.enumerated()), id: \.element.id) { index, person in
                     Button { openDetail(person, at: index) } label: {
                         CastFaceCard(
@@ -486,8 +501,10 @@ struct CastPanelView: View {
                         // No depress. This card is what the detail pane grows
                         // out of, and a press that shifts it means the rectangle
                         // the drill starts from moves while Select is held down.
-                        pressScale: 1
+                        pressScale: 1,
+                        mediaGlass: true
                     ))
+                    .frame(width: metrics.castCardWidth, height: metrics.cardHeight)
                     // The source card is not faded with the row — it is
                     // switched off outright, the instant the pane exists.
                     //
@@ -507,6 +524,7 @@ struct CastPanelView: View {
                     // Per-card, so the scroll view is never itself disabled.
                     .disabled(isFaceDisabled(index))
                     .focused($focus, equals: .castMember(index))
+                    .accessibilityIdentifier("player-cast-face-\(person.id)")
                     .id(Self.faceID(person))
                     // Its rectangle in the panel's space, so the drill can grow
                     // out of exactly this card and shrink back into it.
@@ -520,6 +538,7 @@ struct CastPanelView: View {
                     }
                 }
             }
+            .frame(height: metrics.cardHeight)
             // No leading inset: the first card is a panel-level element, so its
             // edge is the panel's edge — flush with the Info tab above it. An
             // inset here made the row start indented from everything else in the
@@ -530,20 +549,13 @@ struct CastPanelView: View {
             // was reserving room for the focus lift, which `scrollClipDisabled`
             // already allows — all it actually did was leave the cards short.
         }
+        // Re-entry must keep the existing viewport, not center the return card
+        // again. Directional scrolling resumes once that card owns native focus.
+        .scrollDisabled(detailPerson != nil || restoringToIndex != nil)
         // The row runs the full width of the card. Clipping at the content inset
         // left the first and last cards visibly sliced while scrolling; the inset
         // above still holds them off the edge at rest.
         .scrollClipDisabled()
-        // No `scrollPosition` binding. It existed to restore the offset across a
-        // teardown that no longer happens — the row is never destroyed — and all
-        // it did afterwards was re-centre a row that was already exactly where
-        // the viewer left it, which is the small nudge on landing.
-        // Put focus back on the face the viewer opened, now that it exists.
-        //
-        // Only when returning, never on first open: the cast tab is entered with
-        // focus on its tab button, and claiming focus here would snatch it away
-        // before the viewer had pressed anything.
-
     }
 }
 
@@ -553,6 +565,7 @@ struct CastPanelView: View {
 /// swaps with, gives focus something substantial to land on, and leaves the
 /// character name room to read from across a room.
 private struct CastFaceCard: View {
+    @Environment(\.playerControlForeground) private var foreground
     @Environment(\.playerCardMetrics) private var metrics
     let person: MediaPerson
     let focused: Bool
@@ -599,7 +612,7 @@ private struct CastFaceCard: View {
                     isFocused: focused,
                     restingAlignment: .center
                 )
-                .foregroundStyle(.white)
+                .foregroundStyle(foreground)
                 if let role = person.role, !role.isEmpty {
                     MarqueeText(
                         text: role,
@@ -607,7 +620,7 @@ private struct CastFaceCard: View {
                         isFocused: focused,
                         restingAlignment: .center
                     )
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(foreground.opacity(0.6))
                 }
             }
             .frame(maxWidth: .infinity)
@@ -633,10 +646,10 @@ private struct CastFaceCard: View {
 
     private var placeholder: some View {
         ZStack {
-            Circle().fill(.white.opacity(0.12))
+            Circle().fill(foreground.opacity(0.12))
             Text(verbatim: initials)
                 .font(.system(size: 38, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(foreground.opacity(0.7))
         }
     }
 
@@ -654,6 +667,7 @@ private struct CastFaceCard: View {
 /// the ~150pt a portrait card could offer — so it reads in full instead of
 /// needing the marquee the card resorts to.
 private struct CastListRow: View {
+    @Environment(\.playerControlForeground) private var foreground
     @Environment(\.playerCardMetrics) private var metrics
     let person: MediaPerson
 
@@ -666,12 +680,12 @@ private struct CastListRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(person.name)
                     .font(metrics.castNameFont)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(foreground)
                     .lineLimit(1)
                 if let role = person.role, !role.isEmpty {
                     Text(role)
                         .font(metrics.castRoleFont)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(foreground.opacity(0.6))
                         .lineLimit(1)
                 }
             }
@@ -681,6 +695,7 @@ private struct CastListRow: View {
         .padding(.horizontal, 10)
         .frame(height: metrics.castRowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: metrics.panelCornerRadius - 6))
         // Surface comes from PlayerOverVideoCardStyle, exactly as the face
         // cards' does.
     }
@@ -688,6 +703,7 @@ private struct CastListRow: View {
 
 /// A person's headshot, or their initials when there is no photo.
 private struct CastAvatar: View {
+    @Environment(\.playerControlForeground) private var foreground
     let person: MediaPerson
 
     var body: some View {
@@ -700,10 +716,10 @@ private struct CastAvatar: View {
 
     private var placeholder: some View {
         ZStack {
-            Circle().fill(.white.opacity(0.12))
+            Circle().fill(foreground.opacity(0.12))
             Text(verbatim: initials)
                 .font(.system(size: 38, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(foreground.opacity(0.7))
                 .minimumScaleFactor(0.4)
         }
     }
@@ -720,6 +736,7 @@ private struct CastAvatar: View {
 /// elsewhere would end the film, which is the one thing a glance mid-scene must
 /// never do.
 private struct CastMemberDetail: View {
+    @Environment(\.playerControlForeground) private var foreground
     @Environment(\.playerCardMetrics) private var metrics
     let person: MediaPerson
     let loader: PlayerCastDetailLoading?
@@ -807,7 +824,11 @@ private struct CastMemberDetail: View {
             Button(action: onBack) {
                 Image(systemName: "chevron.backward")
             }
+            #if os(iOS)
+            .playerTouchPanelAction()
+            #else
             .buttonStyle(PlozzPanelHeaderButtonStyle())
+            #endif
             .focusEffectDisabled()
             .focused($focus, equals: .castBack)
             .opacity(contentVisible ? 1 : 0)
@@ -827,7 +848,7 @@ private struct CastMemberDetail: View {
         // attached to the finished card, not to what goes in it. The vertical
         // body had no surface at all for the same reason.
         .background {
-            PlayerOverVideoSurface(cornerRadius: metrics.panelCornerRadius)
+            PlayerOverVideoSurface(cornerRadius: metrics.panelCornerRadius, mediaGlass: true)
         }
         // Keyed on the person: switching between two faces without leaving the
         // detail has to re-ask, and re-asking must not show the previous
@@ -851,12 +872,12 @@ private struct CastMemberDetail: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: person.name)
                         .font(metrics.titleFont)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(foreground)
                         .lineLimit(1)
                     if let role = person.role, !role.isEmpty {
                         Text(verbatim: role)
                             .font(metrics.castRoleFont)
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(foreground.opacity(0.6))
                             .lineLimit(1)
                     }
                 }
@@ -904,7 +925,11 @@ private struct CastMemberDetail: View {
                             }
                             .font(.system(size: 13, weight: .medium))
                         }
+                        #if os(iOS)
+                        .playerTouchPanelAction()
+                        #else
                         .buttonStyle(PlozzPanelHeaderButtonStyle())
+                        #endif
                         .focusEffectDisabled()
                         .focused($focus, equals: .castMore)
                     }
@@ -1055,7 +1080,7 @@ private struct CastMemberDetail: View {
             if let biography = detail?.biography, !biography.isEmpty {
                 Text(verbatim: biography)
                     .font(metrics.bodyFont)
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(foreground.opacity(0.82))
                     .lineSpacing(2)
                     // As many lines as the column has room for; with no rail
                     // beside it there is the whole pane to fill.
@@ -1077,7 +1102,7 @@ private struct CastMemberDetail: View {
                     comment: "Shown in the in-player cast card when no source has a biography or other titles for this person."
                 ))
                 .font(metrics.bodyFont)
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(foreground.opacity(0.5))
                 .padding(.top, 12)
             } else if let life = detail?.lifeSummary, !life.isEmpty {
                 // ONLY when there is no biography. A biography's first
@@ -1087,7 +1112,7 @@ private struct CastMemberDetail: View {
                 // them, and Plex often has it when it has nothing else.
                 Text(verbatim: life)
                     .font(metrics.bodyFont)
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(foreground.opacity(0.72))
                     .lineLimit(2)
                     .padding(.top, 12)
             }
@@ -1135,7 +1160,7 @@ private struct CastMemberDetail: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(verbatim: person.name)
                     .font(metrics.titleFont)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(foreground)
                     .lineLimit(2)
                     // The name holds its size. It is the heading of this pane,
                     // and shrinking it to buy room for a supporting line got the
@@ -1173,7 +1198,11 @@ private struct CastMemberDetail: View {
                         }
                         .font(metrics.captionFont)
                     }
+                    #if os(iOS)
+                    .playerTouchPanelAction()
+                    #else
                     .buttonStyle(PlozzPanelHeaderButtonStyle())
+                    #endif
                     .focusEffectDisabled()
                     .focused($focus, equals: .castMore)
                     // Right returns to Back, explicitly.
@@ -1231,7 +1260,7 @@ private struct CastMemberDetail: View {
     }
 
     private var placeholder: some View {
-        Circle().fill(.white.opacity(0.12))
+        Circle().fill(foreground.opacity(0.12))
     }
 }
 
@@ -1246,6 +1275,7 @@ private struct CastMemberDetail: View {
 /// Not focusable, by design. Nothing in this card may end the film.
 private struct CastCreditsRow: View {
     @Environment(\.playerCardMetrics) private var metrics
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
     /// Whether an unowned credit here can be requested or is only flagged.
     @Environment(\.plozzSeerConnected) private var seerConnected
     let items: [MediaItem]
@@ -1421,7 +1451,8 @@ private struct CastCreditsRow: View {
                 .buttonStyle(PlayerOverVideoCardStyle(
                     focused: isFocused,
                     cornerRadius: cornerRadius,
-                    focusScale: Self.focusScale
+                    focusScale: Self.focusScale,
+                    mediaGlass: true
                 ))
                 .focused($focus, equals: .castCredit(index))
                 .accessibilityLabel(Text(verbatim: item.title))
@@ -1435,15 +1466,14 @@ private struct CastCreditsRow: View {
 
     @ViewBuilder
     private func poster(for item: MediaItem) -> some View {
-        let references = item.artworkReferences(
-            for: item.kind == .episode ? .seriesPoster : .poster
-        )
-        if references.isEmpty {
+        let source = CastPanelView.creditArtworkSource(for: item, policy: artworkPolicy)
+        FallbackAsyncImage(
+            references: source.references, variant: .posterCard,
+            artworkPolicy: source.policy,
+            asyncFallbackURL: { await CastPanelView.creditArtworkLookup(for: item) },
+            pinIdentity: source.itemIdentity
+        ) {
             titleTile(item)
-        } else {
-            FallbackAsyncImage(references: references, variant: .posterCard) {
-                titleTile(item)
-            }
         }
     }
 
@@ -1562,7 +1592,7 @@ private struct CastPhotoFrameKey: PreferenceKey {
     }
 }
 
-private struct CastCardFrameKey: PreferenceKey {
+struct CastCardFrameKey: PreferenceKey {
     static let defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue()) { _, new in new }
@@ -1574,6 +1604,7 @@ private struct CastCardFrameKey: PreferenceKey {
 /// Sized by the row that owns it rather than by its own constants, so it cannot
 /// drift from the poster that replaces it.
 private struct CastCreditPlaceholderTile: View {
+    @Environment(\.playerControlForeground) private var foreground
     let width: CGFloat
     let height: CGFloat
     let cornerRadius: CGFloat
@@ -1585,7 +1616,7 @@ private struct CastCreditPlaceholderTile: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(.white.opacity(dim ? 0.05 : 0.11))
+            .fill(foreground.opacity(dim ? 0.05 : 0.11))
             .frame(width: width, height: height)
             .animation(
                 .easeInOut(duration: 0.9).repeatForever(autoreverses: true).delay(delay),

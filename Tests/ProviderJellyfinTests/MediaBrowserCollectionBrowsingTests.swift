@@ -29,6 +29,12 @@ final class MediaBrowserCollectionBrowsingTests: XCTestCase {
             let libraries = try await provider.libraries()
             XCTAssertEqual(libraries.map(\.id), ["boxsets"])
             XCTAssertEqual(libraries.map(\.kind), [.collection])
+            XCTAssertFalse(libraries[0].isServerCollectionDirectory)
+            XCTAssertEqual(libraries[0].hasCollections, true)
+            XCTAssertEqual(http.sentPaths, ["/Users/user/Views", "/Users/user/Items"])
+            let existenceQuery = try XCTUnwrap(http.queryItems(forPathSuffix: "/Users/user/Items"))
+            XCTAssertTrue(existenceQuery.contains(URLQueryItem(name: "Limit", value: "1")))
+            XCTAssertTrue(existenceQuery.contains(URLQueryItem(name: "ParentId", value: "boxsets")))
             let page = try await provider.items(
                 in: "boxsets", kind: .collection, page: PageRequest(startIndex: 60, limit: 1)
             )
@@ -62,6 +68,9 @@ final class MediaBrowserCollectionBrowsingTests: XCTestCase {
             XCTAssertTrue(query.contains(URLQueryItem(name: "Recursive", value: "false")))
             XCTAssertTrue(query.contains(URLQueryItem(name: "StartIndex", value: "60")))
             XCTAssertTrue(query.contains(URLQueryItem(name: "Limit", value: "3")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "EnableUserData", value: "true")))
+            XCTAssertTrue(try XCTUnwrap(query.first { $0.name == "Fields" }?.value)
+                .split(separator: ",").contains("UserData"))
             XCTAssertFalse(query.contains { ["SortBy", "SortOrder", "IncludeItemTypes"].contains($0.name) })
         }
     }
@@ -81,6 +90,27 @@ final class MediaBrowserCollectionBrowsingTests: XCTestCase {
             } catch {
                 XCTAssertEqual(error as? AppError, .unauthorized)
             }
+        }
+    }
+
+    func testCollectionMembersPreserveUserEpisodeCountsWithoutAdditionalRequests() async throws {
+        for kind: ProviderKind in [.jellyfin, .emby] {
+            let http = StubHTTPClient()
+            http.stub(pathSuffix: "/Users/user/Items", json: """
+            {"Items":[
+              {"Id":"seen","Name":"Seen","Type":"Series","UserData":{"Played":true,"UnplayedItemCount":0}},
+              {"Id":"zero","Name":"Zero","Type":"Series","UserData":{"UnplayedItemCount":0}},
+              {"Id":"partial","Name":"Partial","Type":"Series","ChildCount":2,"UserData":{"UnplayedItemCount":18}},
+              {"Id":"movie","Name":"Movie","Type":"Movie","UserData":{"Played":true,"PlaybackPositionTicks":200000000}}
+            ],"TotalRecordCount":4}
+            """)
+            let result = try await provider(kind, http).collectionMembers(of: "set", page: PageRequest())
+            XCTAssertEqual(result.items.map(\.unwatchedEpisodeCount), [0, 0, 18, nil])
+            XCTAssertTrue(result.items[0].isPlayed)
+            XCTAssertFalse(result.items[2].isPlayed)
+            XCTAssertFalse(result.items[3].isPlayed, "A resumed rewatch must keep its in-progress state.")
+            XCTAssertEqual(result.items[3].resumePosition, 20)
+            XCTAssertEqual(http.sentPaths, ["/Users/user/Items"], "The request must use the session's server user.")
         }
     }
 }

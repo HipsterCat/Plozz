@@ -9,8 +9,13 @@ struct PlozziOSDownloadsView: View {
     @Bindable var model: PlozziOSDownloadsModel
     let appModel: PlozziOSAppModel
     let onShowSettings: () -> Void
+    // Only the rebuilt stack may consume the tap; the retiring view must not race it.
+    var notificationPresentationID: UUID?
 
     @State private var pendingBulkDeletion: PlozziOSDownloadsBulkDeletion?
+    @State private var notificationDestination: PlozziOSDownloadNotificationDestination?
+    @State private var selectedShowID: String?
+    @State private var detailNav: PlozziOSDownloadDetailNav?
 
     var body: some View {
         let library = model.library
@@ -34,6 +39,38 @@ struct PlozziOSDownloadsView: View {
             }
         }
         .navigationTitle("Downloads")
+        .task { await model.refreshArtwork() }
+        .task(id: notificationPresentationID) {
+            let navigation = PlozziOSDownloadNotificationNavigation.shared
+            guard let notificationPresentationID,
+                  navigation.presentation?.id == notificationPresentationID,
+                  appModel.isActiveProfileAuthorized,
+                  let destination = navigation.claimDestination(
+                profileID: appModel.profiles.activeProfileID
+            ) else { return }
+            notificationDestination = destination == .library ? nil : destination
+        }
+        .navigationDestination(item: $notificationDestination) { destination in
+            notificationPage(destination)
+        }
+        .navigationDestination(item: $selectedShowID) { showID in
+            PlozziOSDownloadedShowView(showID: showID, model: model, appModel: appModel)
+        }
+        .navigationDestination(item: $detailNav) { nav in
+            if let provider = appModel.provider(for: nav.item) {
+                PlozziOSItemDetailView(
+                    appModel: appModel, provider: provider, item: nav.item,
+                    seerService: appModel.seerService
+                )
+            } else {
+                ContentUnavailableView(
+                    "Server unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("This title's server is no longer connected.")
+                )
+            }
+        }
+        .toolbarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -76,107 +113,107 @@ struct PlozziOSDownloadsView: View {
         }
     }
 
+    @ViewBuilder
+    private func notificationPage(_ destination: PlozziOSDownloadNotificationDestination) -> some View {
+        switch destination {
+        case .library:
+            EmptyView()
+        case let .show(id, seasonID):
+            PlozziOSDownloadedShowView(
+                showID: id, model: model, appModel: appModel, initialSeasonID: seasonID
+            )
+        case let .item(identityKey, createdAt):
+            if let record = model.records.first(where: {
+                $0.identityKey == identityKey && $0.createdAt == createdAt && $0.status == .completed
+            }), let item = model.playbackItem(for: record) {
+                if let provider = appModel.provider(for: item) {
+                    PlozziOSItemDetailView(
+                        appModel: appModel, provider: provider, item: item,
+                        seerService: appModel.seerService,
+                        originSourceAccountID: item.sourceAccountID,
+                        presentsEpisodeAsSubject: item.kind == .episode
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "Server unavailable",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("This title's server is no longer connected.")
+                    )
+                }
+            } else {
+                unavailableNotificationPage
+            }
+        case .unavailable:
+            unavailableNotificationPage
+        }
+    }
+
+    private var unavailableNotificationPage: some View {
+        ContentUnavailableView(
+            "Downloads Unavailable",
+            systemImage: "arrow.down.circle",
+            description: Text("This download has been removed or replaced.")
+        )
+    }
+
     private func libraryList(_ library: PlozziOSDownloadLibrary) -> some View {
         GeometryReader { proxy in
-            ScrollView {
-                VStack(spacing: 16) {
-                    if model.hasActiveTransfers {
-                        activeTransfersHeader
-                    }
-                    LazyVGrid(
-                        columns: Self.columns(for: proxy.size.width),
-                        spacing: 20
-                    ) {
-                        ForEach(library.entries) { entry in
-                            switch entry {
-                            case let .movie(movie):
-                                movieTile(movie)
-                            case let .show(show):
-                                showTile(show)
-                            }
-                        }
+            List {
+                if model.hasActiveTransfers {
+                    activeTransfersHeader
+                        .labelStyle(.titleAndIcon)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(
+                            top: 6, leading: max(20, (proxy.size.width - 900) / 2),
+                            bottom: 10, trailing: max(20, (proxy.size.width - 900) / 2)
+                        ))
+                }
+                ForEach(library.entries) { entry in
+                    switch entry {
+                    case let .movie(movie):
+                        movieRow(movie)
+                    case let .show(show):
+                        showRow(show)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(
+                    top: 6, leading: max(20, (proxy.size.width - 900) / 2),
+                    bottom: 6, trailing: max(20, (proxy.size.width - 900) / 2)
+                ))
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
     }
 
     private var activeTransfersHeader: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Active downloads: \(model.activeTransfers.count.formatted())")
-                    .font(.headline)
-                activeTransferSummary
-                    .font(.caption)
-                    .plozzForeground(.secondary)
-            }
-            Spacer()
-            if model.activeTransfers.contains(where: {
-                $0.status == .downloading
-                    || $0.status == .preparing
-                    || $0.status == .queued
-            }) {
-                Button("Pause All", systemImage: "pause.fill") {
-                    Task { await model.pauseAllActive() }
-                }
-            } else {
-                Button("Resume All", systemImage: "play.fill") {
-                    Task { await model.resumeAllPaused() }
+        let isRunning = model.activeTransfers.contains {
+            $0.status == .downloading || $0.status == .preparing || $0.status == .queued
+        }
+        return PlozziOSActiveDownloadsSummary(
+            count: model.activeTransfers.count,
+            isRunning: isRunning,
+            bytesPerSecond: model.aggregateBytesPerSecond,
+            remaining: model.aggregateETA,
+            limitDescription: model.activeLimitDescription
+        ) {
+            Task {
+                if isRunning {
+                    await model.pauseAllActive()
+                } else {
+                    await model.resumeAllPaused()
                 }
             }
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var activeTransferSummary: Text {
-        var parts = [Text(model.activeLimitDescription)]
-        if model.aggregateBytesPerSecond > 0 {
-            parts.insert(
-                Text(
-                    verbatim: model.aggregateBytesPerSecond
-                        .formatted(.byteCount(style: .file)) + "/s"
-                ),
-                at: 0
-            )
-        }
-        if let eta = model.aggregateETA {
-            let duration = Duration.seconds(eta).formatted(
-                .units(
-                    allowed: [.hours, .minutes],
-                    width: .abbreviated,
-                    maximumUnitCount: 2
-                )
-            )
-            parts.append(
-                Text("\(duration) remaining")
-            )
-        }
-        return parts.dropFirst().reduce(parts[0]) {
-            $0 + Text(verbatim: " • ") + $1
-        }
-    }
-
-    /// Landscape download tiles: one column on a compact phone, two on an iPad in
-    /// portrait, three on a wide iPad — using the real estate the old full-width
-    /// rows left empty.
-    private static func columns(for width: CGFloat) -> [GridItem] {
-        let count: Int
-        switch width {
-        case ..<560: count = 1
-        case ..<1100: count = 2
-        default: count = 3
-        }
-        return Array(repeating: GridItem(.flexible(), spacing: 20), count: count)
     }
 
     @ViewBuilder
-    private func movieTile(_ movie: PlozziOSDownloadedMovie) -> some View {
+    private func movieRow(_ movie: PlozziOSDownloadedMovie) -> some View {
         let record = movie.record
-        tileCard(
+        DownloadCompactCard(
             menu: {
                 transferMenuActions(for: record)
                 Button("Remove", systemImage: "trash", role: .destructive) {
@@ -185,11 +222,13 @@ struct PlozziOSDownloadsView: View {
             },
             accessibilityTitle: record.snapshot.title
         ) {
-            DownloadRowLink(record: record, model: model, appModel: appModel) {
-                DownloadTileContent(
+            DownloadRowButton(record: record, model: model, appModel: appModel, open: {
+                detailNav = PlozziOSDownloadDetailNav(item: $0)
+            }) {
+                DownloadRowContent(
                     title: record.snapshot.title,
                     subtitle: DownloadFormatting.status(for: record),
-                    subtitleColor: DownloadFormatting.statusColor(for: record),
+                    status: record.status,
                     fraction: DownloadFormatting.activeFraction(for: record),
                     failure: DownloadFormatting.failure(for: record),
                     artworkURL: model.artworkURL(for: record),
@@ -201,65 +240,38 @@ struct PlozziOSDownloadsView: View {
     }
 
     @ViewBuilder
-    private func showTile(_ show: PlozziOSDownloadedShow) -> some View {
-        tileCard(
+    private func showRow(_ show: PlozziOSDownloadedShow) -> some View {
+        DownloadCompactCard(
             menu: {
+                if show.records.contains(where: { $0.status.isActive }) {
+                    Button("Pause Show", systemImage: "pause.fill") {
+                        Task { await model.pause(show.records) }
+                    }
+                } else if show.records.contains(where: { $0.status == .paused || $0.status == .failed }) {
+                    Button("Resume Show", systemImage: "play.fill") {
+                        Task { await model.resume(show.records) }
+                    }
+                }
                 Button("Remove", systemImage: "trash", role: .destructive) {
                     pendingBulkDeletion = .show(show)
                 }
             },
             accessibilityTitle: show.title
         ) {
-            NavigationLink {
-                PlozziOSDownloadedShowView(
-                    showID: show.id,
-                    model: model,
-                    appModel: appModel
-                )
+            Button {
+                selectedShowID = show.id
             } label: {
-                DownloadTileContent(
+                DownloadRowContent(
                     title: show.title,
-                    subtitle: Text(DownloadFormatting.showSubtitle(
-                        episodeCount: show.episodeCount,
-                        seasonCount: show.seasons.count,
-                        bytes: show.totalBytes
-                    )),
-                    subtitleColor: .secondary,
-                    fraction: nil,
-                    failure: nil,
+                    subtitle: DownloadFormatting.status(for: show),
+                    status: show.status,
+                    fraction: show.status.isActive ? show.fractionCompleted : nil,
+                    failure: show.records.first { $0.status == .failed }?.failureReason,
                     artworkURL: show.artworkRecord.flatMap(model.artworkURL(for:)),
                     kind: .series
                 )
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    /// Wraps a tile's navigation link with a "⋯" actions menu placed in the same
-    /// top-leading slot the detail-page episode cards use, plus a matching
-    /// long-press context menu. The menu is a sibling *above* the link so its taps
-    /// never trigger navigation.
-    @ViewBuilder
-    private func tileCard<Menu: View, Card: View>(
-        @ViewBuilder menu: () -> Menu,
-        accessibilityTitle: String,
-        @ViewBuilder card: () -> Card
-    ) -> some View {
-        let menuContent = menu()
-        ZStack(alignment: .topLeading) {
-            card()
-                .contextMenu { menuContent }
-            SwiftUI.Menu {
-                menuContent
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-            }
-            .padding(4)
-            .accessibilityLabel("More actions for \(accessibilityTitle)")
         }
     }
 
@@ -358,47 +370,60 @@ struct PlozziOSDownloadsStorageBar: View {
 /// and show rows read identically.
 enum DownloadFormatting {
     static func status(for record: DownloadedMediaRecord) -> Text {
-        let base: Text
-        switch record.status {
-        case .queued: base = Text("Queued")
-        case .preparing:
-            if let fraction = record.preparationFraction {
-                base = Text("Preparing on server ") + Text(
-                    fraction,
-                    format: .percent.precision(.fractionLength(0))
-                )
-            } else {
-                base = Text("Preparing on server")
-            }
-        case .downloading:
-            if let fraction = record.fractionCompleted {
-                base = Text(
-                    fraction,
-                    format: .percent.precision(.fractionLength(0))
-                )
-            } else {
-                base = Text("Downloading")
-            }
-        case .paused: base = Text("Paused")
-        case .completed:
-            base = Text("Available offline • \(byteText(record.bytesDownloaded))")
-        case .failed: base = Text("Failed")
-        }
-        // Several versions of one title can now be downloaded side by side, so
-        // the row has to say WHICH file it is or two entries look identical.
-        // The label is pinned at download time because the server's version list
-        // isn't reachable offline.
+        let base = status(
+            record.status, fraction: record.fractionCompleted,
+            preparationFraction: record.preparationFraction,
+            summary: Text(verbatim: byteText(record.bytesDownloaded))
+        )
+        // Version labels are pinned so two offline copies remain distinguishable.
         guard let version = record.versionLabel, !version.isEmpty else {
             return base
         }
         return Text(verbatim: "\(version) • ") + base
     }
 
-    static func statusColor(for record: DownloadedMediaRecord) -> Color {
-        switch record.status {
-        case .completed: .green
-        case .failed: .red
-        default: .secondary
+    static func status(for show: PlozziOSDownloadedShow) -> Text {
+        let summary = Text(showSubtitle(
+            episodeCount: show.episodeCount,
+            seasonCount: show.seasons.count,
+            bytes: show.totalBytes
+        ))
+        let base = status(
+            show.status, fraction: show.fractionCompleted,
+            preparationFraction: show.fractionCompleted, summary: summary
+        )
+        return show.status == .completed ? base : base + Text(verbatim: " • ") + summary
+    }
+
+    private static func status(
+        _ status: DownloadStatus,
+        fraction: Double?,
+        preparationFraction: Double?,
+        summary: Text
+    ) -> Text {
+        switch status {
+        case .queued: return Text("Queued")
+        case .preparing:
+            if let fraction = preparationFraction {
+                return Text("Preparing on server ") + Text(
+                    fraction,
+                    format: .percent.precision(.fractionLength(0))
+                )
+            } else {
+                return Text("Preparing on server")
+            }
+        case .downloading:
+            if let fraction {
+                return Text(
+                    fraction,
+                    format: .percent.precision(.fractionLength(0))
+                )
+            } else {
+                return Text("Downloading")
+            }
+        case .paused: return Text("Paused")
+        case .completed: return summary
+        case .failed: return Text("Failed")
         }
     }
 
@@ -442,24 +467,20 @@ enum DownloadFormatting {
     }
 }
 
-/// Wraps row content in a detail-page link when the record maps back to a live
+/// Opens details when the record maps back to a live
 /// provider item; otherwise shows the content inert (e.g. a stale source).
-struct DownloadRowLink<Content: View>: View {
+struct DownloadRowButton<Content: View>: View {
     let record: DownloadedMediaRecord
     let model: PlozziOSDownloadsModel
     let appModel: PlozziOSAppModel
+    let open: (MediaItem) -> Void
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         if let item = model.playbackItem(for: record) ?? model.detailItem(for: record),
-           let provider = appModel.provider(for: item) {
-            NavigationLink {
-                PlozziOSItemDetailView(
-                    appModel: appModel,
-                    provider: provider,
-                    item: item,
-                    seerService: appModel.seerService
-                )
+           appModel.provider(for: item) != nil {
+            Button {
+                open(item)
             } label: {
                 content()
             }
@@ -470,166 +491,254 @@ struct DownloadRowLink<Content: View>: View {
 }
 
 struct DownloadRowContent: View {
-    /// Media title and a formatted status line — both provider/derived content.
-    let title: String   // l10n:content — media title from the server
-    let subtitle: Text
-    let subtitleColor: Color
-    let fraction: Double?
-    let failure: String?
-    let artworkURL: URL?
-    let kind: MediaItemKind
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            DownloadArtwork(url: artworkURL, kind: kind)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(2)
-                subtitle
-                    .font(.caption)
-                    .foregroundStyle(subtitleColor)
-                if let fraction {
-                    ProgressView(value: fraction)
-                }
-                if let failure {
-                    Text(failure)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-    }
-}
-
-/// A landscape download tile that shares the app's media-card chrome: the same
-/// concentric framed surface (`plozzFramedMediaCard`), media edge, corner radius,
-/// and caption insets the Home landscape library cards and detail episode cards
-/// use — so downloads read as first-class cards, not a bespoke list.
-struct DownloadTileContent: View {
-    @Environment(\.plozzCardStyle) private var cardStyle
-    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.themePalette) private var palette
     /// Media title and a formatted status line — both provider/derived content.
     let title: String   // l10n:content — media title from the server
     let subtitle: Text
-    let subtitleColor: Color
+    let status: DownloadStatus
     let fraction: Double?
     let failure: String?
     let artworkURL: URL?
     let kind: MediaItemKind
 
-    @ViewBuilder
     var body: some View {
-        if cardStyle == .framed {
-            content
-                .plozzFramedMediaCard(
-                    innerCornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
-                )
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+        HStack(alignment: .top, spacing: 12) {
+            if !dynamicTypeSize.isAccessibilitySize {
+                DownloadArtwork(url: artworkURL, kind: kind)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .foregroundStyle(palette.primaryText)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if status == .completed {
+                        Image(systemName: MediaDownloadBadge.completedSystemImage)
+                            .accessibilityLabel("Downloaded")
+                    }
+                    subtitle
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption)
+                .foregroundStyle(status == .failed ? palette.errorText : palette.secondaryText)
+                .accessibilityElement(children: .combine)
+                if let fraction {
+                    ProgressView(value: fraction)
+                        .tint(ThemePalette.brandBlue)
+                        .accessibilityHidden(true)
+                }
+                if let failure {
+                    Text(failure)
+                        .font(.caption)
+                        .foregroundStyle(palette.errorText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+}
+
+struct DownloadCompactCard<MenuContent: View, Card: View>: View {
+    @Environment(\.plozzCardStyle) private var cardStyle
+    @Environment(\.themePalette) private var palette
+    @ViewBuilder var menu: () -> MenuContent
+    let accessibilityTitle: String // l10n:content - pinned media title.
+    @ViewBuilder var card: () -> Card
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 0) {
+            card()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contextMenu { menu() }
+            Menu {
+                menu()
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(palette.secondaryText)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("More actions for \(accessibilityTitle)")
+        }
+        .modifier(DownloadCompactCardSurface(isFramed: cardStyle == .framed))
+    }
+}
+
+private struct DownloadCompactCardSurface: ViewModifier {
+    @Environment(\.plozzMetrics) private var metrics
+    let isFramed: Bool
+
+    func body(content: Content) -> some View {
+        if isFramed {
+            content.plozzFramedMediaCard(innerCornerRadius: 8, glassAtRest: false)
+                // The frame surrounds the row without shifting its artwork off the list's content edge.
+                .padding(.horizontal, -metrics.cardInset)
         } else {
             content
         }
     }
+}
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: metrics.landscapeCaptionTopSpacing) {
-            artwork
-                .frame(maxWidth: .infinity)
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .overlay { cornerScrim }
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
-                        style: .continuous
-                    )
-                )
-                .plozzMediaEdge(
-                    cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
-                )
-                .overlay(alignment: .bottom) { progressOverlay }
+struct PlozziOSActiveDownloadsSummary: View {
+    let count: Int
+    let isRunning: Bool
+    let bytesPerSecond: Int64
+    let remaining: TimeInterval?
+    let limitDescription: LocalizedStringResource
+    let onToggle: () -> Void
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .foregroundStyle(palette.primaryText)
-                subtitle
-                    .font(.caption)
-                    .foregroundStyle(subtitleColor)
-                    .lineLimit(1)
-                if let failure {
-                    Text(failure)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    title.fixedSize(horizontal: true, vertical: true)
+                    Spacer(minLength: 0)
+                    toggleButton.fixedSize(horizontal: true, vertical: true)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    title
+                    toggleButton
                 }
             }
-            .padding(.horizontal, metrics.landscapeCaptionInset)
-            .padding(
-                .bottom,
-                cardStyle == .framed ? metrics.landscapeCaptionInset : 0
-            )
+            Divider()
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    speed
+                    limit
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 16) {
+                    speed
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    limit
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+            if isRunning, let remaining {
+                let duration = Duration.seconds(remaining).formatted(
+                    .units(allowed: [.hours, .minutes], width: .abbreviated, maximumUnitCount: 2)
+                        .locale(locale)
+                )
+                Label {
+                    Text("\(duration) remaining")
+                        .monospacedDigit()
+                } icon: {
+                    Image(systemName: "clock")
+                }
+                .font(.caption)
+                .plozzForeground(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .contentShape(Rectangle())
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private var artwork: some View {
-        DownloadLocalArtwork(url: artworkURL) {
-            ZStack {
-                Color.secondary.opacity(0.12)
-                Image(systemName: fallbackSymbol)
-                    .font(.largeTitle)
-                    .plozzForeground(.secondary)
+    private var title: some View {
+        Text("Active downloads: \(count.formatted(.number.locale(locale)))")
+            .font(.headline)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var toggleButton: some View {
+        Button(action: onToggle) {
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    toggleLabel.labelStyle(.titleOnly)
+                } else {
+                    toggleLabel
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+    }
+
+    private var toggleLabel: some View {
+        Group {
+            if isRunning {
+                Label("Pause All", systemImage: "pause.fill")
+            } else {
+                Label("Resume All", systemImage: "play.fill")
             }
         }
     }
 
-    /// A corner-anchored legibility scrim: dark at the top-leading corner (behind
-    /// the "⋯" menu) fading to clear by roughly the middle of the artwork —
-    /// similar to the detail episode card's gradient, but only where the menu sits
-    /// so most of the image stays untouched.
-    private var cornerScrim: some View {
-        GeometryReader { proxy in
-            RadialGradient(
-                colors: [.black.opacity(0.5), .clear],
-                center: .topLeading,
-                startRadius: 0,
-                endRadius: max(proxy.size.width, proxy.size.height) * 0.55
-            )
-            .allowsHitTesting(false)
+    private var speed: some View {
+        Group {
+            if isRunning, bytesPerSecond > 0 {
+                Text(verbatim: bytesPerSecond.formatted(.byteCount(style: .file).locale(locale)) + "/s")
+            } else if isRunning {
+                Text("In Progress")
+            } else {
+                Text("Paused")
+            }
         }
+        .font(.title3.weight(.semibold))
+        .monospacedDigit()
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    @ViewBuilder
-    private var progressOverlay: some View {
-        if let fraction {
-            ProgressView(value: fraction)
-                .tint(palette.accent)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-                .background(
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.55)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-        }
+    private var limit: some View {
+        Text(limitDescription)
+            .font(.caption)
+            .plozzForeground(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
+}
 
-    private var fallbackSymbol: String {
-        switch kind {
-        case .episode, .series, .season:
-            return "tv"
-        case .movie, .video:
-            return "film"
-        case .collection, .playlist, .folder, .unknown:
-            return "photo"
+// Keep live record observation out of the view that constructs native picker menus.
+private struct PlozziOSDownloadManagementSettings: View {
+    let model: PlozziOSDownloadsModel
+    @Binding var pendingBulkDeletion: PlozziOSDownloadsBulkDeletion?
+
+    var body: some View {
+        if model.hasActiveTransfers {
+            SettingsSectionGroup("In Progress") {
+                Button("Pause All", systemImage: "pause.circle") {
+                    Task { await model.pauseAllActive() }
+                }
+                Button("Resume All", systemImage: "play.circle") {
+                    Task { await model.resumeAllPaused() }
+                }
+                Button(
+                    "Cancel Active Downloads",
+                    systemImage: "xmark.circle",
+                    role: .destructive
+                ) {
+                    pendingBulkDeletion = .cancelActive(model.activeTransfers)
+                }
+            }
+        }
+
+        SettingsSectionGroup("Storage") {
+            PlozziOSDownloadsStorageBar(downloadsBytes: model.library.totalBytes)
+            LabeledContent("Downloaded titles") {
+                Text(model.records.filter { $0.status == .completed }.count.formatted())
+            }
+            if !model.library.isEmpty {
+                Button(
+                    "Delete All Downloads",
+                    systemImage: "trash",
+                    role: .destructive
+                ) {
+                    pendingBulkDeletion = .all(model.library)
+                }
+            }
         }
     }
 }
@@ -647,9 +756,17 @@ struct PlozziOSDownloadSettingsView: View {
                     isOn: $model.pausesOnLowDataMode
                 )
             } footer: {
-                Text(
-                    "These settings affect offline downloads only. Playback is never throttled."
-                )
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(
+                        "These settings affect offline downloads only. Playback is never throttled."
+                    )
+                    if #available(iOS 26.0, *) {
+                        Text(
+                            "Live Activities show download progress when background processing is available. Cancel in the Live Activity to pause its downloads. You can resume them in Plozz.",
+                            comment: "iOS/iPadOS 26+ download-settings footer. Live Activities is Apple's system feature. Cancelling its task pauses, rather than deletes, the downloads."
+                        )
+                    }
+                }
             }
 
             SettingsSectionGroup("Download Speed") {
@@ -707,7 +824,8 @@ struct PlozziOSDownloadSettingsView: View {
                     Text("Downloads use the full available connection speed.")
                 } else {
                     Text(
-                        "iOS cannot enforce a speed limit on background transfers. Choose whether capped downloads pause or continue uncapped while Plozz is in the background."
+                        "Choose whether speed-limited downloads pause or continue at full speed while Plozz is in the background.",
+                        comment: "Download speed settings footer explaining the two background choices: pause, or temporarily remove the speed limit."
                     )
                 }
             }
@@ -791,39 +909,9 @@ struct PlozziOSDownloadSettingsView: View {
                 )
             }
 
-            if model.hasActiveTransfers {
-                SettingsSectionGroup("In Progress") {
-                    Button("Pause All", systemImage: "pause.circle") {
-                        Task { await model.pauseAllActive() }
-                    }
-                    Button("Resume All", systemImage: "play.circle") {
-                        Task { await model.resumeAllPaused() }
-                    }
-                    Button(
-                        "Cancel Active Downloads",
-                        systemImage: "xmark.circle",
-                        role: .destructive
-                    ) {
-                        pendingBulkDeletion = .cancelActive(model.activeTransfers)
-                    }
-                }
-            }
-
-            SettingsSectionGroup("Storage") {
-                PlozziOSDownloadsStorageBar(downloadsBytes: model.library.totalBytes)
-                LabeledContent("Downloaded titles") {
-                    Text(model.records.filter { $0.status == .completed }.count.formatted())
-                }
-                if !model.library.isEmpty {
-                    Button(
-                        "Delete All Downloads",
-                        systemImage: "trash",
-                        role: .destructive
-                    ) {
-                        pendingBulkDeletion = .all(model.library)
-                    }
-                }
-            }
+            PlozziOSDownloadManagementSettings(
+                model: model, pendingBulkDeletion: $pendingBulkDeletion
+            )
         }
         .settingsPageSurface()
         .navigationTitle("Downloads")
@@ -916,6 +1004,7 @@ struct DownloadArtwork: View {
         }
         .frame(width: 104, height: 60)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .plozzMediaEdge(cornerRadius: 8)
         .accessibilityHidden(true)
     }
 

@@ -144,7 +144,7 @@ extension SiloProvider {
               let trackID = Int(subtitle.id), trackID > 0,
               Self.supportsSubtitleFormat(subtitle.format) else { throw AppError.invalidResponse }
         if let existing = active.downloadedTracks[subtitle.id] { return existing }
-        guard var url = URLComponents(url: session.server.baseURL, resolvingAgainstBaseURL: false) else {
+        guard var url = URLComponents(url: client.baseURL, resolvingAgainstBaseURL: false) else {
             throw AppError.invalidResponse
         }
         let basePath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

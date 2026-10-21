@@ -35,6 +35,7 @@ public final class PlexConnectionResolver: Sendable {
     private let token: String
     private let refresh: Refresh?
     private let onReachable: (@Sendable (URL) -> Void)?
+    private let manualCandidates: [URL]
 
     /// Everything this resolver mutates, held INSIDE the mutex.
     ///
@@ -50,6 +51,7 @@ public final class PlexConnectionResolver: Sendable {
     /// `@unchecked` moved into `Mutex`; it was not eliminated. Keep every field
     /// below `Sendable` (or provably value-copied out) by hand.
     private struct State {
+        var discoveredCandidates: [URL]
         var candidates: [URL]
         var knownBaseURLs: [URL]
         var cached: URL?
@@ -62,6 +64,7 @@ public final class PlexConnectionResolver: Sendable {
         /// a live connection. Cleared by `store` the moment any probe succeeds.
         /// (r8-stale-reachability-locality)
         var reachabilityInvalidated = false
+        var retired = false
     }
 
     private let state: Mutex<State>
@@ -73,6 +76,7 @@ public final class PlexConnectionResolver: Sendable {
 
     public init(
         candidates: [URL],
+        manualCandidates: [URL] = [],
         deviceProfile: PlexDeviceProfile,
         token: String,
         probe: HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
@@ -86,13 +90,16 @@ public final class PlexConnectionResolver: Sendable {
         self.probe = probe
         self.refresh = refresh
         self.onReachable = onReachable
+        self.manualCandidates = manualCandidates
         self.reachableSeed = reachableSeed
         // Seed with the last-known-good connection (persisted across launches) so
         // a previously-reachable server resolves on the first probe instead of
         // re-discovering through dead/stale addresses.
-        let seeded = reachableSeed.map { [$0] + candidates } ?? candidates
+        let all = candidates + manualCandidates
+        let seeded = reachableSeed.map { [$0] + all } ?? all
         let prioritized = Self.prioritized(seeded)
         state = Mutex(State(
+            discoveredCandidates: Self.prioritized(candidates),
             candidates: prioritized,
             knownBaseURLs: prioritized
         ))
@@ -121,6 +128,19 @@ public final class PlexConnectionResolver: Sendable {
     public var knownBaseURLs: [URL] {
         state.withLock { $0.knownBaseURLs }
     }
+
+    /// Retirement and the discovery snapshot share one lock so a late refresh
+    /// cannot be lost or start another authenticated probe after a route edit.
+    func retire() -> [URL] {
+        let previous = state.withLock { state in
+            state.retired = true
+            return (state.discoveredCandidates, state.inFlight)
+        }
+        previous.1?.cancel()
+        return previous.0
+    }
+
+    private var isRetired: Bool { state.withLock { $0.retired } }
 
     /// True when the resolver has a connection whose locality can be trusted: a
     /// probe-confirmed `cached` URL or a persisted last-known-good `reachableSeed`
@@ -180,6 +200,7 @@ public final class PlexConnectionResolver: Sendable {
         }
 
         let decision: Decision = state.withLock { state in
+            if state.retired { return .ready(state.candidates[0]) }
             // Fast path: a fixed URL (or an already-cached choice) needs no probe.
             if let cached = state.cached { return .ready(cached) }
             if !(state.candidates.count > 1 || refresh != nil) {
@@ -239,11 +260,10 @@ public final class PlexConnectionResolver: Sendable {
         }
         // Nothing we know about answered. Ask plex.tv for the current connection
         // list (the server may have moved) and probe that.
-        if let refresh {
+        if let refresh, !isRetired, !Task.isCancelled {
             let fresh = await refresh()
-            if !fresh.isEmpty {
-                let ordered = Self.prioritized(fresh)
-                replaceCandidates(ordered)
+            let ordered = fresh.isEmpty ? currentCandidates() : replaceCandidates(fresh)
+            if let ordered {
                 if let reachable = await firstReachable(among: ordered) {
                     store(reachable)
                     return reachable
@@ -278,6 +298,7 @@ public final class PlexConnectionResolver: Sendable {
         guard !urls.isEmpty else { return nil }
         let byTier = Dictionary(grouping: urls) { SourceLocalityClassifier.classify(url: $0) }
         for tier in [SourceLocality.local, .unknown, .remote] {
+            guard !isRetired, !Task.isCancelled else { return nil }
             guard let tierURLs = byTier[tier], !tierURLs.isEmpty else { continue }
             // The coarse locality tier can't distinguish a real LAN address from a
             // Docker-bridge address (both are RFC1918 `.local`), so racing the
@@ -287,6 +308,7 @@ public final class PlexConnectionResolver: Sendable {
             // deterministically; equally-ranked candidates still race for liveness.
             let byRank = Dictionary(grouping: tierURLs) { Self.rank($0) }
             for rank in byRank.keys.sorted() {
+                guard !isRetired, !Task.isCancelled else { return nil }
                 guard let group = byRank[rank], !group.isEmpty else { continue }
                 // Prefer the last-known-good seed within its rank group: probe it
                 // first so a warm server re-confirms on a single probe and the
@@ -326,7 +348,9 @@ public final class PlexConnectionResolver: Sendable {
     }
 
     private func probeReachable(_ url: URL) async -> Bool {
-        let endpoint = Endpoint(path: "/identity", headers: deviceProfile.headers(token: token))
+        guard !isRetired, !Task.isCancelled else { return false }
+        let endpoint = Endpoint(path: "/identity", headers: deviceProfile.headers(token: token),
+                                redirectPolicy: .sameOrigin)
         do {
             _ = try await probe.send(endpoint, baseURL: url)
             return true
@@ -339,13 +363,17 @@ public final class PlexConnectionResolver: Sendable {
         state.withLock { $0.candidates }
     }
 
-    private func replaceCandidates(_ urls: [URL]) {
+    private func replaceCandidates(_ discovered: [URL]) -> [URL]? {
         state.withLock { state in
+            guard !state.retired else { return nil }
+            state.discoveredCandidates = Self.prioritized(discovered)
+            let urls = Self.prioritized(discovered + manualCandidates)
             state.candidates = urls
             var seen = Set(state.knownBaseURLs.map(\.absoluteString))
             state.knownBaseURLs.append(contentsOf: urls.filter {
                 seen.insert($0.absoluteString).inserted
             })
+            return urls
         }
     }
 
@@ -353,7 +381,8 @@ public final class PlexConnectionResolver: Sendable {
         // The callback stays OUTSIDE the critical section, as it was: invoking
         // it while holding the lock hands an unknown caller the chance to
         // re-enter this resolver and deadlock.
-        state.withLock { state in
+        let stored = state.withLock { state in
+            guard !state.retired else { return false }
             state.cached = url
             state.reachabilityInvalidated = false
             if !state.knownBaseURLs.contains(where: {
@@ -361,8 +390,9 @@ public final class PlexConnectionResolver: Sendable {
             }) {
                 state.knownBaseURLs.append(url)
             }
+            return true
         }
-        onReachable?(url)
+        if stored { onReachable?(url) }
     }
 
     // MARK: Candidate ordering

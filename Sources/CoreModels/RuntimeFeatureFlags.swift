@@ -2,6 +2,7 @@ import Foundation
 
 public enum RuntimeFeatureFlag: String, CaseIterable, Codable, Hashable, Sendable {
     case universalWatchlist
+    case wetrakr
 }
 
 /// Typed runtime rollout values shared by both application shells. The flag
@@ -27,6 +28,8 @@ public struct RuntimeFeatureFlags: Codable, Hashable, Sendable {
     }
 
     public static let productionDefault = RuntimeFeatureFlags(
-        enabled: [.universalWatchlist]
+        enabled: [.universalWatchlist, .wetrakr]
     )
+
+    public static let buildDefault = productionDefault
 }

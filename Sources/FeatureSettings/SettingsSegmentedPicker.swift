@@ -23,11 +23,10 @@ import PlozzCoreUI
 /// Two independent, non-competing indicators:
 /// * **Focus** — the segment you're on wears the same theme-aware bright thumb
 ///   as every other Settings row (WHITE thumb + black text in dark themes, BLACK
-///   thumb + white text in light themes), with a soft lift.
+///   thumb + white text in light themes), without enlarging the control.
 /// * **Selection** — the chosen segment carries a trailing checkmark (matching
-///   ``SettingsOptionPicker``) and brighter label, with no colour. The checkmark
-///   slot is always reserved, so committing a choice never resizes the track or
-///   disturbs focus geometry.
+///   other settings choices), with no colour. Only the selected segment makes
+///   room for the mark; selection animates that space between segments.
 ///
 /// Best for 2–5 short options. For long labels or many options prefer a menu or
 /// a vertical list instead.
@@ -43,7 +42,7 @@ struct SettingsSegmentedPicker<Option: Hashable>: View {
 
     @FocusState private var focusedOption: Option?
     @Environment(\.themePalette) private var palette
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -62,9 +61,7 @@ struct SettingsSegmentedPicker<Option: Hashable>: View {
                     .accessibilityValue(option == selection ? Text("Selected") : Text(verbatim: ""))
                 }
             }
-            // Generous inset so a focused segment's bright thumb and lift have
-            // room to breathe inside the track instead of crowding the rim.
-            .padding(8)
+            .padding(SettingsRowMetrics.segmentedTrackInset)
             .background(
                 Capsule(style: .continuous)
                     .fill(palette.cardSurface.opacity(0.45))
@@ -73,7 +70,9 @@ struct SettingsSegmentedPicker<Option: Hashable>: View {
                 Capsule(style: .continuous)
                     .strokeBorder(palette.cardBorder.opacity(0.8), lineWidth: 1)
             )
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
         }
+        .scrollClipDisabled()
         // English fits without scrolling; longer translations scroll the focused
         // segment fully into view instead of drawing beyond the detail pane.
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -84,11 +83,6 @@ struct SettingsSegmentedPicker<Option: Hashable>: View {
         }
     }
 
-    /// The contents of one segment: the label, plus a trailing checkmark shown
-    /// only on the selected segment. The label always reserves its *semibold*
-    /// width (via a hidden sizing copy) so changing weight never reflows the
-    /// text, and the checkmark is laid out inline only when present so unselected
-    /// segments don't carry an empty gap.
     private struct SegmentLabel: View {
         let text: LocalizedStringResource
         let isSelected: Bool
@@ -96,23 +90,11 @@ struct SettingsSegmentedPicker<Option: Hashable>: View {
         var body: some View {
             HStack(spacing: 8) {
                 Text(text)
-                    .fontWeight(isSelected ? .semibold : .regular)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                    .background(
-                        // Reserve the bold metrics in every state so the label
-                        // is sized as if always semibold — the visible weight can
-                        // change without nudging the content.
-                        Text(text)
-                            .fontWeight(.semibold)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .hidden()
-                    )
                 if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.subheadline.weight(.bold))
-                        .accessibilityHidden(true)
+                    SettingsCheckmark(isChecked: true)
+                        .transition(.opacity)
                 }
             }
         }
@@ -157,10 +139,14 @@ struct SettingsSegmentedPicker<Option: Hashable>: View {
 
             var body: some View {
                 configuration.label
-                    .font(.headline)
+                    .font(SettingsRowMetrics.titleFont)
                     .foregroundStyle(foreground)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
+                    .frame(minHeight: SettingsRowMetrics.minHeight(.primary))
+                    .padding(.horizontal, SettingsRowMetrics.spacing(.secondary))
+                    .padding(
+                        .vertical,
+                        SettingsRowMetrics.verticalPadding(.primary) - SettingsRowMetrics.segmentedTrackInset
+                    )
                     .background {
                         Capsule(style: .continuous)
                             .fill(segmentFill)
@@ -170,7 +156,7 @@ struct SettingsSegmentedPicker<Option: Hashable>: View {
                                 y: isFocused ? 3 : 0
                             )
                     }
-                    .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.04 : 1.0))
+                    .scaleEffect(configuration.isPressed ? 0.97 : 1)
                     .animation(.easeOut(duration: 0.16), value: isFocused)
                     .animation(.easeOut(duration: 0.16), value: isSelected)
                     .animation(.easeOut(duration: 0.12), value: configuration.isPressed)

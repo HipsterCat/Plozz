@@ -55,11 +55,11 @@ struct FamilyGuidanceTile: View {
         .accessibilityIdentifier("family-guidance-tile")
         .accessibilityHint("Open family guidance")
         #if os(tvOS)
-        .fullScreenCover(isPresented: $isPresented) {
+        .plozzSheet(isPresented: $isPresented, style: .floatingCard) {
             FamilyGuidanceSheet(item: item, summary: summary, authorizationID: provider?.contextID)
         }
         #else
-        .sheet(isPresented: $isPresented) {
+        .plozzSheet(isPresented: $isPresented) {
             FamilyGuidanceSheet(item: item, summary: summary, authorizationID: provider?.contextID)
         }
         #endif
@@ -111,7 +111,6 @@ struct FamilyGuidanceSheet: View {
                     .plozzSurface(.overlay, cornerRadius: 28)
                 }
                 .environment(\.colorScheme, palette.isLight ? .light : .dark)
-                .presentationBackground(.clear)
                 .onExitCommand { dismiss() }
                 #else
                 NavigationStack {
@@ -128,7 +127,7 @@ struct FamilyGuidanceSheet: View {
                             .padding(24)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .background(palette.settingsBackground)
+                        .background { SettingsPageBackground() }
                     }
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
@@ -136,7 +135,6 @@ struct FamilyGuidanceSheet: View {
                         }
                     }
                 }
-                .presentationBackground(palette.settingsBackground)
                 #endif
             }
         }
@@ -319,7 +317,7 @@ private struct FamilyGuidanceMobileOverview: View {
             }
             .padding(24)
         }
-        .background(palette.settingsBackground)
+        .background { SettingsPageBackground() }
     }
 }
 #endif
@@ -761,12 +759,11 @@ struct FamilyGuidanceIcon: View {
     @Environment(\.themePalette) private var palette
 
     var body: some View {
-        Image("CommonSenseMedia", bundle: .module)
+        Image(palette.isLight ? "CommonSenseMediaOnLight" : "CommonSenseMedia", bundle: .module)
             .renderingMode(.original)
             .resizable()
             .scaledToFit()
             .frame(width: size, height: size)
-            .background(palette.isLight ? ThemePalette.dark.settingsBackground : .clear, in: Circle())
             .accessibilityHidden(true)
     }
 }

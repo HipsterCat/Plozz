@@ -39,24 +39,26 @@ public struct HomeLibrarySectionGroup: Identifiable, Equatable, Sendable {
         public var id: String { section.id }
     }
 
-    /// Loading and loaded Recently Added share a slot, including in Showcase.
+    /// Base rows retain their relative slots through progressive loading.
     public var rows: [Row] {
-        var result = sections.map { Row(section: $0, isLoading: false, failure: nil) }
+        var result: [Row] = []
         for kind in LibraryHomeRowKind.allCases {
+            let completed = sections.filter {
+                (LibraryHomeRowKind(rawValue: $0.id) ?? .hubs) == kind
+            }
+            result += completed.map { Row(section: $0, isLoading: false, failure: nil) }
+            guard completed.isEmpty else { continue }
             guard loadingRows.contains(kind) || failures[kind] != nil else { continue }
             let row = Row(
                 section: LibrarySection(
-                    id: kind == .recentlyAdded ? "recentlyAdded" : "pending-hubs",
-                    title: library.library.title, style: .poster, items: []
+                    id: kind == .hubs ? "pending-hubs" : kind.rawValue,
+                    title: library.library.title, localizedTitle: kind.displayName,
+                    style: kind == .nextUp ? .landscape : .poster, items: []
                 ),
                 isLoading: loadingRows.contains(kind),
                 failure: failures[kind]
             )
-            if kind == .recentlyAdded {
-                result.insert(row, at: 0)
-            } else {
-                result.append(row)
-            }
+            result.append(row)
         }
         return result
     }

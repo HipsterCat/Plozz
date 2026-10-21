@@ -27,7 +27,7 @@ public struct PlaybackStreamDetails: Equatable, Sendable {
         badges += metadata.dynamicRangeBadges
         if let audio = metadata.audio,
            let format = TrackLabeling.audioFormatHint(codec: audio.codec, channels: audio.channels, isAtmos: false) {
-            badges.append(.init(format))
+            badges.append(.init(format, style: .audio))
         }
         return badges
     }

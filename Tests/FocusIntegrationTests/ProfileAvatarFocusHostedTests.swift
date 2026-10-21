@@ -48,6 +48,13 @@ final class ProfileAvatarFocusHostedTests: XCTestCase {
         XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
         XCTAssertEqual(nativeCards(in: window).count, expectedNativeCards,
                        "Profile and Add avatars must not acquire native rectangular plates.")
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "profile-lock-picker-\(style)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func nativeCards(in view: UIView) -> [TVLockupView] {
@@ -58,7 +65,10 @@ final class ProfileAvatarFocusHostedTests: XCTestCase {
 
 private struct ProfileAvatarFocusFixture: View {
     private let profiles = [
-        Profile(name: "Viewer One", avatarSymbol: "person.fill", colorIndex: 0),
+        Profile(
+            name: "Viewer One", avatarSymbol: "person.fill", colorIndex: 0,
+            lock: ProfileLock.make(pin: "2468", iterations: 1)
+        ),
         Profile(name: "Viewer Two", avatarSymbol: "star.fill", colorIndex: 1)
     ]
     @PlozzCardFocus private var mediaFocused: Bool

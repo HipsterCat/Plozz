@@ -4,6 +4,7 @@ import SwiftUI
 import QuartzCore
 import CoreModels
 import CoreNetworking
+import CoreUI
 
 /// Callbacks the input controller invokes on the owning view model. Kept as a
 /// plain value of closures so the UIKit layer never imports the view model.
@@ -66,7 +67,9 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
     let scrubPreview: ScrubPreviewSource?
     let authenticatedHTTPResolver:
         (any AuthenticatedHTTPResourceResolving)?
+    let makeGeneratedScrubStills: (@MainActor () -> (any ScrubStillExtracting)?)?
     let showsSharedControls: Bool
+    let fitsInsideSafeArea: Bool
     let themePalette: ThemePaletteBox
 
     init(
@@ -76,7 +79,9 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
         actions: PlayerActions,
         scrubPreview: ScrubPreviewSource?,
         authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?,
+        makeGeneratedScrubStills: (@MainActor () -> (any ScrubStillExtracting)?)? = nil,
         showsSharedControls: Bool = true,
+        fitsInsideSafeArea: Bool = false,
         themePalette: ThemePaletteBox
     ) {
         self.engine = engine
@@ -85,16 +90,21 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
         self.actions = actions
         self.scrubPreview = scrubPreview
         self.authenticatedHTTPResolver = authenticatedHTTPResolver
+        self.makeGeneratedScrubStills = makeGeneratedScrubStills
         self.showsSharedControls = showsSharedControls
+        self.fitsInsideSafeArea = fitsInsideSafeArea
         self.themePalette = themePalette
     }
 
     func makeUIViewController(context: Context) -> PlayerInputViewController {
-        let controller = PlayerInputViewController(engine: engine, model: model, actions: actions)
+        let controller = PlayerInputViewController(
+            engine: engine, model: model, actions: actions, fitsInsideSafeArea: fitsInsideSafeArea
+        )
         if showsSharedControls {
             controller.configureScrubPreview(
                 scrubPreview,
-                authenticatedHTTPResolver: authenticatedHTTPResolver
+                authenticatedHTTPResolver: authenticatedHTTPResolver,
+                generatedStills: makeGeneratedScrubStills?()
             )
         }
         controller.attachVideoSurface()
@@ -107,6 +117,7 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: PlayerInputViewController, context: Context) {
         controller.actions = actions
+        controller.fitsInsideSafeArea = fitsInsideSafeArea
     }
 }
 
@@ -115,26 +126,55 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
 /// can initialize before playback reaches `.ready`.
 struct VideoSurfaceContainer: UIViewRepresentable {
     let engine: any VideoEngine
+    var zoom = PlayerVideoZoom()
+    var fitsInsideSafeArea = false
+    var subtitleViewport: VideoSubtitleViewport?
 
-    func makeUIView(context: Context) -> UIView {
-        let root = UIView(frame: .zero)
-        root.backgroundColor = .black
-        attachSurface(to: root)
+    func makeUIView(context: Context) -> VideoPresentationView {
+        let root = VideoPresentationView(frame: .zero)
+        root.subtitleViewport = subtitleViewport
+        root.attach(engine)
+        root.update(zoom: zoom, fitsInsideSafeArea: fitsInsideSafeArea)
         return root
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        attachSurface(to: uiView)
+    func updateUIView(_ uiView: VideoPresentationView, context: Context) {
+        uiView.subtitleViewport = subtitleViewport
+        uiView.attach(engine)
+        uiView.update(zoom: zoom, fitsInsideSafeArea: fitsInsideSafeArea)
+    }
+}
+
+/// Place behind a subtitle overlay to map authored cues into that overlay's
+/// actual coordinate space, including when only the video ignores safe areas.
+struct VideoSubtitleViewportReader: UIViewRepresentable {
+    let viewport: VideoSubtitleViewport
+
+    func makeUIView(context: Context) -> VideoSubtitleViewportView {
+        let view = VideoSubtitleViewportView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.viewport = viewport
+        return view
     }
 
-    private func attachSurface(to root: UIView) {
-        let surface = engine.makeVideoOutputView()
-        guard surface.superview !== root else { return }
-        surface.removeFromSuperview()
-        surface.frame = root.bounds
-        surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        surface.isUserInteractionEnabled = false
-        root.insertSubview(surface, at: 0)
+    func updateUIView(_ uiView: VideoSubtitleViewportView, context: Context) {
+        uiView.viewport = viewport
+    }
+}
+
+final class VideoSubtitleViewportView: UIView {
+    weak var viewport: VideoSubtitleViewport? {
+        didSet { viewport?.attachSubtitleView(self) }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        viewport?.scheduleUpdate()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        viewport?.scheduleUpdate()
     }
 }
 
@@ -164,7 +204,13 @@ struct ThemePaletteBox {
 /// cell is disabled. Returning to playback must not focus every parked card.
 final class PlayerInputView: UIView {
     var allowsFocus = true
-    override var canBecomeFocused: Bool { allowsFocus }
+    override var canBecomeFocused: Bool {
+#if os(tvOS)
+        allowsFocus
+#else
+        false
+#endif
+    }
 }
 
 /// Owns the focusable input surface, hosts the engine's bare video output view,
@@ -175,6 +221,11 @@ final class PlayerInputView: UIView {
 /// a concrete player, so this UI is reused verbatim by every engine.
 final class PlayerInputViewController: UIViewController, UIGestureRecognizerDelegate {
     var actions: PlayerActions
+    var fitsInsideSafeArea: Bool {
+        didSet {
+            if fitsInsideSafeArea != oldValue, isViewLoaded { updateSubtitleVideoRect() }
+        }
+    }
     private let engine: any VideoEngine
     private let model: PlayerControlsModel
     private var scrubPreviewCoordinator: ScrubPreviewCoordinator?
@@ -217,7 +268,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// goes away. Driven every refresh tick off `engine.preventsDisplaySleep`, so
     /// it behaves identically for every engine/decoder (AVPlayer *and* Plozzigen).
     /// iOS owns its lease at the presentation level, including startup/buffering.
-    private let idleSleepGuard = IdleSleepGuard()
+    private let idleSleepGuard = DisplayWakeLease()
     #endif
 
     /// Whether the Siri Remote currently drives the scrub surface or the bottom
@@ -279,11 +330,16 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     private var subtitleClock: CADisplayLink?
 
     private let playerInputView = PlayerInputView()
+    private let videoPresentation = VideoPresentationView(frame: .zero)
 
-    init(engine: any VideoEngine, model: PlayerControlsModel, actions: PlayerActions) {
+    init(
+        engine: any VideoEngine, model: PlayerControlsModel, actions: PlayerActions,
+        fitsInsideSafeArea: Bool = false
+    ) {
         self.engine = engine
         self.model = model
         self.actions = actions
+        self.fitsInsideSafeArea = fitsInsideSafeArea
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -301,7 +357,9 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     override func viewDidLoad() {
         super.viewDidLoad()
+#if os(tvOS)
         installGestures()
+#endif
     }
 
     override func viewDidLayoutSubviews() {
@@ -311,10 +369,12 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+#if os(tvOS)
         // Make sure our input surface owns the focus so the Siri Remote's presses
         // and indirect-touch pans reach our gesture recognizers.
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
+#endif
         startRefreshLoop()
         startSubtitleClock()
 #if os(tvOS)
@@ -339,26 +399,32 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 #endif
     }
 
-    override var canBecomeFirstResponder: Bool { true }
+    override var canBecomeFirstResponder: Bool {
+#if os(tvOS)
+        true
+#else
+        false
+#endif
+    }
 
     func configureScrubPreview(
         _ source: ScrubPreviewSource?,
         authenticatedHTTPResolver:
-            (any AuthenticatedHTTPResourceResolving)?
+            (any AuthenticatedHTTPResourceResolving)?,
+        generatedStills: (any ScrubStillExtracting)? = nil
     ) {
         scrubPreviewCoordinator?.clear()
         scrubPreviewCoordinator = nil
         model.previewImage = nil
 
-        guard let source else {
-            PlozzLog.playback.debug("Scrub preview unavailable: provider did not supply a source")
-            return
-        }
         guard let coordinator = ScrubPreviewCoordinator(
             source: source,
-            authenticatedHTTPResolver: authenticatedHTTPResolver
+            authenticatedHTTPResolver: authenticatedHTTPResolver,
+            generatedStills: generatedStills
         ) else {
-            PlozzLog.playback.debug("Scrub preview unavailable: source exists but is not usable")
+            PlozzLog.playback.debug(
+                "Scrub preview unavailable: no usable server previews and no on-device fallback"
+            )
             return
         }
         coordinator.onImageChange = { [weak self] image in
@@ -366,12 +432,14 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         }
         scrubPreviewCoordinator = coordinator
         switch source {
-        case .tiled(let manifest):
+        case .tiled(let manifest) where manifest.isUsable:
             PlozzLog.playback.debug(
                 "Configured Jellyfin tiled scrub preview (\(manifest.tileResources.count) tiles, intervalMs=\(manifest.intervalMs))"
             )
         case .plexBIF:
             PlozzLog.playback.debug("Configured Plex BIF scrub preview")
+        default:
+            break
         }
         prefetchThumbnailsSoon()
     }
@@ -393,11 +461,11 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// Hosts the engine's bare video surface as the backmost, non-interactive
     /// layer. The engine keeps it fed across reloads, so we add it once.
     func attachVideoSurface() {
-        let surface = engine.makeVideoOutputView()
-        surface.frame = view.bounds
-        surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        surface.isUserInteractionEnabled = false
-        view.insertSubview(surface, at: 0)
+        videoPresentation.frame = view.bounds
+        videoPresentation.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        videoPresentation.attach(engine)
+        videoPresentation.update(zoom: model.videoZoom.settings, fitsInsideSafeArea: fitsInsideSafeArea)
+        view.insertSubview(videoPresentation, at: 0)
     }
 
     /// Mounts the owned subtitle overlay directly above the video surface (and
@@ -420,14 +488,16 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     private func updateSubtitleVideoRect() {
+        videoPresentation.update(zoom: model.videoZoom.settings, fitsInsideSafeArea: fitsInsideSafeArea)
+        videoPresentation.layoutIfNeeded()
         guard let subtitleModel else { return }
-        let aspectRatio = engine.videoAspectRatio.map { CGFloat($0) }
-        let rect = SubtitleOverlayGeometry.aspectFitRect(
-            in: CGRect(origin: .zero, size: view.bounds.size),
-            aspectRatio: aspectRatio
-        )
+        let rect = videoPresentation.videoRect
         if subtitleModel.videoRect != rect {
             subtitleModel.videoRect = rect
+        }
+        let sourceAspect = model.videoZoom.settings.mode == .stretch ? videoPresentation.sourceAspectRatio : nil
+        if subtitleModel.sourceVideoAspectRatio != sourceAspect {
+            subtitleModel.sourceVideoAspectRatio = sourceAspect
         }
     }
 
@@ -442,6 +512,9 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     @objc private func tickSubtitleClock() {
         updateSubtitleVideoRect()
+        if let subtitleModel, subtitleModel.hasContent {
+            engine.renderSubtitles(at: engine.subtitlePresentationTime - subtitleModel.offset, style: subtitleModel.style)
+        }
         subtitleModel?.tick(engine.subtitlePresentationTime)
     }
 
@@ -673,7 +746,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     private func enterSkipButton(stealFocus: Bool = true) {
         presentingSkipButton = true
         model.skipSegments.isPresentingButton = true
-        guard stealFocus else {
+        guard stealFocus, skipButtonHost != nil else {
             // Passive present (a grace-window seek landed here): the button is
             // visible but the scrub surface keeps focus and stays fully
             // interactive, so the seek is never hijacked. An Up press grabs the
@@ -781,7 +854,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     private func enterUpNext(stealFocus: Bool = true) {
         presentingUpNext = true
         model.upNextCard.isPresenting = true
-        guard stealFocus else {
+        guard stealFocus, upNextHost != nil else {
             // Passive present (a grace-window seek landed in credits): the card is
             // visible but the scrub surface keeps focus, so the seek is never
             // hijacked. An Up press grabs the card (see `handleUp`).
@@ -836,6 +909,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     // MARK: Focus
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+#if os(tvOS)
         // While the bottom control bar is active, hand focus to it so the Siri
         // Remote drives its native buttons; the skip button likewise grabs focus
         // while it's presented; otherwise the input surface owns focus so
@@ -850,6 +924,9 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             return [controlBarHost.view]
         }
         return [playerInputView]
+#else
+        return super.preferredFocusEnvironments
+#endif
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
@@ -868,6 +945,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
         pan.allowedPressTypes = []
         pan.delegate = self
+        pan.onStationaryTap = { [weak self] in self?.handleSurfaceTap() }
         view.addGestureRecognizer(pan)
         surfaceRecognizers.append(pan)
         surfacePan = pan
@@ -896,6 +974,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive press: UIPress) -> Bool {
+        surfacePan?.cancelTap()
         if gestureRecognizer === selectRecognizer, press.type == .select, focusContext == .surface {
             var position: RemoteClickInterpreter.Position?
 #if os(tvOS)
@@ -1145,6 +1224,19 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     // MARK: Button handlers
+
+    func handleSurfaceTap() {
+        guard focusContext == .surface, !model.isScrubbing else { return }
+        if !model.controlsVisible {
+            model.timelineClock.isEnabled = false
+            flashControls()
+        } else if !model.timelineClock.isEnabled {
+            model.timelineClock.isEnabled = true
+            flashControls()
+        } else {
+            hideControls()
+        }
+    }
 
     @objc private func handleSelect() {
         guard focusContext == .surface else { return }

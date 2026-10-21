@@ -74,7 +74,7 @@ struct SubtitleDownloadScreen: View {
             }
             Text(detail)
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(Color.primary.opacity(0.7))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -261,7 +261,7 @@ struct SubtitleSyncScreen: View {
             )
             Text(PlayerControls.subtitleSyncHint(model.subtitleDelaySeconds))
                 .font(.callout)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(Color.primary.opacity(0.6))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
@@ -294,7 +294,7 @@ struct SubtitleSyncScreen: View {
             Text(PlayerControls.delayLabel(value))
                 .font(.title3.weight(.semibold))
                 .monospacedDigit()
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
                 .contentTransition(.numericText())
                 .animation(.easeOut(duration: 0.16), value: value)
                 .frame(minWidth: 104)

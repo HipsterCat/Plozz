@@ -51,6 +51,25 @@ final class ShareProviderLocatorTests: XCTestCase {
         XCTAssertEqual(locator.representation.size, 4096)
     }
 
+    func testISOPlaybackKeepsLargeFileIdentityAndUsesNetworkReader() async throws {
+        let path = "Movies/Disc (2024).ISO"
+        let entry = try RemoteFileEntry(
+            relativePath: path, kind: .file, size: 31_316_770_816, strongETag: "\"disc-1\""
+        )
+        let request = try await makeProvider(stat: entry).playbackInfo(
+            for: "f:\(path)", mediaSourceID: nil, forceTranscode: false
+        )
+        guard case .networkFile(let locator) = request.playbackSource else {
+            return XCTFail("ISO playback must use the existing authenticated network-file resolver")
+        }
+        XCTAssertEqual(locator.relativePath, path)
+        XCTAssertEqual(locator.formatHint.container, "iso")
+        XCTAssertEqual(locator.representation.size, 31_316_770_816)
+        XCTAssertEqual(locator.representation.identity.value, "\"disc-1\"")
+        XCTAssertNil(request.streamURL)
+        XCTAssertEqual(request.item.id, "f:\(path)")
+    }
+
     func testModificationTimeStatProducesModificationTimeIdentity() async throws {
         let entry = try RemoteFileEntry(
             relativePath: "movie.mkv",
@@ -72,6 +91,19 @@ final class ShareProviderLocatorTests: XCTestCase {
                 return XCTFail("expected protocolViolation, got \(error)")
             }
         }
+    }
+
+    func testLocatorUsesOpeningMetadataWithoutChangingOrdinaryStat() async throws {
+        let listed = try RemoteFileEntry(relativePath: "movie.mkv", kind: .file, size: 4096)
+        let opening = try RemoteFileEntry(
+            relativePath: "movie.mkv", kind: .file, size: 4096, strongETag: "\"get-validator\""
+        )
+        let fileSystem = LocatorFakeFileSystem(statEntry: listed, openingEntry: opening)
+        let provider = makeProvider(stat: listed, fileSystem: fileSystem)
+        let locator = try await provider.networkFileLocator(for: "movie.mkv")
+        XCTAssertEqual(locator.representation.identity.value, "\"get-validator\"")
+        let ordinary = try await fileSystem.stat(relativePath: "movie.mkv")
+        XCTAssertNil(ordinary.strongETag)
     }
 
     func testSupplementalProbeIsCachedAndPropagatesAtmosIntoPlayback() async throws {
@@ -293,9 +325,11 @@ private final class LocatorFakeSession: MediaTransportSession, @unchecked Sendab
 
 private actor LocatorFakeFileSystem: MediaTransportFileSystem {
     private var statEntry: RemoteFileEntry
+    private let openingEntry: RemoteFileEntry?
 
-    init(statEntry: RemoteFileEntry) {
+    init(statEntry: RemoteFileEntry, openingEntry: RemoteFileEntry? = nil) {
         self.statEntry = statEntry
+        self.openingEntry = openingEntry
     }
 
     func replaceStat(_ entry: RemoteFileEntry) { statEntry = entry }
@@ -318,6 +352,8 @@ private actor LocatorFakeFileSystem: MediaTransportFileSystem {
     func list(relativePath: String) async throws -> [RemoteFileEntry] { [] }
 
     func stat(relativePath: String) async throws -> RemoteFileEntry { statEntry }
+
+    func statForOpening(relativePath: String) async throws -> RemoteFileEntry { openingEntry ?? statEntry }
 
     func readSmallFile(relativePath: String, maximumBytes: Int) async throws -> Data { Data() }
 

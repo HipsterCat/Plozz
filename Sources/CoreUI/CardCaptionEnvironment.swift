@@ -1,17 +1,77 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import CoreModels
 
 private struct PlozzCardCaptionsHiddenKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
+
+private struct PlozzCardCaptionSettingsKey: EnvironmentKey {
+    static let defaultValue = CardCaptionSettings.default
+}
+
+private struct PlozzCardCaptionViewKey: EnvironmentKey {
+    static let defaultValue = CardCaptionView.browse
+}
+
+private struct PlozzCardCaptionShowcaseKey: EnvironmentKey {
     static let defaultValue = false
 }
 
 public extension EnvironmentValues {
-    /// Whether media cards drop the title lines under their artwork. Set by a
-    /// surface that already names the focused title elsewhere, such as the Home
-    /// hero that follows focus. A resume chip then carries the episode instead.
+    var plozzCardCaptionSettings: CardCaptionSettings {
+        get { self[PlozzCardCaptionSettingsKey.self] }
+        set { self[PlozzCardCaptionSettingsKey.self] = newValue }
+    }
+
+    var plozzCardCaptionView: CardCaptionView {
+        get { self[PlozzCardCaptionViewKey.self] }
+        set {
+            self[PlozzCardCaptionViewKey.self] = newValue
+            self[PlozzCardCaptionsHiddenKey.self] = nil
+            self[PlozzCardCaptionShowcaseKey.self] = false
+        }
+    }
+
+    var plozzCardCaptionIsShowcase: Bool {
+        get { self[PlozzCardCaptionShowcaseKey.self] }
+        set { self[PlozzCardCaptionShowcaseKey.self] = newValue }
+    }
+
+    /// Explicit values are reserved for non-media navigation tiles and fixtures.
+    /// Media surfaces resolve their shared default and per-view exception here.
     var plozzCardCaptionsHidden: Bool {
-        get { self[PlozzCardCaptionsHiddenKey.self] }
+        get {
+            hidesCardCaptions(hasArtworkTitle: false)
+        }
         set { self[PlozzCardCaptionsHiddenKey.self] = newValue }
+    }
+
+    var plozzCardCaptionsHiddenWithArtworkTitle: Bool {
+        hidesCardCaptions(hasArtworkTitle: true)
+    }
+
+    var plozzContinueWatchingCaptionsHidden: Bool {
+        hidesCardCaptions(hasArtworkTitle: false, isContinueWatching: true)
+    }
+
+    var plozzContinueWatchingCaptionsHiddenWithArtworkTitle: Bool {
+        hidesCardCaptions(hasArtworkTitle: true, isContinueWatching: true)
+    }
+
+    mutating func copyCardCaptionPresentation(from source: EnvironmentValues) {
+        self[PlozzCardCaptionSettingsKey.self] = source[PlozzCardCaptionSettingsKey.self]
+        self[PlozzCardCaptionViewKey.self] = source[PlozzCardCaptionViewKey.self]
+        self[PlozzCardCaptionShowcaseKey.self] = source[PlozzCardCaptionShowcaseKey.self]
+        self[PlozzCardCaptionsHiddenKey.self] = source[PlozzCardCaptionsHiddenKey.self]
+    }
+
+    private func hidesCardCaptions(hasArtworkTitle: Bool, isContinueWatching: Bool = false) -> Bool {
+        self[PlozzCardCaptionsHiddenKey.self]
+            ?? !plozzCardCaptionSettings.showsLabels(
+                in: plozzCardCaptionView, isShowcase: plozzCardCaptionIsShowcase,
+                hasArtworkTitle: hasArtworkTitle, isContinueWatching: isContinueWatching
+            )
     }
 
     /// How much closer a row's title sits to its cards than usual. Set by a

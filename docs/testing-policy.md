@@ -6,6 +6,12 @@ knowledge is **derived at runtime** from `swift package dump-package`; nothing i
 the test tooling hardcodes the target list, so new targets (e.g. the WebDAV work's
 `MediaTransportWebDAVTests`) are picked up automatically.
 
+Performance investigations use the opt-in [simulator performance lab](performance-lab.md),
+not ordinary correctness-test durations. Its runner builds optimized selected
+workloads once, keeps five measured repetitions, checks work-count invariants,
+and compares source-identified baseline/candidate evidence without hardware
+deployment or automatic retries. Normal suites skip those opt-in probes.
+
 ## The two speed wins
 
 ### 1. Build once, run many (`tools/run-tests.sh`)
@@ -87,29 +93,137 @@ whenever a change could invalidate the map itself or is otherwise unmappable —
 `project.yml`/`Config/**`, `*.xctestplan`, or any changed code path it can't map to
 a test target. Pure docs/asset changes select nothing. Every run prints the chosen
 suites and the reason each was selected.
+This automatic fallback is conservative input to the agent's assessment, not a
+requirement to run the full app matrix for a Python-tooling or documentation edit.
+Use explicit relevant suites/checks when the actual impact is narrower.
 
 ### Main-gate execution and reuse
 
-Use a fixed gate sequence instead of constructing a new orchestration for each
-landing. Record phase start/end times, current status, commands, and retained
-result locations. Start with the localization delta plan; an empty delta does
-not need artifact assembly/import.
+Ordinary main landings use **risk-based agent judgment**, favoring the smallest
+justified validation rather than a blanket full matrix. Inspect the actual diff,
+affected behavior, and existing source-matched evidence. Already validated
+tooling/test-only changes usually need no new app tests or builds; a narrow UI
+change may need its hosted regression; shared behavioral or build-graph changes
+may justify wider coverage. Explain the choice briefly. Do not use a filename
+category alone to force a full run, and do not skip a known relevant failure.
 
-An interrupted landing may reuse a completed phase only when its complete
+Use one runner, recording the assessment, selected checks, prior evidence
+references, timings, and omitted suites. Cheap architecture, test-hygiene,
+localization-source guard, catalog validation, snapshot consistency, clean-tree,
+and fresh-main checks remain. Choose full suites or signed builds only for a
+concrete coverage gap/risk or an explicit request. Focused passing results are
+reported as focused results, never as a full-suite pass.
+
+When translatable source/copy, comments, plurals, or permission text changed,
+complete extraction and the reviewed delta pipeline in `translations.md` before
+publication. An empty delta needs no artifact assembly/import. Distribution
+uses the risk-based release selection below; signing, archive verification,
+localization, and release-note approval remain required.
+
+An interrupted landing may reuse a completed phase only when its consumed
 source/configuration, toolchain/SDK, package workspace, simulator runtime, and
-command recipe match. Keep the authoritative passing summary and expected-bundle
+command recipe match. `tools/lib/l10n_freshness.py` derives consumers from the
+current Swift package and XcodeGen dependency graphs. A TV-only hosted fixture
+edit reruns TV hosted tests, not package tests, iOS hosted tests, or app builds.
+Shared production changes invalidate every consumer. Unknown paths, configuration,
+and tooling are conservatively shared inputs; ordinary documentation and the
+completed localization snapshot do not invalidate compilation. Documentation
+explicitly consumed as a target resource still does.
+Run whole-tree architecture and test-hygiene guards on every invocation,
+including when package-test evidence is reused.
+
+Keep the authoritative passing summary and expected-bundle
 evidence, not just a success marker; missing or changed evidence reruns the gate.
+Package integrity scans have a two-minute per-checkout bound for large dependency
+trees; metadata reads retain their 30-second bound. A timeout is never clean evidence.
 A failed fresh attempt invalidates an earlier success. Inputs changing between
-phases prevent the combined candidate from being declared ready. A changed
-candidate still requires the full package and hosted gates; targeted regressions
-used to diagnose a failure do not replace those final gates.
+phases prevent the combined candidate from being declared ready. Invalidating a
+cached full-suite result does not itself require running that suite: reassess
+whether the changed behavior needs it.
+
+Local main publishers use `tools/main-landing.py`'s shared Git-directory lock
+from the initial main preflight through the verified push, releasing it before
+device delivery. The hook reenters an inherited lock and checks the source guard,
+current catalog, and source snapshot without invoking extraction builds.
+Source extraction is part of relevant development/localization work, not every
+push. Feature pushes do not wait. This coordinates participating
+linked worktrees, not old runners or other machines. A standalone hook owns the
+lock only during its checks, not Git's subsequent network update. Fresh-main
+verification and non-force publication remain mandatory.
 
 Signed products additionally require matching build identity, executable and
 resource-seal fingerprints, and fresh signature verification before reuse.
-After all gates pass, recheck `main` and publish the authorized update **before**
+After the selected checks pass, recheck `main` and publish the authorized update **before**
 independent physical-device installation. Unavailable-device retry budgets stay
 unchanged but are not part of the main-push prerequisite. Keep the enclosing
 build lease through remaining delivery and retain exact artifacts as usual.
+
+For hosted UI speed, replace setup sleeps only with observable readiness.
+`waitForHostedLayout` bounds waits for stable layer geometry and completed
+animations in static library/multiview matrices. Keep loading/shimmer waits and
+negative focus-observation windows intact; continuously animated fixtures are
+not candidates for this helper. Viewport, Dynamic Type, OCR, and pixel assertions
+must remain unchanged. Record actual timings rather than assuming a shorter
+sleep improves a run.
+
+### TestFlight: risk-based checks and a frozen candidate
+
+TestFlight preparation is not an automatic full-matrix main gate. Select checks
+from the net change since the last distributed build and the evidence already
+collected during development. Record the selection, evidence, omitted suites,
+and remaining stages before starting expensive work.
+
+| Change | Default additional validation |
+| --- | --- |
+| Narrow UI change | Affected hosted tests on the affected platform |
+| Shared behavior | Relevant package suites and affected platform integration tests |
+| Broad or high-risk change, inadequate evidence | Expand to the necessary full suites |
+| Release tooling only | Offline orchestration tests, then the real archive/export checks |
+| Notes or ordinary documentation only | Catalog/rendering and relevant integrity checks; no app test sweep |
+
+Run cheap release preflight first: verify credentials without printing them,
+symbol-upload prerequisites, release identity, and catalog validity. After
+release-tooling changes, run `python3 -m unittest discover -s tools/tests -p
+test_fastlane_pipeline.py` before app tests or archives. The offline suite must
+exercise real helper registration, not only mocked lane implementations.
+
+Integrate the intended main revision once, complete requested fixes and
+localization, commit the notes, and freeze the candidate before approval and
+expensive validation. Record its exact commit and approved platform renderings.
+Do not pull subsequent main changes into a frozen release automatically. If new
+content is explicitly added, reassess only affected coverage and renew content
+approval rather than restarting every stage.
+
+Reuse passing evidence when its consumed source/configuration and execution
+inputs match. A commit hash or conservative cache miss alone does not justify
+rerunning every suite: inspect the delta and record a narrower coverage decision.
+Do not label stale results as current or a focused run as a full-suite pass.
+Tooling, test, or documentation-only changes do not invalidate app behavior
+evidence when their lack of effect on its inputs is demonstrated.
+
+Recover at the failed stage. Diagnose an assertion before rerunning tests;
+rerun the affected scope after a fix. Retry an infrastructure failure in a new
+bounded invocation without cleanup, preserving completed independent results.
+Do not restart passing platforms or package suites just because another stage
+failed. Stop and report a repeated infrastructure failure instead of entering an
+unbounded retry loop.
+
+The signed distribution archives are the release compile/signing checks; do not
+require two additional Debug device builds merely to permit them. Local device
+delivery is a separate operation and may reuse a verified exact-source Debug
+artifact. An unavailable device must not block TestFlight. Keep project writers
+serial in a worktree; independent device installation and upload checks may run
+alongside work that does not mutate their artifacts.
+Archives use Xcode's incremental build instead of an unconditional clean.
+Artifact identity and export checks still apply to both platforms before upload.
+
+Always retain localization freshness and reviewed translation requirements,
+explicit note approval, both-platform archive/export identity and signature
+checks, symbol uploads, and actual processing/distribution verification.
+Never skip a known relevant failure. Selected-release retries retain their
+version/build and use partial-upload receipts instead of starting another build.
+Report the current stage and blocker when the plan changes; do not present a
+main merge as completion of a still-pending TestFlight release.
 
 ### 3. Fail fast — you learn a result in seconds, not minutes
 
@@ -149,8 +263,13 @@ always required; reaching the grace period alone never interrupts its writer.
 Large scale fixtures emit unbuffered checkpoints from completed work. The
 million-programme XMLTV test reports preparation phases and every 10,000 indexed
 programmes, so a slow, progressing import is not mistaken for a stalled build.
-Its million-entry workload, assertions, and the no-output watchdog remain intact.
-No timer emits artificial progress while an operation is stuck.
+The 800,005-entry IPTV HTTP import likewise reports every 10,000 staged entries
+and every completed 10,000-row database-copy batch through the real importer
+progress callback, followed by commit/query/reopen checkpoints. All copy batches
+remain inside one transaction; a failure or cancellation restores the previous
+catalogue and freshness state, and other connections cannot see partial results.
+Both workloads, their assertions, and the no-output watchdog remain
+intact. No timer emits artificial progress while an operation is stuck.
 
 ### Simulator readiness and authoritative results
 
@@ -198,6 +317,20 @@ Runner verdict regressions use the existing host-side unittest runner:
 `python3 -m unittest discover -s tools/tests -p 'test_xcresult_summary.py'`.
 
 ## App-hosted focus integration
+
+Episode-panel fixtures activate native window focus before reissuing their
+SwiftUI Browse entry request. Repeated window handoffs must start on Browse and
+still allow the playing episode to receive actual native focus.
+
+`PlayerSkipMarkerHostedTests` updates one live scrub track and waits for stable
+rendered frames before comparing native fills. Liquid Glass can keep changing
+after layout; comparing its first frames must not be mistaken for a marker color
+regression or worked around by relaxing the pixel assertions.
+Capture at the window's native display scale and sample every backing pixel in
+the asserted point ranges. Downsampling a 2x TV render to 1x introduces ringing
+even around plain opaque capsules; a separate capsule fixture protects snapshot
+fidelity. Native-resolution captures retain three consecutive unchanged-frame
+comparisons within a six-second capture budget; pixel tolerances stay unchanged.
 
 `SettingsSubtitleContrastHostedTests` measures rendered text and glyph contrast
 while native focus moves between shared settings rows in Black, Dark, and Light.
@@ -254,7 +387,12 @@ simulator under the shared build lease, with a lane-private package workspace
 and retained result bundle. Its host and tests share only the `AppShelliOS`
 package product. `ServerSetupPresentationTests` checks rendered primary-button
 text in all themes, the native provider picker's logo bounds, and transparent
-WebDAV badge edges. The received-setup summary is exercised with 25 servers,
+WebDAV badge edges. `SettingsCommunityPresentationTests` renders the actual
+compact Settings root on phone-sized windows and the regular About page in
+both themes, checking that Discord, GitHub, and the QR disclosure remain
+reachable. The host includes the app's logos and release-note catalog so these
+checks exercise the real settings content, not an isolated QR-card fixture.
+The received-setup summary is exercised with 25 servers,
 multiple sign-ins per server, and 40 profiles on compact/large phones, landscape,
 iPad-sized windows, accessibility text sizes, and right-to-left layout. Its
 primary action stays in the bottom safe area while the full summary scrolls;
@@ -263,6 +401,127 @@ Empty and single-profile summaries keep the same reachable action. These tests
 use synthetic received data, not pairing services or stored household credentials.
 Package-only UIKit snapshots cannot replace this gate:
 without an application scene, `drawHierarchy` returns an empty image.
+
+`SystemAppearanceTests` changes the scene's device appearance while keeping the
+same window and pushed sheet alive. System leaves the window override unspecified
+and follows light/dark changes; explicit Light, Dark, and Pure Black remain pinned.
+The iOS root owns UIKit appearance from the selected theme, not its resolved
+palette. Sheets inherit that window instead of freezing the opening appearance.
+`PlayerSurfaceAppearanceHostedTests` and `PlayerGlassAppearanceInteractionTests`
+compare player panels against stock regular Liquid Glass in each appearance,
+rather than requiring a fixed dark compositor output.
+`PlayerLayoutInteractionTests` measures actual iPhone 16 Pro Max portrait and
+landscape control frames against the native-player reference, including the
+different skip spacing, edge margins, and non-stretching tabs.
+`PlayerTransportPositionTests` also checks VOD/Live resizing and compact
+landscape clearance. Grouped glass must span adjacent controls without merging
+their actions; compositor coverage checks the bridge and both tap targets.
+
+`PlayerOrientationTests` checks the UIKit player owner's close path without
+another update from the hidden SwiftUI presenter, including disappearance
+cleanup, closing during presentation, reopening, and stale close callbacks.
+Its in-place Live TV fixture checks real scene rotation for Landscape/Portrait,
+Auto and preference changes, restoration on collapse, per-window ownership,
+stale-owner teardown, and retained content lifecycle across expansion. The
+mobile Guide rendering check compares its actual header bounds with the
+standalone grid and checks the current-program surface pixels with normal and
+reduced transparency at phone/tablet widths and larger text.
+`PlayerRotationInteractionTests` verifies actual X taps and return to a hittable
+presenting screen across rotation preferences and nested navigation. Its
+synthetic Emby-quality fixture serves local HTTP video so quality changes are
+available; cancelling preserves the rendition, and applying a changed selection
+reloads once before X closes the player. This is presentation coverage, not
+evidence for real Emby transcoding or Aether loopback transport.
+The failed-playback fixture also taps the actual Back button inside nested
+navigation and reopens the player, covering the shared error screen's handoff
+to the UIKit presentation owner.
+
+`ProfilePickerPresentationTests` covers compact/adaptive avatar sizing, small
+and large households, themes/gradients, landscape, iPad, accessible names and RTL.
+Hosted animation frames check the stagger and settled scale; Reduce Motion
+reveals every tile immediately. `ProfilePickerInteractionTests` exercises
+selection, cancellation, reopening, Edit/Done, long-press editing, separate
+adult/kids creation entry points, and launch/restricted management visibility.
+Its fixture disables sync and uses only synthetic host-sandbox profiles.
+
+`DownloadActivityLifecycleTests` and `DownloadNotificationDeliveryTests` cover
+continued-processing admission, expiration, profile retirement, real-progress
+finalization, and durable notification replay without requesting notification
+permission. Their scheduler and notification clients are injected. The opt-in
+`testSystemActivityReceivesRealHTTPDownloadProgressOnDevice` additionally requires
+an owned physical iPhone/iPad on iOS/iPadOS 26 or later and
+`TEST_RUNNER_PLOZZ_VERIFY_SYSTEM_DOWNLOAD_ACTIVITY=1`. It uses the host's own
+continued-processing identifier and a bounded loopback HTTP fixture, never
+stored accounts or user downloads. Simulator runs skip this system-admission
+check; that skip is not device proof.
+
+Activity progress tests distinguish the current item's measured stage from the
+equal-weight overall indicator. Native subtitle checks cover episode and legacy
+metadata, unknown sizes, preparation, finalization before completion, parallel
+work, and completed/paused/failed queues. Episode handoffs must update the same
+activity only after the preceding record is finalized; do not round an unfinished
+transfer up to 100% or select an arbitrary item when several are active.
+Native title/subtitle assertions keep media names and episode codes out of the
+progress line. Sequential work uses a one-based current step, independent of
+registry ordering; paused/failed peers and parallel work use explicit completed
+counts instead. Preparation and finalization must never be labeled transferring.
+
+`DownloadNotificationNavigationTests` checks versioned, credential-free routing
+payloads, exact item generations, batch/show/season destinations, cold-start
+readiness, profile authorization and cancellation, deleted profiles, and
+single-consumer delivery. Its hosted tab check opens and replaces notifications
+through direct, More, and manually hidden Downloads layouts without changing
+saved navigation preferences. Only the rebuilt navigation stack may consume a
+tap; a retiring Downloads view must not steal it before the new page appears.
+Back navigation must not reopen a consumed notification. These checks do not
+claim physical notification-center tap coverage.
+
+`ManagedDownloadResumeTests` exercises the real background HTTP engine and
+download queue against a bounded local fixture, with and without an ETag.
+It checks that pause/resume preserves progress, issues no second full-body GET,
+and produces byte-identical output. Descriptor checks cover legacy JSON ordering
+and escaping, malformed identities, and profile/item/file isolation. HTTP and
+HLS task lookups, callbacks, cancellation markers, and persisted HLS locations
+must use the same canonical identity, including for tasks saved by older builds.
+
+`DownloadPresentationTests` checks that changing rates and ETAs do not change the
+active-queue summary's height at phone and tablet widths, with separate coverage
+for accessibility text and right-to-left layouts. Live storage and transfer
+sections own their record observation: progress must not invalidate the settings
+view that constructs native picker menus. Actual preference changes must still
+update those controls.
+Compact download rows have bounded normal-text heights, expanding failure text,
+and accessibility/RTL coverage. Hosted library and show checks verify visible
+row density and season metadata. Native tab checks drive progress, completion,
+reordering, and removal/reinsertion: only Downloads may change its image, while
+Watchlist keeps its bookmark.
+`DownloadsInteractionTests` taps the production library and episode menus,
+checks 44-point targets and the compact queue control, returns through one Back
+step, and cancels then confirms season deletion without navigating by accident.
+Completed library and episode rows retain a spoken "Downloaded" label on the
+shared filled download glyph, without visible completion copy or disclosure
+chevrons beside their menus. Receiving 100% of bytes still does not confer the
+completed state before finalization.
+Native geometry checks keep episode artwork aligned with season headings in
+both card styles; the framed surface must not add a second content inset.
+
+The `PlozziOSInteractionTests` scheme adds real native touch coverage for Settings
+on both an owned iPhone simulator and an owned iPad simulator. It launches the
+same presentation host with an explicit settings-fixture argument, exercising
+production views rather than copies. The fixture disables cloud sync in its own
+sandbox before creating the app model; it does not need shipping entitlements
+or stored accounts. Normal presentation-test launches still use the blank host.
+The UI-test target depends on that host, not additional package products.
+
+`SettingsInteractionTests` checks navigation from compact and split Settings,
+Cards and Display Size, independent theme and playback menus, caption previews
+and per-view overrides, and neighboring Home, subtitle, spoiler, Circadian Mode,
+and Live TV controls. These tests must synthesize taps: direct accessibility
+activation and screenshots alone miss a native List cell intercepting a
+neighbor's tap. Keep the shared lease, private package workspace, serial
+execution, and retained `xcresult` used by the presentation suite; select
+`-scheme PlozziOSInteractionTests -only-testing:PlozziOSInteractionTests/SettingsInteractionTests`
+with the explicit owned iOS simulator destination.
 
 `tools/run-focus-tests.sh` runs the `PlozzFocusTests` scheme in a minimal,
 separate `PlozzFocusHost` app. It uses the same package code but supplies a real
@@ -317,8 +576,9 @@ Back starts toward that shape immediately while native focus restores underneath
 A replaced source or changed window size uses a nonspatial fallback. A temporarily
 unrealized source still returns to its captured shape without waiting for focus.
 The episode browser keeps its layout while masked until its final reveal and
-cannot take entry focus during a whole-show entrance. Episode-context opens
-retain their existing initial-focus behavior; Reduce Motion reveals it directly.
+cannot take entry focus during a whole-show or episode-context entrance.
+Both routes must reach the actual native Hero Play control; Reduce Motion
+retains the same entry destination.
 Its rendered keyline check waits for native focus completion and the artwork's
 painted width to settle, then compares artwork and About in one captured frame.
 The settling condition is independent of x-position, so real misalignment still
@@ -506,6 +766,12 @@ vertical animation moves the labels down on focus and returns them on blur,
 reversing from the current presentation position when interrupted. The model
 always contains the latest focus destination, not a deferred completion write.
 Reduce Motion applies the destination without animation.
+`MediaRowEpisodeEntryHostedTests` samples caption pixels from the window's
+presentation-layer tree rather than repeatedly snapshotting the whole UIKit
+hierarchy during the short focus animation. A separate animated-marker/jump
+control verifies that the sampler detects real intermediate positions without
+inventing them. Glyph travel, row stability, and Reduce Motion assertions remain
+unchanged.
 Short captions are centered; overflowing captions reuse the existing marquee
 speeds and reading pauses. Plain labels own a removable Core Animation
 translation with a resting model position, so blur restores the text immediately
@@ -642,8 +908,8 @@ gated until the episode reveal finishes.
 Lower detail content first mounts after the episode row has received focus and the browser's recede
 animation has completed, so rapid early Down presses cannot enter its blank
 scroll region. The page remains at least one viewport tall before that reveal.
-Explicit episode entry keeps its immediate browser behavior; Reduce Motion uses
-an immediate completion. Once revealed, lower content remains mounted so later
+Episode-context entry keeps the hero visible and the prepared episode unfocused;
+Reduce Motion uses an immediate completion. Once revealed, lower content remains mounted so later
 navigation preserves its state. No extra hosting controller divides native
 button focus from the original page tree.
 `DetailTransitionVisualRegressionTests` also moves horizontally between real
@@ -653,8 +919,43 @@ must be restored afterward. Pixel checks compare the season pill's outer edge,
 resting episode artwork, and About's leading keyline. Coverage includes all
 card focus styles, explicit episode entry, and scroll-guard
 removal without disabling nested rails or overriding an existing entrance gate.
-The same production test samples the rail's presented position after completion:
-it must stay within one point of its final position. Checking page offset alone
+Single-season round trips through the lower information sections must preserve
+the horizontal episode offset, restore the page to the browser's vertical stage,
+and settle native focus without leaving scrolling disabled. The isolated
+episode-row regression repeats re-entry across all card focus styles and retains
+the browsed card while its entry geometry remounts.
+`testRelatedReturnsDirectlyToVisibleEpisodeWithoutSeasonFocus` separately returns
+from the second Related poster straight to the episode, without a season-chip
+handoff. Across every focus style and three round trips, actual native focus must
+remain on the episode, its full frame must be onscreen, the page must return to
+zero, and the horizontal row offset must remain unchanged. Screenshots retain
+the rendered result; testing only the focused item misses an offscreen selection.
+Presentation-layer samples also require at least eight intermediate positions
+and 300-600ms between 5% and 95% of the normal-motion return. The 0.6-second
+page animation must not inherit the much shorter focus-effect duration; its
+visible duration must match an unforced native downward reveal within 150ms.
+Nine-move native-focus bursts at 0, 30, 80, 150, and 300ms intervals end on each
+row, across all three focus styles. The final focused item must be fully visible,
+its page destination correct, and scrolling enabled. These exact-target bursts
+exercise animation races, not directional candidate selection.
+`DetailReturnFocusRemoteTests.testEpisodeRelatedDirectionsRevealTheFocusedRow`
+separately uses actual remote Up/Down on the production series detail. Remote
+calls may wait for idle; the hosted burst matrix supplies the rapid timing.
+Its sparse-row cases use real remote directions from left, middle, right, and
+horizontally scrolled episode positions with one or three Related cards and a
+competing Cast row. Every populated Related row must receive focus before Cast;
+an empty Related row must allow direct Cast entry. Both directions and all card
+focus styles are covered.
+`testRapidPassThroughEpisodesPreservesTheBrowsedEpisode` moves among Related
+columns, immediately sends three Up presses through Episodes and Seasons to the
+hero, then returns Down. Across every focus style, actual native focus must
+return to Episode 1 (then a deliberately browsed Episode 4), rather than
+replacing its remembered selection with Episode 2 during the upward pass.
+Remote calls in the reproduction arrive about 220ms apart, before the page
+animations finish.
+System Reduce Motion must reach the same destination without the full-page animation.
+The production browser-layout test also samples the rail's presented position
+after completion: it must stay within one point of its final position. Checking page offset alone
 misses the spring's measured 7–8.5pt post-completion movement of the whole browser.
 
 `NativePosterComparisonTests` is an opt-in, simulator-only comparison, enabled by
@@ -886,14 +1187,28 @@ App-owned tvOS guidance, expanded-overview, title-overview, and startup-release-
 dialogs use `PlozzDialogBackdrop` and the shared `.overlay` surface. Dark and Black
 dim the underlying page by 85%; Light retains 40%. Startup release notes retain
 their 72% minimum in Light and follow the stronger shared dimming in Dark/Black.
-Border, fill, and shadow come from `ThemePalette.overlay`, including the subtle
-Black-appearance hairline (13% opacity), rather than individual dialog implementations.
-Native alerts/sheets retain system-managed dimming; anchored playback menus are
+Border, solid fill, and shadow come from `ThemePalette.overlay`, including the subtle
+Black-appearance hairline (13% opacity). With Gradient Backgrounds enabled, the
+shared dialog style uses the theme's opaque mesh instead of the solid fill.
+`plozzSheet` uses the native presentation background on iPhone/iPad and a clear
+full-screen presentation with the shared card/dimmer on tvOS, avoiding the glass
+sheet's refracted edge strips. Existing custom cards use `.floatingCard` to
+avoid double surfaces/dimming. `plozzFullScreenCover` resets page-background
+ownership when a new full-screen flow opens inside a dialog.
+Native alerts and mobile sheets retain system-managed dimming; anchored playback menus are
 not blocking dialogs and do not gain a screen-wide dimmer.
 
 `DialogSurfaceTests` verifies rendered backdrop pixel values, preserves the
 stronger minimum, and checks that the Black border is visible but subtle without
-changing layout. Remote guidance tests keep focus, scrolling, and dismissal covered.
+changing layout. It also checks gradient/solid surface parity, clipping, page
+background ownership, and appearance forwarding across hosting boundaries.
+`DialogPresentationHostedTests` runs in both native hosted targets and opens the
+real profile actions dialog across Dark/Black/Light, gradient on/off, and normal/
+reduced transparency. Edge pixels must match the shared surface, not the
+contrasting presenter; retained images include the panel geometry. The suite
+also covers Boolean/item bindings, native dismissal callbacks, explicit
+appearance overrides, nested full-screen background ownership, TV focus, and
+single-dimmer floating cards. Remote guidance tests retain scrolling and dismissal coverage.
 
 ## Common Sense Media guidance
 
@@ -991,8 +1306,14 @@ unchanged.
 Each test runner selects its own tvOS simulator matching Xcode 26.2's SDK; no
 simulator or mutable build directory crosses runners. A missing runtime fails
 instead of choosing an older installed runtime. The full matrix retains its
-40-minute wall-clock deadline, and hosted tests retain their existing
-20-minute deadline and authoritative `xcresult` checks. Each lane uploads
+40-minute wall-clock deadline. Hosted integration builds once with
+`build-for-testing`, then runs `test-without-building`, with separate 40-minute
+deadlines and retained build/test logs and result bundles. Cold compilation must
+not consume the test execution budget: run `38059892922` spent about 19 minutes
+building before the former combined 40-minute limit killed still-progressing
+tests. The hosted job has a 90-minute outer limit for both phases and setup;
+test failures, timeouts, and unreadable `xcresult` summaries still fail closed.
+Each lane uploads
 uniquely named diagnostics on success or failure, retained for seven days.
 The simulator app build also retains its raw log without replacing a build
 failure's exit status with the log writer's status.
@@ -1159,8 +1480,10 @@ the FTP socket-timeout tests) are worth their ~1s each and should be left alone.
    `tools/test-fast.sh CoreModels FeatureAuth`. Preview with `--dry-run`.
 2. **Pre-integration (handing a branch off):** `tools/test-fast.sh` already expands
    foundational changes to the affected set.
-3. **Pre-merge / CI gate (before merging to main):** full sweep
-   `tools/run-tests.sh` (no args) — build-once, all suites.
+3. **Ordinary main landing:** agent-selected checks based on actual risk and
+   current evidence; no automatic full sweep. See "Main-gate execution and reuse."
+4. **Broad regression / distribution:** full sweep when warranted by the change
+   or required by the distribution lane. Existing CI schedules remain independent.
 
 ### `tools/test-fast.sh` usage
 ```

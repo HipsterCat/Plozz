@@ -25,19 +25,21 @@ public struct HeroBackgroundSample: Equatable, Sendable {
     }
 }
 
-/// Controls whether a hero may replace its readable text title after asynchronous
-/// logo work completes.
+/// Controls when a logo or its text fallback becomes visible.
 public enum HeroLogoPresentationPolicy: Sendable, Equatable {
     /// Show the logo whenever it finishes. Best for a detail page that does not
     /// transition between many titles in place.
     case whenReady
+    /// Keep the title area empty during resolution; show text only when no usable
+    /// logo is available.
+    case whenResolved
     /// Adopt the logo only if it is ready within the arrival window. A later result
     /// still warms the shared cache, but the current title remains visually stable.
     case onArrival(maximumWait: TimeInterval)
 
     func shouldAdopt(elapsed: TimeInterval) -> Bool {
         switch self {
-        case .whenReady:
+        case .whenReady, .whenResolved:
             return true
         case .onArrival(let maximumWait):
             return elapsed <= max(0, maximumWait)
@@ -45,7 +47,11 @@ public enum HeroLogoPresentationPolicy: Sendable, Equatable {
     }
 
     var animatesResolvedLogo: Bool {
-        self == .whenReady
+        self == .whenReady || self == .whenResolved
+    }
+
+    var showsTextWhileLoading: Bool {
+        self != .whenResolved
     }
 }
 
@@ -56,8 +62,8 @@ public enum HeroLogoPresentationPolicy: Sendable, Equatable {
 ///   1. `primaryURL` — the provider's own `Logo` image (e.g. Jellyfin).
 ///   2. `asyncFallbackURL` — a TMDb logo lookup, used only when the provider has
 ///      no usable logo.
-///   3. `textFallback` — the caller's styled title `Text`, shown immediately while
-///      artwork resolves and retained when no logo can be found.
+///   3. `textFallback` — the caller's styled title `Text`, retained when no logo
+///      can be found. `.whenResolved` keeps it invisible while artwork resolves.
 ///
 /// The logo is fit (never cropped) inside a `maxWidth` × `maxHeight` box and
 /// defaults to leading alignment, while callers presenting a centered logo can
@@ -152,6 +158,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
     private let references: [ArtworkReference]
     private let asyncFallbackURL: HeroLogoFallback?
     private let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
+    private let displayedArtworkID: String?
     private let maxWidth: CGFloat
     private let maxHeight: CGFloat
     private let constrainsToBounds: Bool
@@ -166,6 +173,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         primaryURL: URL?,
         asyncFallbackURL: HeroLogoFallback? = nil,
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
+        displayedArtworkID: String? = nil,
         maxWidth: CGFloat = 620,
         maxHeight: CGFloat = 200,
         constrainsToBounds: Bool = false,
@@ -179,6 +187,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         self.references = primaryURL.map { [.remote($0)] } ?? []
         self.asyncFallbackURL = asyncFallbackURL
         self.backgroundSample = backgroundSample
+        self.displayedArtworkID = displayedArtworkID
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
         self.constrainsToBounds = constrainsToBounds
@@ -197,6 +206,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         references: [ArtworkReference],
         asyncFallbackURL: HeroLogoFallback? = nil,
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
+        displayedArtworkID: String? = nil,
         maxWidth: CGFloat = 620,
         maxHeight: CGFloat = 200,
         constrainsToBounds: Bool = false,
@@ -210,6 +220,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         self.references = references
         self.asyncFallbackURL = asyncFallbackURL
         self.backgroundSample = backgroundSample
+        self.displayedArtworkID = displayedArtworkID
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
         self.constrainsToBounds = constrainsToBounds
@@ -223,11 +234,15 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
 
     public var body: some View {
         #if canImport(UIKit)
+        ArtworkPolicyReader(policy: nil) { policy in
+        let logoPolicy = policy.forPlacement(.logo)
         LoadedLogo(
             references: references,
             asyncFallbackURL: asyncFallbackURL,
-            prefersOnlineArtwork: MetadataProviderSettingsStore().load().preferOnlineArtwork,
+            prefersOnlineArtwork: logoPolicy.prefersOnlineArtwork,
+            providerPolicyIdentity: logoPolicy.identity,
             backgroundSample: backgroundSample,
+            displayedArtworkID: displayedArtworkID,
             maxWidth: maxWidth,
             maxHeight: maxHeight,
             constrainsToBounds: constrainsToBounds,
@@ -238,6 +253,8 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
             onResolve: onResolve,
             textFallback: textFallback
         )
+        .id(logoPolicy.identity)
+        }
         #else
         textFallback()
         #endif
@@ -260,6 +277,7 @@ enum HeroLogoMemo {
         let references: [String]
         let fallback: HeroLogoFallback.Identity?
         let prefersOnlineArtwork: Bool
+        let providerPolicyIdentity: String
     }
 
     private static var entries: [Key: ProcessedLogo] = [:]
@@ -271,12 +289,14 @@ enum HeroLogoMemo {
     static func key(
         for references: [ArtworkReference],
         fallback: HeroLogoFallback? = nil,
-        prefersOnlineArtwork: Bool = false
+        prefersOnlineArtwork: Bool = false,
+        providerPolicyIdentity: String = "default"
     ) -> Key {
         Key(
             references: references.map(\.privacySafeIdentity),
             fallback: fallback?.identity,
-            prefersOnlineArtwork: fallback != nil && prefersOnlineArtwork
+            prefersOnlineArtwork: fallback != nil && prefersOnlineArtwork,
+            providerPolicyIdentity: providerPolicyIdentity
         )
     }
 
@@ -299,7 +319,9 @@ private struct LoadedLogo<TextFallback: View>: View {
     let references: [ArtworkReference]
     let asyncFallbackURL: HeroLogoFallback?
     let prefersOnlineArtwork: Bool
+    let providerPolicyIdentity: String
     let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
+    let displayedArtworkID: String?
     let maxWidth: CGFloat
     let maxHeight: CGFloat
     let constrainsToBounds: Bool
@@ -312,10 +334,11 @@ private struct LoadedLogo<TextFallback: View>: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.heroArtworkDisplayState) private var displayedArtwork
 
     @State private var image: ProcessedLogo?
-    /// The `taskKey` the current `image` was resolved for, so a re-resolve for the
-    /// SAME subject can keep it on screen while a different subject clears it.
+    /// The completed request, including a confirmed miss. A different subject
+    /// must neither show its image nor inherit its text-fallback readiness.
     @State private var resolvedKey: HeroLogoMemo.Key?
 
     var body: some View {
@@ -323,16 +346,21 @@ private struct LoadedLogo<TextFallback: View>: View {
         // resolved once paints on the FIRST frame of a rebuild. Without it every
         // rebuild drew the styled title for at least one frame, because the
         // pipeline is an actor and even a cache hit costs a suspension.
-        let shown = (resolvedKey == taskKey ? image : nil) ?? HeroLogoMemo.value(for: taskKey)
+        let cached = (resolvedKey == taskKey ? image : nil) ?? HeroLogoMemo.value(for: taskKey)
+        let shown = cached.map { processed in
+            guard let displayedArtworkID else { return processed }
+            return HeroLogoAnalysis.refine(processed, backgroundSample: displayedArtwork?.sample(for: displayedArtworkID))
+        }
         Group {
             if let processed = shown {
                 logo(processed)
                     .transition(.opacity)
             } else {
-                // A cache miss may include a network lookup plus decode/analysis.
-                // Keep the title readable throughout; identity must never depend
-                // on optional artwork finishing first.
                 textFallback()
+                    .opacity(
+                        presentationPolicy.showsTextWhileLoading || resolvedKey == taskKey
+                            || (references.isEmpty && asyncFallbackURL == nil) ? 1 : 0
+                    )
                     .transition(.opacity)
             }
         }
@@ -417,7 +445,8 @@ private struct LoadedLogo<TextFallback: View>: View {
     private var taskKey: HeroLogoMemo.Key {
         HeroLogoMemo.key(
             for: references, fallback: asyncFallbackURL,
-            prefersOnlineArtwork: prefersOnlineArtwork
+            prefersOnlineArtwork: prefersOnlineArtwork,
+            providerPolicyIdentity: providerPolicyIdentity
         )
     }
 
@@ -436,19 +465,30 @@ private struct LoadedLogo<TextFallback: View>: View {
         // `body` also rejects that old image before the new task starts.
         if resolvedKey != taskKey { image = nil }
         let key = taskKey
+        if let cached = HeroLogoMemo.value(for: key) {
+            resolvedKey = key
+            adopt(cached, for: key)
+            if displayedArtworkID == nil, let backgroundSample {
+                let sample = await backgroundSample()
+                guard !Task.isCancelled else { return }
+                adopt(HeroLogoAnalysis.refine(cached, backgroundSample: sample), for: key)
+            }
+            return
+        }
         // `HeroLogoPipeline` caches the processed result by URL and runs the heavy
         // pixel work off the main actor, so re-appears / scheme changes / fast
         // scrolling reuse the prepared logo instead of reprocessing it.
-        guard let prepared = await loadPreparedHeroLogo(
+        let prepared = await loadPreparedHeroLogo(
             references: references,
             asyncFallbackURL: asyncFallbackURL?.resolve,
             priority: .userInitiated,
             prefersOnlineArtwork: prefersOnlineArtwork
-        ) else { return }
+        )
         guard !Task.isCancelled else { return }
+        resolvedKey = key
+        guard let prepared else { return }
         let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
         guard presentationPolicy.shouldAdopt(elapsed: elapsed) else { return }
-        resolvedKey = key
 
         // Draw the logo the moment it is decoded, BEFORE the backdrop is sampled.
         //
@@ -463,7 +503,7 @@ private struct LoadedLogo<TextFallback: View>: View {
         // would be one image pass per card while scrolling) keeps the conservative
         // always-on halo, because for that caller "unmeasured" is permanent rather
         // than momentary.
-        let awaitsSample = backgroundSample != nil
+        let awaitsSample = displayedArtworkID == nil && backgroundSample != nil
         adopt(HeroLogoAnalysis.analyze(
             prepared,
             backgroundSample: nil,
@@ -496,6 +536,15 @@ private struct LoadedLogo<TextFallback: View>: View {
 /// wordmark never flipped colour in light mode and low-contrast logos got no
 /// halo, unlike the detail hero.
 enum HeroLogoAnalysis {
+    static func refine(_ logo: ProcessedLogo, backgroundSample: HeroBackgroundSample?) -> ProcessedLogo {
+        analyze(
+            PreparedLogo(image: logo.image, luminance: logo.luminance,
+                         red: logo.red, green: logo.green, blue: logo.blue,
+                         coverage: logo.coverage, brightInk: logo.brightInk, backgroundPlate: logo.backgroundPlate),
+            backgroundSample: backgroundSample
+        )
+    }
+
     /// Logo/background luminance gap (0…1) below which the logo no longer
     /// separates by brightness alone. Tuned for a "clean" lean.
     static let haloLuminanceThreshold = 0.26
@@ -592,6 +641,20 @@ public struct HeroUIKitLogo: @unchecked Sendable {
     /// ink-corrected fit the SwiftUI one uses and a show's wordmark carries the
     /// same weight on both screens — see ``HeroLogoFit/inkScale(coverage:)``.
     public let coverage: Double
+    var measuredTone: ResolvedLogoTone?
+
+    public func matchingBackground(_ sample: HeroBackgroundSample?) -> HeroUIKitLogo {
+        guard let tone = measuredTone else { return self }
+        let processed = HeroLogoAnalysis.analyze(
+            PreparedLogo(image: image, luminance: tone.luminance, red: tone.red, green: tone.green,
+                         blue: tone.blue, coverage: tone.coverage, brightInk: tone.brightInk,
+                         backgroundPlate: tone.backgroundPlate),
+            backgroundSample: sample
+        )
+        return HeroUIKitLogo(image: image, isMonochrome: processed.isMonochrome,
+                             needsHalo: processed.needsHalo, isDark: processed.isDark,
+                             coverage: coverage, measuredTone: tone)
+    }
 }
 
 /// Loads and analyses a hero logo through the exact same shared pipeline the
@@ -603,12 +666,14 @@ public enum HeroUIKitLogoRenderer {
         references: [ArtworkReference],
         asyncFallbackURL: (@Sendable () async -> URL?)? = nil,
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
-        priority: TaskPriority = .userInitiated
+        priority: TaskPriority = .userInitiated,
+        prefersOnlineArtwork: Bool = true
     ) async -> HeroUIKitLogo? {
         guard let prepared = await loadPreparedHeroLogo(
             references: references,
             asyncFallbackURL: asyncFallbackURL,
-            priority: priority
+            priority: priority,
+            prefersOnlineArtwork: prefersOnlineArtwork
         ) else { return nil }
         let processed = HeroLogoAnalysis.analyze(prepared, backgroundSample: await backgroundSample?())
         return HeroUIKitLogo(
@@ -616,7 +681,8 @@ public enum HeroUIKitLogoRenderer {
             isMonochrome: processed.isMonochrome,
             needsHalo: processed.needsHalo,
             isDark: processed.isDark,
-            coverage: processed.coverage
+            coverage: processed.coverage,
+            measuredTone: processed.tone
         )
     }
 
@@ -624,13 +690,15 @@ public enum HeroUIKitLogoRenderer {
         primaryURL: URL?,
         asyncFallbackURL: (@Sendable () async -> URL?)? = nil,
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
-        priority: TaskPriority = .userInitiated
+        priority: TaskPriority = .userInitiated,
+        prefersOnlineArtwork: Bool = true
     ) async -> HeroUIKitLogo? {
         await render(
             references: primaryURL.map { [.remote($0)] } ?? [],
             asyncFallbackURL: asyncFallbackURL,
             backgroundSample: backgroundSample,
-            priority: priority
+            priority: priority,
+            prefersOnlineArtwork: prefersOnlineArtwork
         )
     }
 }
@@ -655,52 +723,49 @@ public enum HeroLogoPreloader {
            priority: .utility
        )
     }
+
+    @MainActor
+    public static func prepare(
+        references: [ArtworkReference], fallback: HeroLogoFallback?,
+        policy: ArtworkPresentationPolicy
+    ) async {
+        let policy = policy.forPlacement(.logo)
+        let key = HeroLogoMemo.key(
+            for: references, fallback: fallback,
+            prefersOnlineArtwork: policy.prefersOnlineArtwork,
+            providerPolicyIdentity: policy.identity
+        )
+        guard HeroLogoMemo.value(for: key) == nil, !Task.isCancelled else { return }
+        guard let prepared = await loadPreparedHeroLogo(
+            references: references, asyncFallbackURL: fallback?.resolve,
+            priority: .background, prefersOnlineArtwork: policy.prefersOnlineArtwork,
+            background: true
+        ), !Task.isCancelled else { return }
+        HeroLogoMemo.store(HeroLogoAnalysis.analyze(prepared, backgroundSample: nil), for: key)
+    }
 }
 
 private func loadPreparedHeroLogo(
     references: [ArtworkReference],
     asyncFallbackURL: (@Sendable () async -> URL?)?,
     priority: TaskPriority,
-    prefersOnlineArtwork: Bool? = nil
+    prefersOnlineArtwork: Bool = false,
+    background: Bool = false
 ) async -> PreparedLogo? {
     guard !Task.isCancelled else { return nil }
-    let prefersOnline = prefersOnlineArtwork ?? MetadataProviderSettingsStore().load().preferOnlineArtwork
     guard let firstPaint = await ArtworkFirstPaintResolver.resolve(
         references: references,
         variant: .original,
         maxAspectRatio: nil,
         asyncOnlineURL: asyncFallbackURL,
-        maximumOnlineWait: ArtworkFirstPaintResolver.focalArtworkWait,
-        prefersOnlineArtwork: prefersOnline
-    ), !Task.isCancelled else { return nil }
-    if let prepared = await HeroLogoPipeline.shared.preparedLogo(
-        for: firstPaint.reference,
-        priority: priority
-    ) {
-        return prepared
-    }
-
-    for reference in references where reference != firstPaint.reference {
-        guard !Task.isCancelled else { return nil }
-        if let prepared = await HeroLogoPipeline.shared.preparedLogo(
-            for: reference,
-            priority: priority
-        ) {
-            return prepared
+        prefersOnlineArtwork: prefersOnlineArtwork,
+        background: background,
+        imageLoader: { reference in
+            await HeroLogoPipeline.shared.preparedLogo(for: reference, priority: priority)?.image
         }
-    }
-
-    guard !Task.isCancelled,
-          let asyncFallbackURL,
-          let onlineURL = await asyncFallbackURL(),
-          !Task.isCancelled
-    else { return nil }
-    let onlineReference = ArtworkReference.remote(onlineURL)
-    guard onlineReference != firstPaint.reference,
-          !references.contains(onlineReference)
-    else { return nil }
+    ), !Task.isCancelled else { return nil }
     return await HeroLogoPipeline.shared.preparedLogo(
-        for: onlineReference,
+        for: firstPaint.reference,
         priority: priority
     )
 }
@@ -799,26 +864,6 @@ struct ProcessedLogo {
 actor HeroLogoPipeline {
     static let shared = HeroLogoPipeline()
 
-    /// Warms the cache for a card that has not scrolled into view yet.
-    ///
-    /// A logo resolves asynchronously, so a card that appears before its logo does
-    /// shows the styled title first and swaps once the artwork lands. On a row the
-    /// viewer is scrolling that swap is visible — the card changes under them,
-    /// which is exactly what a rail should never do. Artwork was already warmed
-    /// ahead of the scroll; this does the same for the logo (and, because the
-    /// prepared result carries the tone the card's backdrop reacts to, for the
-    /// dim as well) so both are resident before the card is reached.
-    ///
-    /// Fire-and-forget and at background priority: it must never compete with the
-    /// cards actually on screen. Requests coalesce and results are cached, so a
-    /// rail scrolled back and forth pays once.
-    nonisolated func prefetch(references: [ArtworkReference]) {
-        guard let first = references.first else { return }
-        Task.detached(priority: .background) {
-            _ = await self.preparedLogo(for: first, priority: .background)
-        }
-    }
-
     private struct CacheEntry {
         let logo: PreparedLogo
         let reference: ArtworkReference
@@ -834,6 +879,7 @@ actor HeroLogoPipeline {
         let task: Task<PreparedLogo?, Never>
         let reference: ArtworkReference
         let token: NetworkToken?
+        var consumers: Set<UUID>
     }
 
     private var cache: [String: CacheEntry] = [:]
@@ -842,6 +888,7 @@ actor HeroLogoPipeline {
     private var accountGenerations: [String: UInt64] = [:]
     private var revisionGenerations: [String: UInt64] = [:]
     private let capacity = 48
+    private static let backgroundLimiter = ConcurrencyLimiter(limit: 2)
 
     func preparedLogo(
         for reference: ArtworkReference,
@@ -852,24 +899,49 @@ actor HeroLogoPipeline {
             promote(key)
             return hit.logo
         }
-        if let running = inFlight[key] {
-            return await running.task.value
-        }
+        guard !Task.isCancelled else { return nil }
+        let consumer = UUID()
         let token = networkToken(for: reference)
-        let id = UUID()
-        let task = Task.detached(priority: priority) {
-            await HeroLogoPipeline.fetchAndPrepare(reference)
+        let work: Running
+        if var running = inFlight[key], !running.task.isCancelled {
+            running.consumers.insert(consumer)
+            inFlight[key] = running
+            work = running
+        } else {
+            let task = Task.detached(priority: priority) {
+                if priority == .background {
+                    // Keep the permit until the actual I/O and pixel work drain,
+                    // not merely until a cancelled view stops awaiting them.
+                    return try? await Self.backgroundLimiter.runUnlessCancelled {
+                        await Self.fetchAndPrepare(reference, background: true)
+                    }
+                }
+                return await Self.fetchAndPrepare(reference, background: false)
+            }
+            work = Running(id: UUID(), task: task, reference: reference, token: token, consumers: [consumer])
+            inFlight[key] = work
         }
-        inFlight[key] = Running(id: id, task: task, reference: reference, token: token)
-        let result = await task.value
-        if inFlight[key]?.id == id {
+        let result = await withTaskCancellationHandler {
+            await work.task.value
+        } onCancel: {
+            Task { await self.cancelConsumer(consumer, key: key, id: work.id) }
+        }
+        if inFlight[key]?.id == work.id {
             inFlight.removeValue(forKey: key)
         }
-        guard token == networkToken(for: reference) else { return nil }
+        guard !Task.isCancelled, !work.task.isCancelled, token == networkToken(for: reference) else { return nil }
         if let result {
             store(result, reference: reference, key: key)
         }
         return result
+    }
+
+    private func cancelConsumer(_ consumer: UUID, key: String, id: UUID) {
+        guard inFlight[key]?.id == id else { return }
+        inFlight[key]?.consumers.remove(consumer)
+        if inFlight[key]?.consumers.isEmpty == true {
+            inFlight[key]?.task.cancel()
+        }
     }
 
     func purgeNetworkArtwork(
@@ -951,7 +1023,7 @@ actor HeroLogoPipeline {
         "\(accountID)|\(credentialRevision.rawValue.uuidString)"
     }
 
-    private static func fetchAndPrepare(_ reference: ArtworkReference) async -> PreparedLogo? {
+    private static func fetchAndPrepare(_ reference: ArtworkReference, background: Bool) async -> PreparedLogo? {
         switch reference {
         case .remote(let url):
             guard let (data, response) = try? await ArtworkSession.shared.data(from: url) else {
@@ -964,7 +1036,8 @@ actor HeroLogoPipeline {
         case .networkFile:
             guard let image = await ArtworkImageCache.shared.image(
                 for: reference,
-                variant: .heroPreview
+                variant: .heroPreview,
+                background: background
             ) else {
                 return nil
             }
@@ -1446,6 +1519,14 @@ private struct LogoStats {
 /// left-of-centre band where the logo sits. Returns `nil` when no candidate URL
 /// yields a decodable image (the caller then keeps the halo on, to be safe).
 public enum HeroBackgroundSampler {
+    /// Uses an already-displayed bitmap; never requests another image or resolution.
+    public static func sample(
+        artwork: FirstPaintArtwork,
+        region: CGRect = CGRect(x: 0.0, y: 0.28, width: 0.5, height: 0.40)
+    ) async -> HeroBackgroundSample? {
+        await Cache.shared.sample(artwork.reference, region: region, variant: artwork.variant, image: artwork.image)
+    }
+
     /// Mean colour + luminance of `region` (normalized, origin top-left) across
     /// the first decodable URL in `urls`. `region` defaults to the left-of-centre
     /// vertical mid-band, which is where the hero's leading-aligned logo renders.
@@ -1496,9 +1577,11 @@ public enum HeroBackgroundSampler {
         func sample(
             _ reference: ArtworkReference,
             region: CGRect,
-            variant: ArtworkImageVariant
+            variant: ArtworkImageVariant,
+            image: UIImage? = nil
         ) async -> HeroBackgroundSample? {
-            let key = "\(reference.privacySafeIdentity)|\(region.minX),\(region.minY),\(region.width),\(region.height)|\(variant.rawValue)"
+            let source = image.map { "displayed:\(ObjectIdentifier($0))" } ?? "requested"
+            let key = "\(source)|\(reference.privacySafeIdentity)|\(region.minX),\(region.minY),\(region.width),\(region.height)|\(variant.rawValue)"
             if let hit = entries[key] {
                 promote(key)
                 return hit
@@ -1507,7 +1590,8 @@ public enum HeroBackgroundSampler {
                 return await running.value
             }
             let task = Task.detached(priority: .utility) {
-                await HeroBackgroundSampler.sampleOne(reference, region: region, variant: variant)
+                if let image { return HeroBackgroundSampler.sampleImage(image, region: region) }
+                return await HeroBackgroundSampler.sampleOne(reference, region: region, variant: variant)
             }
             inFlight[key] = task
             let result = await task.value
@@ -1539,8 +1623,12 @@ public enum HeroBackgroundSampler {
         region: CGRect,
         variant: ArtworkImageVariant
     ) async -> HeroBackgroundSample? {
-        guard let image = await ArtworkImageCache.shared.image(for: reference, variant: variant),
-              let cg = image.cgImage,
+        guard let image = await ArtworkImageCache.shared.image(for: reference, variant: variant) else { return nil }
+        return sampleImage(image, region: region)
+    }
+
+    private static func sampleImage(_ image: UIImage, region: CGRect) -> HeroBackgroundSample? {
+        guard let cg = image.cgImage,
               cg.width > 0,
               cg.height > 0 else {
             return nil

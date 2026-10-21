@@ -7,6 +7,71 @@ import zlib
 final class LiveTVXMLTVParserTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_767_225_600)
 
+    func testProgrammeOnlyFeedMatchesExactIDsWithoutGuessingNamesOrCase() throws {
+        let xml = Data("""
+        <tv>
+          <programme channel="station" start="20260101000000 +00:00" stop="20260101010000 +00:00"><title>Listing</title></programme>
+          <programme channel="other" start="20260101000000 +0000" stop="20260101010000 +0000"><title>Other</title></programme>
+        </tv>
+        """.utf8)
+        let channels = [
+            makeChannel(id: "sd", name: "Station SD", guideID: "station"),
+            makeChannel(id: "hd", name: "Station HD", guideID: "station"),
+            makeChannel(id: "name-only", name: "station", guideID: nil),
+            makeChannel(id: "case-only", name: "station", guideID: "STATION")
+        ]
+        let plain = try LiveTVXMLTVParser().parseXML(data: xml, channels: channels, now: now)
+        let compressed = try LiveTVXMLTVParser().parse(gzipData: gzip(xml), channels: channels, now: now)
+        XCTAssertEqual(Set(plain.programs.map(\.channelID)), ["sd", "hd"])
+        XCTAssertEqual(plain.matches["sd"]?.method, .exactID)
+        XCTAssertEqual(plain.guideChannels["station"], [])
+        XCTAssertEqual(plain.guideChannelCount, 2)
+        XCTAssertEqual(plain.programs.map(\.id), compressed.programs.map(\.id))
+        let overridden = try LiveTVXMLTVParser().parseXML(
+            data: xml, channels: channels, now: now, overrides: ["sd": "missing"]
+        )
+        XCTAssertNil(overridden.matches["sd"])
+    }
+
+    func testColonOffsetsAreEquivalentAndMalformedOffsetsStayInvalid() {
+        for (colon, compact) in [
+            ("+08:00", "+0800"), ("-05:30", "-0530"), ("+00:00", "+0000"), ("-00:30", "-0030")
+        ] {
+            let actual = XMLTVDateParser.date(from: "20260101010000 \(colon)")
+            XCTAssertNotNil(actual, colon)
+            XCTAssertEqual(actual, XMLTVDateParser.date(from: "20260101010000 \(compact)"))
+        }
+        for offset in ["+24:00", "-05:60", "+8:00", "+008:00", "+00:000", "+0:000", "+00::00",
+                       "+00:0x", "+٠٠:٠٠", "+000:0", "00:00", "UTC", "+00:00 trailing"] {
+            XCTAssertNil(XMLTVDateParser.date(from: "20260101010000 \(offset)"), offset)
+        }
+        XCTAssertNil(XMLTVDateParser.date(from: "20260230010000 +00:00"))
+    }
+
+    func testProgrammeReferencesRespectChannelAndRetainedTextBudgets() {
+        for ids in [
+            (0...LiveTVXMLTVParser.maximumGuideChannels).map(String.init),
+            (0..<8_193).map { String(repeating: "x", count: 4_090) + String(format: "%06d", $0) }
+        ] {
+            let xml = "<tv>" + ids.map { "<programme channel=\"\($0)\"/>" }.joined() + "</tv>"
+            XCTAssertThrowsError(
+                try LiveTVXMLTVParser().parseXML(data: Data(xml.utf8), channels: [], now: now)
+            ) { XCTAssertEqual($0 as? LiveTVSourceImportError, .guideTooLarge) }
+        }
+    }
+
+    func testProgrammeReferencesDoNotHideConflictingLaterDeclarations() {
+        let xml = Data("""
+        <tv><programme channel="g"/>
+          <channel id="g"><display-name>First</display-name></channel>
+          <channel id="g"><display-name>Conflicting</display-name></channel>
+        </tv>
+        """.utf8)
+        XCTAssertThrowsError(
+            try LiveTVXMLTVParser().parseXML(data: xml, channels: [], now: now)
+        ) { XCTAssertEqual($0 as? LiveTVSourceImportError, .invalidGuide) }
+    }
+
     func testMissingEndUsesOnlyBoundedSameChannelSuccessorAndRetainsProvenance() throws {
         let xml = """
         <tv><channel id="g"><display-name>Station</display-name></channel>

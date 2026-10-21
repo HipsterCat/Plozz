@@ -76,6 +76,17 @@ streams, real video-frame/audio decoding, seek/pause/resume and cleanup. It repo
 HTTP service is owned by the invocation and closed on success/failure; its
 pre-encoded streams do not validate an actual server encoder or subscription.
 
+`StreamingBufferingHostedTests` in the iOS/tvOS presentation test targets
+separately delays the second segment of a synthetic H.264/AAC VOD stream by
+20 seconds. It requires actual decoded frames and recovery at more than 90%
+of the selected speed once the remaining segments are available, including a
+paused/resumed case at 1.25x speed. An exploratory comparison found that both
+immediate and automatically buffered playback can exhaust the first segment
+during this unpredictable gap. The regression checks recovery, not a promise
+of stall-free playback from an underpowered or stalled real encoder.
+The test reuses the existing generated `iptv` media fixture and discontinuity
+markers rather than adding captured content or contacting a live provider.
+
 `--self-test` is explicitly labelled **harness-unit-tests**, not an end-to-end
 result. To test one available server, explicitly select `--providers emby`, for
 example. The report then names that narrower required set; it does not imply the
@@ -102,6 +113,9 @@ For every selected provider:
   audible speaker route, correct loudness, Atmos passthrough, or HDMI behavior.
 - Pause holds position, resume advances, a seek presents new frames, and the
   custom case also starts from a nonzero resume position.
+- Providers with a session-maintenance capability must acknowledge a ping while
+  their rendition is paused. This checks the exact owned session, not survival
+  across the server's undocumented expiry interval or iOS app suspension.
 - The owned transcode cleanup request is acknowledged. This is not independent
   observation of the server's OS process exiting.
 

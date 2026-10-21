@@ -204,6 +204,36 @@ public final class ItemDetailViewModel {
     /// Full per-item episode facts used by the hero. Deliberately separate from
     /// `seasonEpisodes`: enriching a focused hero must not replace the visible rail.
     private let episodeBadgeEnrichment = EpisodeBadgeEnrichmentModel()
+    private let playbackInventoryState = DetailPlaybackInventoryState()
+    public var playbackInventoryRetryError: LocalizedStringResource? {
+        get { playbackInventoryState.retryError }
+        set { playbackInventoryState.retryError = newValue }
+    }
+
+    public func hasNoPlaybackStreams(for item: MediaItem) -> Bool {
+        (item.sourceAccountID == nil || item.sourceAccountID == activeSourceAccountID)
+            && playbackInventoryState.noStreamItemIDs.contains(item.id)
+    }
+
+    public func isRetryingPlaybackInventory(for item: MediaItem) -> Bool {
+        (item.sourceAccountID == nil || item.sourceAccountID == activeSourceAccountID)
+            && playbackInventoryState.retryingItemIDs.contains(item.id)
+    }
+
+    public func retryPlaybackInventory(for item: MediaItem) async {
+        guard hasNoPlaybackStreams(for: item),
+              playbackInventoryState.retryingItemIDs.insert(item.id).inserted else { return }
+        let generation = sourceGeneration
+        playbackInventoryRetryError = nil
+        defer {
+            if sourceGeneration == generation { playbackInventoryState.retryingItemIDs.remove(item.id) }
+        }
+        if item.id == activeItemID {
+            _ = await refreshPlaybackInventory(for: item, token: nil)
+        } else if item.kind == .episode {
+            _ = await enrichEpisodeBadgesIfNeeded(item)
+        }
+    }
     /// When this detail is a series, context propagated onto its episodes so each
     /// episode resolves fallback artwork/routing with full series metadata.
     private var seriesEpisodeContext: SeriesEpisodeContext?
@@ -217,7 +247,7 @@ public final class ItemDetailViewModel {
     /// Stable identity for the active movie/series source. Includes the account so
     /// switching servers re-resolves even when two backends use the same item id.
     public var themeMusicPlaybackID: String? {
-        guard !isDiscoveryItem,
+        guard !isDiscoveryItem, let activeProvider,
               case let .loaded(detail) = state,
               detail.item.kind == .movie || detail.item.kind == .series else {
             return nil
@@ -233,7 +263,7 @@ public final class ItemDetailViewModel {
 
     /// Resolves theme audio as a best-effort decorative enhancement.
     public func resolveThemeMusic() async -> ThemeMusic? {
-        guard themeMusicPlaybackID != nil else { return nil }
+        guard themeMusicPlaybackID != nil, let activeProvider else { return nil }
         do {
             let theme = try await activeProvider.themeMusic(for: activeItemID)
             if let theme {
@@ -250,9 +280,10 @@ public final class ItemDetailViewModel {
         }
     }
 
-    private let provider: any MediaProvider
+    private let provider: (any MediaProvider)?
     private let itemID: String
     private let ratingsProvider: any ExternalRatingsProviding
+    private let detailMetadataResolver: @Sendable (MediaItem) async -> MetadataEnrichment
     /// External until a real library source is resolved. Both shells observe this
     /// instead of freezing the index's ownership answer at navigation time.
     public private(set) var isDiscoveryItem: Bool
@@ -279,7 +310,7 @@ public final class ItemDetailViewModel {
     /// keying go through these, never the immutable base, so an in-place switch
     /// re-keys cleanly. The base lets are kept so the page's original identity is
     /// recoverable and the documented immutability of the opened source holds.
-    private var activeProvider: any MediaProvider
+    private var activeProvider: (any MediaProvider)?
     private var activeItemID: String
     private var activeSourceAccountID: String?
     private let editionOpeningSource: MediaItemSourceIdentity?
@@ -324,6 +355,7 @@ public final class ItemDetailViewModel {
     /// versions/watch-state are seeded from the loaded detail; alternates are
     /// enriched off the critical path (see ``enrichAlternateSources``).
     private var initialSources: [MediaSourceRef]
+    @ObservationIgnored private var rejectedSourceIDs: Set<String>
     /// Resolves an account id to its provider so alternate-server copies can be
     /// fetched for their versions/watch-state. Returns `nil` for unknown accounts
     /// (e.g. a server signed out since the merge).
@@ -337,7 +369,8 @@ public final class ItemDetailViewModel {
     /// server's ``MediaSourceRef``. Also resolves an external title's first library
     /// copy when the index has no entry. Ordinary library details use it only for
     /// off-critical-path picker enrichment.
-    private let crossServerSourceResolver: (@Sendable (MediaItem) async -> [MediaSourceRef])?
+    private let crossServerSourceResolver: (@Sendable (MediaItem) async -> CrossServerSourceResolution)?
+    private let identitySources: (MediaItem) -> [MediaSourceRef]
 
     /// The enriched per-server sources for this title, primary first. Drives the
     /// detail server picker; each entry's `versions` fill in as alternate servers
@@ -353,14 +386,16 @@ public final class ItemDetailViewModel {
 
     /// The current server described as a ``MediaSourceRef`` **for display**, built
     /// from the active provider. Unlike ``sources`` (deliberately empty for a
-    /// single-server title so no picker shows), this is always populated, so the
+    /// single-server title so no picker shows), this is populated for library
+    /// details and nil for provider-free external details, so the
     /// detail "Playback" card can show the server + connection even for the common
     /// one-server case. Prefers the matching enriched source when the multi-server
     /// picker is populated so its richer metadata (e.g. resolved locality) wins.
-    public var currentSourceForDisplay: MediaSourceRef {
+    public var currentSourceForDisplay: MediaSourceRef? {
+        guard let activeProvider else { return nil }
         if let match = sources.first(where: { $0.accountID == activeSourceAccountID && $0.itemID == activeItemID })
             ?? sources.first(where: { $0.accountID == activeSourceAccountID }) {
-            return match
+            return Self.fillingSourceDisplayMetadata(in: match, provider: activeProvider)
         }
         return MediaSourceRef(
             accountID: activeSourceAccountID ?? activeProvider.session.server.id,
@@ -489,7 +524,7 @@ public final class ItemDetailViewModel {
     private var snapshotKey: String { "\(activeSourceAccountID ?? "_")|\(activeItemID)" }
 
     public init(
-        provider: any MediaProvider,
+        provider: (any MediaProvider)?,
         itemID: String,
         initialItem: MediaItem? = nil,
         initialResumeEpisode: MediaItem? = nil,
@@ -506,6 +541,7 @@ public final class ItemDetailViewModel {
         availabilityRegionCode: String =
             Locale.current.region?.identifier ?? "US",
         ratingsProvider: any ExternalRatingsProviding = DisabledRatingsProvider(),
+        detailMetadataResolver: @escaping @Sendable (MediaItem) async -> MetadataEnrichment = { _ in MetadataEnrichment() },
         sourceAccountID: String? = nil,
         originSourceAccountID: String? = nil,
         onlineTrailerResolver: @escaping OnlineTrailerResolving = ItemDetailViewModel.defaultOnlineTrailerResolver,
@@ -513,7 +549,8 @@ public final class ItemDetailViewModel {
         trailerCache: TrailerResolutionCache = .shared,
         initialSources: [MediaSourceRef] = [],
         alternateProviderResolver: @escaping (String) -> (any MediaProvider)? = { _ in nil },
-        crossServerSourceResolver: (@Sendable (MediaItem) async -> [MediaSourceRef])? = nil,
+        crossServerSourceResolver: (@Sendable (MediaItem) async -> CrossServerSourceResolution)? = nil,
+        identitySources: @escaping (MediaItem) -> [MediaSourceRef] = { _ in [] },
         relatedTitlesLoader: RelatedTitlesLoader? = nil,
         snapshotCache: DetailSnapshotCache = .ephemeral
     ) {
@@ -536,14 +573,17 @@ public final class ItemDetailViewModel {
         // instead, which is why a share's resume never survived a relaunch).
         self.activeSourceAccountID = sourceAccountID ?? originSourceAccountID
         self.ratingsProvider = ratingsProvider
+        self.detailMetadataResolver = detailMetadataResolver
         self.sourceAccountID = sourceAccountID
         self.originSourceAccountID = originSourceAccountID
         self.onlineTrailerResolver = onlineTrailerResolver
         self.playableVideoIDResolver = playableVideoIDResolver
         self.trailerCache = trailerCache
         self.initialSources = initialSources
+        self.rejectedSourceIDs = initialItem?.rejectedSourceIDs ?? []
         self.alternateProviderResolver = alternateProviderResolver
         self.crossServerSourceResolver = crossServerSourceResolver
+        self.identitySources = identitySources
         self.snapshotCache = snapshotCache
 
         // Seed the hero from the list item the user just tapped so the detail
@@ -642,7 +682,11 @@ public final class ItemDetailViewModel {
         // children). Handles the single-library-copy case that the multi-source
         // locality retarget below doesn't.
         adoptLibraryItemIDForActiveAccountIfNeeded()
-        let loadProvider = activeProvider
+        guard let loadProvider = activeProvider else {
+            PlozzLog.app.error("Library detail has no active media source")
+            state = .failed(.unauthorized)
+            return
+        }
         let loadItemID = activeItemID
         let loadAccountID = activeSourceAccountID
         let loadSourceGeneration = sourceGeneration
@@ -770,7 +814,7 @@ public final class ItemDetailViewModel {
                 await resumeTask
                 guard !Task.isCancelled, isCurrent() else { return }
                 state = .loaded(Detail(
-                    item: taggedItem,
+                    item: tagged(state.value?.item ?? taggedItem),
                     children: fetchedChildren.map(tagged),
                     childrenLoaded: true,
                     upcomingSchedule: state.value?.upcomingSchedule,
@@ -861,7 +905,9 @@ public final class ItemDetailViewModel {
               sourceGeneration == generation,
               state.value?.item.id == seed.id else { return }
 
-        let availableSources = resolved.compactMap { source -> MediaSourceRef? in
+        rejectedSourceIDs.formUnion(resolved.rejectedSourceIDs)
+        let availableSources = resolved.sources.compactMap { source -> MediaSourceRef? in
+            guard !rejectedSourceIDs.contains(source.id) else { return nil }
             guard source.kind == nil || source.kind == seed.kind,
                   let provider = alternateProviderResolver(source.accountID) else { return nil }
             var source = source
@@ -885,6 +931,7 @@ public final class ItemDetailViewModel {
         initialSources = availableSources
         var owned = seed.selectingSource(selected)
         owned.sources = availableSources
+        owned.rejectedSourceIDs = rejectedSourceIDs
         owned.availability = nil
         owned.downloadProgress = nil
         state = .loaded(Detail(item: owned, children: []))
@@ -952,7 +999,8 @@ public final class ItemDetailViewModel {
            !Task.isCancelled,
            sourceGeneration == generation,
            case var .loaded(latest) = state,
-           latest.item.id == enriched.id {
+           latest.item.id == enriched.id,
+           !latest.item.usesProviderRatings {
             latest.item.ratings =
                 latest.item.ratings.mergedWithAuthoritative(externalRatings)
             state = .loaded(latest)
@@ -964,7 +1012,7 @@ public final class ItemDetailViewModel {
         _ enrichment: MetadataEnrichment,
         to item: MediaItem
     ) -> MediaItem {
-        var copy = item
+        var copy = DetailMetadataResolver.applying(enrichment, to: item)
         if copy.overview?.isEmpty != false, let overview = enrichment.overview {
             copy.overview = overview.value
             copy.metadataProvenance.set(overview, for: .overview)
@@ -997,10 +1045,6 @@ public final class ItemDetailViewModel {
            let backdrop = enrichment.detailBackdrop {
             copy.heroBackdropURL = backdrop.value
             copy.metadataProvenance.set(backdrop, for: .detailBackdrop)
-        }
-        if copy.cast.isEmpty, let cast = enrichment.cast {
-            copy.people = cast.value
-            copy.metadataProvenance.set(cast, for: .cast)
         }
         for (key, value) in enrichment.externalIDs
         where copy.providerIDs[key] == nil {
@@ -1195,7 +1239,79 @@ public final class ItemDetailViewModel {
             self.enrichmentGeneration = token
             self.startAlternateSourceEnrichment(primaryID: item.id)
             self.startCrossServerDiscovery(for: taggedItem)
-            self.enrichmentComplete = true
+            let completed = await self.refreshPlaybackInventory(for: taggedItem, token: token)
+            guard !Task.isCancelled, self.enrichmentGeneration == token else { return }
+            self.enrichmentComplete = completed
+        }
+    }
+
+    private func refreshPlaybackInventory(for item: MediaItem, token: UInt64?) async -> Bool {
+        guard let provider = activeProvider, provider.playbackInventoryRequiresEnrichment,
+              item.kind == .movie || item.kind == .episode else { return true }
+        let generation = sourceGeneration
+        let accountID = activeSourceAccountID
+        do {
+            let resolved: MediaItem
+            if let token {
+                guard let result = await EnrichmentScheduler.shared.run(token: token, {
+                    () async -> Result<MediaItem, Error> in
+                    do {
+                        try Task.checkCancellation()
+                        return .success(try await provider.playbackItem(id: item.id))
+                    } catch {
+                        return .failure(error)
+                    }
+                }) else { return false }
+                resolved = try result.get()
+            } else {
+                try Task.checkCancellation()
+                resolved = try await provider.playbackItem(id: item.id)
+            }
+            guard !Task.isCancelled, token == nil || enrichmentGeneration == token,
+                  isCurrentSource(generation: generation, itemID: item.id, accountID: accountID),
+                  var detail = state.value else { return false }
+            guard resolved.id == item.id, resolved.kind == item.kind,
+                  resolved.sourceAccountID == nil || resolved.sourceAccountID == accountID else {
+                PlozzLog.playback.error("Detail version inventory did not match the requested source.")
+                if playbackInventoryState.retryingItemIDs.contains(item.id) {
+                    playbackInventoryRetryError = StreamingQualityError.sourceUnavailable.userMessage
+                }
+                return false
+            }
+            playbackInventoryState.noStreamItemIDs.remove(item.id)
+            detail.item.versions = resolved.versions
+            detail.item.sources = detail.item.sources.map {
+                stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
+            }
+            state = .loaded(detail)
+            sources = sources.map {
+                stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
+            }
+            persistSnapshot()
+            return true
+        } catch {
+            guard !Task.isCancelled, (error as? AppError) != .cancelled,
+                  !(error is CancellationError), token == nil || enrichmentGeneration == token,
+                  isCurrentSource(generation: generation, itemID: item.id, accountID: accountID) else { return false }
+            // Browsing remains available; Play still requires its own successful
+            // inventory and presents the typed error instead of trusting this fallback.
+            let message = PlaybackVersionChoiceModel.reportFailure(error, stage: "detail")
+            if (error as? StreamingQualityError) == .noStreams {
+                playbackInventoryState.noStreamItemIDs.insert(item.id)
+                if var detail = state.value {
+                    detail.item.versions = []
+                    detail.item.sources = detail.item.sources.map {
+                        stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
+                    }
+                    state = .loaded(detail)
+                    sources = sources.map {
+                        stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
+                    }
+                }
+                return true
+            }
+            if playbackInventoryState.retryingItemIDs.contains(item.id) { playbackInventoryRetryError = message }
+            return false
         }
     }
 
@@ -1226,6 +1342,7 @@ public final class ItemDetailViewModel {
             for: item,
             sourceGeneration: sourceGeneration
         )
+        async let metadataDone: Void = enrichDetailMetadata(for: item, sourceGeneration: sourceGeneration)
         async let extrasDone: Void = loadExtras(
             for: item,
             children: children,
@@ -1235,6 +1352,7 @@ public final class ItemDetailViewModel {
         _ = await trailersDone
         _ = await ratingsDone
         _ = await overviewDone
+        _ = await metadataDone
         _ = await extrasDone
     }
 
@@ -1319,7 +1437,7 @@ public final class ItemDetailViewModel {
     }
 
     public func retryExtras() async {
-        guard let detail = state.value else { return }
+        guard let detail = state.value, let activeProvider else { return }
         await loadExtras(
             for: detail.item,
             children: detail.children,
@@ -1352,7 +1470,7 @@ public final class ItemDetailViewModel {
             seasonLoadingSuspended = false
         }
         guard hasPaintedFreshDetail else { return }
-        if let item = state.value?.item {
+        if let item = state.value?.item, let activeProvider {
             startStreamProbeEnrichment(
                 for: item,
                 provider: activeProvider,
@@ -1597,6 +1715,9 @@ public final class ItemDetailViewModel {
                 var updated = mutation.applied(to: child)
                 if let seriesPlayedCascade {
                     updated.isPlayed = seriesPlayedCascade
+                    if updated.kind == .season {
+                        updated.unwatchedEpisodeCount = seriesPlayedCascade ? 0 : nil
+                    }
                 }
                 return updated
             }
@@ -1660,7 +1781,7 @@ public final class ItemDetailViewModel {
         // reload) while this one is still awaiting the network; re-checking the
         // identity before publishing makes a superseded reload bail instead of
         // painting the previous server's detail/children over the newer one.
-        let provider = activeProvider
+        guard let provider = activeProvider else { await load(); return }
         let itemID = activeItemID
         let account = activeSourceAccountID
         let reloadSourceGeneration = sourceGeneration
@@ -1731,6 +1852,7 @@ public final class ItemDetailViewModel {
         guard !Task.isCancelled else { return }
         await enrichRatings(for: item, sourceGeneration: reloadSourceGeneration)
         await enrichOverview(for: item, sourceGeneration: reloadSourceGeneration)
+        await enrichDetailMetadata(for: item, sourceGeneration: reloadSourceGeneration)
         async let trailers: Void = loadTrailers(
             for: item,
             provider: provider,
@@ -1846,11 +1968,11 @@ public final class ItemDetailViewModel {
     /// Reads bounded pages without changing the existing collection detail/rail
     /// presentation. A failed later page is never cached as an empty collection.
     public func retryCollectionMembers() async {
-        guard case var .loaded(detail) = state, detail.item.kind == .collection else { return }
+        guard case var .loaded(detail) = state, detail.item.kind == .collection,
+              let provider = activeProvider else { return }
         collectionLoadGeneration &+= 1
         let requestGeneration = collectionLoadGeneration
         let generation = sourceGeneration
-        let provider = activeProvider
         let itemID = detail.item.id
         detail.collectionMembersState = .loading
         state = .loaded(detail)
@@ -2018,6 +2140,7 @@ public final class ItemDetailViewModel {
     /// failures cache an empty list so a missing season does not retry on every
     /// focus change.
     public func loadEpisodes(for seasonID: String, forceRefresh: Bool = false) async {
+        guard let provider = activeProvider else { return }
         let sourceItemID = activeItemID
         let sourceAccountID = activeSourceAccountID
         let loadSourceGeneration = sourceGeneration
@@ -2044,7 +2167,6 @@ public final class ItemDetailViewModel {
                    !previousAttemptFailed {
                     return
                 }
-                let provider = activeProvider
                 let token = UUID()
                 load = SeasonLoad(token: token)
                 let superseded = seasonLoads[seasonID]
@@ -2180,19 +2302,27 @@ public final class ItemDetailViewModel {
     /// Overlay technical facts without replacing current progress, numbering or
     /// ownership. A later sparse season/resume result must not erase hero badges.
     public func episodeWithEnrichedBadges(_ episode: MediaItem) -> MediaItem {
+        if hasNoPlaybackStreams(for: episode) {
+            var unavailable = episode
+            unavailable.versions = []
+            return unavailable
+        }
         guard episode.kind == .episode,
               episode.sourceAccountID == nil || activeSourceAccountID == nil
                 || episode.sourceAccountID == activeSourceAccountID,
               let full = episodeBadgeEnrichment[episode.id] else { return episode }
         var enriched = episode
         enriched.mediaInfo = full.mediaInfo ?? enriched.mediaInfo
-        if !full.versions.isEmpty { enriched.versions = full.versions }
+        if activeProvider?.playbackInventoryRequiresEnrichment == true || !full.versions.isEmpty {
+            enriched.versions = full.versions
+        }
         return enriched
     }
 
-    /// Fetches full file facts once per episode/source without rewriting the rail.
+    /// Fetches full file facts and deferred versions once per episode/source
+    /// without rewriting the rail or replacing the series' editorial hero.
     public func enrichEpisodeBadgesIfNeeded(_ episode: MediaItem) async -> MediaItem? {
-        guard episode.kind == .episode,
+        guard let activeProvider, episode.kind == .episode,
               episode.sourceAccountID == nil || activeSourceAccountID == nil
                 || episode.sourceAccountID == activeSourceAccountID else { return nil }
         if episodeBadgeEnrichment[episode.id] != nil {
@@ -2201,17 +2331,37 @@ public final class ItemDetailViewModel {
         let generation = sourceGeneration
         let itemID = activeItemID
         let accountID = activeSourceAccountID
+        let provider = activeProvider
         do {
-            let full = try await activeProvider.item(id: episode.id)
-            guard !Task.isCancelled, full.id == episode.id,
+            let full: MediaItem
+            if provider.playbackInventoryRequiresEnrichment {
+                full = try await provider.playbackItem(id: episode.id)
+            } else {
+                full = try await provider.item(id: episode.id)
+            }
+            guard !Task.isCancelled,
                   isCurrentSource(generation: generation, itemID: itemID, accountID: accountID) else { return nil }
+            guard full.id == episode.id, full.kind == .episode,
+                  full.sourceAccountID == nil || full.sourceAccountID == accountID else {
+                PlozzLog.playback.error("Episode version inventory did not match the requested source.")
+                if playbackInventoryState.retryingItemIDs.contains(episode.id) {
+                    playbackInventoryRetryError = StreamingQualityError.sourceUnavailable.userMessage
+                }
+                return nil
+            }
+            playbackInventoryState.noStreamItemIDs.remove(episode.id)
             episodeBadgeEnrichment.store(full)
             HandoffDiagnostics.emit("detail episode metadata versions=\(full.versions.count) badges=\(full.technicalBadges.count)")
             return episodeWithEnrichedBadges(episode)
         } catch {
-            guard !Task.isCancelled,
+            guard !Task.isCancelled, !(error is CancellationError), (error as? AppError) != .cancelled,
                   isCurrentSource(generation: generation, itemID: itemID, accountID: accountID) else { return nil }
-            PlozzLog.networking.error("Episode technical metadata lookup failed")
+            let message = PlaybackVersionChoiceModel.reportFailure(error, stage: "episode-detail")
+            if (error as? StreamingQualityError) == .noStreams {
+                playbackInventoryState.noStreamItemIDs.insert(episode.id)
+            } else if playbackInventoryState.retryingItemIDs.contains(episode.id) {
+                playbackInventoryRetryError = message
+            }
             return nil
         }
     }
@@ -2220,9 +2370,16 @@ public final class ItemDetailViewModel {
     /// keeps routing to the right provider.
     private func tagged(_ item: MediaItem) -> MediaItem {
         var tagged = activeSourceAccountID.map { item.taggingSource($0) } ?? item
+        if item.kind == state.value?.item.kind,
+           let url = state.value?.item.metadataProvenance.wetrakrWatchlistURL {
+            tagged.metadataProvenance[MetadataField(rawValue: "watchlist.wetrakr")] =
+                MetadataAttribution(source: .wetrakr, sourceURL: url)
+        }
+        tagged.rejectedSourceIDs.formUnion(rejectedSourceIDs)
+        tagged.sources.removeAll { tagged.rejectedSourceIDs.contains($0.id) }
         if editionOpeningSource?.matches(tagged) == true {
             tagged.editionOpeningSource = editionOpeningSource
-            tagged.edition = Self.nonblankEdition(tagged.edition) ?? Self.nonblankEdition(openingEdition)
+            tagged.edition = Self.nonblank(tagged.edition) ?? Self.nonblank(openingEdition)
         } else {
             tagged.editionOpeningSource = nil
         }
@@ -2265,6 +2422,7 @@ public final class ItemDetailViewModel {
         pendingSnapshotWrite?.cancel()
         pendingSnapshotWrite = nil
         episodeBadgeEnrichment.reset()
+        playbackInventoryState.reset()
         seasonEpisodeRosters.reset()
     }
 
@@ -2283,6 +2441,7 @@ public final class ItemDetailViewModel {
     /// rails deliberately wait for one live fetch from the already-selected server
     /// so a stale cached rail can never be replaced underneath the viewer.
     private func applySnapshot(_ snapshot: DetailSnapshotCache.Snapshot) {
+        retainSourceRejections(snapshot.item.rejectedSourceIDs)
         let item = tagged(snapshot.item)
         captureSeriesContext(from: item)
         // A snapshot's children are a COMPLETED fetch persisted from a prior visit,
@@ -2321,6 +2480,7 @@ public final class ItemDetailViewModel {
     /// downgrading anything the live fetch already produced (each merge is guarded
     /// on the current value being empty/thinner).
     private func adoptSnapshotEnrichments(_ snapshot: DetailSnapshotCache.Snapshot) {
+        retainSourceRejections(snapshot.item.rejectedSourceIDs)
         if case var .loaded(detail) = state {
             let enriched = Self.preservingConfirmedStreamFacts(
                 in: detail.item,
@@ -2395,11 +2555,24 @@ public final class ItemDetailViewModel {
     /// already-loaded detail. Failures are silent — the screen keeps whatever
     /// backend-native ratings it already has.
     private func enrichRatings(for item: MediaItem, sourceGeneration: UInt64) async {
+        guard !item.usesProviderRatings else { return }
         let external = await ratingsProvider.ratings(for: item)
         guard !Task.isCancelled, self.sourceGeneration == sourceGeneration else { return }
         guard !external.isEmpty else { return }
-        guard case var .loaded(detail) = state, detail.item.id == item.id else { return }
+        guard case var .loaded(detail) = state, detail.item.id == item.id,
+              !detail.item.usesProviderRatings else { return }
         detail.item.ratings = detail.item.ratings.mergedWithAuthoritative(external)
+        state = .loaded(detail)
+    }
+
+    private func enrichDetailMetadata(for item: MediaItem, sourceGeneration: UInt64) async {
+        guard !DetailMetadataResolver.missingFields(in: item).isEmpty, !Task.isCancelled else { return }
+        let enrichment = await detailMetadataResolver(item)
+        guard !Task.isCancelled, self.sourceGeneration == sourceGeneration,
+              case var .loaded(detail) = state, detail.item.id == item.id else { return }
+        let enriched = DetailMetadataResolver.applying(enrichment, to: detail.item)
+        guard enriched != detail.item else { return }
+        detail.item = enriched
         state = .loaded(detail)
     }
 
@@ -2574,6 +2747,7 @@ public final class ItemDetailViewModel {
             seeded.edition = primary.edition
             seeded.resumePosition = primary.resumePosition
             seeded.playedPercentage = primary.playedPercentage
+            seeded.unwatchedEpisodeCount = primary.unwatchedEpisodeCount
             seeded.isPlayed = primary.isPlayed
             seeded.isFavorite = primary.isFavorite
             seeded.lastPlayedAt = primary.lastPlayedAt
@@ -2586,7 +2760,8 @@ public final class ItemDetailViewModel {
     /// them into ``sources`` so a single-server card (e.g. a Home row only one
     /// server surfaced) still gets a server picker. Idempotent: only updates when
     /// it actually finds *more* servers than are already known, so it never
-    /// regresses a richer picker already seeded from a merged Search/Home card.
+    /// regresses a richer picker on an inconclusive lookup. Explicit rejections
+    /// remove stale sources even if no alternate survives.
     private func startCrossServerDiscovery(for primary: MediaItem) {
         guard let resolver = crossServerSourceResolver else { return }
         let token = enrichmentGeneration
@@ -2598,7 +2773,8 @@ public final class ItemDetailViewModel {
             let discovered = await EnrichmentScheduler.shared.run(token: token) {
                 await resolver(primary)
             }
-            guard let discovered, !Task.isCancelled, discovered.count > 1 else { return }
+            guard let discovered, !Task.isCancelled,
+                  self?.enrichmentGeneration == token else { return }
             await self?.applyDiscoveredSources(discovered, primary: primary)
         }
     }
@@ -2613,12 +2789,35 @@ public final class ItemDetailViewModel {
     /// The primary/active source is always retained so the page the user
     /// navigated to never loses its own entry. This is what keeps a disabled
     /// server from lingering in the picker when it's restored from a stale
-    /// on-disk snapshot persisted while the server was still enabled.
+    /// on-disk snapshot persisted while the server was still enabled. Repairs
+    /// missing display labels using only each retained source's owning provider.
     private func prunedToActiveAccounts(_ candidate: [MediaSourceRef]) -> [MediaSourceRef] {
-        candidate.filter { source in
-            source.accountID == activeSourceAccountID
-                || alternateProviderResolver(source.accountID) != nil
+        candidate.compactMap { source in
+            guard !rejectedSourceIDs.contains(source.id) else { return nil }
+            let isActiveSource = source.accountID == activeSourceAccountID
+            let provider = isActiveSource ? activeProvider : alternateProviderResolver(source.accountID)
+            guard isActiveSource || provider != nil else { return nil }
+            return Self.fillingSourceDisplayMetadata(in: source, provider: provider)
         }
+    }
+
+    private static func fillingSourceDisplayMetadata(
+        in source: MediaSourceRef,
+        from known: MediaSourceRef? = nil,
+        provider: (any MediaProvider)? = nil
+    ) -> MediaSourceRef {
+        let known = known.flatMap {
+            $0.accountID == source.accountID && $0.itemID == source.itemID ? $0 : nil
+        }
+        var result = source
+        result.providerKind = result.providerKind ?? known?.providerKind ?? provider?.kind
+        if nonblank(result.serverName) == nil {
+            result.serverName = nonblank(known?.serverName) ?? nonblank(provider?.session.server.name)
+        }
+        if nonblank(result.accountName) == nil {
+            result.accountName = nonblank(known?.accountName) ?? nonblank(provider?.session.userName)
+        }
+        return result
     }
 
     /// Stamps the primary source with the freshly-fetched detail so the picker and
@@ -2635,6 +2834,7 @@ public final class ItemDetailViewModel {
         if !preservingWatchState {
             seeded.resumePosition = primary.resumePosition
             seeded.playedPercentage = primary.playedPercentage
+            seeded.unwatchedEpisodeCount = primary.unwatchedEpisodeCount
             seeded.isPlayed = primary.isPlayed
             seeded.isFavorite = primary.isFavorite
             seeded.lastPlayedAt = primary.lastPlayedAt
@@ -2661,65 +2861,85 @@ public final class ItemDetailViewModel {
                 if let revision = version.sourceMetadata?.sourceRevision {
                     return revision == candidate.sourceMetadata?.sourceRevision
                 }
-                guard let file = Self.nonblankEdition(version.fileName) else { return false }
-                return file == Self.nonblankEdition(candidate.fileName)
+                guard let file = Self.nonblank(version.fileName) else { return false }
+                return file == Self.nonblank(candidate.fileName)
             }
         }
         var result = fresh
-        let freshEdition = nonblankEdition(fresh.edition)
+        let freshEdition = nonblank(fresh.edition)
         result.edition = freshEdition
         result.versions = fresh.versions.enumerated().map { index, version in
             var restored = version
-            restored.edition = nonblankEdition(version.edition)
+            restored.edition = nonblank(version.edition)
                 ?? freshEdition
-                ?? matches[index].flatMap { nonblankEdition($0.edition) }
+                ?? matches[index].flatMap { nonblank($0.edition) }
             return restored
         }
         if freshEdition == nil,
-           let previousEdition = nonblankEdition(known.edition),
+           let previousEdition = nonblank(known.edition),
            !incoming.isEmpty,
            matches.allSatisfy({ $0 != nil }),
            result.versions.allSatisfy({
-               nonblankEdition($0.edition)?.caseInsensitiveCompare(previousEdition) == .orderedSame
+               nonblank($0.edition)?.caseInsensitiveCompare(previousEdition) == .orderedSame
            }) {
             result.edition = previousEdition
         }
         return result
     }
 
-    private static func nonblankEdition(_ value: String?) -> String? {
+    private static func nonblank(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty else { return nil }
         return trimmed
     }
 
-    private func applyDiscoveredSources(_ discovered: [MediaSourceRef], primary: MediaItem) async {
-        guard !discovered.isEmpty else { return }
+    private func applyDiscoveredSources(_ resolution: CrossServerSourceResolution, primary: MediaItem) async {
+        var primary = primary
+        if let latest = state.value?.item,
+           latest.id == primary.id, latest.sourceAccountID == primary.sourceAccountID {
+            primary = latest
+        }
+        retainSourceRejections(resolution.rejectedSourceIDs)
+        if let accountID = activeSourceAccountID {
+            rejectedSourceIDs.remove("\(accountID):\(primary.id)")
+        }
+        initialSources.removeAll { rejectedSourceIDs.contains($0.id) }
+        var retained = sources.filter { !rejectedSourceIDs.contains($0.id) }
+        let discovered = prunedToActiveAccounts(resolution.sources)
+        guard !discovered.isEmpty || !resolution.rejectedSourceIDs.isEmpty else { return }
+        if retained.isEmpty, let accountID = activeSourceAccountID, primary.locallyValidatedPlayableSource {
+            retained = [stampedPrimarySource(
+                Self.fillingSourceDisplayMetadata(
+                    in: MediaSourceRef(accountID: accountID, itemID: primary.id, kind: primary.kind),
+                    from: discovered.first { $0.accountID == accountID && $0.itemID == primary.id },
+                    provider: activeProvider
+                ),
+                from: primary
+            )]
+        }
         var result: [MediaSourceRef]
-        if sources.isEmpty {
+        if retained.isEmpty {
             // Single-server card: take the discovered cross-server set wholesale,
             // stamping the primary with the detail we already fetched.
             result = discovered.map { stampedPrimarySource($0, from: primary) }
         } else {
             // Already had a (seeded) picker: union in any newly-found servers,
             // preserving existing order + already-enriched versions.
-            result = sources
-            // Refresh each KEPT source's locality from the re-discovery first: a
-            // repeated discovery may re-classify a server local↔remote after a
-            // network change (e.g. the device got home onto the LAN, or dropped
-            // off it onto Tailscale) WITHOUT surfacing any new server. That
-            // must still update the picker highlight and the play default, so we
-            // publish on a locality change even when the server count is
-            // unchanged (the count-grew guard below alone would swallow it).
-            let discoveredLocality = Dictionary(
-                discovered.compactMap { ref in ref.locality.map { (sourceKey(ref), $0) } },
-                uniquingKeysWith: { first, _ in first }
+            result = retained
+            // Rediscovery can repair sparse labels or change locality without
+            // adding a source. Keep the live versions and per-account watch state.
+            let discoveredByKey = Dictionary(
+                discovered.map { (sourceKey($0), $0) },
+                uniquingKeysWith: { first, next in
+                    var combined = Self.fillingSourceDisplayMetadata(in: first, from: next)
+                    combined.locality = first.locality ?? next.locality
+                    return combined
+                }
             )
             result = result.map { existing in
-                guard let refreshed = discoveredLocality[sourceKey(existing)],
-                      refreshed != existing.locality else { return existing }
-                var copy = existing
-                copy.locality = refreshed
+                guard let refreshed = discoveredByKey[sourceKey(existing)] else { return existing }
+                var copy = Self.fillingSourceDisplayMetadata(in: existing, from: refreshed)
+                copy.locality = refreshed.locality ?? existing.locality
                 return copy
             }
             var keys = Set(result.map(sourceKey))
@@ -2727,12 +2947,8 @@ public final class ItemDetailViewModel {
                 result.append(source)
             }
         }
-        guard result.count > 1 else { return }
-        // Publish when discovery expanded the server list or refreshed locality.
-        // Even an unchanged result must continue into retargeting: the same list
-        // may already have arrived from a snapshot while the active detail provider
-        // is still the merge primary.
-        if result != sources {
+        // Metadata-only repairs must also reach the picker and snapshot cache.
+        if result != sources || !resolution.rejectedSourceIDs.isEmpty {
             sources = result
             applyUnifiedWatchState()
             persistSnapshot()
@@ -2740,6 +2956,28 @@ public final class ItemDetailViewModel {
         // Discovery enriches the picker only. The visible page never changes server
         // after arrival; only an explicit user selection may call switchToSource.
         startAlternateSourceEnrichment(primaryID: primary.id)
+    }
+
+    private func retainSourceRejections(_ rejected: Set<String>) {
+        guard !rejected.isEmpty else { return }
+        if let item = state.value?.item {
+            rejectedSourceIDs.formUnion(MediaItemMerger.rejectionsIncludingDependentSources(
+                rejected, for: item, identitySources: identitySources
+            ))
+        } else {
+            rejectedSourceIDs.formUnion(rejected)
+        }
+        if let account = activeSourceAccountID {
+            rejectedSourceIDs.remove("\(account):\(activeItemID)")
+        }
+        initialSources.removeAll { rejectedSourceIDs.contains($0.id) }
+        sources.removeAll { rejectedSourceIDs.contains($0.id) }
+        if case var .loaded(detail) = state {
+            detail.item.rejectedSourceIDs.formUnion(rejectedSourceIDs)
+            detail.item.sources.removeAll { rejectedSourceIDs.contains($0.id) }
+            state = .loaded(detail)
+        }
+        applyUnifiedWatchState()
     }
 
     private struct AlternateSourceRequest: Sendable {
@@ -2750,6 +2988,7 @@ public final class ItemDetailViewModel {
     }
 
     private struct AlternateSourceUpdate: Sendable {
+        var identity: MediaItem
         var sourceID: String
         var accountID: String
         var itemID: String
@@ -2757,6 +2996,7 @@ public final class ItemDetailViewModel {
         var edition: String?
         var resumePosition: TimeInterval?
         var playedPercentage: Double?
+        var unwatchedEpisodeCount: Int?
         var isPlayed: Bool
         var isFavorite: Bool
         var lastPlayedAt: Date?
@@ -2788,7 +3028,8 @@ public final class ItemDetailViewModel {
                     maxConcurrent: Self.alternateSourceFanoutLimit
                 )
             }
-            guard let result, !Task.isCancelled else { return }
+            guard let result, !Task.isCancelled,
+                  self?.enrichmentGeneration == token else { return }
             await self?.applyAlternateSourceUpdates(
                 result.updates,
                 unreachableAccountIDs: result.unreachableAccountIDs,
@@ -2832,6 +3073,11 @@ public final class ItemDetailViewModel {
                         ? [MediaVersion.synthesized(from: tagged)]
                         : tagged.versions
                     return (index, AlternateSourceUpdate(
+                        identity: MediaItem(
+                            id: tagged.id, title: tagged.title, kind: tagged.kind,
+                            productionYear: tagged.productionYear, providerIDs: tagged.providerIDs,
+                            sourceAccountID: tagged.sourceAccountID
+                        ),
                         sourceID: request.sourceID,
                         accountID: request.accountID,
                         itemID: request.itemID,
@@ -2839,6 +3085,7 @@ public final class ItemDetailViewModel {
                         edition: tagged.edition,
                         resumePosition: tagged.resumePosition,
                         playedPercentage: tagged.playedPercentage,
+                        unwatchedEpisodeCount: tagged.unwatchedEpisodeCount,
                         isPlayed: tagged.isPlayed,
                         isFavorite: tagged.isFavorite,
                         lastPlayedAt: tagged.lastPlayedAt
@@ -2897,15 +3144,24 @@ public final class ItemDetailViewModel {
         }
         var updatedSources = sources
         var changed = false
+        var evidence = [detail.item]
+        var rejected = Set<String>()
         for update in updates {
             guard let index = updatedSources.firstIndex(where: {
                 $0.id == update.sourceID && $0.accountID == update.accountID && $0.itemID == update.itemID
             }) else { continue }
+            guard update.identity.kind == detail.item.kind,
+                  !evidence.contains(where: { MediaItemMerger.plausiblyContradicts($0, update.identity) }) else {
+                rejected.insert(update.sourceID)
+                continue
+            }
+            evidence.append(update.identity)
             var source = updatedSources[index]
             source.versions = update.versions
             source.edition = update.edition
             source.resumePosition = update.resumePosition
             source.playedPercentage = update.playedPercentage
+            source.unwatchedEpisodeCount = update.unwatchedEpisodeCount
             source.isPlayed = update.isPlayed
             source.isFavorite = update.isFavorite
             source.lastPlayedAt = update.lastPlayedAt
@@ -2915,9 +3171,11 @@ public final class ItemDetailViewModel {
                 changed = true
             }
         }
-        guard changed else { return }
+        guard changed || !rejected.isEmpty else { return }
         sources = updatedSources
+        retainSourceRejections(rejected)
         applyUnifiedWatchState()
+        persistSnapshot()
     }
 
     /// Folds every known source's watch-state into one most-recent-wins state and
@@ -2925,11 +3183,13 @@ public final class ItemDetailViewModel {
     /// progress (e.g. 4 min watched on server A even when primary-backed by B).
     private func applyUnifiedWatchState() {
         sources = sources.map { applyingDetailWatchMutations(to: $0) }
-        guard sources.count > 1, case var .loaded(detail) = state else { return }
+        guard !sources.isEmpty, case var .loaded(detail) = state else { return }
         let unified = MediaItemMerger.unifiedWatchState(from: sources)
         detail.item.sources = sources
+        detail.item.rejectedSourceIDs.formUnion(rejectedSourceIDs)
         detail.item.resumePosition = unified.resumePosition
         detail.item.playedPercentage = unified.playedPercentage
+        detail.item.unwatchedEpisodeCount = unified.unwatchedEpisodeCount
         detail.item.isPlayed = unified.isPlayed
         detail.item.lastPlayedAt = unified.lastPlayedAt
         detail.item = applyingDetailWatchMutations(to: detail.item)

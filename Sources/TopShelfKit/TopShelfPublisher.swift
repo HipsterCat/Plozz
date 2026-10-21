@@ -1,19 +1,34 @@
 import Foundation
 import CoreModels
+import OSLog
+#if os(tvOS)
+import TVServices
+#endif
 
 /// Maps the app's domain models onto a `TopShelfSnapshot` and publishes it to
 /// the shared App Group container for the Top Shelf extension to render.
 ///
 /// This file imports `CoreModels`, so it is compiled **only** into the app (via
-/// the `TopShelfKit` package). The extension compiles just `TopShelfSnapshot`
-/// and `TopShelfStore`, keeping `CoreModels` out of its memory budget.
+/// the `TopShelfKit` package). The extension compiles the snapshot, store and
+/// native content builder directly, keeping `CoreModels` out of its memory budget.
 public enum TopShelfPublisher {
+    public typealias ArtworkResolver = @MainActor @Sendable (MediaItem) async -> Data?
+    public typealias MetadataResolver = @MainActor @Sendable (MediaItem) async throws -> MediaItem
+
+    @MainActor private static let publication = TopShelfPublication(save: save)
+
+    /// Clears disabled media even when Home has no loaded model to republish.
+    @MainActor
+    public static func settingsDidChange(_ settings: TopShelfSettings) {
+        publication.settingsDidChange(settings)
+    }
+
     /// Builds and saves a snapshot from the Home screen's two playable rows.
     ///
     /// Continue-Watching items that are mid-playback get a poster with the resume
     /// bar composited into the artwork (posters can't show the native Top Shelf
-    /// progress bar — see `TopShelfPosterComposer`); everything else uses its
-    /// plain remote poster. Empty rows are dropped; if nothing is playable the
+    /// progress bar — see `TopShelfPosterComposer`). The app resolves each image
+    /// using the active profile's policy before exporting it. Empty rows are dropped; if nothing is playable the
     /// snapshot is still written (empty) so a freshly-signed-out state clears the
     /// shelf. Stale composited art is pruned each publish.
     /// - Parameter locale: the language the APP is currently showing. The Top
@@ -24,54 +39,107 @@ public enum TopShelfPublisher {
     ///   titles here and stores finished text; the extension only renders.
     ///   Eager resolution is correct in this one case precisely because the
     ///   value crosses a process boundary.
-    /// How many titles each Top Shelf section carries.
-    ///
-    /// The shelf is a place to *launch* from, not to browse in. What gets clicked
-    /// there is something newly added or something obviously in progress; anything
-    /// requiring a search through a list is a reason to open the app instead. Three
-    /// per section is what Plex settles on, and it holds up: a scrollable shelf
-    /// nobody scrolls is just work done for an audience of none.
-    ///
-    /// Deliberately independent of the unlimited on-screen row. That row is for
-    /// browsing and holds everything; this one should not.
-    private static let maxItemsPerSection = 3
-
+    @MainActor
     public static func publish(
         continueWatching: [MediaItem],
         latest: [MediaItem],
-        locale: Locale? = nil
+        locale: Locale? = nil,
+        spoilerSettings: SpoilerSettings = .default,
+        resolveMetadata: MetadataResolver? = nil,
+        resolveArtwork: ArtworkResolver? = nil,
+        resolveBackdrop: ArtworkResolver? = nil
     ) async {
-        var sections: [TopShelfSnapshot.Section] = []
-
-        let resume = await items(from: Array(continueWatching.prefix(maxItemsPerSection)), compositeProgress: true)
-        if !resume.isEmpty {
-            sections.append(.init(id: "continue",
-                                  title: resolved("Continue Watching", locale),
-                                  items: resume))
+        let settings = TopShelfSettingsModel.shared.settings
+        await publication.publish {
+            await makeSnapshot(
+                continueWatching: continueWatching, latest: latest, settings: settings,
+                locale: locale, spoilerSettings: spoilerSettings,
+                resolveMetadata: resolveMetadata,
+                resolveArtwork: resolveArtwork, resolveBackdrop: resolveBackdrop
+            )
         }
+    }
 
-        let recent = await items(from: Array(latest.prefix(maxItemsPerSection)))
-        if !recent.isEmpty {
-            sections.append(.init(id: "latest",
-                                  title: resolved("Recently Added", locale),
-                                  items: recent))
-        }
-
-        // Drop any composited poster no longer referenced by this snapshot. Guard
-        // on cancellation first: a superseded publish (a newer one started while
-        // this one was awaiting image fetches) must not prune the directory the
-        // winning publish is writing, nor overwrite its snapshot.
-        guard !Task.isCancelled else { return }
+    @MainActor
+    private static func save(_ snapshot: TopShelfSnapshot) {
+        guard TopShelfStore.save(snapshot) else { return }
         let keptArtwork = Set(
-            sections
+            snapshot.sections
                 .flatMap(\.items)
                 .compactMap(\.imageURL)
                 .filter(\.isFileURL)
                 .map(\.lastPathComponent)
         )
         TopShelfStore.pruneArtwork(keeping: keptArtwork)
+        #if os(tvOS)
+        TVTopShelfContentProvider.topShelfContentDidChange()
+        #endif
+    }
 
-        TopShelfStore.save(TopShelfSnapshot(sections: sections))
+    static func makeSnapshot(
+        continueWatching: [MediaItem],
+        latest: [MediaItem],
+        settings: TopShelfSettings = .default,
+        locale: Locale? = nil,
+        spoilerSettings: SpoilerSettings = .default,
+        resolveMetadata: MetadataResolver? = nil,
+        resolveArtwork: ArtworkResolver? = nil,
+        resolveBackdrop: ArtworkResolver? = nil
+    ) async -> TopShelfSnapshot? {
+        guard !Task.isCancelled else { return nil }
+        guard settings.isEnabled else { return TopShelfSnapshot(sections: []) }
+        var sections: [TopShelfSnapshot.Section] = []
+        let resumeItems = Array(continueWatching.prefix(settings.continueWatchingItems))
+        let recentItems = Array(latest.prefix(settings.recentlyAddedItems))
+        var metadata: [String: MediaItem] = [:]
+        if settings.usesFullScreen, let resolveMetadata {
+            var attempted = Set<String>()
+            for item in resumeItems + recentItems {
+                guard !Task.isCancelled else { return nil }
+                let key = TopShelfSnapshot.Item(id: item.id, accountID: item.sourceAccountID, title: item.title)
+                    .shelfIdentifier
+                guard attempted.insert(key).inserted else { continue }
+                do {
+                    let detail = try await resolveMetadata(item)
+                    guard !Task.isCancelled else { return nil }
+                    guard detail.id == item.id, detail.sourceAccountID == item.sourceAccountID else {
+                        throw AppError.invalidResponse
+                    }
+                    metadata[key] = detail
+                } catch {
+                    guard !Task.isCancelled, !(error is CancellationError),
+                          (error as? AppError) != .cancelled else { return nil }
+                    Logger(subsystem: "com.plozz.app", category: "top-shelf")
+                        .warning("Full-screen metadata unavailable; retaining the Home item's known information.")
+                }
+            }
+        }
+
+        let resume = await items(
+            from: resumeItems,
+            compositeProgress: true, usesFullScreen: settings.usesFullScreen,
+            spoilerSettings: spoilerSettings, locale: locale, metadata: metadata,
+            resolveArtwork: resolveArtwork, resolveBackdrop: resolveBackdrop
+        )
+        if !resume.isEmpty {
+            sections.append(.init(id: "continue",
+                                  title: resolved("Continue Watching", locale),
+                                  items: resume))
+        }
+
+        let recent = await items(
+            from: recentItems, usesFullScreen: settings.usesFullScreen,
+            spoilerSettings: spoilerSettings, locale: locale, metadata: metadata,
+            resolveArtwork: resolveArtwork, resolveBackdrop: resolveBackdrop
+        )
+        if !recent.isEmpty {
+            sections.append(.init(id: "latest",
+                                  title: resolved("Recently Added", locale),
+                                  items: recent))
+        }
+
+        guard !Task.isCancelled else { return nil }
+        return TopShelfSnapshot(usesFullScreen: settings.usesFullScreen, sections: sections)
     }
 
     /// What a half-watched card says beside its progress bar: which episode, and
@@ -98,17 +166,23 @@ public enum TopShelfPublisher {
     }
 
     /// Maps domain items onto snapshot items. When `compositeProgress` is set, a
-    /// mid-playback item's poster is replaced by a locally composited poster that
-    /// has the progress bar burned in; on any failure it falls back to the plain
-    /// remote poster (still a poster card, just without a bar).
+    /// mid-playback item's poster has the progress bar burned in. A failed
+    /// explicit resolver uses a placeholder, never an unapproved source.
     private static func items(
         from media: [MediaItem],
-        compositeProgress: Bool = false
+        compositeProgress: Bool = false,
+        usesFullScreen: Bool,
+        spoilerSettings: SpoilerSettings,
+        locale: Locale?,
+        metadata: [String: MediaItem],
+        resolveArtwork: ArtworkResolver? = nil,
+        resolveBackdrop: ArtworkResolver? = nil
     ) async -> [TopShelfSnapshot.Item] {
         var result: [TopShelfSnapshot.Item] = []
         result.reserveCapacity(media.count)
 
         for item in media {
+            guard !Task.isCancelled else { return [] }
             // Composited artwork is cached by this id. A bare item id is unique only
             // within one server (Plex ratingKeys are small per-server integers), so
             // two accounts would otherwise overwrite each other's poster files and a
@@ -122,7 +196,24 @@ public enum TopShelfPublisher {
             let progress = compositeProgress ? item.playedPercentage : nil
             var imageURL: URL?
 
-            if let poster = posterURL {
+            if usesFullScreen {
+                if let resolveBackdrop {
+                    let data = await resolveBackdrop(item)
+                    guard !Task.isCancelled else { return [] }
+                    imageURL = TopShelfBackdropComposer.imageURL(data: data)
+                } else {
+                    imageURL = item.kind == .episode
+                        ? item.fallbackArtworkURL : item.heroBackdropURL ?? item.backdropURL
+                    if imageURL == nil { imageURL = TopShelfBackdropComposer.imageURL(data: nil) }
+                }
+            } else if let resolveArtwork {
+                if let data = await resolveArtwork(item), !Task.isCancelled {
+                    imageURL = TopShelfPosterComposer.selectedPosterURL(
+                        id: artworkID, data: data, progress: progress,
+                        chip: compositeProgress ? resumeChipText(for: item) : nil
+                    )
+                }
+            } else if let poster = posterURL {
                 if let progress,
                    let composited = await TopShelfPosterComposer.compositedPosterURL(
                        id: artworkID,
@@ -131,10 +222,12 @@ public enum TopShelfPublisher {
                        chip: resumeChipText(for: item)
                    ) {
                     imageURL = composited
-                } else {
+                }
+                if imageURL == nil {
                     imageURL = poster
                 }
-            } else {
+            }
+            if !usesFullScreen, imageURL == nil, !Task.isCancelled {
                 // No vertical artwork anywhere: render a neutral title-card
                 // placeholder (with the resume bar burned in when mid-playback)
                 // instead of leaving a blank card or a zoomed backdrop.
@@ -143,16 +236,17 @@ public enum TopShelfPublisher {
                 )
             }
 
-            result.append(
-                TopShelfSnapshot.Item(
-                    id: item.id,
-                    accountID: item.sourceAccountID,
-                    title: item.title,
-                    subtitle: item.subtitle,
-                    imageURL: imageURL,
-                    playbackProgress: item.playedPercentage
-                )
+            var snapshot = TopShelfSnapshot.Item(
+                id: item.id, accountID: item.sourceAccountID, title: item.title,
+                subtitle: item.subtitle, imageURL: imageURL, playbackProgress: item.playedPercentage
             )
+            if usesFullScreen {
+                TopShelfMetadata.apply(
+                    to: &snapshot, item: item, details: metadata[artworkID],
+                    spoilerSettings: spoilerSettings, locale: locale
+                )
+            }
+            result.append(snapshot)
         }
 
         return result
@@ -173,9 +267,34 @@ public enum TopShelfPublisher {
 
     /// Resolves a section title against the app's current language. `nil` means
     /// "follow the system", which is what `LocalizedStringResource` already does.
-    private static func resolved(_ resource: LocalizedStringResource, _ locale: Locale?) -> String {
+    static func resolved(_ resource: LocalizedStringResource, _ locale: Locale?) -> String {
         var resource = resource
         if let locale { resource.locale = locale }
         return String(localized: resource)   // l10n:content — deliberately resolved here: the value is written to an App Group file the Top Shelf extension reads in another process
+    }
+}
+
+/// Serializes the commit with settings changes; suspended artwork cannot restore a cleared shelf.
+@MainActor
+final class TopShelfPublication {
+    private var generation = UUID()
+    private let save: (TopShelfSnapshot) -> Void
+
+    init(save: @escaping (TopShelfSnapshot) -> Void) {
+        self.save = save
+    }
+
+    func settingsDidChange(_ settings: TopShelfSettings) {
+        generation = UUID()
+        if !settings.isEnabled { save(TopShelfSnapshot(sections: [])) }
+    }
+
+    func publish(makeSnapshot: () async -> TopShelfSnapshot?) async {
+        guard !Task.isCancelled else { return }
+        generation = UUID()
+        let currentGeneration = generation
+        guard let snapshot = await makeSnapshot(),
+              currentGeneration == generation, !Task.isCancelled else { return }
+        save(snapshot)
     }
 }

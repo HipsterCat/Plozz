@@ -1,6 +1,7 @@
 #if os(iOS)
 import CoreModels
 import PlozzCoreUI
+import FeatureSyncSetup
 import SwiftUI
 import UIKit
 import Vision
@@ -9,6 +10,131 @@ import XCTest
 
 @MainActor
 final class ServerSetupPresentationTests: XCTestCase {
+    func testCompleteCodeFitsNarrowPhoneAtLargestTextSize() async throws {
+        for palette in [ThemePalette.dark, .light] {
+            let image = try await render(
+                ConnectionCodeView("123 456")
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(palette.backgroundBase)
+                    .environment(\.themePalette, palette)
+                    .environment(\.dynamicTypeSize, .accessibility5),
+                size: .init(width: 320, height: 240), light: palette.isLight
+            )
+            let text = try recognize(image).joined()
+            XCTAssertEqual(text.filter(\.isNumber), "123456", "Every code digit must fit: \(text)")
+            attach(image, name: "Largest text code light \(palette.isLight)")
+        }
+    }
+
+    func testMatchingCodesRemainReadableOnCompactAndLargeTextLayouts() async throws {
+        for (size, typeSize) in [
+            (CGSize(width: 320, height: 568), DynamicTypeSize.large),
+            (.init(width: 844, height: 390), .accessibility3),
+            (.init(width: 320, height: 568), .accessibility5),
+            (.init(width: 768, height: 1024), .large)
+        ] {
+            for sending in [false, true] {
+                let image = try await render(
+                    ScrollView {
+                        SetupCodeComparisonView(code: "123 456", onResult: sending ? { _ in } : nil)
+                            .padding(24)
+                    }
+                    .environment(\.themePalette, sending ? ThemePalette.light : .dark)
+                    .environment(\.dynamicTypeSize, typeSize),
+                    size: size, light: sending
+                ) { window in
+                    let scroll = try XCTUnwrap(self.scrollViews(in: window).first)
+                    XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+                    try await self.scrollToBottom(scroll, in: window)
+                }
+                let text = try recognize(image).joined(separator: " ")
+                XCTAssertTrue(text.contains(sending ? "different" : "Confirm"), text)
+                XCTAssertFalse(text.contains("…"), text)
+                attach(image, name: "Shared matching code \(sending) \(size) \(typeSize)")
+            }
+        }
+    }
+
+    func testSentSetupKeepsDoneVisibleAndAllProfilesReachable() async throws {
+        let url = try XCTUnwrap(URL(string: "https://fixture.example.test"))
+        let accounts = (0..<25).map { index in
+            Account(
+                id: "account-\(index)",
+                server: MediaServer(
+                    id: "server-\(index)", name: "Server \(index) with a long library name",
+                    baseURL: url, provider: index.isMultiple(of: 2) ? .plex : .jellyfin
+                ),
+                userID: "viewer", userName: "Viewer", deviceID: "fixture"
+            )
+        }
+        let profiles = (0..<40).map { Profile(id: "profile-\($0)", name: "Viewer \($0)") }
+        for (size, typeSize) in [
+            (CGSize(width: 320, height: 568), DynamicTypeSize.large),
+            (.init(width: 844, height: 390), .accessibility5),
+            (.init(width: 768, height: 1024), .large)
+        ] {
+            let image = try await render(
+                SyncSetupSentSuccessView(accounts: accounts, profiles: profiles, onDone: {})
+                    .environment(\.themePalette, ThemePalette.dark)
+                    .environment(\.dynamicTypeSize, typeSize),
+                size: size, light: false
+            ) { window in
+                let scroll = try XCTUnwrap(self.scrollViews(in: window).first)
+                XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height)
+                XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+                let start = try self.capture(window)
+                XCTAssertTrue(try self.recognize(start).contains("Done"))
+                self.attach(start, name: "Sent setup top \(size) \(typeSize)")
+                try await self.scrollToBottom(scroll, in: window)
+            }
+            let text = try recognize(image).joined(separator: " ")
+            XCTAssertTrue(text.contains("Done"), text)
+            XCTAssertTrue(text.contains("39"), text)
+            XCTAssertFalse(text.contains("…"), text)
+            attach(image, name: "Sent setup bottom \(size) \(typeSize)")
+        }
+    }
+
+    func testTVSourceLinkOpensReceivingInstructionsOnPhoneAndPad() async throws {
+        let app = PlozziOSAppModel()
+        let invite = SyncSetupSourceInvite()
+        XCTAssertTrue(app.handleIncomingURL(try XCTUnwrap(URL(string: invite.encoded()))))
+        XCTAssertEqual(app.pendingPairingInvite, invite.encoded())
+        XCTAssertFalse(app.handleIncomingURL(try XCTUnwrap(URL(string: "https://example.com/pair#invalid"))))
+        XCTAssertEqual(app.pendingPairingInvite, invite.encoded())
+        defer { app.pendingPairingInvite = nil }
+        for size in [CGSize(width: 320, height: 568), CGSize(width: 768, height: 1024)] {
+            let image = try await render(
+                PlozziOSSyncSetupReceiveView(appModel: app, sourceInvite: invite, onClose: {})
+                    .environment(\.themePalette, ThemePalette.dark),
+                size: size, light: false
+            )
+            let text = try recognize(image).joined(separator: " ")
+            XCTAssertTrue(text.contains("Check your Apple TV"), text)
+            XCTAssertTrue(text.contains("matching code"), text)
+            XCTAssertTrue(text.contains("Cancel"), text)
+            XCTAssertFalse(text.contains("Scan this QR"), text)
+            attach(image, name: "TV source scan \(size)")
+        }
+    }
+
+    func testExpiredTVSourceLinkAsksForANewScanWithoutOfferingBrokenRetry() async throws {
+        let app = PlozziOSAppModel()
+        let invite = SyncSetupSourceInvite(now: Date().addingTimeInterval(-300))
+        let image = try await render(
+            PlozziOSSyncSetupReceiveView(appModel: app, sourceInvite: invite, onClose: {})
+                .environment(\.themePalette, ThemePalette.light),
+            size: .init(width: 390, height: 844), light: true
+        )
+        let text = try recognize(image).joined(separator: " ")
+        XCTAssertTrue(text.contains("expired"), text)
+        XCTAssertTrue(text.contains("Scan a new code"), text)
+        XCTAssertTrue(text.contains("Cancel"), text)
+        XCTAssertFalse(text.contains("Try Again"), text)
+        attach(image, name: "Expired TV source scan")
+    }
+
     func testReceivedSetupKeepsContinueVisibleWithManyServersAndProfiles() async throws {
         let accounts = (0..<25).flatMap { server in
             (0..<3).map { user in
@@ -59,16 +185,16 @@ final class ServerSetupPresentationTests: XCTestCase {
                 XCTAssertTrue(window.bounds.inset(by: window.safeAreaInsets).contains(button))
                 XCTAssertNotNil(window.hitTest(CGPoint(x: button.midX, y: button.midY), with: nil))
                 self.attach(start, name: "Large setup top \(size) \(typeSize) \(direction)")
-                for _ in 0..<5 {
-                    scroll.setContentOffset(CGPoint(
-                        x: 0,
-                        y: max(-scroll.adjustedContentInset.top,
-                               scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
-                    ), animated: false)
-                    try await Task.sleep(for: .milliseconds(80))
-                    window.layoutIfNeeded()
-                }
+                try await self.scrollToBottom(scroll, in: window)
                 let bottom = try self.capture(window)
+                let metrics = XCTAttachment(string: """
+                    size=\(size), type=\(typeSize), content=\(scroll.contentSize), bounds=\(scroll.bounds),
+                    inset=\(scroll.adjustedContentInset), offset=\(scroll.contentOffset),
+                    windowFrame=\(scroll.convert(scroll.bounds, to: window))
+                    """)
+                metrics.name = "Summary scroll metrics \(size) \(typeSize)"
+                metrics.lifetime = .keepAlways
+                self.add(metrics)
                 let buttonAfterScrolling = try self.continueFrame(in: bottom, size: size)
                 XCTAssertEqual(buttonAfterScrolling.midY, button.midY, accuracy: 3)
                 let text = try self.recognize(bottom).joined(separator: " ")
@@ -101,6 +227,23 @@ final class ServerSetupPresentationTests: XCTestCase {
 
     private func scrollViews(in view: UIView) -> [UIScrollView] {
         (view as? UIScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+    }
+
+    private func scrollToBottom(_ scroll: UIScrollView, in window: UIWindow) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        var settled = 0
+        func bottom() -> CGFloat {
+            max(-scroll.adjustedContentInset.top,
+                scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        }
+        // Lazy grids replace estimated row heights as scrolling realizes them.
+        while settled < 2, ContinuousClock.now < deadline {
+            scroll.setContentOffset(CGPoint(x: 0, y: bottom()), animated: false)
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(80))
+            settled = abs(scroll.contentOffset.y - bottom()) < 1 ? settled + 1 : 0
+        }
+        XCTAssertEqual(scroll.contentOffset.y, bottom(), accuracy: 1, "The final content must actually be reached.")
     }
 
     private func capture(_ window: UIWindow) throws -> CGImage {

@@ -89,6 +89,7 @@ struct SeerDetailView: View {
 
                 TextField("Server address (e.g. https://requests.example.com)", text: $urlText)
                     .textContentType(.URL)
+                    .settingsWorkspaceEntry()
                     #if os(tvOS) || os(iOS)
                     .keyboardType(.URL)
                     .autocorrectionDisabled(true)
@@ -196,6 +197,7 @@ struct SeerDetailView: View {
                 } label: {
                     Label("Disconnect", systemImage: "xmark.circle")
                 }
+                .settingsWorkspaceEntry()
             }
         }
     }
@@ -231,7 +233,7 @@ struct SeerDetailView: View {
                 case let .loaded(list):
                     VStack(spacing: 14) {
                         ForEach(profiles) { profile in
-                            NavigationLink(value: SettingsRoute.seerUserPicker(profileID: profile.id)) {
+                            SettingsRouteLink(value: SettingsRoute.seerUserPicker(profileID: profile.id)) {
                                 profileMappingRow(profile: profile, users: list)
                             }
                             .buttonStyle(SettingsFocusButtonStyle())
@@ -244,7 +246,7 @@ struct SeerDetailView: View {
                             .plozzForeground(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         ForEach(profiles) { profile in
-                            NavigationLink(
+                            SettingsRouteLink(
                                 value: SettingsRoute.seerUserPicker(profileID: profile.id)
                             ) {
                                 profileMappingRow(profile: profile, users: [])
@@ -346,15 +348,15 @@ struct SeerUserPickerView: View {
     let onSelect: (SeerUser?) -> Void
 
     @State private var users: LoadState<[SeerUser]> = .idle
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     private var profileName: String { profile.name }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                SettingsPageHeader("Requests as — \(profileName)")
                 SettingsPanel(
-                    title: "Requests as — \(profileName)",
                     footer: "Requests from \(profileName) will use this Seerr user’s quota, approvals, and default quality profile."
                 ) {
                     VStack(spacing: 14) {

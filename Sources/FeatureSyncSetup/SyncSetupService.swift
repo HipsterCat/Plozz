@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 import CoreModels
+#if canImport(OSLog)
+import OSLog
+#endif
 
 // MARK: - SyncSetupService (app-facing facade)
 //
@@ -43,13 +46,16 @@ public final class SyncSetupService {
     private let rendezvousStore: PairingRendezvousStoring
     private let coordinator = SyncSetupCoordinator()
 
-    private let configProvider: @MainActor () -> LocalConfig
+    private let configProvider: @MainActor () throws -> LocalConfig
     private let secretsProvider: @MainActor () -> SyncSecretsBundle
     private let deviceID: @MainActor () -> String
     private let deviceName: @MainActor () -> String
     private let isConfigured: @MainActor () -> Bool
 
     public private(set) var isEnabled: Bool
+    #if canImport(OSLog)
+    private static let logger = Logger(subsystem: "com.plozz.app", category: "sync")
+    #endif
 
     public init(
         flag: SyncSetupFeatureFlag = SyncSetupFeatureFlag(),
@@ -58,7 +64,7 @@ public final class SyncSetupService {
         deviceID: @escaping @MainActor () -> String,
         deviceName: @escaping @MainActor () -> String,
         isConfigured: @escaping @MainActor () -> Bool,
-        configProvider: @escaping @MainActor () -> LocalConfig,
+        configProvider: @escaping @MainActor () throws -> LocalConfig,
         secretsProvider: @escaping @MainActor () -> SyncSecretsBundle = { SyncSecretsBundle() }
     ) {
         self.flag = flag
@@ -105,7 +111,15 @@ public final class SyncSetupService {
     /// device on the same Apple ID can offer "bring your setup here".
     public func publishPresence() {
         guard isEnabled else { return }
-        let cfg = configProvider()
+        let cfg: LocalConfig
+        do {
+            cfg = try configProvider()
+        } catch {
+            #if canImport(OSLog)
+            Self.logger.error("Setup presence update deferred because local configuration is unavailable")
+            #endif
+            return
+        }
         guard !cfg.accounts.isEmpty || !cfg.profiles.isEmpty else { beaconStore.clear(); return }
         beaconStore.write(SyncPresenceBeacon(
             setupExists: true,
@@ -133,10 +147,11 @@ public final class SyncSetupService {
         public let invite: SyncPairingInvite
         public let identity: SyncPairingIdentity
         public let displayName: String
+        public let sourceRequestID: UUID?
     }
 
     /// Create a fresh code + QR invite + identity this device shows to be set up.
-    public func makeHostPairing(ttlSeconds: Int = 180) -> HostPairing {
+    public func makeHostPairing(ttlSeconds: Int = 180, sourceRequestID: UUID? = nil) -> HostPairing {
         let code = SyncPairingCode.generate()
         let identity = SyncPairingIdentity()
         let invite = SyncPairingInvite(
@@ -144,7 +159,10 @@ public final class SyncSetupService {
             publicKeyData: identity.publicKeyData,
             context: SyncPairingContext(ttlSeconds: ttlSeconds)
         )
-        return HostPairing(code: code, invite: invite, identity: identity, displayName: deviceName())
+        return HostPairing(
+            code: code, invite: invite, identity: identity,
+            displayName: deviceName(), sourceRequestID: sourceRequestID
+        )
     }
 
     // MARK: Same-Apple-ID rendezvous (zero-typing credential auto-skip)
@@ -279,12 +297,13 @@ public final class SyncSetupService {
         pairing: HostPairing,
         over link: PairingLink,
         existingAuthorizations: [String: LocalAuthorization] = [:],
-        presentSAS: @escaping @Sendable (String) -> Void = { _ in }
+        presentSAS: @escaping @Sendable (String) -> Void = { _ in },
+        progress: @escaping @Sendable (DeviceSetupDiagnostic.Stage) async -> Void = { _ in }
     ) async throws -> ReceivedSetup {
         let bundle = try await SyncPairingSession.hostReceiveSetup(
             identity: pairing.identity, context: pairing.invite.context,
             serviceName: pairing.invite.serviceName, over: link,
-            presentSAS: presentSAS
+            presentSAS: presentSAS, progress: progress
         )
         var application = coordinator.apply(
             snapshot: bundle.config,
@@ -312,9 +331,11 @@ public final class SyncSetupService {
         expectedPublicKey: Data?,
         configOnly: Bool = false,
         restrictToAccountIDs: Set<String>? = nil,
-        confirmSAS: @escaping @Sendable (String) async -> Bool = { _ in true }
+        confirmSAS: @escaping @Sendable (String) async -> Bool = { _ in true },
+        progress: @escaping @Sendable (DeviceSetupDiagnostic.Stage) async -> Void = { _ in }
     ) async throws {
-        let cfg = configProvider()
+        await progress(.configuration)
+        let cfg = try configProvider()
         // A per-server request (restrictToAccountIDs set) transfers ONLY the chosen
         // account(s) and no profiles/settings — the receiver just wants that one
         // server. A whole-device request (nil) sends everything, as before.
@@ -346,7 +367,7 @@ public final class SyncSetupService {
         }
         let bundle = SyncTransferBundle(config: snapshot, secrets: (secrets?.isEmpty ?? true) ? nil : secrets)
         try await SyncPairingSession.guestSendSetup(
-            bundle, over: link, expectedPublicKey: expectedPublicKey, confirmSAS: confirmSAS
+            bundle, over: link, expectedPublicKey: expectedPublicKey, confirmSAS: confirmSAS, progress: progress
         )
     }
 }

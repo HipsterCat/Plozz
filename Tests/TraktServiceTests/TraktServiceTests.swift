@@ -7,7 +7,7 @@ import CoreNetworking
 private let traktBaseURL = URL(string: "https://api.trakt.tv")!
 
 private func configured() -> TraktConfig {
-    TraktConfig(clientID: "CLIENT", clientSecret: "SECRET")
+    TraktConfig(clientID: "CLIENT")
 }
 
 private func tokenJSON(access: String = "acc", refresh: String = "ref", expiresIn: Double = 7_776_000, createdAt: Double = Date().timeIntervalSince1970) -> String {
@@ -32,16 +32,16 @@ private func episode(tvdb: String? = "12345") -> MediaItem {
 // MARK: - Config
 
 final class TraktConfigTests: XCTestCase {
-    func testIsConfiguredRequiresBothCredentials() {
-        XCTAssertTrue(TraktConfig(clientID: "a", clientSecret: "b").isConfigured)
-        XCTAssertFalse(TraktConfig(clientID: "a", clientSecret: nil).isConfigured)
-        XCTAssertFalse(TraktConfig(clientID: "", clientSecret: "b").isConfigured)
+    func testIsConfiguredRequiresOnlyClientID() {
+        XCTAssertTrue(TraktConfig(clientID: "a").isConfigured)
+        XCTAssertFalse(TraktConfig().isConfigured)
+        XCTAssertFalse(TraktConfig(clientID: "").isConfigured)
     }
 
     func testSanitizeRejectsPlaceholderAndEmpty() {
-        XCTAssertNil(TraktConfig(clientID: "$(TRAKT_CLIENT_ID)", clientSecret: "x").clientID)
-        XCTAssertNil(TraktConfig(clientID: "   ", clientSecret: "x").clientID)
-        XCTAssertEqual(TraktConfig(clientID: " abc ", clientSecret: "x").clientID, "abc")
+        XCTAssertNil(TraktConfig(clientID: "$(TRAKT_CLIENT_ID)").clientID)
+        XCTAssertNil(TraktConfig(clientID: "   ").clientID)
+        XCTAssertEqual(TraktConfig(clientID: " abc ").clientID, "abc")
     }
 }
 
@@ -170,6 +170,35 @@ final class TraktScrobblerNetworkTests: XCTestCase {
         XCTAssertTrue(http.sentPaths.isEmpty, "No token → must not hit the network")
     }
 
+    func testDurableMissingIdentityThrowsWithoutSendingARequest() async {
+        let http = RecordingHTTPClient()
+        let scrobbler = makeScrobbler(http: http, tokens: validTokens())
+        var missingEpisodeNumbers = episode()
+        missingEpisodeNumbers.episodeNumber = nil
+        for item in [movie(imdb: nil), episode(tvdb: nil), missingEpisodeNumbers] {
+            do {
+                try await scrobbler.scrobbleResult(item: item, progress: 100, event: .stop)
+                XCTFail("Missing identity must not be acknowledged as delivered")
+            } catch {
+                XCTAssertEqual(error as? TraktScrobbleError, .unidentifiableItem)
+            }
+        }
+        XCTAssertTrue(http.sentPaths.isEmpty)
+    }
+
+    func testDisconnectedMissingIdentityAndUnsupportedTargetsRemainNoOps() async throws {
+        let http = RecordingHTTPClient()
+        let disconnected = makeScrobbler(http: http, tokens: nil)
+        try await disconnected.scrobbleResult(item: movie(imdb: nil), progress: 100, event: .stop)
+        let connected = makeScrobbler(http: http, tokens: validTokens())
+        for kind in [MediaItemKind.series, .season, .folder] {
+            let item = MediaItem(id: "container", title: "Container", kind: kind)
+            try await connected.scrobbleResult(item: item, progress: 100, event: .stop)
+        }
+        try await connected.scrobbleResult(item: movie(imdb: nil), progress: 50, event: .progress)
+        XCTAssertTrue(http.sentPaths.isEmpty)
+    }
+
     func testProgressEventIsNotScrobbled() async {
         let http = RecordingHTTPClient()
         http.stubEmpty(pathSuffix: "/scrobble/start")
@@ -192,6 +221,124 @@ final class TraktScrobblerNetworkTests: XCTestCase {
         XCTAssertEqual(http.sentPaths, ["/oauth/token", "/scrobble/stop"])
         XCTAssertEqual(http.sent.last?.headers["Authorization"], "Bearer acc2")
         XCTAssertEqual(store.load()?.accessToken, "acc2", "Refreshed token must be persisted")
+    }
+}
+
+// MARK: - Scrobble receipt diagnostics
+
+final class TraktScrobbleReceiptDiagnosticsTests: XCTestCase {
+    private func responseLog(
+        json: String,
+        item: MediaItem,
+        progress: Double,
+        action: String = "pause"
+    ) async throws -> PlozzLog.LogEntry {
+        let wasEnabled = HandoffDiagnostics.isEnabled
+        HandoffDiagnostics.setEnabled(true)
+        defer { HandoffDiagnostics.setEnabled(wasEnabled) }
+        let previousIDs = Set(PlozzLog.recentEntries(limit: 500).map(\.id))
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "/scrobble/\(action)", json: json, status: 201)
+        let body = try XCTUnwrap(TraktScrobbler.scrobbleBody(for: item, progress: progress))
+
+        try await TraktClient(config: configured(), http: http).scrobble(
+            action: action, body: body, accessToken: "DO_NOT_LOG_TOKEN"
+        )
+
+        XCTAssertEqual(http.sentPaths, ["/scrobble/\(action)"], "Diagnostics must not add requests")
+        return try XCTUnwrap(PlozzLog.recentEntries(limit: 500).last {
+            !previousIDs.contains($0.id) && $0.message.hasPrefix("TRAKT_SCROBBLE ")
+        })
+    }
+
+    func testPauseRecordsReturnedIdentityAndProgressRatherThanEchoingRequest() async throws {
+        let entry = try await responseLog(
+            json: """
+            {
+                "action":"pause","progress":42.5,
+                "show":{"title":"PRIVATE_TITLE","ids":{"trakt":300,"tvdb":421974}},
+                "episode":{"season":2,"number":4,"ids":{"trakt":400,"tvdb":98765}},
+                "access_token":"DO_NOT_LOG_RESPONSE_TOKEN",
+                "user":{"username":"DO_NOT_LOG_USERNAME"}
+            }
+            """,
+            item: episode(), progress: 40
+        )
+
+        XCTAssertEqual(entry.level, .info)
+        XCTAssertTrue(entry.message.contains("requestedAction=pause requested={progress=40.0"))
+        XCTAssertTrue(entry.message.contains("episode[season=1,number=3"))
+        XCTAssertTrue(entry.message.contains("responseAction=pause response={progress=42.5"))
+        XCTAssertTrue(entry.message.contains("show[trakt=300,imdb=none,tmdb=none,tvdb=421974]"))
+        XCTAssertTrue(entry.message.contains("episode[season=2,number=4,trakt=400"))
+        XCTAssertFalse(entry.message.contains("PRIVATE_TITLE"))
+        XCTAssertFalse(entry.message.contains("DO_NOT_LOG"))
+        XCTAssertTrue(HandoffDiagnostics.persistentPlaybackLogText().contains(entry.message))
+    }
+
+    func testCompletedMovieRecordsScrobbleActionWithoutLoggingMetadata() async throws {
+        let entry = try await responseLog(
+            json: """
+            {"action":"scrobble","progress":100,
+             "movie":{"title":"PRIVATE_TITLE","year":1994,
+                      "ids":{"trakt":10,"imdb":"tt0111161","tmdb":278}}}
+            """,
+            item: movie(), progress: 100, action: "stop"
+        )
+
+        XCTAssertTrue(entry.message.contains("requestedAction=stop"))
+        XCTAssertTrue(entry.message.contains("responseAction=scrobble response={progress=100.0"))
+        XCTAssertTrue(entry.message.contains("movie[trakt=10,imdb=tt0111161,tmdb=278,tvdb=none]"))
+        XCTAssertFalse(entry.message.contains("PRIVATE_TITLE"))
+        XCTAssertFalse(entry.message.contains("DO_NOT_LOG"))
+    }
+
+    func testInvalidIMDbCannotInjectRequestOrResponseLogText() async throws {
+        let entry = try await responseLog(
+            json: """
+            {"action":"pause","progress":50,
+             "movie":{"ids":{"trakt":10,"imdb":"ttDO_NOT_LOG_RESPONSE_TOKEN"}}}
+            """,
+            item: movie(imdb: "ttDO_NOT_LOG_REQUEST_TOKEN"), progress: 50
+        )
+
+        XCTAssertTrue(entry.message.contains("responseAction=pause"))
+        XCTAssertEqual(entry.message.components(separatedBy: "imdb=invalid").count, 3)
+        XCTAssertFalse(entry.message.contains("DO_NOT_LOG"))
+    }
+
+    func testUnreadableReceiptsAreExplicitButDoNotFailAcceptedWrites() async throws {
+        for json in [
+            "{}",
+            "DO_NOT_LOG_NON_JSON_RESPONSE",
+            #"{"action":"DO_NOT_LOG_UNKNOWN_ACTION","progress":50}"#,
+            #"{"action":"pause","progress":"DO_NOT_LOG_BAD_PROGRESS"}"#,
+        ] {
+            let entry = try await responseLog(json: json, item: episode(), progress: 50)
+            XCTAssertEqual(entry.level, .error)
+            XCTAssertTrue(entry.message.hasSuffix("response=unreadable"))
+            XCTAssertFalse(entry.message.contains("responseAction="))
+            XCTAssertFalse(entry.message.contains("DO_NOT_LOG"))
+        }
+    }
+
+    func testDisabledDiagnosticsDoNotRecordReceipt() async throws {
+        let wasEnabled = HandoffDiagnostics.isEnabled
+        HandoffDiagnostics.setEnabled(false)
+        defer { HandoffDiagnostics.setEnabled(wasEnabled) }
+        let previousIDs = Set(PlozzLog.recentEntries(limit: 500).map(\.id))
+        let http = RecordingHTTPClient()
+        http.stubEmpty(pathSuffix: "/scrobble/pause")
+        let body = try XCTUnwrap(TraktScrobbler.scrobbleBody(for: episode(), progress: 50))
+
+        try await TraktClient(config: configured(), http: http).scrobble(
+            action: "pause", body: body, accessToken: "DO_NOT_LOG_TOKEN"
+        )
+
+        XCTAssertEqual(http.sentPaths, ["/scrobble/pause"])
+        XCTAssertFalse(PlozzLog.recentEntries(limit: 500).contains {
+            !previousIDs.contains($0.id) && $0.message.hasPrefix("TRAKT_SCROBBLE ")
+        })
     }
 }
 

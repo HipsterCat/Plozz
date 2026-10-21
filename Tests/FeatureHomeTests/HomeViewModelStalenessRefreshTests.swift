@@ -29,11 +29,12 @@ final class HomeViewModelStalenessRefreshTests: XCTestCase {
         return HomeViewModel(
             accounts: [ResolvedAccount(account: account, provider: provider)],
             layoutStore: InMemoryHomeLayoutStore(),
+            currentVisibility: { self.visibility },
             policy: policy
         )
     }
 
-    private var visibility: HomeLibraryVisibility { HomeLibraryVisibility(mergeLibrariesOnHome: true) }
+    private var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: true)
 
     /// The regression that let a removed title sit on the row all session: three
     /// returns to Home, and not one of them asked a server anything.
@@ -101,7 +102,8 @@ final class HomeViewModelStalenessRefreshTests: XCTestCase {
         await model.loadIfNeeded(for: visibility)
         let afterFirstLoad = provider.continueWatchingCalls
 
-        await model.loadIfNeeded(for: HomeLibraryVisibility(mergeLibrariesOnHome: false))
+        visibility.mergeLibrariesOnHome = false
+        await model.loadIfNeeded(for: visibility)
 
         XCTAssertGreaterThan(provider.continueWatchingCalls, afterFirstLoad)
     }

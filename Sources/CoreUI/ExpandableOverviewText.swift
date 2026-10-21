@@ -44,26 +44,6 @@ private struct InlineOverviewTailMask: View {
     }
 }
 
-#if os(tvOS) && canImport(UIKit)
-/// Makes the presenting sheet's own host transparent, so the card floats over
-/// the page (dimmed) instead of on an opaque full-screen plate.
-private struct ClearExpandableSheetBackground: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        DispatchQueue.main.async {
-            view.superview?.superview?.backgroundColor = .clear
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {}
-}
-#else
-private struct ClearExpandableSheetBackground: View {
-    var body: some View { Color.clear }
-}
-#endif
-
 private struct ExpandableVisibleHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -152,9 +132,9 @@ public struct ExpandableOverviewText: View {
         preview
             // Avoid the tvOS sheet-relayout watchdog on pages containing media rails.
             #if os(tvOS)
-            .fullScreenCover(isPresented: $isExpanded) { expandedCard }
+            .plozzSheet(isPresented: $isExpanded, style: .floatingCard) { expandedCard }
             #else
-            .sheet(isPresented: $isExpanded) { expandedCard }
+            .plozzSheet(isPresented: $isExpanded) { expandedCard }
             #endif
             .onChange(of: text) { _, _ in isExpanded = false }
     }
@@ -321,10 +301,6 @@ public struct ExpandableOverviewText: View {
         // Menu closes the card. Without it the only way out was the system's own
         // sheet dismissal, which cannot fire while the focus engine is stuck.
         .onExitCommand { isExpanded = false }
-        // Place focus once the card exists. In `task` rather than `onAppear`:
-        // the content is still being laid out when `onAppear` fires, and
-        // focusing a view mid-layout is unreliable.
-        .background(ClearExpandableSheetBackground())
         #else
         NavigationStack {
             ScrollView {
@@ -335,8 +311,11 @@ public struct ExpandableOverviewText: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(24)
             }
-            .background(palette.settingsBackground)
+            .background { SettingsPageBackground() }
             .navigationTitle(title)
+            #if os(iOS)
+            .toolbarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 if style == .inline {
                     ToolbarItem(placement: .confirmationAction) {

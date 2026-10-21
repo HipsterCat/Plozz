@@ -11,13 +11,13 @@ final class PrototypeGuideWindowRequestTests: XCTestCase {
     func testLargeCatalogOnlyRequestsTheCurrentNeighborhood() throws {
         let rows = (0..<5_000).map { LiveTVGuideRowID(channelID: "channel-\($0)") }
         for (anchor, expected) in [(0, 0..<48), (2_500, 2_497..<2_545), (4_999, 4_952..<5_000)] {
-            let value = try XCTUnwrap(request(rows: rows, anchor: rows[anchor]))
+            let value = try XCTUnwrap(request(rows: rows, anchorIndex: anchor))
             XCTAssertEqual(value.channelIDs, expected.map { "channel-\($0)" })
             XCTAssertEqual(value.range.duration, 21_600)
         }
     }
 
-    func testRepeatedSectionsAndRemovedSectionAnchorRemainStable() throws {
+    func testRepeatedSectionsDoNotDuplicateChannelRequests() throws {
         let rows = [
             LiveTVGuideRowID(channelID: "one", section: .recent),
             LiveTVGuideRowID(channelID: "one", section: .favorites),
@@ -26,7 +26,7 @@ final class PrototypeGuideWindowRequestTests: XCTestCase {
         ]
         let value = try XCTUnwrap(
             request(
-                rows: rows, anchor: LiveTVGuideRowID(channelID: "two", section: .favorites)
+                rows: rows, anchorIndex: 3
             ))
         XCTAssertEqual(value.channelIDs, ["one", "two"])
     }
@@ -50,7 +50,7 @@ final class PrototypeGuideWindowRequestTests: XCTestCase {
     }
 
     private func request(
-        rows: [LiveTVGuideRowID], anchor: LiveTVGuideRowID? = nil,
+        rows: [LiveTVGuideRowID], anchorIndex: Int? = nil,
         enabledSourceIDs: Set<String> = ["guide"], end: Date? = nil,
         mappings: [String: LiveTVGuideMappingOverride] = [:]
     ) -> PrototypeGuideWindowRequest? {
@@ -59,7 +59,7 @@ final class PrototypeGuideWindowRequestTests: XCTestCase {
             guideURL: URL(string: "https://example.invalid/guide.xml")!
         )
         return PrototypeGuideWindowRequest(
-            rows: rows, anchor: anchor, from: start, to: end ?? start.addingTimeInterval(21_600),
+            rows: rows, anchorIndex: anchorIndex, from: start, to: end ?? start.addingTimeInterval(21_600),
             sources: imports.guideSources, enabledSourceIDs: enabledSourceIDs, mappings: mappings
         )
     }

@@ -732,6 +732,59 @@ final class HeroCuratorTests: XCTestCase {
 }
 
 final class HomeHeroSlotStateTests: XCTestCase {
+    func testUnconfiguredCollectionsAndDiscoveryNeverReserveAPlaceholder() {
+        for sources: [HeroSourceKind] in [[.collection], [.featured], [.collection, .featured], []] {
+            var settings = HeroSettings.default
+            settings.sources = sources
+            settings.collections = []
+            settings.discoverySources = []
+            XCTAssertEqual(
+                HomeHeroSlotState.resolve(settings: settings, hasItems: false, recomputeComplete: false),
+                .hidden
+            )
+            XCTAssertEqual(
+                HomeHeroSlotState.resolve(settings: settings, hasItems: true, recomputeComplete: false),
+                .hidden, "Stale items cannot restore an unconfigured source."
+            )
+        }
+    }
+
+    func testOtherConfiguredSourcesStillReserveTheirLoadingSlot() {
+        var settings = HeroSettings.default
+        settings.sources = [.collection, .watchlist]
+        settings.collections = []
+        XCTAssertEqual(
+            HomeHeroSlotState.resolve(settings: settings, hasItems: false, recomputeComplete: false),
+            .placeholder
+        )
+        XCTAssertEqual(
+            HomeHeroSlotState.resolve(settings: settings, hasItems: false, recomputeComplete: true),
+            .hidden
+        )
+        XCTAssertEqual(
+            HomeHeroSlotState.resolve(settings: settings, hasItems: true, recomputeComplete: true),
+            .content
+        )
+    }
+
+    func testSelectedCollectionLoadsThenHidesOnlyIfEmpty() {
+        var settings = HeroSettings.default
+        settings.sources = [.collection]
+        settings.collections = [.init(accountID: "account", collectionID: "collection", title: "Collection")]
+        XCTAssertEqual(
+            HomeHeroSlotState.resolve(settings: settings, hasItems: false, recomputeComplete: false),
+            .placeholder
+        )
+        XCTAssertEqual(
+            HomeHeroSlotState.resolve(settings: settings, hasItems: false, recomputeComplete: true),
+            .hidden
+        )
+        XCTAssertEqual(
+            HomeHeroSlotState.resolve(settings: settings, hasItems: true, recomputeComplete: false),
+            .content, "Retain available content while refreshing."
+        )
+    }
+
     func testAsyncOnlyHeroReservesPlaceholderUntilCurationCompletes() {
         XCTAssertEqual(
             HomeHeroSlotState.resolve(
@@ -1417,6 +1470,7 @@ final class HomeHeroDisplayResolverTests: XCTestCase {
                 case .recentlyAdded: return "recent"
                 case .randomFromLibrary: return "random"
                 case .watchlist: return "watchlist"
+                case .collection: return nil
                 }
             }
             runtime.items = expectedLive.map { item($0) }

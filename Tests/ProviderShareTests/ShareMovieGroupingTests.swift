@@ -66,6 +66,8 @@ final class ShareMovieGroupingTests: XCTestCase {
         XCTAssertTrue(detail.hasMultipleVersions)
         XCTAssertEqual(detail.versions.first?.height, 2160, "4K version sorts first")
         XCTAssertTrue(detail.versions.first?.isDefault ?? false)
+        XCTAssertEqual(detail.versions.first?.fileName, "Star Wars (1977) Bluray-2160p.mkv")
+        XCTAssertTrue(detail.versions.allSatisfy { $0.audioLanguageNames().isEmpty })
 
         // The default playable file is the 4K one.
         guard let key = ShareCatalogID.movieKey(forMovieID: id) else { return XCTFail() }

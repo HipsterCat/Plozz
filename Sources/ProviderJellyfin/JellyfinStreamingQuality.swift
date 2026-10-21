@@ -19,13 +19,17 @@ extension JellyfinProvider: StreamingQualityProviding {
     }
 
     func releaseStreamingEncoding(_ id: String, origin: String = #function) async {
-        do {
-            try await client.stopActiveEncoding(playSessionID: id, origin: origin)
-            HandoffDiagnostics.emit("streaming RELEASE_ACK provider=\(kind.rawValue)")
-        } catch {
-            HandoffDiagnostics.emit("streaming RELEASE_FAILED provider=\(kind.rawValue)")
-            PlozzLog.playback.error("Unable to release the previous streaming rendition.")
-        }
+        // Cleanup must reach the server even when the negotiation's caller was
+        // cancelled. Await the independently cancellable task; do not fire-and-forget.
+        await Task { [client, kind] in
+            do {
+                try await client.stopActiveEncoding(playSessionID: id, origin: origin)
+                HandoffDiagnostics.emit("streaming RELEASE_ACK provider=\(kind.rawValue)")
+            } catch {
+                HandoffDiagnostics.emit("streaming RELEASE_FAILED provider=\(kind.rawValue)")
+                PlozzLog.playback.error("Unable to release the previous streaming rendition.")
+            }
+        }.value
     }
 }
 
@@ -35,6 +39,18 @@ extension JellyfinCapabilityProfile {
 
     var canRequestHEVC: Bool {
         transcodingProfiles.contains { $0.videoCodec.split(separator: ",").contains("hevc") }
+    }
+
+    func applyingTranscodingRange(for provider: ProviderKind) -> Self {
+        var result = self
+        result.codecProfiles.append(.init(type: "Video", codec: "h264", conditions: [
+            .init(
+                condition: "Equals",
+                property: provider == .emby ? "VideoRange" : "VideoRangeType",
+                value: "SDR", isRequired: false
+            )
+        ]))
+        return result
     }
 
     func applying(_ options: StreamingPlaybackOptions) -> Self {
@@ -83,13 +99,52 @@ extension PlaybackInfoResponse {
 }
 
 extension MediaSourceInfo {
+    mutating func requestSDRForH264Transcode(provider: ProviderKind, forceVideoTranscode: Bool) throws {
+        guard let TranscodingUrl else { return }
+        guard var url = URLComponents(string: TranscodingUrl) else {
+            throw StreamingQualityError.unavailable
+        }
+        var query = url.queryItems ?? []
+        let codecs = query.first { $0.name.caseInsensitiveCompare("VideoCodec") == .orderedSame }?
+            .value?.lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } ?? []
+        guard codecs.contains("h264") else { return }
+
+        let allowsCopy = query.first { $0.name.caseInsensitiveCompare("AllowVideoStreamCopy") == .orderedSame }?
+            .value?.lowercased() != "false"
+        let sourceCodec = MediaStreams?.first { $0.Type == "Video" }?.Codec?.lowercased()
+        let requiresCodecChange = sourceCodec.map { !codecs.contains($0) && !codecs.contains("copy") } ?? false
+        // A TranscodingUrl can also copy the video while converting audio or its
+        // container. Do not turn that lossless path into an SDR video encode.
+        guard forceVideoTranscode || !allowsCopy || requiresCodecChange else { return }
+
+        let name = provider == .emby ? "h264-videorange" : "h264-rangetype"
+        query.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        query.append(.init(name: name, value: "SDR"))
+        url.queryItems = query
+        guard let value = url.string else { throw StreamingQualityError.unavailable }
+        self.TranscodingUrl = value
+    }
+
+    var burnedInSubtitleTrackID: Int? {
+        guard let TranscodingUrl,
+              let query = URLComponents(string: TranscodingUrl)?.queryItems,
+              query.first(where: { $0.name.caseInsensitiveCompare("SubtitleMethod") == .orderedSame })?
+                .value?.caseInsensitiveCompare("Encode") == .orderedSame else { return nil }
+        let index = query.first { $0.name.caseInsensitiveCompare("SubtitleStreamIndex") == .orderedSame }?.value
+            ?? query.first { $0.name.caseInsensitiveCompare("SubtitleStreamIndexes") == .orderedSame }?.value
+        guard let index, let id = Int(index), id >= 0 else { return nil }
+        return id
+    }
+
     func fits(_ quality: StreamingQuality) -> Bool {
         let video = MediaStreams?.first { $0.Type == "Video" }
         return quality.permitsOriginal(bitrate: Bitrate, width: video?.Width, height: video?.Height)
     }
 
     /// Apply bounds to the server-issued rendition, never to an original-file URL.
-    func boundedTranscodingURL(_ options: StreamingPlaybackOptions, supportsHEVC: Bool) throws -> String {
+    func boundedTranscodingURL(
+        _ options: StreamingPlaybackOptions, supportsHEVC: Bool, forceVideoTranscode: Bool = false
+    ) throws -> String {
         try options.quality.validate()
         guard let TranscodingUrl, var url = URLComponents(string: TranscodingUrl) else {
             throw StreamingQualityError.unavailable
@@ -99,17 +154,25 @@ extension MediaSourceInfo {
             query.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
             query.append(.init(name: name, value: value))
         }
+        let requiresConversion = forceVideoTranscode || options.forceTranscoding || !fits(options.quality)
+        let burnsSubtitles = !options.subtitlesOff && options.subtitleTrack?.isBitmapSubtitle == true
         if let total = options.quality.maximumBitrate, let bitrate = options.quality.videoBitrate,
            let height = options.quality.maximumHeight, let width = options.quality.maximumWidth {
-            set("VideoBitrate", String(bitrate))
-            set("AudioBitrate", String(options.quality.audioBitrate))
+            if requiresConversion || burnsSubtitles {
+                set("VideoBitrate", String(bitrate))
+                set("AudioBitrate", String(options.quality.audioBitrate))
+                set("MaxAudioChannels", "2")
+            }
             set("MaxStreamingBitrate", String(total))
             set("MaxHeight", String(height))
             set("MaxWidth", String(width))
-            set("MaxAudioChannels", "2")
         }
-        set("AllowVideoStreamCopy", "false")
-        set("AllowAudioStreamCopy", "false")
+        if requiresConversion || burnsSubtitles {
+            set("AllowVideoStreamCopy", "false")
+        }
+        if requiresConversion {
+            set("AllowAudioStreamCopy", "false")
+        }
         if let audio = options.audioTrack { set("AudioStreamIndex", String(audio.id)) }
         if !options.subtitlesOff, let subtitle = options.subtitleTrack, subtitle.isBitmapSubtitle {
             set("SubtitleStreamIndex", String(subtitle.id))
@@ -130,14 +193,28 @@ extension MediaSourceInfo {
         let videoCodec = query.first { $0.name.caseInsensitiveCompare("VideoCodec") == .orderedSame }?.value
         let offeredCodecs = (videoCodec ?? "").lowercased().split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
-        if options.codec == .preferHEVC, supportsHEVC {
+        let sourceCodec = MediaStreams?.first { $0.Type == "Video" }?.Codec?.lowercased()
+        let permitsVideoCopy = !requiresConversion && !burnsSubtitles
+            && query.first { $0.name.caseInsensitiveCompare("AllowVideoStreamCopy") == .orderedSame }?
+                .value?.lowercased() != "false"
+        if permitsVideoCopy, let sourceCodec,
+           (sourceCodec == "h264" || (sourceCodec == "hevc" && supportsHEVC)),
+           offeredCodecs.contains(sourceCodec) || offeredCodecs.contains("copy") {
+            // A codec preference describes an encode, not a reason to encode
+            // an already compatible bitstream during container/audio conversion.
+            set("VideoCodec", sourceCodec)
+        } else if options.codec == .preferHEVC, supportsHEVC {
             guard offeredCodecs.contains("hevc") else {
                 PlozzLog.playback.info("The server did not provide the requested HEVC rendition.")
                 throw StreamingQualityError.codecUnavailable(.hevc)
             }
             set("VideoCodec", "hevc")
-        } else if !supportsHEVC || options.codec == .preferH264 || !["h264", "hevc"].contains(videoCodec?.lowercased() ?? "") {
+        } else if !supportsHEVC || options.codec == .preferH264 {
             set("VideoCodec", "h264")
+        } else if let codec = offeredCodecs.first(where: { $0 == "h264" || $0 == "hevc" }) {
+            set("VideoCodec", codec)
+        } else {
+            throw StreamingQualityError.noCompatibleStream
         }
         let selectedCodec = query.first { $0.name.caseInsensitiveCompare("VideoCodec") == .orderedSame }?.value?.lowercased()
         if selectedCodec == "hevc" {
@@ -152,7 +229,9 @@ extension MediaSourceInfo {
             set("MaxVideoBitDepth", depth)
             set("h264-videobitdepth", depth)
         }
-        set("AudioCodec", "aac")
+        if requiresConversion {
+            set("AudioCodec", "aac")
+        }
         url.queryItems = query
         guard let value = url.string else { throw StreamingQualityError.unavailable }
         return value

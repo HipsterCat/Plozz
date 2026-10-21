@@ -10,7 +10,9 @@ final class AggregatedLibraryCollectionTests: XCTestCase {
         let provider = aggregate(first, second)
         XCTAssertTrue(provider.capabilities.contains(.libraryCollections))
 
-        let page = try await provider.collections(in: "merged", page: PageRequest())
+        let page = try await provider.collections(in: "merged", page: PageRequest()) { _ in
+            XCTFail("Unmerged source progress must not bypass aggregate ordering and ownership.")
+        }
         XCTAssertEqual(page.totalCount, 2)
         XCTAssertEqual(Set(page.items.map(\.sourceAccountID)), ["first", "second"])
         XCTAssertTrue(page.items.allSatisfy { $0.sources.count <= 1 })
@@ -74,7 +76,7 @@ final class AggregatedLibraryCollectionTests: XCTestCase {
             _ = try await provider.collections(in: "merged", page: PageRequest())
             XCTFail("A failed source must remain retryable, not look empty or complete.")
         } catch {
-            XCTAssertEqual(error as? AppError, .serverUnreachable)
+            XCTAssertEqual(LibrarySourceFailure.underlying(error) as? AppError, .serverUnreachable)
         }
         await second.setFailure(nil)
         let recovered = try await provider.collections(in: "merged", page: PageRequest())

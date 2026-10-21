@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreModels
 import XCTest
 @testable import PlozzCoreUI
 
@@ -13,6 +14,34 @@ import XCTest
 /// chrome's scrim and the logo must both be positioned off the same mirror line
 /// the artwork actually uses.
 final class ExtendedArtworkGeometryTests: XCTestCase {
+    func testPortraitReflectionPreservesTheCompletePosterAtEveryRowWidth() {
+        for width in [CGFloat(90), 112, 132, 220, 280, 300, 420] {
+            let height = width / ContinueWatchingCardShape.portraitAspectRatio
+            let geometry = ExtendedArtworkGeometry(
+                slot: CGSize(width: width, height: height), artworkAspectRatio: 2.0 / 3.0, sideCrop: 0
+            )
+            XCTAssertEqual(geometry.renderedWidth, width, accuracy: 0.001)
+            XCTAssertEqual(geometry.pictureHeight, width * 1.5, accuracy: 0.001)
+            XCTAssertEqual(height, width * 1.65, accuracy: 0.001)
+            XCTAssertEqual(geometry.reflectionHeight, width * 1.5 * 0.20 / 2, accuracy: 0.001)
+            XCTAssertLessThan(height, width * 1.8, "Detailed cards must be shorter than the previous treatment.")
+            XCTAssertEqual(geometry.reflectionHeight,
+                           width * 1.5 * PlozzTheme.Metrics.continueWatchingPortraitReflectionShare, accuracy: 0.001)
+            XCTAssertEqual(geometry.reflectionStart, ContinueWatchingCardShape.portraitGeometry.reflectionStart,
+                           accuracy: 0.001)
+        }
+    }
+
+    func testProgressOnlyPortraitUsesTheStandardPosterWithoutAnExtension() {
+        let aspect = ContinueWatchingPlaybackDetails.progressOnly.cardAspectRatio
+        XCTAssertEqual(aspect, 2.0 / 3.0, accuracy: 0.001)
+        let geometry = ExtendedArtworkGeometry(
+            slot: CGSize(width: 200, height: 200 / aspect), artworkAspectRatio: 2.0 / 3.0, sideCrop: 0
+        )
+        XCTAssertEqual(geometry.reflectionHeight, 0)
+        XCTAssertEqual(ContinueWatchingPlaybackDetails.detailed.cardAspectRatio,
+                       ContinueWatchingCardShape.portraitAspectRatio)
+    }
 
     private let sixteenByNine: CGFloat = 16.0 / 9.0
 

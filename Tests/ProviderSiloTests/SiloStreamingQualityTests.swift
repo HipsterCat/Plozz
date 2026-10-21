@@ -130,6 +130,60 @@ extension SiloProviderTests {
         XCTAssertFalse(requests.contains { $0.path == "/api/v2/playback/start" })
     }
 
+    func testOriginalQualityKeepsClientHDRAndAudioHandlingOutOfServerHLSClaims() async throws {
+        let raw = try credential().encoded()
+        let http = SiloHTTPStub(playbackResponses())
+        let provider = try SiloProvider(
+            context: context(raw), credentials: SiloCredentialStub(raw), http: http,
+            capabilities: .init(supportsHDR10: false, supportsHLG: false, supportsDolbyVision: false)
+        )
+        let request = try await provider.playbackInfo(
+            for: "movie:1", mediaSourceID: "42", forceTranscode: false,
+            streaming: .init(quality: .original)
+        )
+        XCTAssertEqual(request.deliveryMode, .directPlay)
+        let requests = await http.requests
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: XCTUnwrap(requests.first { $0.path == "/api/v2/playback/start" }?.body)
+        ) as? [String: Any])
+        XCTAssertEqual(body["quality_preference"] as? String, "original")
+        XCTAssertNil(body["bandwidth_cap_kbps"])
+        let client = try XCTUnwrap(body["client_playback_context"] as? [String: Any])
+        let output = try XCTUnwrap(client["output"] as? [String: Any])
+        let hdr = try XCTUnwrap(output["hdr_details"] as? [String: Any])
+        XCTAssertEqual(hdr["hdr10"] as? Bool, false)
+        XCTAssertEqual(hdr["hdr10_plus"] as? Bool, false)
+        XCTAssertEqual(hdr["dolby_vision_profiles"] as? [Int], [])
+        let deliveries = try XCTUnwrap(client["deliveries"] as? [String: [String: Any]])
+        XCTAssertEqual(deliveries["original_http"]?["enabled"] as? Bool, true)
+        XCTAssertEqual(deliveries["original_http"]?["validated_claims"] as? [String], [
+            "client_managed_dynamic_range_v1", "client_selected_audio_track_v1"
+        ])
+        XCTAssertEqual(deliveries["hls"]?["validated_claims"] as? [String], [])
+        XCTAssertTrue(
+            (deliveries["hls"]?["containers"] as? [String])?.contains("hls") == true,
+            "Silo checks the plan's stream container, not just its segment format."
+        )
+    }
+
+    func testUnknownSiloRefusalDoesNotAssertThatTranscodingWasRequested() {
+        let error = SiloStreamingSelection.refusal("adaptation_unavailable")
+        XCTAssertEqual(error, .serverRefusal(
+            "Silo did not return a playable stream. No recognized reason was supplied.", reason: .unspecified
+        ))
+        XCTAssertEqual(SiloStreamingSelection.refusal("transcoding_disabled"), .serverRefusal(
+            "Silo reported that transcoding is disabled.", reason: .transcodingDisabled
+        ))
+    }
+
+    func testKnownSiloReasonsSurviveWithoutSpeculativeRemedies() {
+        let hdr = SiloStreamingSelection.refusal("hdr_transcode_unsupported")
+        XCTAssertEqual(hdr.diagnosticCode, "hdr_transcode_unsupported")
+        XCTAssertFalse(String(localized: hdr.userMessage).contains("tone"))
+        XCTAssertEqual(SiloStreamingSelection.refusal("session_expired"),
+                       .playback(.init(kind: .unavailable, provider: .silo, providerReason: .sessionExpired)))
+    }
+
     func testSiloWillNotSilentlyReturnOriginalOrNormalizeAnUnsupportedQuality() async throws {
         var original = streamingResponses()
         original["/api/v2/playback/start"] = playbackResponses()["/api/v2/playback/start"]

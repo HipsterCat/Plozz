@@ -7,6 +7,13 @@ the methodology, the on-device tooling, how to read an Instruments trace without
 the GUI, and two worked case studies (a memory/CPU storm and a SwiftUI re-render
 storm) that this process actually solved.
 
+For proactive, agent-driven optimization without borrowing a physical device,
+start with the [simulator performance lab](performance-lab.md). It owns automated
+workloads, configuration matrices, baselines, native Home navigation sampling
+(`tools/performance.py profile`) and evidence comparison. This
+playbook owns attribution and physical confirmation, not a requirement to deploy
+every experimental edit.
+
 > Golden rule: **get ground truth before changing code.** tvOS performance bugs
 > are almost always the opposite of what they look like. "No artwork" was never an
 > artwork bug; it was JavaScriptCore garbage collection pinning every core. "The
@@ -25,13 +32,13 @@ cycle: jump straight to §10.
 **Focus missing until the next remote press, or landing on the wrong control?**
 Start with [tvOS focus handoffs](#tvos-focus-handoffs-searchsidebar), not a CPU trace.
 
-Most of this playbook was written against the Apple TV, and §0 still holds there
-(the TV is the honest signal for *performance*). But it applies to **iPhone and
-iPad too** — the July 2026 leak in §10 was iOS-only, and treating this as a
-tvOS-only document is exactly why it went unread for two hours. The drill is always the same: **reproduce on the
-device → measure with the watchdog and/or `xctrace` → aggregate the trace →
-name the subsystem → fix at the source → re-measure.** Do not change code on a
-hunch before a measurement names the culprit.
+Most of this playbook was written against the Apple TV, but it applies to
+**iPhone and iPad too** — the July 2026 leak in §10 was iOS-only. For a physical
+failure, reproduce on the affected device, measure with the watchdog and/or
+`xctrace`, aggregate the trace, name the subsystem, fix the source and re-measure.
+For device-free optimization, follow the simulator lab's equivalent measured
+loop and reserve hardware-specific confirmation for a checkpoint. Do not change
+code on a hunch before a measurement names the culprit.
 
 There are two dominant bug **classes** in this app; identify which one you're in
 early (the decision tree in §4 routes you):
@@ -44,11 +51,256 @@ early (the decision tree in §4 routes you):
 
 ---
 
-## 0. The Apple TV is the only honest signal
+## Sentry diagnostics and matching symbols
 
-- The Simulator does **not** reproduce these problems. CPU, memory pressure, the
-  cooperative-thread-pool size, and the H.264/HEVC decoders all differ. Always
-  reproduce and confirm on the **physical Apple TV**.
+Crash-reporting consent gates all uploads. Automatic UI/network breadcrumbs and
+performance tracing remain disabled. Reports retain a bounded history of fixed
+screen categories and typed Live TV sync stages; failures include only an
+allowlisted reason and, for known system errors, a numeric code. No raw source/profile
+identity, playlist URL, media title, error description or user-info dictionary is
+included. Repeated sync failures are reported once per profile/operation/stage
+until recovery. Expected schedule deferrals and cancellation are not failures.
+Numeric SDK memory measurements and its low-memory flag survive redaction;
+device names, installation IDs and arbitrary contexts do not.
+The `PLZLTVSYNC` local log uses the same non-secret vocabulary.
+
+Manual **Send to Developer** reports additionally attach the persistent,
+Release-capable [Live TV source journal](live-tv-prototype.md#diagnosing-disappearing-sources).
+This is separate from automatic Sentry events and the in-memory performance
+snapshot below. It captures pseudonymous source/account/profile transitions and
+a fresh source-storage snapshot so a disappearing source can be distinguished
+from failed enrollment, suppression, changed profile scope or stale presentation.
+
+Opted-in reports also carry a bounded, in-memory performance snapshot. It records
+coarse operation/provider categories, elapsed time, start-thread identity,
+overlapping work, and available item/row/credit/account/request/byte counts.
+Home fetching, merging and state publication are distinguished from HTTP
+transport/JSON decoding, share scans, playlist imports, guide batches and
+automatic-channel work. Active operations remain visible if a hang prevents
+their completion. Slow completed operations are retained separately from recent
+work so a burst of fast requests cannot immediately erase them.
+Terminal outcomes include failures in requested individual Home rows and earlier
+guide batches, even when global feeds or later batches succeed. These outcomes
+do not replace the existing per-row or per-window UI status.
+The `performance_operations` context holds at most 32 active operations, 16
+recent fast completions and 16 slow completions (at least 250 ms), plus bounded
+drop/overlap counters. Home's optional credit count is omitted above 2,048 media
+entries; item/row counts remain available without walking the larger metadata feed.
+
+This adds no automatic tracing, timer, polling task, file logging, or additional
+Sentry events. Serialization happens only when an existing report is captured.
+Opting out clears the buffer and invalidates old spans, including across a later
+opt-in. The final scrub accepts only the typed schema and bounded numeric values;
+URLs, request paths, server/profile names, credentials, media identities/titles,
+and response bodies are never part of the snapshot.
+
+Elapsed time is not CPU time: a request can be waiting on a server, and a task
+that starts on the main thread can suspend without blocking it. Streaming
+playlist import includes overlapping transport, parsing and staging; it is not
+an isolated parser or socket benchmark. Correlate active operations and slow
+records with the hang stack and screen history rather than assigning the whole
+hang to the last operation. Missing records can reflect disabled reporting or
+the bounded buffer; inspect its drop/retention counters before drawing conclusions.
+
+Playlist import limit warnings contain only a closed limit category and numeric
+observed/maximum counts. Header size, received bytes, parser input, header-line
+size and entry count are distinguishable without uploading an address, channel
+name, credential, error description or playlist content. Reporting is gated by
+crash-reporting consent and limited to one warning per category per reporter
+lifecycle. These measurements diagnose an unavailable input; a screenshot of the
+generic import error alone cannot establish which limit was reached.
+
+Automatic IPTV setup reports are enabled for **all TestFlight builds**, including
+hotfixes, and local Debug verification, never App Store builds. There is no
+build-number allowlist or automatic build-based expiry; retire the investigation
+explicitly once the setup issues are resolved. This is not a remote configuration
+switch. They reuse Share Crash Reports (including explicit opt-outs), not the
+manual Send Diagnostics action. A handled add/reconnect failure produces a warning with
+`report.kind:iptv-setup`; a crash or button press is not required.
+
+Playback failures use the same Debug/TestFlight and Share Crash Reports gate,
+with `report.kind:playback-failure`. The IPTV proxy records the upstream HTTP
+status and MIME category before converting a failed request to a gateway
+response; the live engine records typed error kinds and numeric domain/code
+evidence. Reports distinguish response, body, manifest, load, playback and
+audio-session failures. Unknown format information stays unknown. URL/header
+values, media names, provider addresses and error descriptions are never included.
+Each playback attempt emits at most one failure; the reporter accepts at most
+10 distinct playback reports per enabled lifecycle, separately from setup
+reports. Success, cancellation and downstream client disconnects do not report
+proxy failures. Opting out invalidates retained attempts even if reporting is
+later re-enabled. These reports diagnose playback separately from catalogue
+imports; they do not establish that two users have the same underlying failure.
+
+Local **Details** are separate from automatic reporting. Failed IPTV sign-in/import
+forms and terminal Live TV playback errors retain a small in-memory support report
+even without crash-reporting consent, including in App Store builds. Where known,
+it shows the failed stage, HTTP status, response type, numeric network/engine/storage
+codes, aggregate import counts and timings, and app/OS versions. iPhone and iPad
+can share the report through the system share sheet; Apple TV displays it locally.
+The report excludes addresses, headers, credentials, account/channel names and
+arbitrary error descriptions. Unknown causes remain unknown rather than implying
+a subscription, regional restriction or unsupported codec.
+
+The live decoder wrapper forwards evidence only while it owns a source. The
+player captures that evidence before stopping on failure or end-of-stream and
+passes the typed report through the guide and multiview callbacks. An end without
+underlying evidence does not invent an engine cause. Prepared-stream identity still rejects
+late failures from replaced channels. Only terminal upstream refusals are retained
+as delivery failures; a recoverable 404 or 503 must not poison native fallback.
+Starting another setup attempt clears its preceding local report. Local capture
+does not enable uploads, bypass telemetry budgets or replay into later consent
+generations, and introduces no probes, rescans or background polling. Failed
+server enrollment stays visible on the empty setup screen with an explicit retry.
+
+For live HLS, the proxy retains the root playlist's successfully resolved delivery
+URL for subsequent refreshes and HEAD probes. Reopening a provider's original
+entrypoint can create a different session and change segment URLs at the same
+media sequence, even when the proxy's local URL encoding is deterministic.
+Redirected delivery URLs remain private, and account headers are scoped against
+the actual request origin on every refresh. A 401, 403, 404, or 410 from a retained
+redirect triggers one renewal through the original entrypoint; an actual refusal
+there remains terminal. Other failures do not trigger a renewal loop. This state
+is playback-session-local, does not alter raw transport streams or on-demand
+requests, and is discarded when the proxy stops.
+
+Only explicit URL, file, and Xtream account setup and legacy source check/save
+attempts establish the task-local context. Ordinary catalogue refresh, guide
+polling, playback, and browsing do not. Each attempt emits at most 16 stage
+breadcrumbs and one terminal breadcrumb. Only failed outcomes create issues:
+success and cancellation do not. A reporter lifecycle accepts at most 20 attempts
+and 10 distinct failure summaries, deduplicated by source/authentication kind, entry point,
+stage, reason, HTTP status, and network code. These are bounded samples, not
+population-wide success/failure rates.
+
+The closed payload contains source/authentication categories, add/edit entry
+point, phase, outcome, elapsed/phase milliseconds, available entry/skip counts,
+the most recently measured playlist input size, request count, final HTTP status,
+coarse response MIME category, and an allowlisted reason/numeric network code.
+Unavailable measurements stay absent. It never contains URLs, hostnames, account
+or profile IDs, filenames, header names/values, credentials, channel names, bodies,
+or arbitrary error descriptions. Counters are recorded at parser/library
+completion, never per channel; no extra requests, timers, disk logs, or tracing
+are added. Restarting reporting invalidates old attempts instead of replaying
+them. The final Sentry scrub revalidates every field and preserves only coarse
+app/OS/hardware/screen tags and the existing numeric memory evidence.
+
+Live TV sync size guards also emit a `plozz.live_tv_sync_limit` breadcrumb with
+only a closed limit name and the already-measured `observed`/`maximum` counts.
+These distinguish schedule/item counts, encoded snapshot/record/export bytes,
+and journal/input/storage limits without attaching identifiers or content.
+They run only on the existing failure branches: no additional serialization,
+catalogue scans, I/O, timers or per-record notifications occur on successful syncs.
+The reporter adds at most one breadcrumb per limit per minute to its existing
+100-breadcrumb buffer, and never creates a separate issue for the measurement.
+Normal reporting consent still applies; unknown sizes and non-integer values
+are omitted. Existing errors, safety limits and all-or-nothing publication are
+unchanged. Look at the breadcrumb chronology alongside the sync stage; do not
+attribute an older size measurement to an unrelated failure.
+
+Missing breadcrumbs in a shared issue or formatted summary are not proof that
+the original event contained none. Check the event and its debug images: an app
+image with `debug_status: missing` specifically means Sentry lacks its matching
+symbols. An unknown framework source location alone does not establish that.
+
+Before distribution, configure `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and
+`SENTRY_PROJECT` in the private Plozz env file (or CI environment), and install
+`sentry-cli`. The `beta` and `release` lanes validate both IPAs, then upload each
+archive's UUID-matched app/extension dSYMs and wait for Sentry processing before
+uploading either platform to Apple. Source bundles are explicitly excluded.
+The uploader verifies every archive debug UUID, including dependencies, through
+the configured project's symbol API. This accepts already-processed symbols
+without relying on `sentry-cli --require-all`, which can reject existing uploads.
+Missing debug information, API failures and redirects still block distribution;
+the token must allow reading the project's debug files as well as uploading them.
+Local builds/archives do not need Sentry upload credentials.
+
+For an existing retained archive, use
+`python3 tools/upload-sentry-symbols.py /path/to/Plozz-tvOS.xcarchive`.
+The UUID must match the event's exact binary; rebuilding the same Git commit does
+not recreate its symbols. Missing historical breadcrumbs cannot be recovered by
+uploading symbols. Symbolication improves attribution, not proof of a hang's cause.
+
+Portable iCloud Keychain publication runs on a dedicated serial utility queue,
+including local credential reads and encoding. Unchanged values are not rewritten.
+Sign-out and purge use the same queue, invalidate older publications, and hide
+pending removals from auto-connect. Turning sync off cancels queued publication;
+an already executing Security call cannot be interrupted.
+
+Library-channel playback keeps display eligibility separate from durable
+authorization. Focus, title and status getters use only the current in-memory
+profile/account/source state. The runtime supplies a separate asynchronous
+validator for initial load, provider/decoder/seek completion, resume, periodic
+reconciliation and history commits; its definition-store read runs off the main
+thread. A slow periodic check is coalesced, not queued again on every UI tick.
+Storage errors deny access rather than reuse a cached grant. Generation checks
+discard superseded results, and an I/O-free, namespace-scoped store revision
+fences cross-instance writes while a read is suspended. Candidate IDs and
+rendered titles must never be treated as permission to execute playback.
+After decoder loading, pause intent is restored before durable validation
+suspends, so a paused start or foreground reload cannot autoplay during the read.
+
+IPTV catalogue teardown can reach SQLite WAL checkpoint writes even without an
+explicit save. If the final provider reference is released on the main thread,
+the catalogue transfers its connection and cached statements to a serial utility
+queue for finalization and close. Non-main-thread teardown remains synchronous.
+Opening a connection installs the existing busy timeout before WAL/schema
+pragmas, so an immediate reopen tolerates a previous connection's checkpoint.
+Committed imports are unchanged, and closing still rolls back unfinished work;
+do not disable journaling or skip closing to avoid a teardown hang.
+
+Xtream catalogue entries require a usable source ID, but a missing or empty
+display name does not invalidate an otherwise addressable entry. Such entries
+keep their native ID for both playback routing and fallback display, matching
+the existing episode-title fallback. Import logs report only the aggregate
+unnamed-entry count, never the source IDs or payload. Invalid identities,
+malformed JSON and truncated responses still roll back the entire replacement;
+unnamed entries are retained, not skipped.
+
+`IPTVPerformanceProbeTests.testOptInXtreamImportAndLibraryDiscovery` exercises
+real catalogue bytes through a separately owned loopback relay and dummy
+credentials. Its ignored `.build/iptv-xtream-performance-source.json` control
+file is an array of `{ "source": 1, "url": "http://127.0.0.1:PORT/CAPABILITY",
+"counts": { "live": 0, "movies": 0, "series": 0 } }` entries with expected
+unique source-ID counts. The probe checks all three catalogues, seven setup
+requests, sub-two-second cached discovery and decoding every persisted record
+after reopening. Without that control file it skips; ordinary tests never
+contact trial providers. Keep credentials and original response bodies out of
+the control file and Git, and report upstream transfer time separately from
+local replay/import time. Simulator measurements are not physical-device
+performance evidence.
+
+iOS detail-hero layout alternatives share one resolved action set per body
+evaluation. Do not call the action coordinator again from each derived button,
+overflow-menu, or `ViewThatFits` candidate: even an empty download registry used
+to trigger repeated provider-identity normalization. Empty download lookups still
+observe index membership, so the first download appears without a forced reload.
+Nonempty lookups retain version/account matching and per-record progress updates.
+
+The pinned SMB fork validates Direct TCP frame boundaries, decrypted SMB2 header
+sizes, compound offsets, and the fields consumed by the error decoder before
+unchecked reads. Invalid envelopes close the connection and return
+`ConnectionError.invalidResponse`; incomplete transport frames return
+`ConnectionError.disconnected`. Pending replies use the same buffered framing
+path, and a compound response is returned only once. This guards the receive
+envelope, not every command-specific payload decoder.
+
+Live TV portable journal commits keep consent checks and authoritative local-store
+changes on the main actor, then await atomic file writes on a worker. The journal
+revision is fenced until completion, and observation receipts are written after
+their records. Cloud capture and acknowledgements cannot report success before
+that commit. Failures invalidate preparation and preserve the caller's fallback;
+unchanged observations do not trigger another disk flush. Do not fix `fsync`
+hangs by removing atomic writes or returning before persistence finishes.
+
+## 0. Match the evidence to the claim
+
+- Simulator workloads can expose repeated computation, I/O, invalidation and
+  lifetime defects without using a physical device. Use them for the automated
+  inner loop; count actual work and compare controlled measurements.
+- CPU, GPU, memory pressure, scheduling and H.264/HEVC decoders differ on
+  hardware. Confirm a hardware-specific claim on the affected physical
+  platform. A simulator improvement is not proof of Apple TV frame pacing.
 - The device is shared and is a hard lock: **one install at a time**. Compiling is
   free; installing replaces the app, so two deploys clobber each other. Only the
   agent who "holds" the device deploys.
@@ -183,6 +435,18 @@ and return tour. Repeated headings are disambiguated using adjacent rows and car
 identities, not the heading alone. `--observe-home` captures accessibility evidence
 without sending directional input. These modes prove functional coverage only.
 
+`--run-pinned-navigation` exercises the existing Movies library without selecting
+another destination or changing settings. `PLOZZ_PINNED_LIBRARY_LABEL` overrides
+the expected selected library's localized title. Confirm the current process on
+Recommended with the pinned sidebar closed and a header control focused before
+posting `warm-ready`. Up to three observed preparatory Left presses position focus
+on Recommended. Six Left/Right pairs then verify the selected library row on every
+open and Recommended on every close, with the content mode unchanged. Failure
+stops input and preserves the final hierarchy, screenshot, and input timeline;
+there is no relaunch or recovery navigation. Checking only a burst's final state
+can mistake movement between Recommended and Browse for sidebar roundtrips.
+This checked workload is not rapid-reversal, cold-first-open, or hitch-free evidence.
+
 For a cold **Hero → Continue Watching** case, start the unbound runner before
 the externally controlled app launch and retain the new PID and launch timestamp.
 Use `PLOZZ_HOME_FIRST_DOWN_ONLY=1` with `--run-vertical-roundtrip` and one
@@ -230,6 +494,14 @@ accessibility checks between presses. Log the actual cadence and verify the
 ending destination. A Continue Watching/Watchlist or Watchlist/Recently Added
 burst is not a substitute for the cold Hero/Continue Watching case.
 
+`--measure-multirow-up` first verifies four populated rows below Continue Watching
+and their return path. Each sample then measures four consecutive Up presses from
+the deepest verified row, followed by 0.6 seconds for the final arrival to settle.
+Downward preparation and accessibility checks are outside the measurement.
+This exercises accumulated upward motion into the shorter row, unlike alternating
+between the top two rows. Actual remote-call timestamps remain authoritative;
+XCTest's press cadence is not the same as a fast physical remote gesture.
+
 The driver exports `native-metrics.json` from the result bundle and requires
 finite native hitch measurements, not just successful focus assertions. Keep the
 reported duration, count, and time-ratio units. A passing XCTest run means the
@@ -250,6 +522,19 @@ and `--home-menu-control` add one workload dimension at a time without touching
 the real app's accounts or settings. Select it explicitly with
 `PLOZZ_HOME_APP_BUNDLE_ID=com.thatcube.Plozz.FocusHost`; the default remains Plozz.
 Synthetic assets and a small number of rows are not a substitute for real Home.
+
+For gradient-background comparisons, `ShowcaseNavigationTests` accepts
+`TEST_RUNNER_PLOZZ_GRADIENT_COMPARISON=1` and
+`TEST_RUNNER_PLOZZ_GRADIENT_DISABLED=1` (baseline) or `0` (enabled).
+Run horizontal and vertical Showcase workloads plus
+`testCarouselHeroGradientNavigationHitches`: the latter verifies actual classic
+hero slide changes, not just movement among its action buttons. The fixture uses
+distinct, coloured cached artwork per title. Both arms keep the same Black theme,
+data and input sequence. Retain native metric arrays and authoritative results;
+a testmanagerd disconnect is incomplete even when it prints partial metrics.
+These compare rendering, palette work and native navigation, not real-server
+latency or the user's artwork variety. Verify both layouts with real libraries
+before treating fixture results as end-to-end performance acceptance.
 
 **Calibrate a new metric target before trusting zero hitches.** The fixture's
 `--home-hitch-positive-control` injects bounded 120 ms main-thread stalls. Run
@@ -274,6 +559,126 @@ during a focus update. The experiment and its focus bridge were removed; a
 performance improvement does not excuse a failed lifecycle gate. An additional
 observable-hosting-state experiment also failed to improve the measurements and
 was removed.
+
+#### Actual library poster comparisons
+
+`NativeLibraryPosterRemoteTests` targets the already-running, optimized Plozz
+application through the unbound `PlozzPhysicalHomeRowsTests` runner. The external
+driver must verify the installed build and unchanged PID before and after XCTest;
+the runner must not install or launch the app. Its physical target, matching
+target confirmation, optimized-app confirmation and renderer arm are explicit
+`TEST_RUNNER_PLOZZ_LIBRARY_*` environment values, not inferred defaults.
+
+Use an actual populated TV Shows Browse grid with **All** watch states and
+**Name** sorting, including visible episode counts and progress. Unwatched-only
+Movies and a synthetic poster grid do not exercise the same overlay workload.
+Record the nineteen focused titles during calibration, then require that same
+eighteen-row path for every arm (`PLOZZ_LIBRARY_EXPECTED_PATH`). Keep the existing
+profile and all its servers enabled. Calibration warms that route; these are
+matched return-traversal measurements, not cold-first-open evidence.
+
+Launch the **app** with `PLOZZ_LIBRARY_TRAVERSAL_RECORDING=1`. This enables a
+controller-local, 512-event native-focus journal and a nonfocusable diagnostic
+accessibility element. The focus callback only records indices, metadata readiness
+and uptime. The runner reads/encodes snapshots outside measurement, then validates
+events inside each measured interval. Missing history, overflow, changed grid,
+unloaded destinations, excursions and incomplete traversals invalidate a window.
+
+Run `testControlledAIdle`, `testControlledBTraversal`, `testControlledCRapidTraversal` and
+`testControlledDHeldTraversal` together, in that order, in one runner and app process. Each phase has one XCTest warm-up and three
+recorded observations around a 24-second input loop. Scrolling sends six Down followed by six Up, one
+press every two seconds. Rapid traversal sends eighteen Down followed by eighteen Up, one press every
+0.3 seconds; native-focus evidence must match all 36 transitions on the calibrated path.
+Held traversal holds Down for two seconds, then Up for four seconds. Declare
+`TEST_RUNNER_PLOZZ_LIBRARY_HELD_MINIMUM_ROWS` before comparing arms (default 18);
+the journal must prove at least that depth and return to the starting item.
+Repeat throughput may legitimately differ between arms and is retained as evidence,
+not assumed to be twenty rows. Accessibility assertions, screenshots and JSON timing
+attachments stay outside the metric windows. Retained timing attachments include
+epoch, elapsed duration, each input's lateness and remote-call duration, and both
+focus snapshots; do not
+depend on live stdout surviving a long asynchronous wait.
+
+Collect `XCTClockMetric` alongside the application metrics, and retain runner-only
+timestamps bracketing both `startMeasuring()` and `stopMeasuring()`. The 24-second
+input timer excludes those calls. Native hitch-duration/ratio pairs have implied
+longer effective denominators; Apple's current `XCTHitchMetric` documentation
+does not specify whether its boundaries match the clock metric exactly. Compare
+the exported per-iteration clock, boundary calls and input duration rather than
+assuming every collector covers exactly 24 seconds or renormalizing its counts.
+For nonzero ratios, `1000 * hitchDurationSeconds / hitchRatio` is an effective
+denominator, not independently verified wall or animation time. Keep attachments
+and assertions outside measurement, including the boundary-timing export.
+
+Start no earlier than eight minutes after an externally recorded fresh launch,
+and sixty seconds after calibration. Automated navigation also waits until
+launch + sixty seconds before using Home's library shortcuts, allowing initial
+rows to populate. During the startup wait the runner steps focus Right and back
+Left every 45 seconds, ending at least 30 seconds before the idle measurement:
+minutes of unchanging picture let the TV suspend the app. Startup age alone does not establish quiescence:
+correlate the actual windows with background diagnostics. Scan/lister counters
+do not represent every Plex, Jellyfin, CloudKit or metadata request. Keep idle
+and scrolling CPU separate; do not subtract a busy idle scan from a quiet scroll.
+
+An A-B-B-A comparison on Apple TV 4K (2nd generation), tvOS 27.2, recorded
+original-renderer hitch counts `[43, 35, 30]` and `[33, 35, 36]`, versus
+`[54, 45, 44]` and `[53, 51, 52]` for the single-image candidate. These are counts
+around each 24-second input traversal, not per input. The candidate was kept off
+during this investigation: preserving geometry did not establish better frame pacing. All four drivers reported a
+transport error at teardown despite both metric tests completing; preserve that
+limitation rather than reporting whole-suite success. The measured scrolling
+windows had no active scan/listers, while some idle windows remained busy.
+
+Check the control before trusting zero. In October 2026 the same device returned
+zero `XCTHitchMetric` hitches in every phase, including the original renderer
+above, and Instruments' Animation Hitches template recorded no display data. When
+that happens, read frame pacing from the app instead: launch with
+`PLZPERF_STDOUT=1` through `devicectl device process launch --console` and keep
+the `PLZPERF ... hitch/s=... worst=...ms` lines `HomePerfSampler` prints each
+second. These are display-link callback gaps, not proof of presented-frame hitches.
+The sampler keeps running while a screen such as a library grid is pushed
+over Home, and releases its display link and observers when its owner is destroyed.
+Faster input than XCTest can send (about four presses a second) comes
+from pyatv over one Companion connection; ten Down or Up presses a second on TV
+Shows Browse reproduce the stutter seen with fast clicking.
+
+After removing the scroll-index hierarchy polling, a same-build comparison
+still recorded `[46, 44, 57]` hitches with the original renderer and
+`[50, 50, 58]` with the candidate. Neither established acceptable frame pacing.
+A header-translation wrapper also showed no clear benefit and was removed.
+
+Separating artwork from the managed cell content view removed proven layout
+oscillation, but subsequent original-renderer runs still recorded `[42, 52, 42]`
+and `[42, 58, 40]` hitches; the same-build composite recorded `[59, 50, 59]`.
+All measured scrolling windows had zero scan/lister counters. Neither lower
+scrolling CPU nor better pacing was consistently established. Long-run transport
+teardown failures remained, so these are completed metric observations, not
+whole-suite passes.
+
+The single-image renderer is now enabled for the requested removal of internal
+poster zoom while retaining native focus enlargement and motion. This is a
+visual-behavior correction, not a measured scrolling-speed improvement. Normal
+launches include it; Debug comparisons of the old Browse renderer must explicitly
+use `--original-library-posters`. The shared Home/Showcase, Recommended,
+Continue Watching and episode poster renderer also uses a normalized
+ancestor-adjusted `UIImageView`. Watch/count/library-status marks share the
+artwork bitmap; async logos and focus-reactive progress remain live in
+`overlayContentView`. The native overlay projects slightly above the image:
+matching layout bounds did not prevent corner flags from visibly lifting past
+the image edges. The regression now checks painted flag pixels against actual
+artwork edges, not just the overlay's constraint rectangle.
+That shared correction has no old-renderer launch switch and is not covered by
+the historical Browse performance comparisons above.
+A later offscreen-header clamp experiment was
+withdrawn without adoption; do not confuse it with the retained index-search
+and artwork-ownership fixes.
+
+`testProfileRealLibraryTraversal` drives the same 24-second path for a separately
+attached CPU trace. Retain its timestamps and the exact process image map.
+Profiling and uninstrumented hitch acceptance are separate runs; a scan can
+restart between them. A successful CPU-only capture does not mean the Animation
+Hitches template works on the same device: a disconnected or unready recording
+must not authorize input or count as frame-pipeline evidence.
 
 ### Opt-in Home cache and native artwork timings
 
@@ -336,19 +741,163 @@ source-image identity, target size, and scale. The evictable cache has targets
 of 32 entries and 24 MB; weak source references avoid pinning decoded artwork,
 and an identity check rejects recycled object identifiers. Recreated lazy cards
 can reuse completed pixels instead of rendering the reflection again.
+On tvOS these are concrete, unrounded pixels. Adaptive logo dimming and the
+resume/progress scrim are composited with the picture before its one final
+rounded mask, not hosted on UIKit's nearer overlay plane. That avoids the
+focused dark outline without rerendering the reflection when legibility changes.
+The logo and resume controls stay live, and Continue Watching has no top watch
+mark. Hosted coverage compares pixels just outside all four artwork edges with
+and without the live overlay, and checks the unchanged logo and resume positions.
 
 Focus-only caption movement changes transforms and colors, not intrinsic row
 geometry. Native focus presentation and artwork clipping are separate:
 `TVCardView` still needs clips around artwork nested above captions, while
-`TVPosterView` owns its image clipping. The hosted framed/landscape return
+shared native posters bake rounded alpha into their normalized artwork and
+clip live overlays to the same shape. The hosted framed/landscape return
 regression checks the actual painted artwork bounds.
 
-Native poster controls receive their initial cached `UIImage` directly from
+For corner artifacts, check fractional raster dimensions at 2x first.
+An inverse eraser ending at fractional logical bounds
+left alpha values up to 243 in the extra physical row/column. Extend its outer
+rectangle beyond the raster, keeping the inner rounded path unchanged. Prepare
+shared artwork at committed UIKit bounds and pixel-align composited Browse
+artwork: a 280x190.5 image in a 280x191 view violates UIKit's identical-aspect
+requirement for `masksFocusEffectToContents`. Raw corner-alpha and native-focus
+regressions cover this contract, but fixing these does not fix every
+tilt-dependent native highlight defect.
+
+The reported bottom-left pre-navigation thumb position showed a second rounded
+edge. Fixed motion-effect offsets produced a similar edge on a correctly
+normalized, alpha-masked image, but did not reproduce actual touch-driven tilt.
+Diagnostic layer isolation of that synthetic state
+identified the native specular highlight rather than the artwork. Disabling
+content masking removed that crescent but restored internal zoom (222 painted
+pixels versus 219.29 expected); a 3-point landmark tolerance missed it.
+Changing the image content mode, cap insets, antialiasing or public view corner
+configuration did not preserve both the no-crop composition and clean highlight.
+The `TVCardView` trial removed the desired moving sheen and was rejected.
+Do not modify private UIKit layers or compensate with per-frame transforms.
+
+Portrait row posters and native Browse cells retain the native image effect with its rectangular
+focus mask and the explicitly accepted small internal crop. Hosted measurements
+at 200-320pt widths show about 1-2% extra enlargement inside the visible frame.
+Their source bitmaps and placeholders are fully opaque rectangles, as required
+by UIKit's non-content-masked mode. UIKit owns the only outer corner shape.
+Retaining baked rounded-alpha corners underneath that surface left competing
+artwork/highlight silhouettes; transparent portrait sources now receive a dark
+backing before composition. No clipping view or per-frame mask is added.
+Continue Watching and landscape/square artwork keep their alpha-masked
+no-internal-zoom path. Rows and Browse share `NativePosterImageView`; the existing
+UIButton or collection cell remains the sole focus owner. There is no card
+ancestor or custom animation.
+Count-tile backgrounds stay flush. The original 2pt trailing/aspect-scaled top
+padding adjustment was baked into the whole image. Applying it permanently made
+resting digits uneven. Switching images at focus changes fixed the padding but
+snapped UIKit's native unfocus animation. Waiting for its completion preserved
+motion but caused the reported late number jump; that delay was deliberately
+introduced by the completion callback, not evidence of slow rendering.
+
+The current path never changes the artwork image for focus. Count backgrounds
+and corner flags stay baked, while portrait count digits and floating badges use
+a separate cached foreground on the public `UIImageView.overlayContentView`.
+Only that foreground's geometry is normalized against the public artwork viewport
+and overlay projection. Model/destination transforms are used, not presentation
+samples, so the target is correct at the focus event. A flush count's digits
+center inside the visible tile after the 2pt/aspect-scaled crop; floating badges
+align to the uncropped viewport. UIKit's existing focus coordinator animates the
+geometry change with the card. There is no completion callback, timer, per-frame
+work, custom poster scale/spring/duration, or private-layer mutation.
+
+Background and foreground pixels reuse the same 24 MiB/64-entry indicator cache.
+The layer role, rather than focus, participates in the key. Environment overrides
+stay inside the full environment injection. Stable layouts and focus changes
+reuse both images; data/size/environment changes invalidate the appropriate pixels.
+Continue Watching, landscape/square artwork and mobile stay on the
+combined rendering path.
+
+The library header retains its scrolling offset while another page covers the
+library. Disappearance is not a scroll-to-top event; resetting then overlays
+mode/sort controls on the retained lower rows when returning. Native layout also
+synchronizes the header with the actual collection viewport. A full-screen
+cover/return regression exercises both system and custom-focus grids.
+
+`testPortraitArtworkLeavesCornerClippingToUIKit` checks opaque source corners and
+native rendered rounding at rest, focus and defocus on indigo artwork. The
+motion-effect-offset tests cover interpolation only: they do not inject remote
+touch or validate `UIFocusMovementHint` deformation. Keep their evidence separate
+from the user's continuous-touch acceptance check.
+
+`testPortraitCountKeepsEvenPaddingAtRestFocusAndReturn` measures opposite-edge
+digit clearance within 2 rendered pixels for 8, 88 and 12345 at 220/280pt widths
+in both left-to-right and right-to-left layouts,
+starting on another control, then focusing, defocusing and refocusing. It checks
+settled states and stable-layout image reuse. `drawHierarchy(afterScreenUpdates: true)`
+does not prove intermediate rendered geometry; the old nominal transition
+snapshots missed the snap and could combine final geometry with outgoing pixels.
+The separate `testPortraitFocusAndDefocusRetainNativeIntermediateFrames` samples
+presentation-layer artwork geometry without snapshots, with and without counts,
+for focus, unfocus and refocus. Hidden source layers and the square sheen are
+excluded, so moving lighting alone cannot satisfy the test. It captures the
+visible artwork's image reference at the first 20ms sample, then compares pixels
+outside the timed sampling loop. Badge model geometry must already match its
+settled destination at that sample, with no later repositioning. Rapid reversals
+force layout and verify both image identities remain stable and resting padding
+stays balanced.
+
+`testNativePortraitHighlightHasCleanCornersAtDirectionalExtremes` drives the
+fixture's original public `UIMotionEffect` interpolation at center, horizontal
+offsets and all four diagonal offsets (+/-0.9), restores the original effects,
+and retains rendered images. It rejects a second bright edge outside the artwork.
+`testNativePortraitCountStaysInsideTileAtDirectionalExtremes` uses that same
+native motion with split count rendering, checking the complete digit bounds and
+a surrounding band of tile background at every offset.
+`testNativePortraitHighlightMovesAcrossTheArtwork` separately requires the
+highlight's spatial brightness to move left/right on gray artwork: differing
+screenshots alone would also pass when only the card moves, as the trial did.
+Shared aspect-ratio checks retain a 1-point landmark tolerance and explicitly
+allow only the small portrait crop. Actual Siri Remote feel still needs physical
+acceptance; a simulator render is not that acceptance.
+
+For horizontal cards disappearing early, inspect actual rendered pixels as
+well as mounting and clipping. Showcase kept the poster mounted but SwiftUI
+hid its platform host when the artwork entered the 80-point leading gutter,
+with 30 or 60 points still on screen. Expand the row and mask motion surfaces'
+leading viewport and reserve matching safe area. Enlarging only their child
+hosts, or using ordinary counter-padding inside them, did not fix visibility
+culling. Do not expand trailing safe area: portrait rows intentionally ignore
+it, which changes their measured width and breaks 6.25-card density and parking.
+Loaded native-card coverage checks both screen edges, both movement directions,
+and native/pinned navigation; an opaque SwiftUI rectangle misses this failure.
+
+Native poster controls receive the latest cached `UIImage` directly from
 the existing ordered artwork resolver. The former zero-sized background loader
 published through a second observable state after construction, so even warmed
 cards first created placeholder artwork and then updated the native view.
 The direct bitmap path keeps one native view identity across loading and loaded
 states, using the same source ordering, provider policy, and progressive loading.
+Creation now shares rounded loading masks; artwork and attached status are
+prepared in mounted UIKit layout at the committed size, inside a per-poster
+autorelease pool. `sizeThatFits` only answers measurements. Rendering during
+SwiftUI lazy-row estimation previously generated fallback-width and proposed-width
+surfaces before their cards were mounted, with temporary images surviving across
+the larger layout transaction. A populated physical Home exposed startup hangs
+that isolated poster fixtures missed. Regressions must verify that size probes
+leave committed pixels unchanged, detached controls do not prepare artwork, and
+loading/status updates retain native focus and painted-edge geometry.
+Mounted layout alone is not sufficient: the populated page also exposed long
+Core Graphics/RenderBox reads while compositing per-card status images. Ordinary
+artwork now goes directly into its final normalized/composited surface, without
+retaining a second unmarked bitmap. Identical status presentations reuse
+concrete Core Graphics pixels from a bounded shared cache (24 MiB, 64 entries),
+instead of constructing and reading a new deferred SwiftUI image per card.
+The cache stores value keys and pixels, not the inherited environment or its
+view graph. Protected/extended artwork keeps its existing treatment.
+
+For startup recovery, verify the same process remains alive and responds to
+remote input on the populated page before collecting its app-data-container
+journal. A successful launch command alone is insufficient. Container transfer
+can terminate the tvOS app, so disappearance after that transfer does not prove
+a crash.
 
 Continue Watching logo prefetch also deduplicates overlapping lookahead windows
 within a traversal. Five neighboring cards appearing together previously
@@ -660,6 +1209,14 @@ A Time Profiler trace tells you *which threads burn CPU and in which binary* —
 on this app that immediately fingers the subsystem. The physical Apple TV is
 visible to Instruments under the **xctrace UDID** (not the devicectl id).
 
+For CPU attribution, disable **Record Waiting Threads** and verify the exported
+recording metadata (`record-waiting-threads="0"`). Waiting-thread stacks can locate
+blocked work, but their weights are not CPU usage or measured wait durations.
+Resolve raw addresses only against image mappings for that exact process and a
+UUID-matched executable/dSYM. Keep the app's hangs separate from test-runner hangs,
+and correlate accessibility snapshots before attributing a hang to remote input.
+An existing-app capture with no verified input is not a cold-open benchmark.
+
 Use the coordinated recorder for a live reproduction:
 ```bash
 tools/trace-device.sh --device "$DEVICE_ID" --time-limit 90s
@@ -675,13 +1232,29 @@ before input. It does not navigate to the control for you.
 
 **Do not tell someone to reproduce while the recorder is merely starting.**
 Current local Debug builds show a non-focusable status badge on tvOS and iOS:
-preparing (wait), recording (ready), and finished/failed. The helper requires
+preparing (wait), **Recording** with a red dot (ready), and finished/failed. The helper requires
 the app's visible-status acknowledgement, the recorder's Darwin start
 notification, and five seconds without an early disconnect before authorizing
 input. Heartbeats maintain the badge; a missing heartbeat expires it after
 15 seconds, including a render-server fade if the main thread is blocked.
+Debug builds also export `Library/Caches/Plozz/diagnostic-images-{preparing,finished,failed}.json`
+on those status transitions, not recording heartbeats. Each snapshot includes the
+PID, build, image UUIDs and executable-segment load/file addresses; names contain
+only binary basenames. dyld callbacks safely copy loaded-image metadata, and file
+writes run on a utility queue. Copy these files alongside a raw trace when
+Instruments loses image mappings. Match the PID/build and exact dSYM UUID before
+resolving addresses; never reuse another process's ASLR mappings. Unmapped images
+and export failures are reported explicitly.
 Release builds have no receiver. `--no-indicator` is an explicit opt-out for
 an older/release build, not an automatic fallback when an acknowledgement fails.
+
+The bounded `playback-trace.log` journal also records `LIVE_TV` cold-load stages:
+library discovery, snapshot hydration, schedule construction, and guide-loading
+visibility. `libraryRestoreReady` precedes the automatic lineup refresh; a long
+`libraryRefreshEnd` does not by itself mean the guide was still loading.
+`NAVIGATION` records native top-tab selection requests and actual screen changes,
+using only built-in destination names, so a later tab snap-back can be checked
+without another launch or an Instruments recording.
 
 The default uses `Blank` + the `Time Profiler` instrument, device-wide, then
 counts samples only for the verified app PID. Both bundled and CPU-only
@@ -705,6 +1278,22 @@ the helper uses native `xctrace import` into a **new** recovered trace and
 preserves the original. A failed symbolicated export can be bypassed with the
 `time-sample` raw CPU table; do not silently label raw addresses as resolved
 symbols. Missing device support symbols also limit attribution in Debug builds.
+
+Before accepting that a finalized, verified trace is mostly unresolved, try
+symbolicating a new copy using the exact executable's matching dSYM:
+
+```bash
+xcrun xctrace symbolicate --input Recording-1.trace \
+  --output Symbolicated.trace --dsym Exact-Plozz.dSYM
+xcrun xctrace export --input Symbolicated.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' \
+  --output resolved-cpu.xml
+```
+
+This recovered app and most UIKit/SwiftUI/QuartzCore names in the verified
+library-scroll capture. Resolve XML `id`/`ref` indirection before aggregating,
+and keep unresolved leaf counts explicit. A failed export from another recovered
+trace does not establish that symbolication is unavailable for this recording.
 
 Other useful templates: `Allocations` (attributes a memory total to a call stack —
 the natural follow-up when memory is the problem), `Leaks`, `Swift Concurrency`.
@@ -815,11 +1404,17 @@ and a passing functional test are not substitutes for presented-frame timing.
 - **Measure the focus result, not the request.** Enable `PLZHFOCUS_STDOUT=1`;
   compare `UIFocusSystem.focusedItem`, its frame and `canBecomeFocused`, then the
   visible highlight. A successful build or `FocusState` assignment proves neither.
-- **Known fix:** native Search retained focus after leaf-only requests.
-  `NavigationRowFocusRequester.handoff` requests the real row, then their shared
-  **window**, then calls `updateFocusIfNeeded` and confirms the actual target.
-  Reuse this path; extra yields, delays, layout resets, modifier reordering,
-  hiding the capsule and disabling content did not fix it.
+- **Request through the shared native owner.** Native Search and nested library
+  hosts can retain focus after leaf-only requests. `NavigationRailFocusHost`
+  temporarily prefers the exact target and requests the update from the owner
+  containing both current and requested focus. Confirm the actual focused item.
+  Opening navigation does not need to disable and re-enable the entire page;
+  retain the disabled-content gate only while a different destination is pending.
+  Keep rail interaction state inside that hosting boundary, not above it:
+  opening must not replace the whole hosted root or forward a newly captured
+  environment through the stationary page. Actual content and environment
+  changes still update the host. The native owner's focus flag is updated
+  independently from the rail's observed focus state.
 - **Return to real Search content.** `SearchPageFocusObserver` checks ownership by
   the native Search controller, not screen coordinates alone: outgoing Home
   content can occupy the same rectangle. Keep the capsule gated until entry.
@@ -830,6 +1425,80 @@ and a passing functional test are not substitutes for presented-frame timing.
   the content actually depicts, not a requested identity that still shows old
   content. Older/cancelled callbacks must not release a newer request. Do not
   replace this with an immediate focus clear or a fixed loading delay.
+- **Closing pinned navigation restores its source.** Capture the real focused item
+  before opening navigation; retain it weakly and reject detached, hidden, disabled,
+  or no-longer-visible targets. Veto spatial Right while navigation owns focus so
+  the existing boundary observer requests restoration instead of choosing Browse
+  or a nearby card. The shared
+  `NavigationRailFocusHost` supplies the preferred target and requests the update:
+  UIKit ignores requests from a leaf or nested library host that does not contain
+  current focus. A removed source falls back to the page's entry preference;
+  switching destinations clears the source and uses the presentation fence above.
+  Query each native container once, including visible nested controller roots:
+  window queries alone omitted the share library's real header. Exclude every
+  candidate owned by the rail and centered in a rail label, not just one
+  minimum-area match. A nested page's controls can overlap the expanded labels
+  without belonging to the rail; compare native ownership before excluding them. Scrolled
+  rows overlap Profile and can have identical areas; virtual items can also be
+  recreated between queries. The physical failure explicitly requested a rail
+  item as page content, then moved again when the rail became disabled. Cross the
+  newly enabled page's render commit before resolving its content target.
+- **New-page entry prefers useful content.** `navigationEntryFocus` declares
+  content and fallback regions without changing ordinary directional navigation.
+  Libraries prefer their cards; Music prefers Recently Played, then Playlists.
+  Apply the preference to cards rather than scan banners or Now Playing header
+  accessories. Idle/loading pages declare a pending region; region changes wake
+  the active request after rendering, without polling or focusing a header first.
+  Empty/error states clear pending and use the remaining visible controls.
+  Cancellation removes the observer, and a valid captured source still wins
+  when closing navigation on the same page.
+  Native library cells also supply a weak exact focus item. If every visible
+  content region has one, resolve the first eligible card without enumerating
+  the window's unrelated focus containers. Revalidate attachment, visibility,
+  clipping, enabled state, ownership and viewport each time; mixed native/virtual
+  regions retain full discovery. This adds no preloading or idle observer.
+  A hosted share-library comparison reduced this lookup from roughly 3.4 ms
+  to 0.2 ms; that isolates lookup work, not physical-device page-load latency.
+- **Nested hosts must observe enabled-state changes.** Forwarding
+  `context.environment` alone did not subscribe `NativeLibraryFocusHost` to
+  `isEnabled`. A library could keep disabled controls after a shell gate
+  cleared. Explicitly observe and forward `isEnabled`; retain the regression
+  that holds the gate disabled with unchanged content before re-enabling it.
+- **Pinned expansion changes horizontal geometry only.** Both states use the
+  expanded panel's physical vertical inset. Interpolating vertical padding moved
+  every row by 36pt in the hosted reproduction. Reveal offscreen destinations with
+  minimal scrolling, not an unconditional centered jump; already-visible rows
+  must retain their vertical positions when an opening request repeats.
+  Each pending native-focus generation owns its reveal; do not also scroll for
+  the shell's opening token. Initial selection and destination-list changes
+  still reveal the selected destination independently.
+- **Do not copy a hosting tree's private accessibility environment.** A whole
+  `environment(\.self, ...)` bridge can leave a visibly rendered page absent from
+  the accessibility tree. Adding a containment accessibility modifier alone does
+  not repair it. Use `copyHostedPresentation(from:)` and explicitly forward the
+  host's required observable models and ambient media context. Cover profile
+  context changes as well as enabled-state changes across nested hosts.
+- **Test destination selection separately from roundtrips.** For the physical
+  pinned-navigation workload, `PLOZZ_PINNED_ENTER_LIBRARY=1` explicitly starts on
+  Home, opens navigation, and selects the requested matching library. Use
+  `PLOZZ_PINNED_LIBRARY_LABEL` and zero-based `PLOZZ_PINNED_LIBRARY_INDEX` when
+  providers have duplicate names. `PLOZZ_PINNED_ENTRY_SOURCE_LABEL` selects an
+  already-open source instead of Home. Require automatic page presentation,
+  navigation closure, and the expected header focus before six open/close pairs.
+  Share pages use `PLOZZ_PINNED_CONTENT_CONTROL='Browse Files'`, not Recommended;
+  exclude the disabled same-named rail button from that query.
+- **Measure menu animation separately.** `PLOZZ_PINNED_MEASURE_OPEN=1` runs three
+  native hitch/CPU measurements plus XCTest's warm-up. Only Left and a 600ms
+  settling interval are measured; accessibility assertions and Right resets are
+  outside each interval. Validate exported native metrics, not just successful
+  focus. The controlled Movies investigation recorded one 16.7ms hitch per
+  opening initially, then zero on the unchanged build and on two subsequent
+  shared-owner runs. A final installed-build repeat returned `[0, 1, 1]`
+  hitches, about 16.7ms each when present; intermittent hitches remain.
+  Sampled main-thread work across four openings was 1.114s before and 1.224s
+  after, with cloud publication also present in the latter.
+  This does not establish an aggregate CPU improvement or eliminate first-use
+  stutter; warm zero-hitch runs are not proof that app performance is flawless.
 - **Native Sidebar needs its own content gate.** `NativeSidebarFocusDestination`
   excludes inactive and not-yet-presented tab content without replacing native
   chrome. Final focus alone is not sufficient evidence: check the whole handoff
@@ -846,6 +1515,52 @@ and a passing functional test are not substitutes for presented-frame timing.
 
 ### Performance traps
 
+- **Do not resize a collection cell's managed `contentView` to the artwork.**
+  UIKit restores that view to the full cell bounds during layout. The native
+  library then shrank it to exclude captions, producing two size changes per
+  otherwise unchanged pass and notifying hosted SwiftUI geometry observers.
+  A bounds observer with a positive control captured five successive
+  `273 x 506.9 -> 253 x 379.5` cycles in the actual hosted collection.
+  Keep the managed content view full-sized and lay out a separate artwork
+  child. For `TVMediaItemContentView`, preserve the focused cell as its direct
+  parent; captions and detail-transition geometry must still use the artwork
+  rectangle. A stable-layout regression proves the size churn is removed,
+  not that physical scrolling is hitch-free. The first physical original-renderer
+  run after this fix still recorded `[42, 52, 42]` hitches around 24-second input traversals, with
+  no active scan/listers. A separate idle window recorded a 984 ms hitch and
+  a 921 ms main-actor hop; zero scan counters do not prove the whole app is idle.
+- **Moving an offscreen SwiftUI host can still render synchronously.** A fresh
+  post-layout-fix trace attributed 208 of 4,309 running main-thread samples to
+  the library header's `setCenter` path; 82 executed nested display-list
+  rendering through geometry invalidation and `run_moved_callback`. These were
+  not passive graph-lock waits. Avoid assigning unidentified hosting-root work
+  to the same owner: the directly attributed header share was about 4.8%, not
+  all SwiftUI rendering. A clamp experiment must preserve visible movement,
+  return, accessibility and native focus, and improve physical pacing before
+  being adopted. The same trace included periodic cloud publication despite
+  zero scan/lister counters.
+- **Do not poll the whole window for a private scroll-index class.** The library's
+  alphabet-rail hider previously retried a recursive hierarchy/class-name search
+  every fifteen display-link ticks when no index bar matched. An exact-process
+  CPU trace attributed 1,872 of 4,886 running main-thread scrolling samples to
+  that path, with an even larger idle share. A native collection directly owns
+  `showsVerticalScrollIndicator` and tvOS's public `indexDisplayMode`; it needs no
+  polling controller. The SwiftUI fallback enforces those public properties only
+  on cached ancestor scroll views. Preserve alphabet navigation and indicator
+  restoration. Removing the search reduced idle work, but the first subsequent
+  physical run still recorded `[51, 50, 51]` hitches: a CPU improvement is not
+  proof that scrolling improved.
+- **Receipt lookup must also be cheap.** Partition portable Live TV record IDs
+  once on the preparation actor and reuse their parsed profile ownership while
+  those IDs remain in the input. Do not repeatedly decode and re-encode every ID
+  for each profile on the main actor before taking the unchanged-capture path.
+  Payload edits must still invalidate content fingerprints; only ID ownership is
+  cached, and removed IDs must leave that cache.
+- **Avoid per-movie representative queries during scan finalization.** Resolve
+  all movie-group representatives in one grouped query, including members without
+  explicit filename IDs. Retain ambiguity rejection and orphan cleanup. This
+  reduces the cost of a required reconciliation; it does not make a resumed or
+  changed scan an unchanged scan.
 - **`Task {}` inside a `@MainActor` type inherits `@MainActor`.** Its body runs on
   the main actor. Use `Task.detached` (or hop to a background actor) for heavy work,
   or you'll measure main-actor saturation and blame the wrong thing.
@@ -1067,6 +1782,36 @@ next agent doesn't re-chase a ghost.
 
 ### Home backdrop composition and comparison controls
 
+Home's ambient tint and hero-logo contrast consume the bitmap adopted by the
+visible renderer, not another pass through the candidate artwork URLs. This
+includes first-paint online choices, library fallbacks, preview/full upgrades,
+and cached returns. Detail pages own separate display state; incoming carousel
+slides, reflections, and inactive/outgoing owners cannot replace the current
+sample. Deferred reports coalesce per owner and item, so a late report from the
+previous item cannot discard the current item's pending image. Reports may
+precede source activation; releasing an owner cancels all of its pending items.
+Derived colors remain bounded/cached, and palette extraction stays
+off-main with the existing navigation coalescing. Disabling gradients does not
+disable the shared logo-contrast sample.
+
+Plex photo requests fit inside both variant dimensions (`minSize=0`,
+`upscale=0`). Clamping width alone with a portrait-shaped minimum-size request
+can otherwise transfer a 5333x3000 landscape response for a 2000px hero.
+
+For a Home/Showcase background-color mismatch, enable the existing
+`PLZHEROART=1` trace for a bounded reproduction and filter `plzheroart.log` for
+`palette`. `hero` events identify the image actually fronted (including preview
+upgrades), `sample` events identify the image used for color extraction, `ambient`
+events distinguish cached/applied palettes from stock fallback, and `mesh`
+events record the actual input and theme-adjusted output RGB components.
+Correlate item/reference fingerprints, the ambient cache key, and timestamps;
+compare full-resolution pixel fingerprints rather than preview/full pairs.
+Image fingerprints use a tiny off-main sample, and references are hashed without
+exposing authenticated URLs. No diagnostic changes the artwork or colors.
+Record the settled screen and input sequence before copying
+`Library/Caches/plzheroart.log` from the app container. End the reproduction with
+`PLZHEROART=0` on the next launch to clear its persistent tracing latch.
+
 tvOS uses cached shading by default where it preserves the original treatment.
 iOS retains analytic shading by default. These launch overrides do not change saved settings:
 
@@ -1090,6 +1835,24 @@ match Home's current leading/bottom treatment. Regenerate with
 `python3 tools/generate_home_scrim.py` whenever those parameters change, and
 verify with `python3 tools/generate_home_scrim.py --check` plus
 `python3 tools/test_generate_home_scrim.py`.
+
+Pinned Home navigation selects a second baked texture with the same wash, leading
+strength/width, and bottom curve, extending the leading fade to the full height.
+It replaces the standard texture rather than adding an overlay, blur, shadow,
+or runtime rasterization. Home reads `plozzPinnedSidebarActive`, not the changing
+content inset. Detail pages have no sidebar and use the original softer upper-left
+corner for every navigation style. The analytic comparison and RTL/custom-tone
+fallback use the same respective treatment. Native Home navigation and mobile keep the
+original texture/parameters. The lower field (from 62% height) and the artwork
+beyond the leading fade (42% width) are unchanged. Compact rail glyphs no longer
+carry individual shadows; the expanded menu keeps its existing glass backing.
+
+During a cinematic detail entrance, scrim opacity begins its existing 0.45-second
+reveal when the artwork cover hands off, before the logo's 0.10-second pause ends.
+It stays anchored inside the existing bottom dissolve; it does not use the
+foreground's translation or add another mask. Late artwork/video readiness still
+gates the sequence. Disabled transitions, Reduce Motion, and missing artwork
+show the completed shading without a separate entrance delay.
 
 An opaque color-fade experiment did not replace the original alpha mask: it
 introduced a visible seam and differed during intermediate animation frames.

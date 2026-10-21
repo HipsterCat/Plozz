@@ -4,6 +4,7 @@ import CoreModels
 import PlozzCoreUI
 import TraktService
 import SimklService
+import WetrakrService
 import AniListService
 import MALService
 import LastFmService
@@ -11,30 +12,53 @@ import LastFmService
 struct IntegrationsDetailView: View {
     let trakt: TraktService
     let simkl: SimklService
+    let wetrakr: WetrakrService
     let anilist: AniListService
     let mal: MALService
     let lastfm: LastFmService
     @Bindable var playback: PlaybackSettingsModel
     let serverCount: Int
+    @State private var confirmingTraktReconnect = false
+    @State private var confirmingWetrakrReconnect = false
+    #if os(tvOS)
+    @Environment(\.settingsInWorkspace) private var inWorkspace
+    #endif
 
     var body: some View {
         SettingsSplitLayout(title: "Trackers", rows: rows)
+            .confirmationDialog("Reconnect Trakt for this profile?", isPresented: $confirmingTraktReconnect, titleVisibility: .visible) {
+                Button("Reconnect Trakt", role: .destructive) { trakt.connect() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Try Retry first. Reconnecting replaces this profile's Trakt connection on all your Plozz devices. Other profiles are not affected.")
+            }
+            .onChange(of: trakt.phase) { _, _ in
+                confirmingTraktReconnect = false
+            }
+            .confirmationDialog("Reconnect WeTrakr for this profile?", isPresented: $confirmingWetrakrReconnect, titleVisibility: .visible) {
+                Button("Reconnect WeTrakr", role: .destructive) { wetrakr.connect() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Try Retry first. Reconnecting replaces this profile's WeTrakr connection on all your Plozz devices. Other profiles are not affected.")
+            }
+            .onChange(of: wetrakr.phase) { _, _ in confirmingWetrakrReconnect = false }
             .task {
                 // Load all statuses up front so the left list's value
                 // summaries are correct before any row is focused.
                 async let t: Void = trakt.refreshStatus()
                 async let s: Void = simkl.refreshStatus()
+                async let w: Void = wetrakr.refreshStatus()
                 async let a: Void = anilist.refreshStatus()
                 async let m: Void = mal.refreshStatus()
                 async let l: Void = lastfm.refreshStatus()
-                _ = await (t, s, a, m, l)
+                _ = await (t, s, w, a, m, l)
             }
     }
 
     private var rows: [SettingsSplitRow] {
         @Bindable var playback = playback
 
-        let trackers: [SettingsSplitRow] = [
+        var trackers: [SettingsSplitRow] = [
             SettingsSplitRow(
                 id: "trakt",
                 verbatimTitle: "Trakt",
@@ -56,6 +80,13 @@ struct IntegrationsDetailView: View {
                         codeLifetime: trakt.codeLifetime,
                         onCancel: { trakt.cancelConnect() }
                     )
+                } else if case let .syncError(message, canReconnect) = trakt.phase {
+                    Text(message)
+                        .foregroundStyle(.secondary)
+                    Button("Retry") { Task { await trakt.refreshStatus() } }
+                    if canReconnect {
+                        Button("Reconnect Trakt") { confirmingTraktReconnect = true }
+                    }
                 } else {
                     trackerActionBar(
                         phase: traktRowPhase,
@@ -85,6 +116,31 @@ struct IntegrationsDetailView: View {
                         onConnect: { simkl.connect() },
                         onCancel: { simkl.cancelConnect() },
                         onDisconnect: { Task { await simkl.disconnect() } }
+                    )
+                }
+            },
+            SettingsSplitRow(
+                id: "wetrakr",
+                verbatimTitle: "WeTrakr",
+                description: "Scrobble movies and episodes and sync your watchlist with WeTrakr."
+            ) {
+                if case let .connecting(userCode, verificationURL, expiresAt) = wetrakr.phase {
+                    DeviceCodeConnectingView(
+                        serviceName: "WeTrakr", userCode: userCode,
+                        verificationURL: verificationURL, expiresAt: expiresAt,
+                        codeLifetime: wetrakr.codeLifetime, onCancel: { wetrakr.cancelConnect() }
+                    )
+                } else if case let .syncError(message, canReconnect) = wetrakr.phase {
+                    Text(message).foregroundStyle(.secondary)
+                    Button("Retry") { Task { await wetrakr.refreshStatus() } }
+                    if canReconnect {
+                        Button("Reconnect WeTrakr") { confirmingWetrakrReconnect = true }
+                    }
+                } else {
+                    trackerActionBar(
+                        phase: wetrakrRowPhase, onConnect: { wetrakr.connect() },
+                        onCancel: { wetrakr.cancelConnect() },
+                        onDisconnect: { Task { await wetrakr.disconnect() } }
                     )
                 }
             },
@@ -156,7 +212,26 @@ struct IntegrationsDetailView: View {
             }
         ]
 
-        return trackers + watchStatus
+        #if os(tvOS)
+        if inWorkspace {
+            let phases = [traktRowPhase, simklRowPhase, wetrakrRowPhase, anilistRowPhase, malRowPhase, lastfmRowPhase]
+            trackers = zip(trackers, phases).map { row, phase in
+                row.page(summary: statusLabel(phase))
+            }
+        }
+        #endif
+        return trackers.filter { $0.id != "wetrakr" || wetrakr.isConfigured } + watchStatus
+    }
+
+    private func statusLabel(_ phase: TrackerRowPhase) -> Text {
+        switch phase {
+        case .loading: Text("Checking status…")
+        case .unavailable: Text("Unavailable")
+        case .disconnected: Text("Not connected")
+        case .connecting: Text("Connecting…")
+        case let .connected(username): Text(verbatim: username)
+        case .error: Text("Needs attention")
+        }
     }
 
     /// The status + action controls shown in a tracker's detail pane for every
@@ -228,12 +303,13 @@ struct IntegrationsDetailView: View {
 
     private var traktRowPhase: TrackerRowPhase {
         switch trakt.phase {
-        case .unknown: .loading
+        case .unknown, .savingConnection: .loading
         case .unavailable: .unavailable
         case .disconnected: .disconnected
-        case .connecting: .connecting
+        case .connecting, .authorizing: .connecting
         case let .connected(name): .connected(name)
         case .error(let message): .error(message)
+        case .syncError(let message, _): .error(message)
         }
     }
 
@@ -256,6 +332,17 @@ struct IntegrationsDetailView: View {
         case .awaitingToken: .connecting
         case let .connected(name): .connected(name)
         case .error(let message): .error(message)
+        }
+    }
+
+    private var wetrakrRowPhase: TrackerRowPhase {
+        switch wetrakr.phase {
+        case .unknown, .savingConnection: .loading
+        case .unavailable: .unavailable
+        case .disconnected: .disconnected
+        case .connecting, .authorizing: .connecting
+        case let .connected(name): .connected(name)
+        case let .error(message), let .syncError(message, _): .error(message)
         }
     }
 
@@ -522,6 +609,7 @@ struct AttributionsDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                SettingsPageHeader(SettingsCopy.attributions)
                 Text(PlozzAttributions.introduction)
                     .font(.callout)
                     .plozzForeground(.secondary)

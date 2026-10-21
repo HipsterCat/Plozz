@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
+import Observation
 
 /// A provider-neutral action that can share the compact overflow panel with
 /// server/version choices.
@@ -23,9 +24,69 @@ public struct PlaybackSourceMenuAction: Identifiable, Hashable, Sendable {
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-/// Anchored menu-shaped source selector. It uses drill-in pages rather than
-/// native submenus so version rows can carry the facts needed to distinguish
-/// files. iPad stays a popover; iPhone gets the system's compact adaptation.
+/// Keep this owner above adaptive action rows so relayout cannot dismiss a menu.
+@MainActor @Observable
+public final class PlaybackSourceMenuState {
+    public var isPresented = false
+    var page = PlaybackSourceMenuButtonPage.root
+    var triggerFrame: CGRect = .zero
+    var actions: [PlaybackSourceMenuAction] = []
+
+    public init() {}
+
+    public func open(from frame: CGRect, actions: [PlaybackSourceMenuAction] = []) {
+        guard !isPresented else { return }
+        triggerFrame = frame
+        self.actions = actions
+        page = .root
+        isPresented = true
+    }
+}
+
+public struct PlaybackSourceMenuTrigger<Label: View>: View {
+    let state: PlaybackSourceMenuState
+    let actions: [PlaybackSourceMenuAction]
+    let label: Label
+    @State private var frame: CGRect = .zero
+
+    public init(
+        state: PlaybackSourceMenuState,
+        actions: [PlaybackSourceMenuAction] = [],
+        @ViewBuilder label: () -> Label
+    ) {
+        self.state = state
+        self.actions = actions
+        self.label = label()
+    }
+
+    public var body: some View {
+        Button { state.open(from: frame, actions: actions) } label: { label }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+    }
+}
+
+public extension View {
+    func playbackSourceMenu(
+        state: PlaybackSourceMenuState,
+        sources: [MediaSourceRef], selectedSourceID: String?,
+        offlineSourceAccountIDs: Set<String> = [],
+        versions: [MediaVersion], selectedVersionID: String?,
+        onSelectSource: @escaping (String) -> Void,
+        onSelectVersion: @escaping (String) -> Void,
+        onPerformAction: @escaping (String) -> Void = { _ in },
+        onDismiss: @escaping () -> Void = {}
+    ) -> some View {
+        modifier(PlaybackSourceMenuPresentation(
+            sources: sources, selectedSourceID: selectedSourceID,
+            offlineSourceAccountIDs: offlineSourceAccountIDs,
+            versions: versions, selectedVersionID: selectedVersionID,
+            onSelectSource: onSelectSource, onSelectVersion: onSelectVersion,
+            onPerformAction: onPerformAction, onDismiss: onDismiss, state: state
+        ))
+    }
+}
+
+/// Standalone source selector. Adaptive rows use a trigger and a stable owner instead.
 public struct PlaybackSourceMenuButton<Label: View>: View {
     private let sources: [MediaSourceRef]
     private let selectedSourceID: String?
@@ -41,20 +102,7 @@ public struct PlaybackSourceMenuButton<Label: View>: View {
     private let onDismiss: () -> Void
     private let label: Label
 
-    @State private var isPresented = false
-    @State private var page = PlaybackSourceMenuButtonPage.root
-    @State private var triggerFrame: CGRect = .zero
-    /// The trigger's frame FROZEN at the moment the menu was opened. The live
-    /// frame keeps moving while the detail page animates in, and anchoring to a
-    /// moving target let the placement flip mid-presentation — which is what
-    /// made the panel fly in when the button was tapped straight after arriving
-    /// on the page. The user tapped the button where they saw it, so that
-    /// position is the authoritative anchor for this presentation.
-    @State private var openTriggerFrame: CGRect = .zero
-    #if !os(tvOS)
-    @Environment(\.horizontalSizeClass) private var hSizeClass
-    @State private var appeared = false
-    #endif
+    @State private var state = PlaybackSourceMenuState()
 
     public init(
         sources: [MediaSourceRef],
@@ -82,15 +130,34 @@ public struct PlaybackSourceMenuButton<Label: View>: View {
         self.label = label()
     }
 
-    @ViewBuilder
     public var body: some View {
-        trigger
-            .onGeometryChange(for: CGRect.self) { proxy in
-                proxy.frame(in: .global)
-            } action: { frame in
-                triggerFrame = frame
-            }
-            .fullScreenCover(isPresented: $isPresented, onDismiss: onDismiss) {
+        PlaybackSourceMenuTrigger(state: state, actions: actions) { label }
+            .playbackSourceMenu(
+                state: state, sources: sources, selectedSourceID: selectedSourceID,
+                offlineSourceAccountIDs: offlineSourceAccountIDs,
+                versions: versions, selectedVersionID: selectedVersionID,
+                onSelectSource: onSelectSource, onSelectVersion: onSelectVersion,
+                onPerformAction: onPerformAction, onDismiss: onDismiss
+            )
+    }
+}
+
+private struct PlaybackSourceMenuPresentation: ViewModifier {
+    let sources: [MediaSourceRef]
+    let selectedSourceID: String?
+    let offlineSourceAccountIDs: Set<String>
+    let versions: [MediaVersion]
+    let selectedVersionID: String?
+    let onSelectSource: (String) -> Void
+    let onSelectVersion: (String) -> Void
+    let onPerformAction: (String) -> Void
+    let onDismiss: () -> Void
+    @Bindable var state: PlaybackSourceMenuState
+    @State private var appeared = false
+
+    func body(content: Content) -> some View {
+        content
+            .plozzFullScreenCover(isPresented: $state.isPresented, onDismiss: onDismiss) {
                 #if os(tvOS)
                 tvOSPresentation
                 #else
@@ -100,7 +167,7 @@ public struct PlaybackSourceMenuButton<Label: View>: View {
             // Kill the cover's own bottom-up slide: this is a menu anchored to a
             // button, not a drawer. The panel fades/scales in from the trigger
             // instead (see `iosPresentation`).
-            .transaction { $0.disablesAnimations = true }
+            .transaction(value: state.isPresented) { $0.disablesAnimations = true }
     }
 
     #if !os(tvOS)
@@ -117,7 +184,7 @@ public struct PlaybackSourceMenuButton<Label: View>: View {
             // this safe-area-relative space before using it.
             let insets = proxy.safeAreaInsets
             let screen = proxy.size
-            let anchor = openTriggerFrame == .zero ? triggerFrame : openTriggerFrame
+            let anchor = state.triggerFrame
             let trigger = anchor.offsetBy(dx: -insets.leading, dy: -insets.top)
             let margin: CGFloat = 16
             let gap: CGFloat = 12
@@ -149,7 +216,7 @@ public struct PlaybackSourceMenuButton<Label: View>: View {
                 Color.black.opacity(0.001)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
-                    .onTapGesture { isPresented = false }
+                    .onTapGesture { state.isPresented = false }
 
                 panel(maxHeight: layout.available)
                     .frame(width: width)
@@ -192,54 +259,51 @@ public struct PlaybackSourceMenuButton<Label: View>: View {
 
     #if os(tvOS)
     private var tvOSPresentation: some View {
-        ZStack(alignment: .topLeading) {
-            Color.black.opacity(0.001)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { isPresented = false }
+        GeometryReader { geometry in
+            let margin: CGFloat = 32
+            let width = min(PlaybackSourceMenuMetrics.panelWidth(for: state.page),
+                            max(0, geometry.size.width - margin * 2))
+            let height = min(panelHeight, max(0, geometry.size.height - margin * 2))
+            ZStack(alignment: .topLeading) {
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture { state.isPresented = false }
 
-            panel()
-                .offset(
-                    x: triggerFrame.minX,
-                    y: triggerFrame.minY - panelHeight - 12
-                )
+                panel(maxHeight: height, maxWidth: width)
+                    .offset(
+                        x: min(max(margin, state.triggerFrame.minX), geometry.size.width - width - margin),
+                        y: min(max(margin, state.triggerFrame.minY - height - 12),
+                               geometry.size.height - height - margin)
+                    )
+            }
         }
         .ignoresSafeArea()
         .presentationBackground(.clear)
     }
     #endif
 
-    private var trigger: some View {
-        Button {
-            page = .root
-            if !isPresented { openTriggerFrame = triggerFrame }
-            isPresented.toggle()
-        } label: {
-            label
-        }
-    }
-
-    private func panel(maxHeight: CGFloat = 620) -> some View {
+    private func panel(maxHeight: CGFloat = 620, maxWidth: CGFloat = 800) -> some View {
         PlaybackSourceMenuPanel(
-            page: $page,
+            page: $state.page,
             maxHeight: maxHeight,
+            maxWidth: maxWidth,
             sources: sources,
             selectedSourceID: selectedSourceID,
             offlineSourceAccountIDs: offlineSourceAccountIDs,
             versions: versions.sortedForPicker(),
             selectedVersionID: selectedVersionID,
-            actions: actions,
+            actions: state.actions,
             onSelectSource: { id in
                 onSelectSource(id)
-                isPresented = false
+                state.isPresented = false
             },
             onSelectVersion: { id in
                 onSelectVersion(id)
-                isPresented = false
+                state.isPresented = false
             },
             onPerformAction: { id in
                 onPerformAction(id)
-                isPresented = false
+                state.isPresented = false
             }
         )
         #if os(tvOS)
@@ -251,29 +315,34 @@ public struct PlaybackSourceMenuButton<Label: View>: View {
 
     private var panelHeight: CGFloat {
         PlaybackSourceMenuMetrics.panelHeight(
-            page: page,
+            page: state.page,
             sourceCount: sources.count,
             versionCount: versions.count,
-            actionCount: actions.count
+            actionCount: state.actions.count
         )
     }
 
     private func handleExit() {
-        if page != .root {
+        if state.page != .root {
             withAnimation(.easeInOut(duration: 0.28)) {
-                page = .root
+                state.page = .root
             }
         } else {
-            isPresented = false
+            state.isPresented = false
         }
     }
 }
 
-private struct PlaybackSourceMenuPanel: View {
+struct PlaybackSourceMenuPanel: View {
     @Binding var page: PlaybackSourceMenuButtonPage
     /// Ceiling imposed by the room available on the trigger's chosen side.
     /// Past this the rows scroll rather than the panel running off screen.
+    #if os(tvOS)
+    var maxHeight: CGFloat = 820
+    #else
     var maxHeight: CGFloat = 620
+    #endif
+    var maxWidth: CGFloat = 800
     let sources: [MediaSourceRef]
     let selectedSourceID: String?
     var offlineSourceAccountIDs: Set<String> = []
@@ -285,11 +354,13 @@ private struct PlaybackSourceMenuPanel: View {
     let onPerformAction: (String) -> Void
 
     @Namespace private var panelFocusScope
+    @Environment(\.locale) private var locale
     #if os(tvOS)
     @Environment(\.resetFocus) private var resetFocus
     #endif
     @FocusState private var focusedRowID: String?
     #if !os(tvOS)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var navDirection: Edge = .trailing
     @State private var contentHeight: CGFloat = 220
     /// The page the current `contentHeight` was measured for. Height changes
@@ -300,8 +371,8 @@ private struct PlaybackSourceMenuPanel: View {
     var body: some View {
         panelContent
             #if os(tvOS)
-            .frame(width: 620)
-            .frame(height: panelHeight, alignment: .top)
+            .frame(width: min(PlaybackSourceMenuMetrics.panelWidth(for: page), maxWidth))
+            .frame(height: min(panelHeight, maxHeight), alignment: .top)
             // Page content swaps immediately; only the glass container morphs.
             .animation(nil, value: page)
             // tvOS presents the panel bare inside a full-screen cover, so it has
@@ -364,6 +435,8 @@ private struct PlaybackSourceMenuPanel: View {
                     .padding(14)
             }
             .scrollIndicators(.hidden)
+            // A shorter page must not inherit the outgoing page's native offset.
+            .id(page)
         }
         #else
         // Pages slide horizontally as you drill in/out. The column scrolls
@@ -483,8 +556,11 @@ private struct PlaybackSourceMenuPanel: View {
             drillInRow(
                 id: "root.versions",
                 title: "Version",
-                detail: selectedVersion.map { versionTitleText($0.displayLabel) }
-                    ?? Text("Choose a version", comment: "Placeholder shown in Settings when no playback version is selected yet."),
+                detail: PlaybackSourceMenuVersionSummary(
+                    version: selectedVersion,
+                    fallback: selectedVersion.map { versionTitleText($0.displayLabel) }
+                        ?? Text("Choose a version", comment: "Placeholder shown in Settings when no playback version is selected yet.")
+                ),
                 destination: .versions
             ) {
                 Image(systemName: "film.stack")
@@ -586,45 +662,21 @@ private struct PlaybackSourceMenuPanel: View {
 
     @ViewBuilder
     private var versionRows: some View {
-        ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
-            #if !os(tvOS)
-            if index > 0 { rowSeparator }
-            #endif
-            // `displayLabel` is `nil` only when no fact/name is known — used
-            // here just to de-dupe `menuFacts` against whatever the title
-            // already shows; the actual rendered title below branches on the
-            // Optional so the "Version" fallback stays a translatable resource
-            // rather than a `Text(String)` that would always render verbatim.
-            let titleForDedupe = version.displayLabel ?? ""
-            let titleFacts = Set(titleForDedupe.components(separatedBy: " · "))
-            let supplementalFacts = version.menuFacts.filter { !titleFacts.contains($0) }
-            menuRowButton(id: "version.\(version.id)") {
-                onSelectVersion(version.id)
-            } label: {
-                HStack(alignment: .top, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        versionTitleText(version.displayLabel)
-                            .font(rowTitleFont)
-                        if !supplementalFacts.isEmpty {
-                            Text(supplementalFacts.joined(separator: " · "))
-                                .font(rowDetailFont)
-                                .settingsRowSecondary()
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        if let fileName = version.fileName {
-                            Text(fileName)
-                                .font(fileNameFont)
-                                .settingsRowSecondary()
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    Spacer(minLength: 12)
-                    if version.id == selectedVersionID {
-                        Image(systemName: "checkmark")
-                            .font(.headline.weight(.bold))
-                    }
+        VStack(spacing: 12) {
+            ForEach(versions.sortedForPicker()) { version in
+                let rowID = "version.\(version.id)"
+                MediaVersionChoiceButton(
+                    presentation: .init(version, locale: locale),
+                    isSelected: version.id == selectedVersionID,
+                    isFocused: focusedRowID == rowID
+                ) {
+                    onSelectVersion(version.id)
                 }
+                .focused($focusedRowID, equals: rowID)
+                .accessibilityIdentifier(rowID)
+                #if os(tvOS)
+                .prefersDefaultFocus(rowID == initialRowID, in: panelFocusScope)
+                #endif
             }
         }
     }
@@ -640,32 +692,53 @@ private struct PlaybackSourceMenuPanel: View {
         return Text("Version", comment: "Generic label for a playback version/source with no distinguishing facts (resolution, edition, etc.) known.")
     }
 
-    private func drillInRow<Icon: View>(
+    private func drillInRow<Detail: View, Icon: View>(
         id: String,
         title: LocalizedStringKey,
-        detail: Text,
+        detail: Detail,
         destination: PlaybackSourceMenuButtonPage,
         @ViewBuilder icon: () -> Icon
     ) -> some View {
         let iconView = icon()
+        let category = Text(title)
+            .font(rowCategoryFont)
+            .textCase(.uppercase)
+            .tracking(0.8)
+            .settingsRowSecondary()
+        let chevron = Image(systemName: "chevron.forward")
+            .settingsRowSecondary()
+        #if os(tvOS)
+        let stacksSummary = false
+        #else
+        let stacksSummary = destination == .versions && dynamicTypeSize.isAccessibilitySize
+        #endif
         return menuRowButton(id: id, fixedHeight: rootRowHeight) {
             navigate(to: destination)
         } label: {
-            HStack(spacing: 14) {
-                iconView
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                       .font(rowCategoryFont)
-                       .textCase(.uppercase)
-                       .tracking(0.8)
-                       .settingsRowSecondary()
+            if stacksSummary {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        category
+                        Spacer(minLength: 12)
+                        chevron
+                            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    }
                     detail
-                       .font(rowTitleFont)
-                       .lineLimit(2)
+                        .font(rowTitleFont)
                 }
-                Spacer(minLength: 12)
-                Image(systemName: "chevron.forward")
-                    .settingsRowSecondary()
+                .multilineTextAlignment(.leading)
+            } else {
+                HStack(spacing: 14) {
+                    iconView
+                    VStack(alignment: .leading, spacing: 4) {
+                        category
+                        detail
+                            .font(rowTitleFont)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 12)
+                    chevron
+                }
             }
         }
     }
@@ -829,14 +902,68 @@ private struct PlaybackSourceMenuPanel: View {
         #endif
     }
 
-    private var fileNameFont: Font {
+}
+
+private struct PlaybackSourceMenuVersionSummary: View {
+    let version: MediaVersion?
+    let fallback: Text
+
+    var body: some View {
         #if os(tvOS)
-        .system(size: 17)
+        fallback
         #else
-        .caption
+        let pictureFacts = [
+            ("edition", version?.editionLabel),
+            ("resolution", version?.resolutionLabel),
+            ("range", version?.hdrLabel)
+        ].compactMap { id, text in text.map { (id: id, text: $0) } }
+        let fileFacts = [
+            ("source", version?.sourceQualityLabel),
+            ("size", version?.sizeLabel)
+        ].compactMap { id, text in text.map { (id: id, text: $0) } }
+        VStack(alignment: .leading, spacing: 4) {
+            if !pictureFacts.isEmpty {
+                PlaybackSourceMenuSummaryFacts(facts: pictureFacts)
+                if !fileFacts.isEmpty {
+                    PlaybackSourceMenuSummaryFacts(facts: fileFacts)
+                        .font(.subheadline)
+                        .settingsRowSecondary()
+                }
+            } else if !fileFacts.isEmpty {
+                PlaybackSourceMenuSummaryFacts(facts: fileFacts)
+            } else {
+                fallback
+            }
+        }
+        .lineLimit(nil)
+        .multilineTextAlignment(.leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(fallback)
         #endif
     }
 }
+
+#if !os(tvOS)
+private struct PlaybackSourceMenuSummaryFacts: View {
+    let facts: [(id: String, text: String)]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Text(verbatim: facts.map(\.text).joined(separator: " · "))
+                .fixedSize()
+            // Separators belong only to a complete inline group, never a line edge.
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(facts, id: \.id) { fact in
+                    Text(verbatim: fact.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+#endif
 
 private struct PlaybackSourceMenuRowHeight: ViewModifier {
     let fixedHeight: CGFloat?
@@ -852,7 +979,7 @@ private struct PlaybackSourceMenuRowHeight: ViewModifier {
 }
 
 // The generic button's nested type cannot be named in a non-generic panel.
-private enum PlaybackSourceMenuButtonPage: Hashable {
+enum PlaybackSourceMenuButtonPage: Hashable {
     case root
     case servers
     case versions
@@ -985,6 +1112,12 @@ private struct PlaybackSourceMenuContentHeightKey: PreferenceKey {
 #endif
 
 private enum PlaybackSourceMenuMetrics {
+    #if os(tvOS)
+    static func panelWidth(for page: PlaybackSourceMenuButtonPage) -> CGFloat {
+        page == .versions ? 800 : 620
+    }
+    #endif
+
     static func panelHeight(
         page: PlaybackSourceMenuButtonPage,
         sourceCount: Int,
@@ -1006,7 +1139,7 @@ private enum PlaybackSourceMenuMetrics {
         case .servers:
             return min(max(CGFloat(sourceCount) * 104 + 94, 250), 700)
         case .versions:
-            return min(max(CGFloat(versionCount) * 142 + 94, 300), 700)
+            return min(max(CGFloat(versionCount) * 190 + 94, 360), 820)
         }
         #else
         return 620

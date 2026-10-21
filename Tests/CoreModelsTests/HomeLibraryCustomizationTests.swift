@@ -2,6 +2,43 @@ import XCTest
 @testable import CoreModels
 
 final class HomeLibraryVisibilityTests: XCTestCase {
+    func testEmptyCollectionsHideAutomaticallyWithoutDisablingTheirLibrary() throws {
+        var library = MediaLibrary(id: "collections", title: "Collections", kind: .collection, hasCollections: false)
+        var visibility = HomeLibraryVisibility.default
+        XCTAssertTrue(visibility.isEnabled("first:collections"))
+        XCTAssertFalse(visibility.isVisibleOnHome("first:collections", library: library))
+        visibility.setEnabled(true, for: "first:collections")
+        XCTAssertTrue(visibility.isVisibleOnHome("first:collections", library: library))
+        XCTAssertFalse(visibility.isVisibleOnHome("second:collections", library: library))
+        let restored = try JSONDecoder().decode(
+            HomeLibraryVisibility.self, from: JSONEncoder().encode(visibility)
+        )
+        XCTAssertTrue(restored.isVisibleOnHome("first:collections", library: library))
+        visibility.setEnabled(false, for: "first:collections")
+        XCTAssertFalse(visibility.isVisibleOnHome("first:collections", library: library))
+        XCTAssertFalse(visibility.explicitlyEnabledKeys.contains("first:collections"))
+        library.hasCollections = true
+        XCTAssertFalse(visibility.isVisibleOnHome("first:collections", library: library), "Explicit off wins over new content.")
+        XCTAssertTrue(visibility.isVisibleOnHome("second:collections", library: library))
+    }
+
+    func testCollectionAvailabilityIsOptionalAndDoesNotHideUnknownOrOrdinaryLibraries() throws {
+        let legacy = try JSONDecoder().decode(
+            MediaLibrary.self, from: Data(#"{"id":"collections","title":"Collections","kind":"collection"}"#.utf8)
+        )
+        XCTAssertNil(legacy.hasCollections)
+        let visibility = try JSONDecoder().decode(HomeLibraryVisibility.self, from: Data("{}".utf8))
+        XCTAssertTrue(visibility.explicitlyEnabledKeys.isEmpty)
+        XCTAssertTrue(visibility.isVisibleOnHome("acct:collections", library: legacy))
+        var knownEmpty = legacy
+        knownEmpty.hasCollections = false
+        let restored = try JSONDecoder().decode(MediaLibrary.self, from: JSONEncoder().encode(knownEmpty))
+        XCTAssertEqual(restored.hasCollections, false)
+        XCTAssertFalse(visibility.isVisibleOnHome("acct:collections", library: restored))
+        knownEmpty.kind = .movie
+        XCTAssertTrue(visibility.isVisibleOnHome("acct:collections", library: knownEmpty))
+    }
+
     func testDefaultShowsEverything() {
         let visibility = HomeLibraryVisibility.default
         XCTAssertTrue(visibility.isVisible("acct:anything"))
@@ -44,6 +81,56 @@ final class HomeLibraryVisibilityTests: XCTestCase {
 
     func testContinueWatchingShowsSeriesArtworkDefaultsOn() {
         XCTAssertTrue(HomeLibraryVisibility.default.continueWatchingShowsSeriesArtwork)
+        XCTAssertEqual(HomeLibraryVisibility.default.continueWatchingLayout, .landscape)
+        XCTAssertEqual(HomeLibraryVisibility.default.continueWatchingPlaybackDetails, .detailed)
+    }
+
+    func testPortraitOverridesThumbnailsWithoutErasingTheLandscapeChoice() throws {
+        var visibility = HomeLibraryVisibility(continueWatchingShowsSeriesArtwork: false)
+        visibility.continueWatchingLayout = .portrait
+        var decoded = try JSONDecoder().decode(
+            HomeLibraryVisibility.self, from: JSONEncoder().encode(visibility)
+        )
+        XCTAssertEqual(decoded.continueWatchingLayout, .portrait)
+        XCTAssertTrue(decoded.continueWatchingUsesSeriesArtwork)
+        XCTAssertFalse(decoded.continueWatchingShowsSeriesArtwork)
+        decoded.continueWatchingLayout = .landscape
+        XCTAssertFalse(decoded.continueWatchingUsesSeriesArtwork)
+    }
+
+    func testLegacyThumbnailPreferenceRemainsLandscape() throws {
+        let decoded = try JSONDecoder().decode(
+            HomeLibraryVisibility.self,
+            from: Data(#"{"continueWatchingShowsSeriesArtwork":false}"#.utf8)
+        )
+        XCTAssertEqual(decoded.continueWatchingLayout, .landscape)
+        XCTAssertFalse(decoded.continueWatchingUsesSeriesArtwork)
+        XCTAssertEqual(decoded.continueWatchingPlaybackDetails, .detailed)
+    }
+
+    func testPlaybackDetailsRoundTripWithoutChangingArtworkOrLayout() throws {
+        for layout in ContinueWatchingCardLayout.allCases {
+            for details in ContinueWatchingPlaybackDetails.allCases {
+                let original = HomeLibraryVisibility(
+                    continueWatchingShowsSeriesArtwork: false, continueWatchingLayout: layout,
+                    continueWatchingPlaybackDetails: details
+                )
+                let decoded = try JSONDecoder().decode(
+                    HomeLibraryVisibility.self, from: JSONEncoder().encode(original)
+                )
+                XCTAssertEqual(decoded, original)
+                XCTAssertEqual(decoded.continueWatchingUsesSeriesArtwork, layout == .portrait)
+            }
+        }
+    }
+
+    func testPortraitOnlyStoredPlaybackPreferenceIsPreservedForAllLayouts() throws {
+        let decoded = try JSONDecoder().decode(
+            HomeLibraryVisibility.self,
+            from: Data(#"{"continueWatchingPortraitDetails":"progressOnly","continueWatchingLayout":"landscape"}"#.utf8)
+        )
+        XCTAssertEqual(decoded.continueWatchingPlaybackDetails, .progressOnly)
+        XCTAssertEqual(decoded.continueWatchingLayout, .landscape)
     }
 
     func testContinueWatchingArtworkChoiceSurvivesARoundTrip() throws {
@@ -79,9 +166,10 @@ final class HomeLibraryVisibilityTests: XCTestCase {
 
     // MARK: - Single on/off axis (the Home-only opt-out was retired)
 
-    func testDefaultsMergeOnNothingDisabled() {
+    func testDefaultsMatchServerWithoutDisablingLibraries() {
         let v = HomeLibraryVisibility.default
-        XCTAssertTrue(v.mergeLibrariesOnHome)
+        XCTAssertFalse(v.mergeLibrariesOnHome)
+        XCTAssertEqual(v.rowCustomization?.defaults, .matchServer)
         XCTAssertTrue(v.disabledKeys.isEmpty)
         XCTAssertTrue(v.isEnabled("acct:anything"))
         XCTAssertTrue(v.isVisibleOnHome("acct:anything"))
@@ -139,10 +227,10 @@ final class HomeLibraryVisibilityTests: XCTestCase {
 
     // MARK: - Global & per-library Home rows
 
-    func testGlobalRowsDefaultOnAndToggleOff() {
+    func testProviderDefaultsUsePerLibraryLatestAndSharedWatchRows() {
         var v = HomeLibraryVisibility.default
         for row in HomeGlobalRow.allCases {
-            XCTAssertTrue(v.isGlobalRowEnabled(row), "\(row) should default on")
+            XCTAssertEqual(v.isGlobalRowEnabled(row), row != .recentlyAdded)
         }
         v.setGlobalRowEnabled(false, for: .watchlist)
         XCTAssertFalse(v.isGlobalRowEnabled(.watchlist))
@@ -176,6 +264,31 @@ final class HomeLibraryVisibilityTests: XCTestCase {
 }
 
 final class HomeLibraryVisibilityStoreTests: XCTestCase {
+    @MainActor
+    func testContinueWatchingLayoutPersistsAndSwitchesWithItsProfile() {
+        let suite = "test.portraitVisibility.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = HomeLibraryVisibilityStore(defaults: defaults)
+        let second = HomeLibraryVisibilityStore(defaults: defaults, namespace: "second")
+        let model = HomeLibraryVisibilityModel(store: first)
+        model.setContinueWatchingShowsSeriesArtwork(false)
+        model.setContinueWatchingLayout(.portrait)
+        model.setContinueWatchingPlaybackDetails(.progressOnly)
+        let restored = HomeLibraryVisibilityModel(store: first)
+        XCTAssertEqual(restored.continueWatchingLayout, .portrait)
+        XCTAssertTrue(restored.continueWatchingUsesSeriesArtwork)
+        XCTAssertEqual(HomeLibraryVisibilityModel(store: second).continueWatchingLayout, .landscape)
+        XCTAssertEqual(restored.continueWatchingPlaybackDetails, .progressOnly)
+        XCTAssertEqual(HomeLibraryVisibilityModel(store: second).continueWatchingPlaybackDetails, .detailed)
+        restored.setContinueWatchingLayout(.landscape)
+        XCTAssertFalse(restored.continueWatchingUsesSeriesArtwork)
+        XCTAssertEqual(first.load().continueWatchingLayout, .landscape)
+        XCTAssertEqual(first.load().continueWatchingPlaybackDetails, .progressOnly)
+        restored.setContinueWatchingLayout(.portrait)
+        XCTAssertEqual(restored.continueWatchingPlaybackDetails, .progressOnly)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suite = "test.homeVisibility.\(UUID().uuidString)"
         return UserDefaults(suiteName: suite)!
@@ -207,6 +320,21 @@ final class HomeLibraryVisibilityStoreTests: XCTestCase {
         XCTAssertTrue(bob.load().disabledKeys.isEmpty)
         XCTAssertTrue(bob.load().isVisible("acct:movies"))
     }
+
+    @MainActor
+    func testManualCollectionEnablePersistsOnlyForItsProfile() {
+        let suite = "test.collectionVisibility.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = HomeLibraryVisibilityStore(defaults: defaults, namespace: "first")
+        let second = HomeLibraryVisibilityStore(defaults: defaults, namespace: "second")
+        let library = MediaLibrary(id: "collections", title: "Collections", kind: .collection, hasCollections: false)
+        let model = HomeLibraryVisibilityModel(store: first)
+        XCTAssertFalse(model.isVisibleOnHome("acct:collections", library: library))
+        model.setEnabled(true, for: "acct:collections")
+        XCTAssertTrue(HomeLibraryVisibilityModel(store: first).isVisibleOnHome("acct:collections", library: library))
+        XCTAssertFalse(HomeLibraryVisibilityModel(store: second).isVisibleOnHome("acct:collections", library: library))
+    }
 }
 
 final class HomeLibraryVisibilityModelTests: XCTestCase {
@@ -220,6 +348,8 @@ final class HomeLibraryVisibilityModelTests: XCTestCase {
     @MainActor
     func testSetMergePersistsAndReads() {
         let model = makeModel()
+        XCTAssertFalse(model.mergeLibrariesOnHome)
+        model.setMergeLibrariesOnHome(true)
         XCTAssertTrue(model.mergeLibrariesOnHome)
         model.setMergeLibrariesOnHome(false)
         XCTAssertFalse(model.mergeLibrariesOnHome)

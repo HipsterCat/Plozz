@@ -6,6 +6,49 @@ import FoundationNetworking
 #endif
 
 final class ServerURLNormalizerTests: XCTestCase {
+    func testDiscoveryRetainsResolvedHTTPSAndReverseProxyPrefix() throws {
+        let requested = URL(string: "http://media.example/old")!
+        let resolved = try ServerURLNormalizer.resolvedBaseURL(
+            requested: requested,
+            responseURL: URL(string: "https://media.example:8443/new/System/Info/Public"),
+            endpointPath: "/System/Info/Public"
+        )
+        XCTAssertEqual(resolved.absoluteString, "https://media.example:8443/new")
+        XCTAssertEqual(try ServerURLNormalizer.resolvedBaseURL(
+            requested: requested,
+            responseURL: URL(string: "http://media.example/old/System/Info/Public"),
+            endpointPath: "/System/Info/Public"
+        ), requested)
+    }
+
+    func testDiscoveryRejectsUnapprovedOriginsAndNonAPIResponses() {
+        for (requested, response) in [
+            ("http://media.example", "https://other.example/System/Info/Public"),
+            ("https://media.example", "http://media.example/System/Info/Public"),
+            ("http://media.example", "http://media.example:8096/System/Info/Public"),
+            ("https://media.example", "https://media.example/login"),
+            ("https://media.example", "https://media.example"),
+            ("https://media.example", "https://viewer@media.example/System/Info/Public"),
+            ("https://media.example", "https://media.example/System/Info/Public?token=fixture"),
+            ("https://media.example", "https://media.example/System/Info/Public#fragment")
+        ] {
+            XCTAssertThrowsError(try ServerURLNormalizer.resolvedBaseURL(
+                requested: URL(string: requested)!,
+                responseURL: URL(string: response),
+                endpointPath: "/System/Info/Public"
+            ), response)
+        }
+    }
+
+    func testDiscoveryPreservesEncodedReverseProxyPrefixes() throws {
+        let resolved = try ServerURLNormalizer.resolvedBaseURL(
+            requested: URL(string: "https://media.example/media%2Fhome")!,
+            responseURL: URL(string: "https://media.example/media%2Fhome/System/Info/Public"),
+            endpointPath: "/System/Info/Public"
+        )
+        XCTAssertEqual(resolved.absoluteString, "https://media.example/media%2Fhome")
+    }
+
     func testBareIPGetsHttpAndDefaultPort() {
         let url = ServerURLNormalizer.normalize("192.168.1.5")
         XCTAssertEqual(url?.absoluteString, "http://192.168.1.5:8096")

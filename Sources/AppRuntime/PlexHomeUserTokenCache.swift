@@ -1,19 +1,11 @@
 import Foundation
 import FeatureAuthCore
 
-/// Persists the **server-scoped access tokens** resolved for *unprotected* Plex
-/// Home users so subsequent launches (and profile picks) can install the right
-/// identity **synchronously** — painting Home once with the correct token
-/// instead of loading with the admin token and reloading when the async switch
-/// lands. This is the cache that removes the startup double-load + its latency.
-///
-/// ## Why only unprotected users
-/// This cache is also read on manual switches, so protected tokens are never
-/// written here. Opt-in trusted startup uses the separate, device-only
-/// `AutomaticSignInStore`. Callers gate this cache behind
-/// `binding.requiresPIN != true`. Unprotected users have no
-/// PIN to bypass, and their token is no more sensitive than the admin token the
-/// `AccountStore` already persists in the same Keychain.
+/// Legacy storage for credentials previously cached for unprotected Plex users.
+/// Retained so upgraded builds can remove those entries. Historical protection
+/// metadata cannot authorize a new activation: the user may have added a PIN
+/// since it was checked. Only the device-only `AutomaticSignInStore` restores
+/// an authenticated session, and only through the startup entry point.
 ///
 /// ## Storage
 /// Entries are keyed by `accountID` + `homeUserID` and live in a dedicated

@@ -47,45 +47,40 @@ public enum GenreDisplayFormatter {
 /// show is one pure, testable place; the UI layer only decides *how* to paint
 /// each `Style`.
 public struct MediaBadge: Hashable, Sendable, Identifiable {
-    /// How a badge should be painted, mirroring the three visual treatments
-    /// Apple TV uses in its detail hero.
+    /// Metadata families retain their identity independently of the shared visual treatment.
     public enum Style: String, Sendable, Hashable {
-        /// An outlined pill with a transparent fill — content ratings such as
-        /// `TV-14` or `PG-13`.
+        /// Content certification, separate from picture and audio capabilities.
         case rating
-        /// A solid, faintly-filled gray pill — technical specs such as `4K`,
-        /// `HDR`, `HDR10`, `5.1`, `DTS:X`.
+        /// Other technical facts, including video codecs.
         case spec
-        /// A highly visible solid pill (e.g. solid white with dark text) for
-        /// the primary resolution badge.
+        /// Resolution.
         case prominent
-        /// A stylized HDR wordmark badge (`HDR10`, `HDR10+`, `HLG`, `HDR`)
-        /// painted with a gradient border so it reads like the HDR logo rather
-        /// than a plain spec pill.
+        /// HDR signal metadata.
         case hdr
-        /// The standard-dynamic-range counterpart to `.hdr`: the same borderless
-        /// heavy wordmark treatment, but filled with a muted, theme-aware
-        /// brushed-metal sheen (a faint diagonal satin streak across neutral
-        /// grays) instead of HDR's vibrant luminance gradient — a matte logo that
-        /// reads as the deliberate "opposite of shiny".
+        /// Explicit standard dynamic range.
         case sdr
-        /// A Dolby badge rendered as the double-D logo with a stacked wordmark
-        /// (`Dolby` over the format, e.g. Dolby Vision / Atmos / Digital+). No
-        /// pill.
+        /// Dolby Vision or Dolby audio, rendered as text rather than a vendor logo.
         case dolby
-        /// A DTS badge rendered as a custom `dts:X` / `dts-HD` wordmark logo
-        /// (lowercase `dts` with an emphasized format suffix). No pill.
+        /// DTS audio.
         case dts
+        /// Other audio formats, audio languages, or a standalone channel layout.
+        case audio
     }
 
     public var label: String  // l10n:content — technical spec/brand name (e.g. "4K", "Dolby Vision"), never translated
     public var style: Style
-    /// Optional trailing detail rendered as plain text after a logo-style badge
-    /// (`.dolby`/`.dts`) — e.g. the channel layout `5.1`/`7.1`, so the format
-    /// logo and its channel count read as one unit with no separate pill.
+    /// Audio detail displayed in an attached segment, never a detached channel chip.
     public var detail: String?  // l10n:content — technical spec (e.g. channel layout), never translated
 
     public var id: String { "\(style.rawValue):\(label):\(detail ?? "")" }
+
+    public var isAudio: Bool {
+        switch style {
+        case .audio, .dts: true
+        case .dolby: label != "Dolby Vision"
+        default: false
+        }
+    }
 
     public init(_ label: String, style: Style = .spec, detail: String? = nil) {  // l10n:content — technical spec/brand name, never translated
         self.label = label
@@ -101,7 +96,7 @@ public struct MediaBadge: Hashable, Sendable, Identifiable {
     }
 
     /// For `.dolby` badges, the format word(s) after the leading "Dolby " (e.g.
-    /// `Vision`, `Atmos`, `Digital+`) — the logo conveys the "Dolby". For any
+    /// `Vision`, `Atmos`, `Digital+`). For any
     /// other style this is just the full label.
     public var dolbyFormatWord: String {  // l10n:content — brand/format name, never translated
         guard style == .dolby else { return label }
@@ -147,8 +142,8 @@ public extension MediaSourceMetadata {
     /// "DoVi/HDR10") reads `Dolby Vision` **and** `HDR10` so the badge row
     /// advertises both. Otherwise a single `HDR10+`, `HDR10`, `HLG`, or generic
     /// `HDR` badge, or `SDR` for standard-range content. Empty only when there's
-    /// nothing to classify. HDR badges use the `.hdr` logo style; Dolby Vision
-    /// uses the `.dolby` mark; `SDR` is a plain `.spec` pill.
+    /// nothing to classify. HDR badges use the `.hdr` metadata family; Dolby
+    /// Vision uses `.dolby`, and standard dynamic range uses `.sdr`.
     var dynamicRangeBadges: [MediaBadge] {
         guard let video else { return [] }
         let rangeType = (video.videoRangeType ?? "").uppercased()
@@ -208,92 +203,65 @@ public extension MediaSourceMetadata {
         return MediaBadge(name, style: .spec)
     }
 
-    /// Audio capability badges: a single headline format badge (Dolby Atmos,
-    /// DTS:X, Dolby TrueHD, DTS-HD, Dolby Digital+/Dolby Digital) carrying the
-    /// channel layout (`5.1`/`7.1`) as a trailing `detail` when the format isn't
-    /// already object-based surround. When no headline format is present, a bare
-    /// channel badge is emitted instead.
+    /// The source's codec and spatial capability are separate facts. Channels
+    /// attach to the codec, not to an inferred Atmos/DTS:X speaker configuration.
     var audioBadges: [MediaBadge] {
         guard let audio else { return [] }
-        let profile = (audio.profile ?? "").lowercased()
-        let codec = (audio.codec ?? "").lowercased()
+        return Self.audioBadges(
+            codec: audio.codec, profile: audio.profile,
+            channels: audio.channels, channelLayout: audio.channelLayout
+        )
+    }
 
-        // Object-based / lossless headline formats imply surround on their own,
-        // so they suppress the trailing channel detail below.
+    static func audioBadges(
+        codec: String?, profile: String?, channels: Int?, channelLayout: String? = nil
+    ) -> [MediaBadge] {
+        let profile = (profile ?? "").lowercased()
+        let codec = (codec ?? "").lowercased()
+        let layout = surroundLabel(channelLayout: channelLayout, channels: channels)
         var format: MediaBadge?
-        var formatImpliesSurround = false
-        if profile.contains("atmos") {
-            format = MediaBadge("Dolby Atmos", style: .dolby)
-            formatImpliesSurround = true
-        } else if profile.contains("dts:x") || profile.contains("dtsx") || profile.contains("dts x") {
-            format = MediaBadge("DTS:X", style: .dts)
-            formatImpliesSurround = true
-        } else if codec == "truehd" {
+        if codec == "truehd" {
             format = MediaBadge("Dolby TrueHD", style: .dolby)
-            formatImpliesSurround = true
-        } else if codec == "dts" && (profile.contains("hd") || profile.contains("ma")) {
-            format = MediaBadge("DTS-HD", style: .dts)
+        } else if codec == "dts" {
+            format = MediaBadge(profile.contains("hd") || profile.contains("ma") ? "DTS-HD" : "DTS", style: .dts)
         } else if codec == "eac3" {
             format = MediaBadge("Dolby Digital+", style: .dolby)
         } else if codec == "ac3" {
             format = MediaBadge("Dolby Digital", style: .dolby)
         }
-
-        let channels = formatImpliesSurround ? nil : Self.surroundLabel(
-            channelLayout: audio.channelLayout,
-            channels: audio.channels
-        )
-
+        var result: [MediaBadge] = []
         if var format {
-            format.detail = channels
-            return [format]
-        } else if let channels {
-            return [MediaBadge(channels, style: .spec)]
+            format.detail = layout
+            result.append(format)
         }
-        return []
+        if profile.contains("atmos") {
+            result.append(MediaBadge("Dolby Atmos", style: .dolby, detail: format == nil ? layout : nil))
+        } else if profile.contains("dts:x") || profile.contains("dtsx") || profile.contains("dts x") {
+            result.append(MediaBadge("DTS:X", style: .dts, detail: format == nil ? layout : nil))
+        }
+        if result.isEmpty, let layout { result.append(MediaBadge(layout, style: .audio)) }
+        return result
     }
 
-    /// The full ordered technical badge set: resolution, then the Dolby-family
-    /// badges grouped together (Dolby Vision before audio Dolby badges), then
-    /// the HDR10 / HDR / SDR pill, then any non-Dolby audio badges. The video
-    /// codec (HEVC / H.264) is intentionally omitted from the headline badge
-    /// row; the full codec profile remains in the playback-diagnostics overlay.
-    ///
-    /// Grouping keeps the two visually-similar Dolby logos (e.g. Dolby Vision +
-    /// Dolby Atmos) adjacent rather than separated by an `HDR10` pill, mirroring
-    /// how Apple TV composes "4K · Dolby Vision · Dolby Atmos · HDR10".
+    /// Resolution, picture, then audio. Video codecs remain in the detailed picker
+    /// and playback diagnostics rather than the hero's headline row.
     var technicalBadges: [MediaBadge] {
-        Self.dolbyGroupedTechnicalBadges(
+        Self.orderedTechnicalBadges(
             resolution: resolutionBadge,
             range: dynamicRangeBadges,
             audio: audioBadges
         )
     }
 
-    /// Composes a resolution/HDR/audio badge list in the Apple-TV-style Dolby
-    /// grouped order — resolution, then any Dolby-styled range badges (Dolby
-    /// Vision), then any Dolby-styled audio badges (Dolby Atmos, TrueHD,
-    /// Digital+/Digital), then the remaining range badges (HDR10+, HDR10,
-    /// HLG, HDR, SDR), then the remaining audio (DTS:X / DTS-HD / channels).
-    ///
-    /// Single source of truth for the ordering used by both an item's own
-    /// `technicalBadges` and the cross-source `representativeTechnicalBadges`
-    /// summary — they used to maintain inline copies that could drift.
-    static func dolbyGroupedTechnicalBadges(
+    static func orderedTechnicalBadges(
         resolution: MediaBadge?,
         range: [MediaBadge],
         audio: [MediaBadge]
     ) -> [MediaBadge] {
         var badges: [MediaBadge] = []
         if let resolution { badges.append(resolution) }
-        let dolbyRange = range.filter { $0.style == .dolby }
-        let otherRange = range.filter { $0.style != .dolby }
-        let dolbyAudio = audio.filter { $0.style == .dolby }
-        let otherAudio = audio.filter { $0.style != .dolby }
-        badges.append(contentsOf: dolbyRange)
-        badges.append(contentsOf: dolbyAudio)
-        badges.append(contentsOf: otherRange)
-        badges.append(contentsOf: otherAudio)
+        badges.append(contentsOf: range)
+        badges.append(contentsOf: audio)
         return badges
     }
     /// A surround-channel label (`7.1`, `5.1`) from a layout string or channel
@@ -321,7 +289,7 @@ public extension MediaVersion {
     /// channel-layout audio. Otherwise they're composed from this version's own
     /// flattened facts (resolution from width/height, HDR/DoVi from `videoRange`,
     /// audio from `audioProfile`/`audioCodec`/`audioChannels`), via the same
-    /// Dolby-grouped ordering helper so a per-version row reads identically to
+    /// category ordering helper so a per-version row reads identically to
     /// the per-item one.
     ///
     /// The hero's badge row uses this when the user picks a non-default version
@@ -384,47 +352,10 @@ public extension MediaVersion {
             }
         }()
 
-        let audio: [MediaBadge] = {
-            let profile = (audioProfile ?? "").lowercased()
-            let codec = (audioCodec ?? "").lowercased()
-            var format: MediaBadge?
-            var formatImpliesSurround = false
-            if profile.contains("atmos") {
-                format = MediaBadge("Dolby Atmos", style: .dolby)
-                formatImpliesSurround = true
-            } else if profile.contains("dts:x") || profile.contains("dtsx") || profile.contains("dts x") {
-                format = MediaBadge("DTS:X", style: .dts)
-                formatImpliesSurround = true
-            } else if codec == "truehd" {
-                format = MediaBadge("Dolby TrueHD", style: .dolby)
-                formatImpliesSurround = true
-            } else if codec == "dts" && (profile.contains("hd") || profile.contains("ma")) {
-                format = MediaBadge("DTS-HD", style: .dts)
-            } else if codec == "eac3" {
-                format = MediaBadge("Dolby Digital+", style: .dolby)
-            } else if codec == "ac3" {
-                format = MediaBadge("Dolby Digital", style: .dolby)
-            }
-
-            let channels: String? = {
-                if formatImpliesSurround { return nil }
-                switch audioChannels {
-                case .some(let c) where c >= 8: return "7.1"
-                case .some(let c) where c >= 6: return "5.1"
-                default: return nil
-                }
-            }()
-
-            if var format {
-                format.detail = channels
-                return [format]
-            } else if let channels {
-                return [MediaBadge(channels, style: .spec)]
-            }
-            return []
-        }()
-
-        return MediaSourceMetadata.dolbyGroupedTechnicalBadges(
+        let audio = MediaSourceMetadata.audioBadges(
+            codec: audioCodec, profile: audioProfile, channels: audioChannels
+        )
+        return MediaSourceMetadata.orderedTechnicalBadges(
             resolution: resolution,
             range: range,
             audio: audio
@@ -658,13 +589,11 @@ public extension MediaSourceMetadata {
     /// a single item's `technicalBadges`, this maximises resolution, dynamic
     /// range and audio independently so the summary reflects the group's peak
     /// capabilities rather than any one file's. Output order matches
-    /// `MediaSourceMetadata.technicalBadges`: resolution → Dolby Vision → Dolby
-    /// audio → HDR10/HDR/SDR → non-Dolby audio, so the two Dolby logos stay
-    /// adjacent (e.g. "4K · Dolby Vision · Dolby Atmos · HDR10").
+    /// `MediaSourceMetadata.technicalBadges`: resolution, picture, then audio.
+    /// Codec, channels, and spatial capability always come from the same source.
     static func representativeTechnicalBadges(from sources: [MediaSourceMetadata]) -> [MediaBadge] {
         guard !sources.isEmpty else { return [] }
         var resolution: MediaBadge?
-        var audioBadge: MediaBadge?
 
         if let r = sources
             .compactMap(\.resolutionBadge)
@@ -682,36 +611,18 @@ public extension MediaSourceMetadata {
             rangeBadges = best
         }
 
-        // Maximise the headline audio format and the surround layout separately,
-        // then attach the best channel layout to the winning format as a trailing
-        // detail — unless that format already implies surround (Atmos/DTS:X/
-        // TrueHD). Channel info may live on a format badge's `detail` or as a
-        // standalone channel badge's label.
-        let audioBadges = sources.flatMap(\.audioBadges)
-        let bestFormat = audioBadges
-            .filter { audioFormatRank($0.label) > 0 }
-            .max(by: { audioFormatRank($0.label) < audioFormatRank($1.label) })
-        let channelCandidates = audioBadges.flatMap { badge -> [String] in
-            var candidates: [String] = []
-            if let detail = badge.detail { candidates.append(detail) }
-            if channelRank(badge.label) > 0 { candidates.append(badge.label) }
-            return candidates
-        }
-        let bestChannels = channelCandidates.max(by: { channelRank($0) < channelRank($1) })
-        if var bestFormat {
-            bestFormat.detail = formatImpliesSurround(bestFormat.label) ? nil : bestChannels
-            audioBadge = bestFormat
-        } else if let bestChannels {
-            audioBadge = MediaBadge(bestChannels, style: .spec)
-        }
-
-        // Compose the same Dolby-grouped order as `technicalBadges` via the
-        // shared helper, so resolution/HDR/audio ordering lives in exactly one
-        // place.
-        return dolbyGroupedTechnicalBadges(
+        let audio = sources.map(\.audioBadges).max { lhs, rhs in
+            let leftFormat = lhs.map { audioFormatRank($0.label) }.max() ?? 0
+            let rightFormat = rhs.map { audioFormatRank($0.label) }.max() ?? 0
+            if leftFormat != rightFormat { return leftFormat < rightFormat }
+            let leftChannels = lhs.map { channelRank($0.detail ?? $0.label) }.max() ?? 0
+            let rightChannels = rhs.map { channelRank($0.detail ?? $0.label) }.max() ?? 0
+            return leftChannels < rightChannels
+        } ?? []
+        return orderedTechnicalBadges(
             resolution: resolution,
             range: rangeBadges,
-            audio: audioBadge.map { [$0] } ?? []
+            audio: audio
         )
     }
 
@@ -745,12 +656,13 @@ public extension MediaSourceMetadata {
 
     private static func audioFormatRank(_ label: String) -> Int {  // l10n:content — brand/format name, never translated
         switch label {
-        case "Dolby Atmos": return 6
-        case "DTS:X": return 5
-        case "Dolby TrueHD": return 4
-        case "DTS-HD": return 3
-        case "Dolby Digital+": return 2
-        case "Dolby Digital": return 1
+        case "Dolby Atmos": return 7
+        case "DTS:X": return 6
+        case "Dolby TrueHD": return 5
+        case "DTS-HD": return 4
+        case "Dolby Digital+": return 3
+        case "Dolby Digital": return 2
+        case "DTS": return 1
         default: return 0
         }
     }
@@ -763,9 +675,6 @@ public extension MediaSourceMetadata {
         }
     }
 
-    private static func formatImpliesSurround(_ label: String) -> Bool {  // l10n:content — brand/format name, never translated
-        label == "Dolby Atmos" || label == "DTS:X" || label == "Dolby TrueHD"
-    }
 }
 
 public extension TimeInterval {

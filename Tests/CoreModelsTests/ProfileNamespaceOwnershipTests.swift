@@ -97,6 +97,26 @@ final class ProfileNamespaceOwnershipTests: XCTestCase {
 
     /// Ownership survives a relaunch, so the answer can't drift between runs.
     @MainActor
+    func testDeletingOwnerKeepsSurvivorNamespaceAcrossRelaunch() {
+        let defaults = makeDefaults()
+        let store = ProfileStore(defaults: defaults)
+        let model = ProfilesModel(store: store)
+        let originalID = model.activeProfileID
+        let survivor = model.add(name: "Survivor")
+        ThemeSettingsStore(defaults: defaults, namespace: nil).save(.light)
+        ThemeSettingsStore(defaults: defaults, namespace: survivor.id).save(.dark)
+        model.remove(originalID)
+
+        let reopened = ProfilesModel(store: ProfileStore(defaults: defaults))
+        XCTAssertEqual(reopened.activeProfileID, survivor.id)
+        XCTAssertNil(reopened.rootNamespaceOwnerID)
+        XCTAssertEqual(reopened.activeNamespace, survivor.id)
+        XCTAssertEqual(
+            ThemeSettingsStore(defaults: defaults, namespace: reopened.activeNamespace).load(), .dark
+        )
+    }
+
+    @MainActor
     func testOwnershipPersistsAcrossReload() {
         let defaults = makeDefaults()
         let first = ProfilesModel(store: ProfileStore(defaults: defaults))

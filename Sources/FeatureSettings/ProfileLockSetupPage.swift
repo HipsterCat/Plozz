@@ -18,7 +18,7 @@ struct ProfileLockSetupPage: View {
     let profileID: String
     let syncEnabled: Bool
 
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     private var profile: Profile? {
         context.profiles.first(where: { $0.id == profileID })
@@ -53,7 +53,7 @@ struct ProfileLockSetupPage: View {
 struct ParentalPINSetupPage: View {
     let context: SettingsContext
 
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     var body: some View {
         ParentalPINSetupView(

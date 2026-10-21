@@ -44,6 +44,7 @@ struct ParentalPINDetailView: View {
                                     .settingsRowSecondary()
                             }
                         }
+                        .settingsWorkspaceEntry()
 
                         if hasPIN {
                             Button(role: .destructive) {
@@ -67,7 +68,7 @@ struct ParentalPINDetailView: View {
             .padding(.vertical, 24)
         }
         .scrollClipDisabled()
-        .navigationDestination(isPresented: $isSettingPIN) {
+        .settingsPageDestination(isPresented: $isSettingPIN) {
             ParentalPINSetupView(
                 isReplacing: hasPIN,
                 onComplete: { pin in

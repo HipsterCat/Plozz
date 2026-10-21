@@ -24,7 +24,7 @@ final class PlozziOSSettingsModel {
     let homeVisibility: HomeLibraryVisibilityModel
     let diagnostics: DiagnosticsSettingsModel
 
-    init(namespace: String? = nil) {
+    init(namespace: String? = nil, allowsDiscovery: @escaping @MainActor () -> Bool = { true }) {
         theme = ThemeSettingsModel(
             store: ThemeSettingsStore(namespace: namespace)
         )
@@ -33,7 +33,9 @@ final class PlozziOSSettingsModel {
         )
         cardStyle = CardStyleSettingsModel(
             store: CardStyleSettingsStore(namespace: namespace),
-            focusStore: CardFocusStyleSettingsStore(namespace: namespace)
+            focusStore: CardFocusStyleSettingsStore(namespace: namespace),
+            captionStore: CardCaptionSettingsStore(namespace: namespace),
+            artworkStore: ArtworkSettingsStore(namespace: namespace)
         )
         density = UIDensitySettingsModel(
             store: UIDensitySettingsStore(namespace: namespace)
@@ -41,15 +43,10 @@ final class PlozziOSSettingsModel {
         watchIndicator = WatchStatusIndicatorSettingsModel(
             store: WatchStatusIndicatorSettingsStore(namespace: namespace)
         )
-        let navigationDefault = NavigationLibraryLayout(
-            hiddenKeys: [NavigationLibraryLayout.watchlistKey]
-        )
         navigation = NavigationStyleSettingsModel(
             store: NavigationStyleSettingsStore(namespace: namespace),
-            layoutStore: NavigationLibraryLayoutStore(
-                namespace: namespace,
-                defaultLayout: navigationDefault
-            )
+            layoutStore: NavigationLibraryLayoutStore(namespace: namespace),
+            librariesSnapshotStore: NavigationLibrariesSnapshotStore(namespace: namespace)
         )
         playback = PlaybackSettingsModel(
             store: PlaybackSettingsStore(namespace: namespace)
@@ -81,6 +78,7 @@ final class PlozziOSSettingsModel {
         hero = HeroSettingsModel(
             store: HeroSettingsStore(namespace: namespace)
         )
+        hero.setDiscoveryPolicy(allowsDiscovery)
         heroBackground = HeroBackgroundSettingsModel(
             store: HeroBackgroundSettingsStore(namespace: namespace)
         )

@@ -7,6 +7,13 @@ import ProviderJellyfin
 import ProviderPlex
 import ProviderSilo
 
+private struct WatchlistArtworkRequest: Hashable {
+    let url: URL
+    let accountID: String?
+    let playbackAccountID: String?
+    let maxWidth: Int?
+}
+
 /// The shell-side dependencies the universal watchlist needs.
 ///
 /// This exists because `AppState+UniversalWatchlist.swift` (tvOS) and
@@ -275,6 +282,10 @@ public protocol UniversalWatchlistHost: AnyObject {
     /// prepare.
     func ensureTrackersScopedToActiveProfile() async
 
+    /// False throughout re-scoping, including a return to the same profile.
+    /// Connection callbacks must defer rather than recursively start another scope change.
+    var trackersAreScopedToActiveProfile: Bool { get }
+
     /// Whether the ACTIVE profile is locked and nobody has entered its PIN this
     /// run.
     ///
@@ -289,6 +300,17 @@ public protocol UniversalWatchlistHost: AnyObject {
 }
 
 public extension UniversalWatchlistHost {
+    /// Read on watchlist publication, not on each navigation render. The union's
+    /// cached membership includes native lists and honors explicit removals.
+    var navigationWatchlistHasItems: Bool? {
+        guard runtimeFeatureFlags.isEnabled(.universalWatchlist) else {
+            // The legacy read path has no authoritative empty-list signal here.
+            return true
+        }
+        guard isUniversalWatchlistPresentationReady else { return nil }
+        return !universalWatchlistMembershipIDs.isEmpty
+    }
+
     var isUniversalWatchlistPresentationReady: Bool {
         universalWatchlistNativeViewLoaded
             && universalWatchlistProfileID?
@@ -308,6 +330,36 @@ public extension UniversalWatchlistHost {
             profiles: profiles,
             accountsProviders: accountsProviders
         )
+    }
+
+    private var isUniversalWatchlistReconciliationReady: Bool {
+        guard runtimeFeatureFlags.isEnabled(.universalWatchlist),
+              trackersAreScopedToActiveProfile,
+              universalWatchlistNativeViewLoaded,
+              universalWatchlistReconciler != nil else { return false }
+        return universalWatchlistProfileID == UniversalWatchlistScope.live(
+            profileID: profiles.activeProfileID,
+            identityGeneration: plexWatchlistIdentityGeneration,
+            accountsKey: nativeWatchlistAccounts
+                .map(\.account.id).sorted().joined(separator: ",")
+        )
+    }
+
+    private func mayReadUniversalWatchlist() -> Bool {
+        if activeProfileAwaitsUnlock {
+            PlozzLog.app.info("Watchlist refresh deferred — profile locked")
+        } else if profiles.activeProfile.needsSetup {
+            PlozzLog.app.info("Watchlist refresh deferred — profile awaiting setup")
+        } else if !profiles.actionableIdentityAccountIDs(
+            forProfile: profiles.activeProfileID,
+            importAccountIDs: ProfileServerIdentityPolicy
+                .importPlexAccountIDs(in: nativeWatchlistAccounts)
+        ).isEmpty {
+            PlozzLog.app.info("Watchlist refresh deferred — server awaiting identity")
+        } else {
+            return true
+        }
+        return false
     }
 
     func prepareUniversalWatchlist() async {
@@ -350,11 +402,11 @@ public extension UniversalWatchlistHost {
                 PlozzLog.app.info("Watchlist prepare superseded — profile changed during hydrate")
                 return
             }
-            try await makeUniversalWatchlistReconciler(profileID: profileID)
-            if universalWatchlistShouldResumeAuthentication {
-                universalWatchlistShouldResumeAuthentication = false
-                await resumeUniversalWatchlistAuthentication()
+            guard trackersAreScopedToActiveProfile else {
+                PlozzLog.app.info("Watchlist prepare deferred — trackers still changing profile")
+                return
             }
+            try await makeUniversalWatchlistReconciler(profileID: profileID)
             PlozzLog.app.info(
                 "Watchlist hydrate entries=\(universalWatchlist.activeSnapshot.orderedEntries.count) ms=\(Int(Date().timeIntervalSince(started) * 1000))"
             )
@@ -368,30 +420,15 @@ public extension UniversalWatchlistHost {
                 PlozzLog.app.info("Watchlist refresh superseded — profile changed before refresh")
                 return
             }
-            let profile = profiles.activeProfile
-            if activeProfileAwaitsUnlock {
-                // Nobody has proved this profile's PIN. Its own watchlist is
-                // still its own, so this isn't a leak between profiles — but
-                // fetching and reconciling it is work done on behalf of someone
-                // who hasn't shown they're allowed to be here, and it lands
-                // behind a lock screen where it can't be seen anyway. The picker
-                // is in front; this resumes when a profile is actually chosen.
-                PlozzLog.app.info("Watchlist refresh deferred — profile locked")
-            } else if profile.needsSetup {
-                PlozzLog.app.info("Watchlist refresh deferred — profile awaiting setup")
-            } else if !profiles.actionableIdentityAccountIDs(
-                forProfile: profileID,
-                importAccountIDs: ProfileServerIdentityPolicy
-                    .importPlexAccountIDs(in: nativeWatchlistAccounts)
-            ).isEmpty {
-                // A server was switched on and nobody has said who this profile
-                // is there yet. Reading it now reads it as the account OWNER and
-                // shows their watchlist — the same leak setup defers, arriving
-                // through a later door. See `Profile.accountsAwaitingIdentity`.
-                PlozzLog.app.info("Watchlist refresh deferred — server awaiting identity")
-            } else {
-                await refreshNativeWatchlistView()
+            guard isUniversalWatchlistReconciliationReady,
+                  mayReadUniversalWatchlist() else { return }
+            if universalWatchlistShouldResumeAuthentication {
+                await resumeUniversalWatchlistAuthentication()
             }
+            guard profiles.activeProfileID == profileID,
+                  isUniversalWatchlistReconciliationReady,
+                  mayReadUniversalWatchlist() else { return }
+            await refreshNativeWatchlistView()
         } catch {
             PlozzLog.app.error("Watchlist local preparation failed")
         }
@@ -537,9 +574,27 @@ public extension UniversalWatchlistHost {
             // library film watchlisted in Plozz appears in no other Home row, so
             // without this it renders as "not in your library" while sitting in it.
             indexedSources: identityIndex.identitySourcesProvider,
-            capabilities: .detected()
+            capabilities: .detected(),
+            localPresentationScope: universalWatchlistPresentationScope
         ).map(\.item)) ?? []
         return resolved
+    }
+
+    private var universalWatchlistPresentationScope: String {
+        let accounts = accountsProviders.resolvedActiveAccounts.map(\.account)
+        let accountsKey = accounts.map { account in
+            let fields = [
+                account.id, account.server.id, account.server.provider.rawValue,
+                account.server.baseURL.absoluteString, account.userID,
+                accountsProviders.credentialRevision(account).rawValue.uuidString
+            ]
+            return fields.map { "\($0.utf8.count):\($0)" }.joined()
+        }.sorted().joined(separator: "|")
+        return UniversalWatchlistScope.live(
+            profileID: profiles.activeProfileID,
+            identityGeneration: plexWatchlistIdentityGeneration,
+            accountsKey: accountsKey + "#" + profiles.activeProfile.plexPlaybackIdentityKey(for: accounts)
+        )
     }
 
     /// Re-signs last-known artwork for this process without a network lookup.
@@ -588,15 +643,37 @@ public extension UniversalWatchlistHost {
                 accountsProviders.provider(forAccountID: accountID)
         }
 
+        // Only reuse work within this synchronous batch. The next publication
+        // must resolve current profile/provider credentials again.
+        var sanitizedKeys: [URL: String] = [:]
+        func artworkKey(_ url: URL) -> String {
+            if let key = sanitizedKeys[url] { return key }
+            let key = SyncURLSanitizer.sanitize(url).absoluteString
+            sanitizedKeys[url] = key
+            return key
+        }
+        var discoverURLs: [WatchlistArtworkRequest: URL?] = [:]
+        var localURLs: [WatchlistArtworkRequest: (url: URL, accountID: String)?] = [:]
+
         return items.map { persistedItem in
             var item = persistedItem
             var rehydratedArtworkSources: [(URL, String)] = []
 
-            func rehydratedDiscoverURL(_ url: URL?) -> URL? {
+            @MainActor func rehydratedDiscoverURL(_ url: URL?) -> URL? {
                 guard let url else { return nil }
                 let accountID =
-                    item.artworkSourceAccountID(for: url)
+                    item.artworkSourceAccountIDsByURL[artworkKey(url)]
                     ?? item.sourceAccountID
+                let request = WatchlistArtworkRequest(
+                    url: url, accountID: accountID, playbackAccountID: nil, maxWidth: nil
+                )
+                if let cached = discoverURLs[request] {
+                    if let cached, let accountID {
+                        rehydratedArtworkSources.append((cached, accountID))
+                    }
+                    return cached ?? url
+                }
+                discoverURLs.updateValue(nil, forKey: request)
                 guard let accountID,
                       let signer = discoverSigners.first(where: {
                           $0.accountID == accountID
@@ -607,6 +684,7 @@ public extension UniversalWatchlistHost {
                     url,
                     discoverToken: signer.token
                 ) else { return url }
+                discoverURLs[request] = signed
                 rehydratedArtworkSources.append((signed, accountID))
                 return signed
             }
@@ -637,13 +715,10 @@ public extension UniversalWatchlistHost {
                 return person
             }
 
-            func finalizedItem() -> MediaItem {
+            @MainActor func finalizedItem() -> MediaItem {
                 var result = item
                 for (url, accountID) in rehydratedArtworkSources {
-                    result.recordArtworkSource(
-                        accountID: accountID,
-                        for: [url]
-                    )
+                    result.artworkSourceAccountIDsByURL[artworkKey(url)] = accountID
                 }
                 return result
             }
@@ -657,12 +732,24 @@ public extension UniversalWatchlistHost {
                 providersByAccountID[$0]
             }
 
-            func reauthenticatedLocalURL(
+            @MainActor func reauthenticatedLocalURL(
                 _ url: URL?,
                 maxWidth: Int?
             ) -> URL? {
                 guard let url else { return nil }
-                if let accountID = item.artworkSourceAccountID(for: url) {
+                let artworkAccountID = item.artworkSourceAccountIDsByURL[artworkKey(url)]
+                let request = WatchlistArtworkRequest(
+                    url: url, accountID: artworkAccountID,
+                    playbackAccountID: playbackAccountID, maxWidth: maxWidth
+                )
+                if let cached = localURLs[request] {
+                    if let cached {
+                        rehydratedArtworkSources.append((cached.url, cached.accountID))
+                    }
+                    return cached?.url
+                }
+                localURLs.updateValue(nil, forKey: request)
+                if let accountID = artworkAccountID {
                     guard let provider = providersByAccountID[accountID],
                           provider.ownsPersistedImageURL(url)
                     else { return nil }
@@ -670,6 +757,7 @@ public extension UniversalWatchlistHost {
                         url,
                         maxWidth: maxWidth
                     ) else { return nil }
+                    localURLs[request] = (signed, accountID)
                     rehydratedArtworkSources.append((signed, accountID))
                     return signed
                 }
@@ -701,6 +789,7 @@ public extension UniversalWatchlistHost {
                     url,
                     maxWidth: maxWidth
                 ) else { return nil }
+                localURLs[request] = (signed, owners[0].accountID)
                 rehydratedArtworkSources.append((
                     signed,
                     owners[0].accountID
@@ -860,8 +949,8 @@ public extension UniversalWatchlistHost {
         guard runtimeFeatureFlags.isEnabled(.universalWatchlist),
               item.kind == .movie || item.kind == .series else { return false }
         let profileID = profiles.activeProfileID
-        guard profileID == profiles.activeProfileID,
-              let evidence = universalWatchlistEvidence(for: item)
+        let presentationScope = universalWatchlistPresentationScope
+        guard let evidence = universalWatchlistEvidence(for: item)
         else { return false }
         do {
             let aliasID = try await mediaAliasLedger.resolveOrCreate(
@@ -869,6 +958,11 @@ public extension UniversalWatchlistHost {
                 evidence: evidence,
                 preferredAliasID: universalWatchlistPreferredAliasID(for: item)
             )
+            guard profileID == profiles.activeProfileID,
+                  presentationScope == universalWatchlistPresentationScope else {
+                PlozzLog.app.info("Watchlist local mutation dropped — scope changed during identity resolution")
+                return false
+            }
             if adding {
                 try universalWatchlist.add(
                     profileID: profileID,
@@ -876,6 +970,21 @@ public extension UniversalWatchlistHost {
                     kind: item.kind,
                     presentation: evidence.presentation
                 )
+                let activeAccountIDs = Set(
+                    accountsProviders.resolvedActiveAccounts.map(\.account.id)
+                )
+                if let accountID = item.sourceAccountID,
+                   activeAccountIDs.contains(accountID) {
+                    var retained = item
+                    retained.sources.removeAll {
+                        !activeAccountIDs.contains($0.accountID)
+                    }
+                    universalWatchlist.retainLocalPresentation(
+                        retained,
+                        aliasID: aliasID,
+                        scope: presentationScope
+                    )
+                }
             } else {
                 try universalWatchlist.remove(
                     profileID: profileID,
@@ -1097,7 +1206,8 @@ public extension UniversalWatchlistHost {
                     kind: resolved.1.kind,
                     presentation: resolved.1.presentation,
                     presentationAccountID: resolved.1.presentationAccountID,
-                    index: offset
+                    index: offset,
+                    attribution: resolved.1.attribution
                 )
             }
             loadingView.applySuccess(
@@ -1240,7 +1350,8 @@ public extension UniversalWatchlistHost {
                     // the badge flip now but left Discover artwork on screen
                     // until a later Home rebuild happened to find the full local
                     // MediaItem.
-                    ownedPresentation: owned?.presentation
+                    ownedPresentation: owned?.presentation,
+                    attribution: entry.attribution
                 ) else { continue }
                 entries.append(value)
             }
@@ -1973,10 +2084,50 @@ public extension UniversalWatchlistHost {
     }
 
     func resumeUniversalWatchlistAuthentication() async {
-        guard let reconciler = universalWatchlistReconciler else { return }
-        _ = try? await reconciler.resumeAuthentication()
-        _ = await reconciler.drain(profileID: profiles.activeProfileID)
+        universalWatchlistShouldResumeAuthentication = true
+        guard isUniversalWatchlistReconciliationReady,
+              mayReadUniversalWatchlist(),
+              let reconciler = universalWatchlistReconciler else { return }
+        let profileID = profiles.activeProfileID
+        do {
+            _ = try await reconciler.resumeAuthentication()
+        } catch {
+            PlozzLog.app.error("Watchlist authentication resume failed")
+            return
+        }
+        guard profiles.activeProfileID == profileID,
+              universalWatchlistReconciler === reconciler,
+              isUniversalWatchlistReconciliationReady,
+              mayReadUniversalWatchlist() else { return }
+        universalWatchlistShouldResumeAuthentication = false
+        _ = await reconciler.drain(profileID: profileID)
+        guard profiles.activeProfileID == profileID,
+              universalWatchlistReconciler === reconciler,
+              isUniversalWatchlistReconciliationReady,
+              mayReadUniversalWatchlist() else { return }
         await universalWatchlistRetryScheduler?.reschedule()
+    }
+
+    func trackerWatchlistConnectionChanged(destination: any WatchlistDestination) async {
+        universalWatchlistShouldResumeAuthentication = true
+        guard isUniversalWatchlistReconciliationReady,
+              let reconciler = universalWatchlistReconciler else {
+            PlozzLog.app.info("Watchlist connection refresh deferred — scope not ready")
+            return
+        }
+        let profileID = profiles.activeProfileID
+        var view = universalWatchlistNativeView
+        view.discardCachedEntries(
+            for: destination.id, unlessIdentityScopeMatches: destination.cacheIdentityScope
+        )
+        persistUniversalWatchlistNativeView(view)
+        announceUniversalWatchlistDidChange()
+        await resumeUniversalWatchlistAuthentication()
+        guard profiles.activeProfileID == profileID,
+              universalWatchlistReconciler === reconciler,
+              isUniversalWatchlistReconciliationReady,
+              mayReadUniversalWatchlist() else { return }
+        await refreshNativeWatchlistView()
     }
 
     /// Tell every surface the watchlist moved, and drop the memoized membership

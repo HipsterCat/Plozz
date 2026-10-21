@@ -44,7 +44,7 @@ public final class CloudSyncUIModel {
 // to the mirror, so the observation-driven re-publish it triggers is a no-op.
 extension AppState {
 
-    private static let cloudContainerIdentifier = "iCloud.com.thatcube.Plozz"
+    private static let cloudContainerIdentifier = AppInstallation.current.cloudContainerIdentifier
 
     /// A writable directory for the sync state, robust across platforms. Tries
     /// Application Support (iOS), then Caches (tvOS's reliably-writable area), then
@@ -77,6 +77,7 @@ extension AppState {
     /// `UserDefaults` (thread-safe) so it needs no main-actor hop. Returns `nil`
     /// only if no writable state location exists.
     static func makeCloudSync(for appState: AppState) -> CloudConfigSyncService? {
+        TraktSharedRefreshBootstrap.install(containerIdentifier: cloudContainerIdentifier)
         // tvOS restricts persistent storage — .applicationSupportDirectory often
         // can't be created — so fall back to Caches (CKSyncEngine can rebuild its
         // state if it's ever purged). Per-Apple-TV-user (both dirs are partitioned
@@ -111,6 +112,9 @@ extension AppState {
             },
             applyRecords: { changes in
                 TrackerTokenSyncBridge.apply(changes)
+            },
+            onAccountSwitch: {
+                await TraktSharedRefreshBootstrap.synchronizeKnownAccounts()
             }
         )
 
@@ -125,6 +129,7 @@ extension AppState {
                 guard let appState else { return }
                 await appState.traktService.refreshStatus()
                 await appState.simklService.refreshStatus()
+                await appState.wetrakrService.refreshStatus()
                 await appState.anilistService.refreshStatus()
                 await appState.malService.refreshStatus()
             }
@@ -135,11 +140,16 @@ extension AppState {
         SyncedTokenRegistry.shared.setChangeHandler { [weak appState] in
             Task { await appState?.cloudSync?.publishLocalChanges() }
         }
+        Task { await TraktSharedRefreshBootstrap.synchronizeKnownAccounts() }
 
         var channels = [mediaChannel, trackerTokenChannel]
         channels.append(Self.makeLiveTVSyncChannel(
             bridge: appState.liveTVPortableSync,
             stateFileURL: syncDir.appendingPathComponent("cloud-live-tv-state-v1.json")
+        ))
+        channels.append(Self.makeLiveTVSourceSyncChannel(
+            bridge: appState.liveTVPortableSync?.sourceSync,
+            stateFileURL: syncDir.appendingPathComponent("cloud-live-tv-sources-v1.sealed")
         ))
         appState.observeLiveTVPortableSync()
         return CloudConfigSyncService(.init(
@@ -201,7 +211,7 @@ extension AppState {
     /// no code, no QR. Mirrors the iOS source-side behavior so a TV can set up a phone.
     public func checkForSyncSetupOffer() {
         guard SyncSetupFeatureFlag().isEnabled,
-              !isAutoAdoptingSyncSetup,
+              !isPresentingSyncSetup,
               cloudSyncUI.pendingSyncSetupOffer == nil else { return }
         let localIDs = Set(accountsProviders.accounts.map(\.id))
         guard !localIDs.isEmpty else { return }   // nothing to give
@@ -220,26 +230,12 @@ extension AppState {
         cloudSyncUI.pendingSyncSetupOffer = offer
     }
 
-    /// The user confirmed — push config + credentials to the offered device over the
-    /// local pairing channel (pinned key ⇒ no SAS, no typing).
-    public func confirmSyncSetupOffer() {
-        guard !profileFlow.managementRequiresParentalPIN else { return }
-        guard let offer = cloudSyncUI.pendingSyncSetupOffer else { return }
-        cloudSyncUI.pendingSyncSetupOffer = nil
-        isAutoAdoptingSyncSetup = true
-        let model = SyncSetupPairingModel(service: syncSetup)
-        Task { @MainActor in
-            await model.adopt(offer)
-            isAutoAdoptingSyncSetup = false
+    /// The user closed this offer's flow. Do not discard a newer, unseen request.
+    public func declineSyncSetupOffer(_ offer: SyncPairingRendezvous) {
+        dismissedSyncSetupOfferKeys.insert(Self.syncSetupOfferKey(offer))
+        if cloudSyncUI.pendingSyncSetupOffer == offer {
+            cloudSyncUI.pendingSyncSetupOffer = nil
         }
-    }
-
-    /// The user declined — don't re-prompt for this exact offer this session.
-    public func declineSyncSetupOffer() {
-        if let offer = cloudSyncUI.pendingSyncSetupOffer {
-            dismissedSyncSetupOfferKeys.insert(Self.syncSetupOfferKey(offer))
-        }
-        cloudSyncUI.pendingSyncSetupOffer = nil
     }
 
     private static func syncSetupOfferKey(_ offer: SyncPairingRendezvous) -> String {
@@ -284,7 +280,10 @@ extension AppState {
     public func resetCloudSync() {
         let config = cloudSync
         Task {
-            await config?.resetAndReseed()
+            await CloudSyncRecoveryFeedback.run(.reset, status: cloudSyncStatus, presenter: transientStatusPresenter) {
+                guard let config else { return .unavailable }
+                return await config.resetAndReseed()
+            }
         }
     }
 
@@ -293,39 +292,60 @@ extension AppState {
     public func redownloadCloudSync() {
         let config = cloudSync
         Task {
-            await config?.redownloadFromCloud()
+            await CloudSyncRecoveryFeedback.run(.reload, status: cloudSyncStatus, presenter: transientStatusPresenter) {
+                guard let config else { return .unavailable }
+                return await config.redownloadFromCloud()
+            }
         }
     }
 
-    /// DEBUG: nuke the ENTIRE household from iCloud so you can test a true cold start
-    /// (e.g. "set up only on this Apple TV, then fresh-install another device"). Unlike
-    /// `resetCloudSync` (which deletes then immediately RE-uploads from this device),
-    /// this deletes and does NOT republish, then takes this device out of sync so it
-    /// can't refill iCloud. It:
-    ///   1. deletes every CloudKit config + removal-tombstone record (flushed to peers
-    ///      as normal deletions, so their synced view empties too);
-    ///   2. wipes this device's local roster/profiles/sync bookkeeping (first-run);
-    ///   3. turns iCloud Sync OFF here so this device stays out of the household until
-    ///      you re-enable it — leaving iCloud genuinely empty for the next publisher.
-    /// tvOS holds no synchronizable iCloud-Keychain logins (that channel is iOS-only),
-    /// so there are none to purge here.
-    public func eraseEverythingFromICloudForDebugging() {
-        let config = cloudSync
+    public func eraseCloudSyncData() {
+        let profileID = profilesModel.activeProfileID
         Task { @MainActor in
-            await config?.deleteAllServerData()
-            resetLiveTVPortableSync()
-            for profileID in profilesModel.profiles.map(\.id) {
-                do {
-                    try await mediaAliasLedger.removeProfile(profileID)
-                    try universalWatchlist.removeProfile(profileID)
-                } catch {
-                    PlozzLog.sync.error(
-                        "Media aliases: debug reset failed for one profile: \(error.localizedDescription)"
-                    )
-                }
+            await CloudSyncRecoveryFeedback.run(.erase, status: cloudSyncStatus, presenter: transientStatusPresenter) {
+                await self.performCloudSyncErasure(profileID: profileID)
             }
-            resetToFirstRunForDebugging()         // step 2
-            setSyncSetupEnabled(false)            // step 3
+        }
+    }
+
+    private func performCloudSyncErasure(profileID: String) async -> CloudSyncRecoveryResult {
+        let authorized: @Sendable () async -> Bool = { @MainActor [weak self] in
+            guard let self else { return false }
+            return self.profilesModel.activeProfileID == profileID
+                && !self.profilesModel.activeProfile.isKids
+                && !self.profileFlow.managementRequiresParentalPIN
+        }
+        guard await authorized(), let config = cloudSync else { return .unavailable }
+        let result = await config.eraseAllServerData(
+            trackerStores: TrackerTokenSyncBridge.erasureStores(profileNamespaces: profilesModel.profiles.map {
+                $0.settingsNamespace(isDefault: profilesModel.isDefault($0))
+            }),
+            authorized: authorized,
+            stopSync: { @MainActor in self.setSyncSetupEnabled(false) }
+        )
+        guard result == .completed else { return result }
+        guard await authorized() else { return .interrupted }
+        do {
+            try TrackerTokenSyncBridge.eraseLocalTokens()
+            try LiveTVSourceStorage.eraseAllSources()
+            for id in profilesModel.profiles.map(\.id) {
+                guard await authorized() else { return .interrupted }
+                try await mediaAliasLedger.removeProfile(id)
+                try universalWatchlist.removeProfile(id)
+            }
+            guard await authorized() else { return .interrupted }
+            resetLiveTVPortableSync()
+            var pending = PendingSyncedServersStore()
+            pending.removeAll()
+            var removed = RemovedAccountsStore()
+            removed.removeAll()
+            HouseholdDevicesStore().removeAll()
+            cloudSyncUI.pendingSyncedServers = []
+            cloudSyncUI.pendingServerPrompt = nil
+            return resetToFirstRunForDebugging(afterSyncErasure: true) ? .completed : .failed
+        } catch {
+            PlozzLog.sync.error("iCloud data erased, but local reset failed (code \((error as NSError).code))")
+            return .failed
         }
     }
 
@@ -338,7 +358,7 @@ extension AppState {
     /// invariant). NEVER tokens; NOT the device-local active-profile selection.
     public func captureSyncRecords(fallback: [SyncRecordID: Data]) -> [SyncRecordID: Data] {
         var out: [SyncRecordID: Data] = [:]
-        let localProfileIDs = Set(profilesModel.profiles.map(\.id))
+        let localProfileIDs = Set(profilesModel.profilesForSync.map(\.id))
 
         // Descriptors: this device's signed-in accounts PLUS the ones it has synced
         // but isn't signed into (pending). H2: keep the last-synced bytes when the
@@ -362,16 +382,13 @@ extension AppState {
                 out[SyncRecordKey(kind: .removal, id: id).recordName] = data
             }
         }
-        // Profiles (default ALWAYS included ⇒ never sync-deleted), their membership,
-        // and per-key settings.
-        for p in profilesModel.profiles {
+        // The surviving profiles, their membership, and per-key settings.
+        for p in profilesModel.profilesForSync {
             if let data = CanonicalJSON.encode(ProfileSyncDTO(profile: p)) {
                 out[SyncRecordKey(kind: .profile, id: p.id).recordName] = data
             }
-            if let ids = profilesModel.storedActiveAccountIDs(for: p.id),
-               let data = CanonicalJSON.encode(ids.sorted()) {
-                out[SyncRecordKey(kind: .membership, id: p.id).recordName] = data
-            }
+            let membershipKey = SyncRecordKey(kind: .membership, id: p.id).recordName
+            out[membershipKey] = profilesModel.captureAccountMembership(for: p.id, fallback: fallback[membershipKey])
             let ns = p.settingsNamespace(isDefault: profilesModel.isDefault(p))
             for (baseKey, blob) in ProfileSettingsTransfer.capture(namespace: ns) {
                 out[SyncRecordKey(kind: .setting, id: p.id, subkey: baseKey).recordName] = blob
@@ -521,7 +538,7 @@ extension AppState {
 
         accountsProviders.applySyncedMediaShareLibraries(receivedDescriptors)
 
-        // 1. Profiles: cosmetic upserts + deletions (default never deleted).
+        // 1. Profiles: cosmetic upserts + authoritative deletions.
         // Accounts this device KNOWS aren't Plex. Synced ids for servers not
         // signed in here have an unknown provider, and are deliberately treated
         // as possibly-Plex — see `noteIdentityQuestions`.
@@ -541,8 +558,7 @@ extension AppState {
         // parental gate can only tell that happened if it knows where we were.
         let outgoingProfile = profilesModel.activeProfile
         if !profileUpserts.isEmpty || !profileDeletes.isEmpty {
-            for profileID in profileDeletes
-            where profileID != ProfileStore.defaultProfileID {
+            for profileID in profileDeletes {
                 removeMediaAliases(forProfileID: profileID)
             }
             profilesModel.applySyncedProfileDTOs(profileUpserts, deletions: profileDeletes)
@@ -691,6 +707,7 @@ extension AppState {
 
     /// Activate the engine (if enabled) and start observing local config changes.
     func startCloudSyncIfEnabled() {
+        TraktSharedRefreshBootstrap.install(containerIdentifier: Self.cloudContainerIdentifier)
         guard SyncSetupFeatureFlag().isEnabled else { return }
         // Never start a real CloudKit engine inside a unit-test host. xctest runs
         // without the app's iCloud entitlement, so CloudKit traps (SIGTRAP) the
@@ -758,6 +775,10 @@ extension AppState {
     /// starts observing; disabling stops publishing but NEVER deletes the shared
     /// cloud config (other devices keep syncing).
     public func setSyncSetupEnabled(_ on: Bool) {
+        guard !on || !cloudSyncStatus.isRecovering else {
+            PlozzLog.sync.info("iCloud Sync cannot be enabled during recovery")
+            return
+        }
         syncSetup.setEnabled(on)
         let config = cloudSync
         guard let config else { return }
@@ -860,12 +881,13 @@ extension AppState {
     func captureMediaStateSyncRecords(
         fallback: [SyncRecordID: Data]
     ) async -> [SyncRecordID: Data] {
+        var captured = fallback
         do {
-            var captured = try await mediaAliasLedger.captureAllAliasSyncRecords(
-                profileIDs: profilesModel.profiles.map(\.id),
+            captured = try await mediaAliasLedger.captureAllAliasSyncRecords(
+                profileIDs: profilesModel.profilesForSync.map(\.id),
                 fallback: fallback
             )
-            for profile in profilesModel.profiles {
+            for profile in profilesModel.profilesForSync {
                 try universalWatchlist.hydrate(profileID: profile.id)
                 captured.merge(
                     try universalWatchlist.captureSyncRecords(
@@ -875,12 +897,17 @@ extension AppState {
                     uniquingKeysWith: { _, watchlist in watchlist }
                 )
             }
-            return captured
         } catch {
             PlozzLog.sync.error(
                 "Media aliases: capture failed; preserving sync baseline: \(error.localizedDescription)"
             )
-            return fallback
+            captured = fallback
+        }
+        let pending = profilesModel.pendingSyncedDeletionProfileIDs
+        return captured.filter { name, _ in
+            let profileID = MediaStateRecordKey.parse(name)?.profileID
+                ?? WatchlistMediaStateRecordKey.parse(name)?.profileID
+            return profileID.map { !pending.contains($0) } ?? true
         }
     }
 

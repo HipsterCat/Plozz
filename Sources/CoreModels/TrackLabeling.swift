@@ -75,10 +75,10 @@ public enum TrackLabeling {
     /// Hearing-impaired / SDH heuristic from a provider title (we have no flag).
     public static func isHearingImpaired(_ title: String?) -> Bool {  // l10n:content — `title` is a provider track title
         let token = (title ?? "").lowercased()
-        return token.contains("sdh")
-            || token.contains("hearing impaired")
-            || token.contains("hard of hearing")
-            || token.range(of: #"(^|\W)cc(\W|$)"#, options: .regularExpression) != nil
+        let words = token.split { !$0.isLetter && !$0.isNumber }
+        let phrase = words.joined(separator: " ")
+        return words.contains("sdh") || words.contains("cc") || words.contains("hoh")
+            || phrase.contains("hearing impaired") || phrase.contains("hard of hearing")
     }
 
     /// A short, human audio **format** hint from codec + channel layout, e.g.
@@ -346,6 +346,12 @@ public struct TrackLabel: Equatable, Sendable {
 // MARK: - Enriching demuxer tracks with provider metadata
 
 public extension MediaTrack {
+    /// Flags and explicit track titles both describe accessibility; a missing
+    /// server flag must not discard a container's SDH label.
+    var isSDHSubtitle: Bool {
+        kind == .subtitle && (isHearingImpaired || TrackLabeling.isHearingImpaired(displayTitle))
+    }
+
     /// Returns a copy of this demuxer/engine track enriched with metadata from a
     /// matching provider track (the media server's probe of the *same* file).
     ///

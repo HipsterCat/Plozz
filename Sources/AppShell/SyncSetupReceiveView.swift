@@ -1,6 +1,5 @@
 #if os(tvOS)
 import SwiftUI
-import CoreImage.CIFilterBuiltins
 import CoreModels
 import PlozzCoreUI
 import FeatureProfiles
@@ -45,28 +44,23 @@ struct SyncSetupReceiveView: View {
             case .idle:
                 ProgressView()
             case .waitingForPeer(let code, let invite):
-                Text("Set up from another device").font(.largeTitle.bold())
-                    .foregroundStyle(palette.primaryText)
+                OnboardingHeader(Text("Set up from another device"))
                 HStack(alignment: .center, spacing: 60) {
-                    if let img = Self.qrImage(invite.encoded()) {
-                        VStack(spacing: 12) {
-                            Image(uiImage: img).interpolation(.none).resizable()
-                                .frame(width: 340, height: 340)
-                                .padding(18).background(.white).cornerRadius(16)
-                            Text("Scan with your phone or tablet").font(.callout)
-                                .foregroundStyle(palette.secondaryText)
-                        }
+                    VStack(spacing: 12) {
+                        QRCodeView(invite.encoded())
+                            .frame(width: 340, height: 340)
+                            .padding(18).background(.white).cornerRadius(16)
+                        Text("Scan with your phone or tablet").font(.callout)
+                            .foregroundStyle(palette.secondaryText)
                     }
                     VStack(spacing: 10) {
                         Text("or enter code").font(.callout).foregroundStyle(palette.secondaryText)
-                        Text(SyncPairingCode.grouped(code))
-                            .font(.system(size: 56, weight: .bold, design: .rounded)).monospaced()
-                            .foregroundStyle(palette.primaryText)
+                        ConnectionCodeView(SyncPairingCode.grouped(code), size: 64)
                         Text("on another device").font(.callout).foregroundStyle(palette.secondaryText)
                     }
                 }
-                Text("On your other device, open Plozz ▸ Settings ▸ Sync & Setup ▸ “Set up another device.”")
-                    .font(.headline).foregroundStyle(palette.secondaryText)
+                Text("On your other device, open Settings > iCloud Sync > Set Up Another Device.")
+                    .font(.callout).foregroundStyle(palette.secondaryText)
                     .multilineTextAlignment(.center).frame(maxWidth: 900)
             case .applying:
                 if let sas = model.hostSASCode {
@@ -91,7 +85,14 @@ struct SyncSetupReceiveView: View {
                 Button("Cancel", role: .cancel) { onClose() }.padding(.top, 12)
             }
         }
-        .padding(70)
+        .padding(.horizontal, 70)
+        .padding(.top, summaryIsVisible ? 0 : 70)
+        .padding(.bottom, summaryIsVisible ? 24 : 70)
+    }
+
+    private var summaryIsVisible: Bool {
+        if case .applied = model.phase { return true }
+        return false
     }
 
     // MARK: Verification code (SAS) — shown so the user can confirm both devices
@@ -99,16 +100,7 @@ struct SyncSetupReceiveView: View {
 
     @ViewBuilder
     private func sasComparison(_ code: String) -> some View {
-        VStack(spacing: 24) {
-            Text("Check this code").font(.largeTitle.bold())
-                .foregroundStyle(palette.primaryText)
-            Text(SyncPairingSAS.grouped(code))
-                .font(.system(size: 84, weight: .bold, design: .rounded)).monospaced()
-                .foregroundStyle(palette.primaryText)
-            Text("Make sure the same number shows on your other device, then confirm there.")
-                .font(.headline).foregroundStyle(palette.secondaryText)
-                .multilineTextAlignment(.center).frame(maxWidth: 900)
-        }
+        SetupCodeComparisonView(code: SyncPairingSAS.grouped(code))
     }
 
     // MARK: Applied summary (app design language — provider logos + profiles)
@@ -121,64 +113,16 @@ struct SyncSetupReceiveView: View {
         ).map(\.id))
         let profiles = received.config.profiles.map(\.profile)
 
-        ScrollView {
-            VStack(spacing: 40) {
-                Text(pendingIDs.isEmpty ? "You’re all set" : "Set Up This Device")
-                    .font(.largeTitle.bold()).foregroundStyle(palette.primaryText)
-                    .padding(.top, 12)
-
-            // Stacked full-width cards so a long profiles list can't squeeze the
-            // servers card. Each card wraps its items into a grid so any count fits.
-            VStack(spacing: 28) {
-                if !servers.isEmpty {
-                    summarySection(title: servers.count == 1 ? "Server" : "Servers") {
-                        LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 300), spacing: 24, alignment: .leading)],
-                            alignment: .leading, spacing: 18
-                        ) {
-                            ForEach(servers) { server in
-                                HStack(spacing: 16) {
-                                    ProviderBrandMark(
-                                        provider: server.provider, size: 44,
-                                        mediaShareTransport: server.mediaShareTransportKind)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(server.serverName)
-                                            .font(.title3.weight(.semibold))
-                                            .foregroundStyle(palette.primaryText)
-                                            .lineLimit(1).minimumScaleFactor(0.7)
-                                        Text(pendingIDs.contains(server.id) ? "Needs sign-in" : "Signed in")
-                                            .font(.callout).foregroundStyle(palette.secondaryText)
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                            }
-                        }
-                    }
-                }
-                if !profiles.isEmpty {
-                    summarySection(title: profiles.count == 1 ? "Profile" : "Profiles") {
-                        ProfileSummaryGrid(
-                            profiles: profiles,
-                            avatarSize: 92,
-                            itemWidth: 132,
-                            spacing: 24,
-                            nameFont: .callout
-                        )
-                        .foregroundStyle(palette.primaryText)
-                    }
-                }
-            }
-            .frame(maxWidth: 1240)
-
-            if !pendingIDs.isEmpty {
-                Text("Finish signing in to the remaining servers in Settings > iCloud Sync.")
-                    .font(.callout).foregroundStyle(palette.secondaryText)
-                    .multilineTextAlignment(.center)
-            }
-            Button(pendingIDs.isEmpty ? "Start Watching" : "Continue") {
+        SetupSummaryView(
+            title: pendingIDs.isEmpty ? "You’re all set" : "Set Up This Device",
+            serverGroups: SyncedServerAccountGroup.groups(from: servers),
+            pendingIDs: pendingIDs, profileCount: profiles.count,
+            actionTitle: pendingIDs.isEmpty ? "Start Watching" : "Continue",
+            onAction: {
                 guard !didApply else { return }
                 didApply = true
                 let outcome = appState.applyReceivedSetup(received)
+                model.recordApplication(outcome)
                 if outcome.isTotalCredentialFailure {
                     didApply = false   // allow a retry
                     applyError = "Couldn’t finish signing in on this Apple TV. Check both devices are on the same Wi-Fi and try again."
@@ -186,38 +130,13 @@ struct SyncSetupReceiveView: View {
                     onClose()
                 }
             }
-            .font(.title3.weight(.semibold))
+        ) {
+            ProfileSummaryGrid(
+                profiles: profiles, avatarSize: 80, itemWidth: 152, spacing: 24,
+                nameFont: .caption, nameLineLimit: nil, focusableProfiles: true
+            )
+            .foregroundStyle(palette.primaryText)
         }
-        .frame(maxWidth: .infinity)
-        }
-    }
-
-    @ViewBuilder
-    private func summarySection<Content: View>(
-        title: LocalizedStringResource, @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text(title).textCase(.uppercase)
-                .font(.caption.weight(.semibold)).tracking(1.5)
-                .foregroundStyle(palette.secondaryText)
-            content()
-        }
-        .padding(28)
-        .background(palette.cardSurface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(palette.cardBorder, lineWidth: 1)
-        )
-    }
-
-    static func qrImage(_ string: String) -> UIImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(string.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 12, y: 12)) else { return nil }
-        let context = CIContext()
-        guard let cg = context.createCGImage(output, from: output.extent) else { return nil }
-        return UIImage(cgImage: cg)
     }
 }
 #endif

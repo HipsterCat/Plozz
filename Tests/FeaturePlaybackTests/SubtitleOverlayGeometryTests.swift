@@ -4,6 +4,107 @@ import XCTest
 @testable import FeaturePlayback
 
 final class SubtitleOverlayGeometryTests: XCTestCase {
+    func testStretchedBitmapAvoidanceUsesTheSameMappingAsTheRenderedArtwork() throws {
+        let bitmap = try XCTUnwrap(CGContext(
+            data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )?.makeImage())
+        let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let controls = [CGRect(x: 0, y: 900, width: 1920, height: 180)]
+        var image = SubtitleImage(
+            cgImage: bitmap, normalizedRect: CGRect(x: 0.2, y: 0.78, width: 0.6, height: 0.1),
+            canvasSize: CGSize(width: 800, height: 600)
+        )
+        let actualFrame = SubtitleOverlayGeometry.bitmapRect(
+            normalizedRect: image.normalizedRect, canvasSize: image.canvasSize,
+            videoRect: bounds, sourceAspectRatio: 4 / 3
+        )
+        let automatic = SubtitleOverlayGeometry.bitmapOffset(
+            for: image, videoRect: bounds, controls: controls, bounds: bounds, sourceAspectRatio: 4 / 3
+        )
+        XCTAssertEqual(automatic, 900 - SubtitleOverlayGeometry.controlsClearance - actualFrame.maxY, accuracy: 0.001)
+        let envelope = CGRect(x: 0.1, y: 0.72, width: 0.8, height: 0.2)
+        image.controlAvoidance = .lowerRegion(envelope: envelope, minimumY: 0.4)
+        let region = SubtitleOverlayGeometry.bitmapRect(
+            normalizedRect: envelope, canvasSize: image.canvasSize,
+            videoRect: bounds, sourceAspectRatio: 4 / 3
+        )
+        let lower = SubtitleOverlayGeometry.bitmapOffset(
+            for: image, videoRect: bounds, controls: controls, bounds: bounds, sourceAspectRatio: 4 / 3
+        )
+        XCTAssertEqual(lower, 900 - SubtitleOverlayGeometry.controlsClearance - region.maxY, accuracy: 0.001)
+        XCTAssertEqual(region.minY + lower, 684 - SubtitleOverlayGeometry.controlsClearance, accuracy: 0.001)
+        image.controlAvoidance = .fixed
+        XCTAssertEqual(SubtitleOverlayGeometry.bitmapOffset(
+            for: image, videoRect: bounds, controls: controls, bounds: bounds, sourceAspectRatio: 4 / 3
+        ), 0)
+    }
+
+    func testOnlyTheLowerAuthoredRegionMovesAndRestoresAcrossScreenShapes() throws {
+        let bitmap = try XCTUnwrap(CGContext(
+            data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )?.makeImage())
+        for bounds in [
+            CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            CGRect(x: 0, y: 0, width: 844, height: 390),
+            CGRect(x: 0, y: 0, width: 390, height: 844)
+        ] {
+            let video = try XCTUnwrap(SubtitleOverlayGeometry.aspectFitRect(in: bounds, aspectRatio: 16.0 / 9))
+            let top = SubtitleImage(
+                cgImage: bitmap, normalizedRect: CGRect(x: 0.1, y: 0.05, width: 0.8, height: 0.12),
+                canvasSize: CGSize(width: 1920, height: 1080), controlAvoidance: .fixed
+            )
+            var lower = SubtitleImage(
+                cgImage: bitmap, normalizedRect: CGRect(x: 0.1, y: 0.85, width: 0.8, height: 0.1),
+                canvasSize: CGSize(width: 1920, height: 1080),
+                controlAvoidance: .lowerRegion(
+                    envelope: CGRect(x: 0.1, y: 0.83, width: 0.8, height: 0.14), minimumY: 0.21
+                )
+            )
+            let controls = [CGRect(
+                x: bounds.minX, y: video.minY + video.height * 0.8,
+                width: bounds.width, height: bounds.maxY - (video.minY + video.height * 0.8)
+            )]
+            let lift = SubtitleOverlayGeometry.bitmapOffset(for: lower, videoRect: video, controls: controls, bounds: bounds)
+            XCTAssertLessThan(lift, 0, "bounds=\(bounds) video=\(video)")
+            XCTAssertEqual(SubtitleOverlayGeometry.bitmapOffset(for: top, videoRect: video, controls: controls, bounds: bounds), 0)
+            XCTAssertEqual(SubtitleOverlayGeometry.bitmapOffset(for: lower, videoRect: video, controls: [], bounds: bounds), 0)
+            lower.normalizedRect = lower.normalizedRect.offsetBy(dx: 0, dy: 0.01)
+            XCTAssertEqual(SubtitleOverlayGeometry.bitmapOffset(for: lower, videoRect: video, controls: controls, bounds: bounds), lift,
+                           "Animated ink must not make the control-clearance offset bounce")
+            let raised = SubtitleOverlayGeometry.bitmapRect(
+                normalizedRect: lower.normalizedRect, canvasSize: lower.canvasSize, videoRect: video
+            ).offsetBy(dx: 0, dy: lift)
+            XCTAssertFalse(raised.intersects(controls[0]))
+            XCTAssertTrue(bounds.contains(raised))
+        }
+    }
+
+    func testAuthoredArtworkStaysPutWhenTheOnlyAvailableMoveWouldOverlapTheTop() throws {
+        let bitmap = try XCTUnwrap(CGContext(
+            data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )?.makeImage())
+        let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        var image = SubtitleImage(
+            cgImage: bitmap, normalizedRect: CGRect(x: 0.1, y: 0.8, width: 0.8, height: 0.15),
+            controlAvoidance: .lowerRegion(envelope: CGRect(x: 0.1, y: 0.78, width: 0.8, height: 0.19), minimumY: 0.4)
+        )
+        let controls = [CGRect(x: 0, y: 450, width: 1920, height: 630)]
+        XCTAssertEqual(SubtitleOverlayGeometry.bitmapOffset(for: image, videoRect: bounds, controls: controls, bounds: bounds), 0)
+        image.controlAvoidance = .fixed
+        XCTAssertEqual(SubtitleOverlayGeometry.bitmapOffset(for: image, videoRect: bounds, controls: controls, bounds: bounds), 0)
+        image.controlAvoidance = .automatic
+        XCTAssertEqual(
+            SubtitleOverlayGeometry.bitmapOffset(for: image, videoRect: bounds, controls: controls, bounds: bounds),
+            SubtitleOverlayGeometry.upwardOffset(
+                for: SubtitleOverlayGeometry.bitmapRect(normalizedRect: image.normalizedRect, canvasSize: .zero, videoRect: bounds),
+                avoiding: controls, in: bounds
+            ), "Existing PGS/DVD bitmap behavior is unchanged"
+        )
+    }
+
     func testInfoPillAtTheLeftDoesNotRaiseCenteredTextAboveTheCardClearance() {
         let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let caption = CGRect(x: 800, y: 950, width: 320, height: 70)
@@ -73,16 +174,54 @@ final class SubtitleOverlayGeometryTests: XCTestCase {
         }
     }
 
-    func testOversizedCaptionsRemainInsideTheTopEdgeWhenThereIsTooLittleRoom() {
+    func testOversizedCaptionsUseThePlatformFallbackWhenThereIsTooLittleRoom() {
         let bounds = CGRect(x: 0, y: 0, width: 844, height: 390)
         let subtitle = CGRect(x: 40, y: 120, width: 760, height: 260)
         let lift = SubtitleOverlayGeometry.upwardOffset(
             for: subtitle, avoiding: CGRect(x: 20, y: 220, width: 800, height: 170),
             in: bounds, clearance: 12
         )
+        #if os(iOS)
+        XCTAssertEqual(lift, 0, "Do not partly lift a caption that still cannot clear the controls.")
+        #else
         XCTAssertEqual(lift, -120)
         XCTAssertEqual(subtitle.minY + lift, 0)
+        #endif
     }
+
+    #if os(iOS)
+    func testMobileAvoidanceRestoresTheOriginalPositionIfALaterObstructionCannotBeCleared() {
+        let bounds = CGRect(x: 0, y: 0, width: 956, height: 440)
+        let lower = CGRect(x: 21, y: 350, width: 914, height: 60)
+        let center = CGRect(x: 300, y: 174, width: 356, height: 92)
+        let subtitle = CGRect(x: 350, y: 240, width: 256, height: 170)
+        for controls in [[lower, center], [center, lower]] {
+            XCTAssertEqual(SubtitleOverlayGeometry.upwardOffset(
+                for: subtitle, avoiding: controls, in: bounds
+            ), 0)
+        }
+        let smaller = CGRect(x: 350, y: 310, width: 256, height: 100)
+        let top = CGRect(x: 300, y: 50, width: 356, height: 120)
+        XCTAssertEqual(SubtitleOverlayGeometry.upwardOffset(
+            for: smaller, avoiding: [lower, center, top], in: bounds
+        ), 0, "Fitting above the middle controls is not enough if another visible control occupies that space.")
+    }
+
+    @MainActor
+    func testMobileCenterTransportReservesTheGapBelowItOnlyWhileVisible() {
+        let layout = SubtitleControlsLayout()
+        let center = CGRect(x: 300, y: 174, width: 356, height: 92)
+        layout.setFrame(center, for: .centerTransport)
+        layout.setFrame(CGRect(x: 21, y: 350, width: 914, height: 38), for: .timeline)
+        let subtitle = CGRect(x: 350, y: 295, width: 256, height: 40)
+        let bounds = CGRect(x: 0, y: 0, width: 956, height: 440)
+        let lift = SubtitleOverlayGeometry.upwardOffset(for: subtitle, avoiding: layout.frames, in: bounds)
+        XCTAssertEqual(subtitle.maxY + lift, center.minY - SubtitleOverlayGeometry.controlsClearance)
+        XCTAssertEqual(layout.frame(for: .centerTransport), center, "The measured button row remains its actual size.")
+        layout.setFrame(nil, for: .centerTransport)
+        XCTAssertEqual(SubtitleOverlayGeometry.upwardOffset(for: subtitle, avoiding: layout.frames, in: bounds), 0)
+    }
+    #endif
 
     func testLetterboxedBitmapUsesDisplaySpaceForControlIntersection() throws {
         let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)

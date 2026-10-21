@@ -8,12 +8,25 @@ public struct LiveTVWatchFailure: Identifiable, Equatable, Sendable {
     public let error: LiveTVPlaybackPreparationError
     public let isGuideOnly: Bool
     public let currentToStop: UUID?
+    public let playbackFailure: LiveChannelFailureReport?
+
+    public init(
+        id: UUID, channelID: String, error: LiveTVPlaybackPreparationError,
+        isGuideOnly: Bool, currentToStop: UUID?, playbackFailure: LiveChannelFailureReport? = nil
+    ) {
+        self.id = id
+        self.channelID = channelID
+        self.error = error
+        self.isGuideOnly = isGuideOnly
+        self.currentToStop = currentToStop
+        self.playbackFailure = playbackFailure
+    }
 
     public var message: LocalizedStringResource {
         if isGuideOnly {
             return "This server provides channel listings, but its Live TV playback mode isn't supported yet. You can browse the guide or watch from another source."
         }
-        return error.userDescription
+        return playbackFailure?.message ?? error.userDescription
     }
 }
 
@@ -101,17 +114,23 @@ public final class LiveTVPlaybackCoordinator {
         let task = Task { @MainActor [weak self] in
             guard let self, self.canAutoPreview, self.previewTaskID == id,
                   self.interactionRevision == interaction, !Task.isCancelled else { return false }
-            return await self.preparation.prepare(
-                channel, serverReference: serverReference,
-                isAuthorized: self.authorization(for: channel, reference: serverReference, boundary: boundary)
-            ) { [weak self] in
+            let accepts = { [weak self] in
                 guard let self, self.canAutoPreview, self.previewTaskID == id,
                       self.lifecycle == boundary, self.interactionRevision == interaction,
                       !Task.isCancelled else { return false }
-                let committed = self.preview.commitPreview(request)
-                if !committed { self.model.clearTuneFailure() }
-                return committed
+                return self.preview.canCommitPreview(request)
             }
+            return await self.preparation.prepare(
+                channel, serverReference: serverReference,
+                isAuthorized: self.authorization(for: channel, reference: serverReference, boundary: boundary),
+                commit: { [weak self] in
+                    guard accepts(), let self else { return false }
+                    let committed = self.preview.commitPreview(request)
+                    if !committed { self.model.clearTuneFailure() }
+                    return committed
+                },
+                accept: accepts
+            )
         }
         previewTask = task
         let accepted = await withTaskCancellationHandler {
@@ -282,15 +301,15 @@ public final class LiveTVPlaybackCoordinator {
         return task
     }
 
-    public func playbackFailed(_ id: UUID) {
+    public func playbackFailed(_ id: UUID, report: LiveChannelFailureReport? = nil) {
         guard let current = preparation.current, current.id == id else { return }
         let notify = preview.isExpanded && watchID == nil && !preparation.isPreparing
-        preparation.failCurrent(id: id)
+        preparation.failCurrent(id: id, report: report)
         synchronizePlayerState()
         if notify {
             watchFailure = LiveTVWatchFailure(
                 id: UUID(), channelID: current.channel.id, error: .playbackFailed,
-                isGuideOnly: false, currentToStop: nil
+                isGuideOnly: false, currentToStop: nil, playbackFailure: report
             )
         }
     }
@@ -360,19 +379,25 @@ public final class LiveTVPlaybackCoordinator {
             if isGuideOnly {
                 committed = false
             } else {
-                committed = await self.preparation.prepare(
-                    target.channel, serverReference: target.reference, isAuthorized: authorized
-                ) { [weak self] in
+                let accepts = { [weak self] in
                     guard let self, self.watchID == id, self.isActive, self.isInteractionActive,
                           self.lifecycle == boundary, self.interactionRevision == interaction,
                           !Task.isCancelled else { return false }
-                    self.preview.watch(target.channel.id, origin: target.origin)
-                    guard !self.model.tuneFailed else {
-                        self.model.clearTuneFailure()
-                        return false
-                    }
                     return true
                 }
+                committed = await self.preparation.prepare(
+                    target.channel, serverReference: target.reference, isAuthorized: authorized,
+                    commit: { [weak self] in
+                        guard accepts(), let self else { return false }
+                        self.preview.watch(target.channel.id, origin: target.origin)
+                        guard !self.model.tuneFailed else {
+                            self.model.clearTuneFailure()
+                            return false
+                        }
+                        return true
+                    },
+                    accept: accepts
+                )
             }
             guard self.watchID == id else { return false }
             self.finishWatch(id)

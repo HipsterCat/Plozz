@@ -58,9 +58,10 @@ enum MediaRowEpisodeEntryPolicy {
     }
 
     static func showsPlaceholder(
-        phase: MediaRowEpisodeEntry.Phase, targetReady: Bool, focusEngaged: Bool
+        phase: MediaRowEpisodeEntry.Phase, targetReady: Bool, focusEngaged: Bool,
+        hasBrowsedTarget: Bool = false
     ) -> Bool {
-        phase != .ready || (!focusEngaged && !targetReady)
+        phase != .ready || (!focusEngaged && !targetReady && !hasBrowsedTarget)
     }
 
     static func target(
@@ -81,45 +82,54 @@ struct EpisodeRowEntryPlaceholder: View {
     @Environment(\.themePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.plozzCardFocusStyle) private var focusStyle
+    @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
     private let metrics = PlozzMetrics.standard
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             artwork
-            VStack(alignment: .leading, spacing: 10) {
-                Group {
-                    if showsStatus {
-                        switch phase {
-                        case .loading, .ready:
-                            Label("Loading episodes", systemImage: "hourglass")
-                        case .empty:
-                            Text("No episodes available")
-                        case .failed:
-                            Text("Unable to load episodes")
+            if showsStatus || !captionsHidden {
+                VStack(alignment: .leading, spacing: 10) {
+                    Group {
+                        if showsStatus {
+                            switch phase {
+                            case .loading, .ready:
+                                Label("Loading episodes", systemImage: "hourglass")
+                            case .empty:
+                                Text("No episodes available")
+                            case .failed:
+                                Text("Unable to load episodes")
+                            }
+                        } else {
+                            Capsule().fill(palette.fill).frame(width: 250, height: 20)
                         }
-                    } else {
-                        Capsule().fill(palette.fill).frame(width: 250, height: 20)
                     }
-                }
-                .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
-                .foregroundStyle(palette.primaryText)
-                .lineLimit(1)
-                .frame(height: metrics.cardTitleFontSize * 1.25, alignment: .leading)
-                Capsule().fill(palette.fill).frame(width: 440, height: 15)
-                Capsule().fill(palette.fill).frame(width: 390, height: 15)
-                Group {
-                    if showsStatus && phase == .failed {
-                        Label("Retry", systemImage: "arrow.clockwise")
-                            .font(.system(size: 20))
-                            .foregroundStyle(palette.secondaryText)
-                    } else {
-                        Capsule().fill(palette.fill).frame(width: 310, height: 15)
+                    .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
+                    .foregroundStyle(palette.primaryText)
+                    .lineLimit(1)
+                    .frame(height: metrics.cardTitleFontSize * 1.25, alignment: .leading)
+                    Capsule().fill(palette.fill).frame(width: 440, height: 15)
+                    Capsule().fill(palette.fill).frame(width: 390, height: 15)
+                    Group {
+                        if showsStatus && phase == .failed {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                                .font(.system(size: 20))
+                                .foregroundStyle(palette.secondaryText)
+                        } else {
+                            Capsule().fill(palette.fill).frame(width: 310, height: 15)
+                        }
                     }
+                    .frame(height: 24, alignment: .leading)
                 }
-                .frame(height: 24, alignment: .leading)
+                .padding(.top, metrics.landscapeCaptionTopSpacing + metrics.focusCaptionPush)
+                .offset(y: reduceMotion || isFocused ? 0 : -metrics.focusCaptionPush)
+                .animation(
+                    reduceMotion ? nil : PlozzTheme.Metrics.cardFocusAnimation(
+                        isFocused: isFocused, focusStyle: focusStyle, reduceMotion: reduceMotion
+                    ),
+                    value: isFocused
+                )
             }
-            .padding(.top, metrics.landscapeCaptionTopSpacing + metrics.focusCaptionPush)
-            .offset(y: reduceMotion || focusStyle.usesSystemEffect || isFocused ? 0 : -metrics.focusCaptionPush)
         }
         .frame(width: EpisodeColumnCard.artworkSize.width, alignment: .leading)
         .padding(.trailing, EpisodeColumnCard.trailingSpacing)

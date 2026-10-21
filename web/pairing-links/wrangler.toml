@@ -4,9 +4,14 @@ compatibility_date = "2024-11-01"
 workers_dev = false
 
 # Narrow routes ONLY. Everything else on plozz.app continues to be served by the
-# existing `plozz-website` Cloudflare Pages project — Worker routes take priority
-# over Pages for just these two paths, so the rest of the site is untouched.
+# existing `plozz-website` Cloudflare Worker. Only these paths are intercepted,
+# so the rest of the site is untouched.
 routes = [
   { pattern = "plozz.app/.well-known/apple-app-site-association", zone_name = "plozz.app" },
   { pattern = "plozz.app/pair", zone_name = "plozz.app" },
+  { pattern = "plozz.app/auth/trakt/callback", zone_name = "plozz.app" },
+  { pattern = "plozz.app/auth/wetrakr/callback", zone_name = "plozz.app" },
+  # The wildcard permits query strings; the Worker passes non-shortcut paths through.
+  { pattern = "plozz.app/discord*", zone_name = "plozz.app" },
+  { pattern = "plozz.app/github*", zone_name = "plozz.app" },
 ]

@@ -7,16 +7,18 @@ public struct LiveTVSourcesView: View {
     public enum Presentation { case page, settingsPane }
 
     @State private var model: LiveTVSourceManagementModel
-    @State private var pendingRemoval: LiveTVSourceRemoval?
     @State private var importedRemovalID: UUID?
     @State private var importedRemovalRequest = UUID()
     @State private var catalogReloadRevision = 0
+    @State private var retryingSourceIDs: Set<String> = []
     private let presentation: Presentation
     private let imports: LiveTVPrototypeImportModel?
     private let refresh: (@MainActor () -> Void)?
+    private var refreshSource: (@MainActor (String) async throws -> Void)?
     private let serverChoices: [LiveTVServerChoice]
     private let serverProviderResolver: LiveTVServerProviderResolver?
     private let connectServer: (() -> Void)?
+    private var connectIPTV: ((LiveTVPlaylistSource?, IPTVCredential.Mode) -> Void)?
     private let sourceFilterID: String?
     private let browseSource: ((String?) -> Void)?
     private let didConfigurePlaylist: () -> Void
@@ -83,15 +85,18 @@ public struct LiveTVSourcesView: View {
             didImportPlaylist: didImportPlaylist
         )
         self.catalog = catalog
+        refreshSource = { await catalog.refresh(sourceID: $0) }
     }
 
     init(
         model: LiveTVSourceManagementModel,
         imports: LiveTVPrototypeImportModel,
         refresh: @escaping @MainActor () -> Void,
+        refreshSource: (@MainActor (String) async throws -> Void)? = nil,
         serverChoices: [LiveTVServerChoice] = [],
         serverProviderResolver: LiveTVServerProviderResolver? = nil,
         connectServer: (() -> Void)? = nil,
+        connectIPTV: ((LiveTVPlaylistSource?, IPTVCredential.Mode) -> Void)? = nil,
         sourceFilterID: String? = nil,
         browseSource: ((String?) -> Void)? = nil,
         didConfigurePlaylist: @escaping () -> Void = {},
@@ -104,9 +109,11 @@ public struct LiveTVSourcesView: View {
         presentation = .page
         self.imports = imports
         self.refresh = refresh
+        self.refreshSource = refreshSource
         self.serverChoices = serverChoices
         self.serverProviderResolver = serverProviderResolver
         self.connectServer = connectServer
+        self.connectIPTV = connectIPTV
         self.sourceFilterID = sourceFilterID
         self.browseSource = browseSource
         self.didConfigurePlaylist = didConfigurePlaylist
@@ -121,30 +128,37 @@ public struct LiveTVSourcesView: View {
     public var body: some View {
         LiveTVSourceAccessGate(model: model) {
             let content = LiveTVSourcesContent(
-                model: model, imports: catalog?.isCurrent == false ? nil : imports, refresh: refresh,
+                model: model, imports: catalog?.isPresentationCurrent == false ? nil : imports, refresh: refresh,
+                retrySource: sourceRetry, retryingSourceIDs: retryingSourceIDs,
                 serverChoices: serverChoices, serverProviderResolver: serverProviderResolver,
                 connectServer: connectServer, sourceFilterID: sourceFilterID,
                 browseSource: browseSource, didConfigurePlaylist: didConfigurePlaylist,
-                removeSource: { pendingRemoval = $0 }, createChannel: createChannel,
+                commitRemoval: remove,
+                createChannel: createChannel,
                 scanChannels: scanChannels, scanCoordinator: scanCoordinator,
-                didImportPlaylist: didImportPlaylist
+                didImportPlaylist: didImportPlaylist, connectIPTV: connectIPTV
             )
             if presentation == .settingsPane {
                 VStack(alignment: .leading, spacing: 24) {
-                    content
                     catalogStatus
+                    content
                 }
             } else {
                 LiveTVSettingsPage(title: "Sources") {
-                    content
                     catalogStatus
+                    content
                 }
             }
         }
         #if os(tvOS)
         .toggleStyle(SettingsSwitchToggleStyle(flushLeading: false))
         #elseif os(iOS)
-        .toggleStyle(SettingsTouchSwitchToggleStyle())
+        .toggleStyle(SettingsSwitchToggleStyle())
+        // The embedded pane is one List row; its child groups cannot clear
+        // that row's system background or its extra insets.
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
         #endif
         .task(id: catalogReloadRevision) {
             model.reload()
@@ -155,6 +169,11 @@ public struct LiveTVSourcesView: View {
         }
         .onChange(of: model.mutationRevision) { _, _ in
             if refreshAfterMutation { refresh?() }
+        }
+        .onChange(of: model.configuration, initial: true) { _, _ in recordSourceScreen() }
+        .onChange(of: [model.hasLoaded, model.loadIssue != nil]) { _, _ in recordSourceScreen() }
+        .onChange(of: catalog?.imports.configuration) { _, _ in
+            model.reload()
         }
         .onReceive(NotificationCenter.default.publisher(for: .plozzLiveTVSourceApprovalsDidChange)) { notification in
             guard let catalog, notification.object as? String == catalog.profileID else { return }
@@ -186,42 +205,69 @@ public struct LiveTVSourcesView: View {
         } message: {
             if let issue = model.mutationIssue { Text(issue.message) }
         }
-        .confirmationDialog("Remove this source?", isPresented: Binding(
-            get: { pendingRemoval != nil },
-            set: { if !$0 { pendingRemoval = nil } }
-        ), titleVisibility: .visible) {
-            if let removal = pendingRemoval {
-                Button("Remove source", role: .destructive) {
-                    switch removal {
-                    case .playlist(let source):
-                        model.removePlaylist(source.id)
-                        if imports != nil, !model.configuration.playlists.contains(where: { $0.id == source.id }),
-                           let id = source.importedPlaylistID {
-                            importedRemovalID = id
-                            importedRemovalRequest = UUID()
-                        }
-                    case .server(let source): model.removeServer(source.id)
-                    }
-                    pendingRemoval = nil
-                }
-            }
-        } message: {
-            Text("Its channels leave the guide. Channel preferences are kept.")
+    }
+
+    private func recordSourceScreen() {
+        var identities: [LiveTVSourceDiagnostics.Identity: String] = [:]
+        identities[.profile] = catalog?.profileID
+        LiveTVSourceDiagnostics.shared.record(
+            .sourcesScreen, identities: identities,
+            counts: [
+                .playlists: model.configuration.playlists.count, .servers: model.configuration.servers.count,
+                .choices: serverChoices.count
+            ],
+            flags: [
+                .present: model.hasLoaded, .failed: model.loadIssue != nil,
+                .hasSnapshot: catalog != nil, .current: catalog?.isPresentationCurrent ?? true
+            ]
+        )
+    }
+
+    private var sourceRetry: (@MainActor (String) async throws -> Void)? {
+        guard let refreshSource else { return nil }
+        return { sourceID in
+            retryingSourceIDs.insert(sourceID)
+            defer { retryingSourceIDs.remove(sourceID) }
+            try await refreshSource(sourceID)
         }
+    }
+
+    private func remove(_ removal: LiveTVSourceRemoval) -> Bool {
+        let revision = model.mutationRevision
+        switch removal {
+        case .playlist(let source):
+            model.removePlaylist(source.id)
+            if revision != model.mutationRevision, imports != nil, let id = source.importedPlaylistID {
+                importedRemovalID = id
+                importedRemovalRequest = UUID()
+            }
+        case .server(let source):
+            model.removeServer(source.id)
+        }
+        return revision != model.mutationRevision
     }
 
     @ViewBuilder
     private var catalogStatus: some View {
-        if let catalog {
-            if let issue = catalog.issue {
-                SettingsSectionGroup {
-                    Text(issue.message)
-                    Button("Retry", action: catalog.requestRefresh)
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+        let issue = catalog?.issue
+        let message = issue != nil && issue != .catalog
+            ? issue?.message : imports?.unattributedFailure?.userDescription ?? issue?.message
+        if let message, model.loadIssue == nil {
+            SettingsSectionGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    InlineErrorMessage(Text(message))
+                    if let refresh {
+                        Button("Retry", action: refresh)
+                        .plozzActionButton(role: .secondary)
+                        .disabled(imports?.isLoading == true || catalog?.isLoading == true)
+                        .accessibilityIdentifier("live-tv-page-error-retry")
+                    }
                 }
-            } else if catalog.isLoading {
-                ProgressView("Loading channels and guide")
+                .accessibilityElement(children: .contain)
             }
+            .accessibilityIdentifier("live-tv-page-error")
+        } else if catalog?.isLoading == true, retryingSourceIDs.isEmpty {
+            ProgressView("Loading channels and guide")
         }
     }
 }
@@ -232,49 +278,118 @@ private enum LiveTVSourceRemoval {
 }
 
 private struct LiveTVSourcesContent: View {
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
     let model: LiveTVSourceManagementModel
     let imports: LiveTVPrototypeImportModel?
     let refresh: (@MainActor () -> Void)?
+    let retrySource: (@MainActor (String) async throws -> Void)?
+    let retryingSourceIDs: Set<String>
     let serverChoices: [LiveTVServerChoice]
     let serverProviderResolver: LiveTVServerProviderResolver?
     let connectServer: (() -> Void)?
     let sourceFilterID: String?
     let browseSource: ((String?) -> Void)?
     let didConfigurePlaylist: () -> Void
-    let removeSource: (LiveTVSourceRemoval) -> Void
+    let commitRemoval: (LiveTVSourceRemoval) -> Bool
     let createChannel: (() -> Void)?
     let scanChannels: (() -> Void)?
     let scanCoordinator: LiveTVChannelScanCoordinator?
     let didImportPlaylist: (String) -> Void
+    var connectIPTV: ((LiveTVPlaylistSource?, IPTVCredential.Mode) -> Void)? = nil
 
     var body: some View {
         if let issue = model.loadIssue {
             SettingsSectionGroup {
-                Label {
-                    Text(issue.message)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle")
+                InlineErrorMessage(Text(issue.message))
+                Button { model.reload() } label: {
+                    LiveTVSetupActionLabel(title: "Retry", symbol: "arrow.clockwise")
                 }
-                Button("Retry") { model.reload() }
                     .buttonStyle(SettingsFocusButtonStyle(size: .contained))
             }
         } else if !model.hasLoaded {
             ProgressView("Loading sources")
         } else {
-            if browseSource != nil || createChannel != nil || scanChannels != nil {
+            if !model.configuration.playlists.isEmpty || !model.configuration.servers.isEmpty {
+                SettingsSectionGroup("Your sources") {
+                    ForEach(model.configuration.playlists) { source in
+                        VStack(alignment: .leading, spacing: 12) {
+                            SettingsPageLink {
+                                LiveTVPlaylistSourceDetails(
+                                    model: model, imports: imports, sourceID: source.id,
+                                    didConfigurePlaylist: didConfigurePlaylist,
+                                    refresh: refresh, scanCoordinator: scanCoordinator,
+                                    removeSource: { commitRemoval(.playlist($0)) }, connectIPTV: connectIPTV,
+                                    retrySource: retrySource
+                                )
+                            } label: {
+                                LiveTVPlaylistSourceRow(
+                                    source: source,
+                                    status: imports?.playlistSources.first { $0.id == source.id },
+                                    isRetrying: retryingSourceIDs.contains(source.id)
+                                )
+                            }
+                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                            .accessibilityIdentifier("live-tv-source-details-\(source.id)")
+                            if source.isEnabled, let imports {
+                                LiveTVSourceErrors(imports: imports, sourceID: source.id, retry: retrySource)
+                            }
+                        }
+                        .accessibilityElement(children: .contain)
+                    }
+                    ForEach(model.configuration.servers) { source in
+                        VStack(alignment: .leading, spacing: 12) {
+                            SettingsPageLink {
+                                LiveTVServerSourceDetails(
+                                    model: model, imports: imports, sourceID: source.id,
+                                    removeSource: { commitRemoval(.server($0)) }, retrySource: retrySource
+                                )
+                            } label: {
+                                SettingsRowLabel(
+                                    icon: "server.rack", title: Text(source.name),
+                                    secondary: {
+                                        if !retryingSourceIDs.contains(source.id) {
+                                            LiveTVServerSourceState(
+                                                source: source,
+                                                status: imports?.serverSources.first { $0.id == source.id }
+                                            )
+                                            .font(.caption)
+                                            .settingsRowSecondary()
+                                        }
+                                    },
+                                    trailing: { LiveTVSourceChevron() }
+                                )
+                            }
+                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                            .accessibilityIdentifier("live-tv-source-details-\(source.id)")
+                            if source.isEnabled, let imports {
+                                LiveTVSourceErrors(imports: imports, sourceID: source.id, retry: retrySource)
+                            }
+                        }
+                        .accessibilityElement(children: .contain)
+                    }
+                }
+            }
+            setupActions
+            if browseSource != nil || createChannel != nil
+                || (scanChannels != nil && !model.configuration.playlists.isEmpty)
+                || (imports?.retainedProgramCount ?? 0) > 0 {
                 SettingsSectionGroup {
                     if let createChannel {
-                        Button("Plozz channels", systemImage: "sparkles.tv", action: createChannel)
+                        Button(action: createChannel) {
+                            LiveTVSetupActionLabel(title: "Plozz channels", symbol: "sparkles.tv")
+                        }
                             .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                             .accessibilityHint("Manage your automatic lineup and optional custom channels.")
                             .accessibilityIdentifier("live-tv-manage-library-channels")
                     }
-                    if let scanChannels {
-                        Button("Check channel availability", systemImage: "checkmark.circle", action: scanChannels)
+                    if let scanChannels, !model.configuration.playlists.isEmpty {
+                        Button(action: scanChannels) {
+                            LiveTVSetupActionLabel(title: "Check channel availability", symbol: "checkmark.circle")
+                        }
                             .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     }
                     if browseSource != nil {
-                        NavigationLink {
+                        SettingsPageLink {
                             LiveTVSourceFilterList(
                                 configuration: model.configuration,
                                 sourceFilterID: sourceFilterID, browseSource: browseSource
@@ -290,188 +405,102 @@ private struct LiveTVSourcesContent: View {
                         }
                         .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     }
-                }
-            }
-            ForEach(model.configuration.playlists) { source in
-                SettingsSectionGroup(verbatim: source.name) {
-                    Toggle("Enabled", isOn: Binding(
-                        get: { source.isEnabled },
-                        set: { model.setPlaylistEnabled(source.id, enabled: $0) }
-                    ))
-                    .accessibilityIdentifier("live-tv-source-enabled-\(source.id)")
-                    LiveTVSourceApprovalControl(
-                        source: source, sourceStore: model.sourceStoreForApproval,
-                        onChange: {
-                            model.reload()
-                            refresh?()
-                        }
-                    )
-                    if let scanCoordinator, scanCoordinator.sourceIDs.contains(source.id) {
-                        NavigationLink {
-                            LiveTVSettingsPage(title: "Check channels") {
-                                LiveTVScanSourceSection(
-                                    coordinator: scanCoordinator, sourceID: source.id, sourceName: source.name
-                                )
+                    if let imports, imports.retainedProgramCount > 0 {
+                        SettingsPageLink {
+                            LiveTVSettingsPage(title: "Guide coverage") {
+                                LiveTVGuideOverview(imports: imports)
                             }
                         } label: {
-                            SettingsRowLabel(icon: "checkmark.magnifyingglass", title: "Check channel availability")
-                        }
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                        .accessibilityIdentifier("live-tv-source-scan-\(source.id)")
-                    }
-                    NavigationLink {
-                        if source.importedPlaylistID != nil {
-                            LiveTVImportedPlaylistEditor(
-                                sources: model, imports: imports, original: source,
-                                didConfigurePlaylist: didConfigurePlaylist
-                            )
-                        } else {
-                            LiveTVPlaylistSourceEditor(
-                                model: model, source: source, didConfigurePlaylist: didConfigurePlaylist
-                            )
-                        }
-                    } label: {
-                        SettingsRowLabel(icon: "list.bullet.rectangle", title: "Playlist and guides")
-                    }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                    .accessibilityIdentifier("live-tv-edit-source-\(source.id)")
-                    if let imports {
-                        if imports.supportsDurableCatalog {
-                            NavigationLink {
-                                LiveTVGuideMappingView(
-                                    imports: imports, sourceID: source.id, authorize: model.ensureCanMutate
-                                )
-                            } label: {
-                                SettingsRowLabel(icon: "link", title: "Correct guide mapping")
-                            }
-                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                        }
-                        if let failure = imports.guideDiscoveryFailures[source.id] {
-                            Text(failure.userDescription)
-                                .font(.caption)
-                        }
-                        if let reviews = imports.identityReviews[source.id], !reviews.isEmpty {
-                            NavigationLink {
-                                LiveTVIdentityReviewView(
-                                    imports: imports, sourceID: source.id, authorize: model.ensureCanMutate
-                                )
-                            } label: {
-                                SettingsRowLabel(icon: "person.crop.rectangle.badge.questionmark", title: "Review channel identities", trailing: {
-                                    Text(reviews.count, format: .number).settingsRowSecondary()
-                                })
-                            }
-                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                        }
-                        NavigationLink {
-                            LiveTVPlaylistSourceDetails(
-                                model: model, imports: imports, sourceID: source.id,
-                                didConfigurePlaylist: didConfigurePlaylist
-                            )
-                        } label: {
-                            LiveTVPlaylistSourceSummary(
-                                source: source,
-                                status: imports.playlistSources.first { $0.id == source.id }
-                            )
+                            SettingsRowLabel(icon: "calendar", title: "Guide coverage", trailing: {
+                                LiveTVSourceChevron()
+                            })
                         }
                         .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     }
-                    Button(role: .destructive) {
-                        removeSource(.playlist(source))
-                    } label: {
-                        SettingsRowLabel(icon: "trash", title: "Remove source")
-                    }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                    .accessibilityIdentifier("live-tv-remove-source-\(source.id)")
                 }
             }
-
-            ForEach(model.configuration.servers) { source in
-                SettingsSectionGroup(verbatim: source.name) {
-                    Toggle("Enabled", isOn: Binding(
-                        get: { source.isEnabled },
-                        set: { model.setServerEnabled(source.id, enabled: $0) }
-                    ))
-                    NavigationLink {
-                        LiveTVServerSourceRename(model: model, source: source)
-                    } label: {
-                        SettingsRowLabel(icon: "pencil", title: "Rename source")
-                    }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                    if let imports {
-                        NavigationLink {
-                            LiveTVServerSourceDetails(model: model, imports: imports, sourceID: source.id)
-                        } label: {
-                            LiveTVServerSourceSummary(
-                                source: source,
-                                status: imports.serverSources.first { $0.id == source.id }
-                            )
-                        }
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                    }
-                    Button(role: .destructive) {
-                        removeSource(.server(source))
-                    } label: {
-                        SettingsRowLabel(icon: "trash", title: "Remove source")
-                    }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                }
-            }
-            SettingsSectionGroup {
-                NavigationLink {
-                    LiveTVPlaylistEditor { input in
-                        let previousIDs = Set(model.configuration.playlists.map(\.id))
-                        try model.savePlaylist(input: input)
-                        didConfigurePlaylist()
-                        if let added = model.configuration.playlists.first(where: { !previousIDs.contains($0.id) }) {
-                            didImportPlaylist(added.id)
-                        }
-                    }
-                } label: {
-                    SettingsRowLabel(icon: "plus", title: "Add IPTV playlist")
-                }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                #if os(iOS)
-                if let imports, imports.supportsDurableCatalog {
-                    NavigationLink {
-                        LiveTVImportedPlaylistEditor(
-                            sources: model, imports: imports, didConfigurePlaylist: didConfigurePlaylist,
-                            didImportPlaylist: didImportPlaylist
-                        )
-                    } label: {
-                        SettingsRowLabel(icon: "doc.badge.plus", title: "Import M3U file")
-                    }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                }
-                #endif
-                NavigationLink {
-                    LiveTVServerSetupView(
-                        sources: model, choices: serverChoices,
-                        resolver: serverProviderResolver, connectServer: connectServer
-                    )
-                } label: {
-                    SettingsRowLabel(icon: "server.rack", title: "Use a media server")
-                }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-            }
-
-            if let imports {
-                LiveTVGuideOverview(imports: imports)
-                if let failure = imports.cacheFailure {
-                    SettingsSectionGroup {
-                        Text(failure.userDescription)
-                    }
-                }
-            }
-            if let refresh {
+            if let refresh, !model.configuration.playlists.isEmpty || !model.configuration.servers.isEmpty {
                 SettingsSectionGroup {
-                    Button("Refresh sources", systemImage: "arrow.clockwise", action: refresh)
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                        .disabled(imports?.isLoading == true)
-                    if imports?.isLoading == true {
+                    Button(action: refresh) {
+                        LiveTVSetupActionLabel(title: "Refresh sources", symbol: "arrow.clockwise")
+                    }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .disabled(imports?.isLoading == true)
+                    if imports?.isLoading == true, retryingSourceIDs.isEmpty {
                         ProgressView("Refreshing sources")
                     }
                 }
             }
+        }
+    }
+
+    private var setupActions: some View {
+        SettingsSectionGroup("Add a source") {
+            if connectIPTV != nil || providerSetupRouter != nil {
+                Button {
+                    if let connectIPTV { connectIPTV(nil, .playlist) }
+                    else { providerSetupRouter?.connectIPTV() }
+                } label: {
+                    LiveTVSetupActionLabel(title: "IPTV provider", symbol: "antenna.radiowaves.left.and.right")
+                }
+                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .accessibilityIdentifier("live-tv-add-playlist")
+            } else {
+            SettingsPageLink {
+                LiveTVPlaylistEditor { input in
+                    let previousIDs = Set(model.configuration.playlists.map(\.id))
+                    try model.savePlaylist(input: input)
+                    didConfigurePlaylist()
+                    if let added = model.configuration.playlists.first(where: { !previousIDs.contains($0.id) }) {
+                        didImportPlaylist(added.id)
+                    }
+                }
+            } label: {
+                LiveTVSetupActionLabel(
+                    title: "IPTV playlist", symbol: "list.bullet.rectangle"
+                )
+            }
+            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+            .accessibilityIdentifier("live-tv-add-playlist")
+            }
+            #if os(iOS)
+            if connectIPTV != nil || providerSetupRouter != nil {
+                Button {
+                    if let connectIPTV { connectIPTV(nil, .file) }
+                    else { providerSetupRouter?.connectIPTV(mode: .file) }
+                } label: {
+                    LiveTVSetupActionLabel(title: "Playlist file (M3U)", symbol: "doc.badge.plus")
+                }
+                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .accessibilityIdentifier("live-tv-import-playlist")
+            } else if let imports, imports.supportsDurableCatalog {
+                SettingsPageLink {
+                    LiveTVImportedPlaylistEditor(
+                        sources: model, imports: imports, didConfigurePlaylist: didConfigurePlaylist,
+                        didImportPlaylist: didImportPlaylist
+                    )
+                } label: {
+                    LiveTVSetupActionLabel(
+                        title: "Playlist file (M3U)", symbol: "doc.badge.plus"
+                    )
+                }
+                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .accessibilityHint("Choose a saved playlist from Files.")
+                .accessibilityIdentifier("live-tv-import-playlist")
+            }
+            #endif
+            SettingsPageLink {
+                LiveTVServerSetupView(
+                    sources: model, choices: serverChoices,
+                    resolver: serverProviderResolver, connectServer: connectServer
+                )
+            } label: {
+                LiveTVSetupActionLabel(
+                    title: "Media server", symbol: "server.rack"
+                )
+            }
+            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+            .accessibilityIdentifier("live-tv-add-server")
         }
     }
 
@@ -546,57 +575,56 @@ private struct LiveTVPlaylistSourceDetails: View {
     let imports: LiveTVPrototypeImportModel?
     let sourceID: String
     let didConfigurePlaylist: () -> Void
+    let refresh: (@MainActor () -> Void)?
+    let scanCoordinator: LiveTVChannelScanCoordinator?
+    let removeSource: (LiveTVPlaylistSource) -> Bool
+    var connectIPTV: ((LiveTVPlaylistSource?, IPTVCredential.Mode) -> Void)? = nil
+    var retrySource: (@MainActor (String) async throws -> Void)? = nil
     @State private var confirmsRemoval = false
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
 
     var body: some View {
         if let source = model.configuration.playlists.first(where: { $0.id == sourceID }) {
-            LiveTVSettingsPage(title: "Source details") {
-                SettingsSectionGroup(verbatim: source.name) {
-                    Toggle("Enabled", isOn: Binding(
-                        get: { source.isEnabled },
-                        set: { model.setPlaylistEnabled(source.id, enabled: $0) }
-                    ))
+            LiveTVSettingsPage(title: "Source details", sourceName: source.name) {
+                LiveTVSourceMutationMessage(issue: model.mutationIssue)
+                if source.isEnabled, let imports {
+                    LiveTVSourceErrors(imports: imports, sourceID: source.id, retry: retrySource, grouped: true)
                 }
-                SettingsSectionGroup("Guide refresh") {
-                    Toggle("Use guides declared by the playlist", isOn: Binding(
-                        get: { source.discoversPlaylistGuides },
-                        set: { model.setGuidePolicy(sourceID, discovers: $0) }
-                    ))
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Keep previous days")
-                        SettingsOptionPicker(options: Array(0...7), selection: Binding(
-                            get: { source.guideLookbackDays },
-                            set: { model.setGuidePolicy(sourceID, lookbackDays: $0) }
-                        )) { value in "\(value) days" }
-                    }
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Look ahead")
-                        SettingsOptionPicker(options: [1, 3, 7, 14, 28], selection: Binding(
-                            get: { source.guideLookaheadDays },
-                            set: { model.setGuidePolicy(sourceID, lookaheadDays: $0) }
-                        )) { value in "\(value) days" }
-                    }
-                } footer: {
-                    Text("Keeps the listings provided within this range. A guide may supply fewer days.")
-                }
-                if let imports {
-                    if let status = imports.playlistSources.first(where: { $0.id == sourceID }) {
-                        SettingsSectionGroup("Channels") {
-                            LiveTVPlaylistImportStatus(status: status)
+                if source.importedPlaylistID == nil, connectIPTV != nil || providerSetupRouter != nil {
+                    SettingsSectionGroup {
+                        Button {
+                            do {
+                                try model.ensureCanMutate()
+                                if let connectIPTV { connectIPTV(source, .playlist) }
+                                else { providerSetupRouter?.connectIPTV(playlist: source) }
+                            } catch { model.mutationIssue = .accessDenied }
+                        } label: {
+                            LiveTVSetupActionLabel(title: "Connect as IPTV account", symbol: "person.crop.circle.badge.plus")
                         }
-                    }
-                    ForEach(imports.guideSources.filter { $0.playlistSourceID == sourceID }) { status in
-                        SettingsSectionGroup(verbatim: status.source.name) {
-                            PrototypeSourceAddress(url: status.source.url).font(.caption)
-                            PrototypeGuideSourceStatus(
-                                status: status, enabled: imports.enabledSourceIDs.contains(status.id)
-                            )
-                        }
+                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    } footer: {
+                        Text("Use account setup for large playlists, authentication, movies, and series. Your existing source and preferences are kept; disable this source after connecting to avoid duplicate channels.")
                     }
                 }
                 SettingsSectionGroup {
-                    NavigationLink("Edit playlist and guides") {
+                    Toggle(isOn: Binding(
+                        get: { source.isEnabled },
+                        set: { model.setPlaylistEnabled(source.id, enabled: $0) }
+                    )) {
+                        Label("Use this source", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .accessibilityIdentifier("live-tv-source-enabled-\(source.id)")
+                    LiveTVSourceApprovalControl(
+                        source: source, sourceStore: model.sourceStoreForApproval,
+                        onChange: {
+                            model.reload()
+                            refresh?()
+                        }
+                    )
+                }
+                SettingsSectionGroup {
+                    SettingsPageLink {
                         if source.importedPlaylistID != nil {
                             LiveTVImportedPlaylistEditor(
                                 sources: model, imports: imports, original: source,
@@ -607,26 +635,191 @@ private struct LiveTVPlaylistSourceDetails: View {
                                 model: model, source: source, didConfigurePlaylist: didConfigurePlaylist
                             )
                         }
+                    } label: {
+                        SettingsRowLabel(icon: "list.bullet.rectangle", title: "Playlist and guides", trailing: {
+                            LiveTVSourceChevron()
+                        })
                     }
                     .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .accessibilityIdentifier("live-tv-edit-source-\(source.id)")
+                    if let scanCoordinator, scanCoordinator.sourceIDs.contains(source.id) {
+                        SettingsPageLink {
+                            LiveTVSettingsPage(title: "Check channels") {
+                                LiveTVScanSourceSection(
+                                    coordinator: scanCoordinator, sourceID: source.id, sourceName: source.name
+                                )
+                            }
+                        } label: {
+                            SettingsRowLabel(icon: "checkmark.circle", title: "Check channel availability", trailing: {
+                                LiveTVSourceChevron()
+                            })
+                        }
+                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .accessibilityIdentifier("live-tv-source-scan-\(source.id)")
+                    }
                 }
                 SettingsSectionGroup {
-                    Button("Remove source", role: .destructive) { confirmsRemoval = true }
+                    SettingsPageLink {
+                        LiveTVPlaylistGuideSettings(model: model, imports: imports, sourceID: source.id)
+                    } label: {
+                        SettingsRowLabel(icon: "calendar", title: "Guide options", trailing: {
+                            LiveTVSourceChevron()
+                        })
+                    }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .accessibilityIdentifier("live-tv-source-guides-\(source.id)")
+                    if let imports {
+                        SettingsPageLink {
+                            LiveTVSettingsPage(title: "Source details") {
+                                if let status = imports.playlistSources.first(where: { $0.id == sourceID }) {
+                                    SettingsSectionGroup("Channels") {
+                                        Text("\(status.channelCount) channels")
+                                        LiveTVPlaylistImportStatus(status: status)
+                                    }
+                                }
+                                ForEach(imports.guideSources.filter { $0.playlistSourceID == sourceID }) { status in
+                                    SettingsSectionGroup(verbatim: status.source.name) {
+                                        PrototypeSourceAddress(url: status.source.url).font(.caption)
+                                        PrototypeGuideSourceStatus(
+                                            status: status, enabled: imports.enabledSourceIDs.contains(status.id)
+                                        )
+                                    }
+                                }
+                            }
+                        } label: {
+                            SettingsRowLabel(icon: "info.circle", title: "Source details", trailing: {
+                                LiveTVSourceChevron()
+                            })
+                        }
                         .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .accessibilityIdentifier("live-tv-source-status-\(source.id)")
+                    }
                 }
-            }
-            .confirmationDialog("Remove this source?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
-                Button("Remove source", role: .destructive) {
-                    let revision = model.mutationRevision
-                    model.removePlaylist(source.id)
-                    if revision != model.mutationRevision { dismiss() }
+                SettingsSectionGroup {
+                    Button(role: .destructive) { confirmsRemoval = true } label: {
+                        SettingsRowLabel(icon: "trash", title: "Remove source")
+                    }
+                    .confirmationDialog("Remove this source?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
+                        Button("Remove source", role: .destructive) {
+                            if removeSource(source) { dismiss() }
+                        }
+                    } message: {
+                        Text("Its channels leave the guide. Channel preferences are kept.")
+                    }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .accessibilityIdentifier("live-tv-remove-source-\(source.id)")
                 }
-            } message: {
-                Text("Channel preferences are kept.")
             }
         } else {
             ContentUnavailableView("Source removed", systemImage: "list.bullet.rectangle")
         }
+    }
+}
+
+private struct LiveTVPlaylistGuideSettings: View {
+    let model: LiveTVSourceManagementModel
+    let imports: LiveTVPrototypeImportModel?
+    let sourceID: String
+
+    var body: some View {
+        if let source = model.configuration.playlists.first(where: { $0.id == sourceID }) {
+            LiveTVSettingsPage(title: "Guide options") {
+                LiveTVSourceMutationMessage(issue: model.mutationIssue)
+                if let imports {
+                    let canReviewMappings = imports.supportsDurableCatalog
+                        && (!source.guideURLs.isEmpty || imports.guideSources.contains(where: { $0.playlistSourceID == sourceID }))
+                    let reviews = imports.identityReviews[sourceID] ?? []
+                    if imports.guideDiscoveryFailures[source.id] != nil || canReviewMappings || !reviews.isEmpty {
+                        SettingsSectionGroup {
+                            if let failure = imports.guideDiscoveryFailures[source.id] {
+                                InlineErrorMessage(Text(failure.userDescription))
+                                    .font(.caption)
+                            }
+                            if canReviewMappings {
+                                SettingsPageLink {
+                                    LiveTVGuideMappingView(
+                                        imports: imports, sourceID: sourceID, authorize: model.ensureCanMutate
+                                    )
+                                } label: {
+                                    SettingsRowLabel(icon: "link", title: "Correct guide mapping", trailing: {
+                                        LiveTVSourceChevron()
+                                    })
+                                }
+                                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                                .accessibilityIdentifier("live-tv-guide-mapping-\(sourceID)")
+                            }
+                            if !reviews.isEmpty {
+                                SettingsPageLink {
+                                    LiveTVIdentityReviewView(
+                                        imports: imports, sourceID: sourceID, authorize: model.ensureCanMutate
+                                    )
+                                } label: {
+                                    SettingsRowLabel(
+                                        icon: "person.crop.rectangle.badge.questionmark", title: "Review channel identities",
+                                        trailing: { Text(reviews.count, format: .number).settingsRowSecondary() }
+                                    )
+                                }
+                                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                            }
+                        }
+                    }
+                }
+                SettingsSectionGroup("Guide refresh") {
+                    LiveTVGuideDaysPicker(
+                        title: "Keep previous days", symbol: "clock.arrow.circlepath",
+                        options: Array(0...7), selection: Binding(
+                            get: { source.guideLookbackDays },
+                            set: { model.setGuidePolicy(sourceID, lookbackDays: $0) }
+                        ), identifier: "live-tv-guide-lookback"
+                    )
+                    LiveTVGuideDaysPicker(
+                        title: "Look ahead", symbol: "calendar",
+                        options: [1, 3, 7, 14, 28], selection: Binding(
+                            get: { source.guideLookaheadDays },
+                            set: { model.setGuidePolicy(sourceID, lookaheadDays: $0) }
+                        ), identifier: "live-tv-guide-lookahead"
+                    )
+                } footer: {
+                    Text("Keeps the listings provided within this range. A guide may supply fewer days.")
+                }
+            }
+        }
+    }
+}
+
+private struct LiveTVGuideDaysPicker: View {
+    let title: LocalizedStringResource
+    let symbol: String
+    let options: [Int]
+    @Binding var selection: Int
+    let identifier: String
+
+    var body: some View {
+        #if os(tvOS)
+        HStack(spacing: 24) {
+            Label { Text(title) } icon: { Image(systemName: symbol) }
+            Spacer(minLength: 16)
+            Menu {
+                Picker(selection: $selection) {
+                    ForEach(options, id: \.self) { value in
+                        Text("\(value) days").tag(value)
+                    }
+                } label: {
+                    Text(title)
+                }
+            } label: {
+                Text("\(selection) days")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier(identifier)
+        }
+        #else
+        VStack(alignment: .leading, spacing: 12) {
+            Label { Text(title) } icon: { Image(systemName: symbol) }
+            SettingsOptionPicker(options: options, selection: $selection) { value in "\(value) days" }
+        }
+        #endif
     }
 }
 
@@ -640,7 +833,7 @@ private struct LiveTVPlaylistImportStatus: View {
             Text("Ready to load")
         }
         if let failure = status.failure {
-            Text(failure.userDescription)
+            InlineErrorMessage(Text(failure.userDescription))
             if status.lastRefresh != nil { Text("Keeping previously loaded channels") }
         }
         if status.lastRefresh != nil {
@@ -659,19 +852,32 @@ private struct LiveTVServerSourceDetails: View {
     let model: LiveTVSourceManagementModel
     let imports: LiveTVPrototypeImportModel?
     let sourceID: String
+    let removeSource: (LiveTVServerSource) -> Bool
+    var retrySource: (@MainActor (String) async throws -> Void)? = nil
     @State private var confirmsRemoval = false
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     var body: some View {
         if let source = model.configuration.servers.first(where: { $0.id == sourceID }) {
-            LiveTVSettingsPage(title: "Source details") {
-                SettingsSectionGroup(verbatim: source.name) {
-                    Toggle("Enabled", isOn: Binding(
+            LiveTVSettingsPage(title: "Source details", sourceName: source.name) {
+                LiveTVSourceMutationMessage(issue: model.mutationIssue)
+                if source.isEnabled, let imports {
+                    LiveTVSourceErrors(imports: imports, sourceID: source.id, retry: retrySource, grouped: true)
+                }
+                SettingsSectionGroup {
+                    Toggle(isOn: Binding(
                         get: { source.isEnabled },
                         set: { model.setServerEnabled(source.id, enabled: $0) }
-                    ))
-                    NavigationLink("Rename source") {
+                    )) {
+                        Label("Use this source", systemImage: "server.rack")
+                    }
+                    .accessibilityIdentifier("live-tv-source-enabled-\(source.id)")
+                    SettingsPageLink {
                         LiveTVServerSourceRename(model: model, source: source)
+                    } label: {
+                        SettingsRowLabel(icon: "pencil", title: "Rename source", trailing: {
+                            LiveTVSourceChevron()
+                        })
                     }
                     .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                 }
@@ -687,21 +893,186 @@ private struct LiveTVServerSourceDetails: View {
                     }
                 }
                 SettingsSectionGroup {
-                    Button("Remove source", role: .destructive) { confirmsRemoval = true }
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    Button(role: .destructive) { confirmsRemoval = true } label: {
+                        SettingsRowLabel(icon: "trash", title: "Remove source")
+                    }
+                    .confirmationDialog("Remove this source?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
+                        Button("Remove source", role: .destructive) {
+                            if removeSource(source) { dismiss() }
+                        }
+                    } message: {
+                        Text("The server account stays connected.")
+                    }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .accessibilityIdentifier("live-tv-remove-source-\(source.id)")
                 }
-            }
-            .confirmationDialog("Remove this source?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
-                Button("Remove source", role: .destructive) {
-                    let revision = model.mutationRevision
-                    model.removeServer(source.id)
-                    if revision != model.mutationRevision { dismiss() }
-                }
-            } message: {
-                Text("The server account stays connected.")
             }
         } else {
             ContentUnavailableView("Source removed", systemImage: "server.rack")
+        }
+    }
+}
+
+private struct LiveTVSourceMutationMessage: View {
+    let issue: LiveTVSourceManagementModel.Issue?
+
+    var body: some View {
+        if let issue {
+            InlineErrorMessage(Text(issue.message))
+            .font(.callout)
+            .accessibilityIdentifier("live-tv-source-mutation-error")
+        }
+    }
+}
+
+private struct LiveTVSourceErrors: View {
+    let imports: LiveTVPrototypeImportModel
+    let sourceID: String
+    let retry: (@MainActor (String) async throws -> Void)?
+    var grouped = false
+    @State private var retryRequested = false
+    @State private var retryFailed = false
+
+    private var playlist: LiveTVPlaylistSourceStatus? {
+        imports.playlistSources.first { $0.id == sourceID }
+    }
+    private var server: LiveTVServerSourceStatus? {
+        imports.serverSources.first { $0.id == sourceID }
+    }
+    private var failedGuides: [LiveTVGuideSourceStatus] {
+        imports.guideSources.filter {
+            $0.playlistSourceID == sourceID && imports.enabledSourceIDs.contains($0.id) && $0.failure != nil
+        }
+    }
+    private var hasFailures: Bool {
+        playlist?.failure != nil || server?.failure != nil || server?.guideFailure != nil
+            || !failedGuides.isEmpty || imports.guideDiscoveryFailures[sourceID] != nil
+    }
+
+    var body: some View {
+        Group {
+            if hasFailures || retryRequested || retryFailed {
+                if grouped { SettingsSectionGroup { messages } }
+                else { messages }
+            }
+        }
+        .task(id: retryRequested) {
+            guard retryRequested, let retry else { return }
+            retryFailed = false
+            defer { retryRequested = false }
+            let feedbackDeadline = ContinuousClock.now.advanced(by: .milliseconds(400))
+            do {
+                try await retry(sourceID)
+            } catch {
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
+                retryFailed = true
+            }
+            // Keep even an immediate refusal visible as an attempted refresh.
+            try? await Task.sleep(until: feedbackDeadline, clock: .continuous)
+        }
+    }
+
+    private var messages: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if retryFailed {
+                InlineErrorMessage(Text(LiveTVSourcesCatalog.Issue.catalog.message))
+            }
+            if let failure = playlist?.failure {
+                InlineErrorMessage(Text(failure.userDescription))
+            }
+            if let failure = server?.failure {
+                InlineErrorMessage(Text(failure.userDescription))
+            }
+            if let failure = server?.guideFailure, failure != server?.failure {
+                InlineErrorMessage(Text(failure.userDescription))
+            }
+            ForEach(failedGuides) { guide in
+                if let failure = guide.failure {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(verbatim: guide.source.name).font(.caption)
+                        InlineErrorMessage(Text(failure.userDescription))
+                    }
+                }
+            }
+            if let failure = imports.guideDiscoveryFailures[sourceID] {
+                InlineErrorMessage(Text(failure.userDescription))
+            }
+            if retry != nil {
+                if retryRequested {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityHidden(true)
+                        Text("Loading channels and guide")
+                    }
+                    .font(.callout)
+                    .settingsRowSecondary()
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("live-tv-source-retry-progress-\(sourceID)")
+                } else {
+                    Button("Retry") { retryRequested = true }
+                        .plozzActionButton(role: .secondary)
+                        .disabled(imports.isLoading)
+                        .accessibilityIdentifier("live-tv-source-retry-\(sourceID)")
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("live-tv-source-errors-\(sourceID)")
+    }
+}
+
+private struct LiveTVSourceChevron: View {
+    var body: some View {
+        Image(systemName: "chevron.forward")
+            .font(.caption.weight(.semibold))
+            .settingsRowSecondary()
+            .accessibilityHidden(true)
+    }
+}
+
+private struct LiveTVPlaylistSourceState: View {
+    let source: LiveTVPlaylistSource
+    let status: LiveTVPlaylistSourceStatus?
+
+    var body: some View {
+        if !source.isEnabled {
+            Text("Disabled")
+        } else if let status {
+            switch status.phase {
+            case .idle: Text("Ready to load")
+            case .loading: ProgressView("Loading channels")
+            case .loaded: Text("\(status.channelCount) channels")
+            case .failed: Label("Refresh failed", systemImage: "exclamationmark.triangle")
+            }
+        } else if source.importedPlaylistID != nil {
+            Text("Imported file")
+        } else {
+            Text("IPTV playlist")
+        }
+    }
+}
+
+private struct LiveTVServerSourceState: View {
+    let source: LiveTVServerSource
+    let status: LiveTVServerSourceStatus?
+
+    var body: some View {
+        if !source.isEnabled {
+            Text("Disabled")
+        } else if let status {
+            if status.failure != nil {
+                Label("Refresh failed", systemImage: "exclamationmark.triangle")
+            } else if status.phase == .loading {
+                ProgressView("Loading channels")
+            } else if status.phase == .idle {
+                Text("Ready to load")
+            } else {
+                Text("\(status.channelCount) channels")
+            }
+        } else {
+            Text("Media server")
         }
     }
 }
@@ -711,7 +1082,7 @@ private struct LiveTVServerSourceRename: View {
     @State private var original: LiveTVServerSource
     @State private var name: String
     @State private var failure: LiveTVSourceManagementModel.Issue?
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     init(model: LiveTVSourceManagementModel, source: LiveTVServerSource) {
         self.model = model
@@ -779,8 +1150,8 @@ private struct LiveTVServerSourceSummary: View {
             if !source.isEnabled {
                 Text("Disabled").font(.caption)
             } else if let status {
-                if let failure = status.failure {
-                    Text(failure.userDescription).font(.caption)
+                if status.failure != nil {
+                    Label("Refresh failed", systemImage: "exclamationmark.triangle").font(.caption)
                 } else if let availability = status.availability {
                     LiveTVServerAvailabilitySummary(availability: availability)
                 } else if status.phase == .loading {
@@ -788,52 +1159,52 @@ private struct LiveTVServerSourceSummary: View {
                 } else {
                     Text("Ready to load").font(.caption)
                 }
-                if let failure = status.guideFailure {
-                    Text(failure.userDescription).font(.caption)
-                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-private struct LiveTVPlaylistSourceSummary: View {
+private struct LiveTVPlaylistSourceRow: View {
     let source: LiveTVPlaylistSource
     let status: LiveTVPlaylistSourceStatus?
+    let isRetrying: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(source.name).font(.headline).lineLimit(2)
-                Spacer()
-                if !source.isEnabled {
-                    Text("Disabled").font(.caption).settingsRowSecondary()
+        #if os(tvOS)
+        HStack(spacing: 12) {
+            ProviderSiteIcon(url: source.playlistURL, size: 40) {
+                Image(systemName: source.importedPlaylistID == nil ? "antenna.radiowaves.left.and.right" : "doc")
+                    .font(.body)
+                    .settingsRowIcon()
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: source.name).font(SettingsRowMetrics.titleFont).lineLimit(2)
+                if !isRetrying {
+                    LiveTVPlaylistSourceState(source: source, status: status)
+                        .font(SettingsRowMetrics.helperFont)
+                        .settingsRowSecondary()
                 }
             }
-            if source.importedPlaylistID != nil {
-                Text("Imported file").font(.caption).settingsRowSecondary()
-            } else if let host = source.playlistURL.host {
-                Text(host).font(.caption).settingsRowSecondary().privacySensitive()
-            }
-            if source.isEnabled, let status {
-                switch status.phase {
-                case .idle:
-                    Text("Ready to load").font(.caption)
-                case .loading:
-                    ProgressView("Loading channels")
-                case .loaded:
-                    Text("\(status.channelCount) channels").font(.caption)
-                case .failed:
-                    Label("Refresh failed", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                }
-            }
-            if source.guideURLs.isEmpty {
-                Text("No guide added").font(.caption).settingsRowSecondary()
-            } else {
-                Text("\(source.guideURLs.count) guide sources").font(.caption).settingsRowSecondary()
-            }
+            Spacer(minLength: 12)
+            LiveTVSourceChevron()
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        #else
+        SettingsRowLabel(
+            icon: source.importedPlaylistID == nil ? "list.bullet.rectangle" : "doc",
+            title: Text(verbatim: source.name),
+            secondary: {
+                if !isRetrying {
+                    LiveTVPlaylistSourceState(source: source, status: status)
+                        .font(.caption)
+                        .settingsRowSecondary()
+                }
+            },
+            trailing: { LiveTVSourceChevron() }
+        )
+        #endif
     }
 }

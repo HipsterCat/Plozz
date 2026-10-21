@@ -7,10 +7,8 @@ import PlozzCoreUI
 ///
 /// Lists the Plex Home users reachable from each signed-in Plex account, with
 /// the user's real Plex avatar, so the user can change which Plex Home user
-/// the active profile plays as. Tapping a row writes the mapping to the
-/// active profile via `scope.onSelectPlexHomeUser`; PIN-protected users
-/// trigger the PIN prompt at the next playback / profile re-apply via the
-/// AppState's pending-request flow, which is unchanged.
+/// the active profile plays as. The runtime authenticates the requested user
+/// before saving the mapping, including when the target is the account owner.
 struct PlexLinkedUserDetailView: View {
     let scope: ProfileLibrariesScope
     let accountID: String
@@ -52,12 +50,13 @@ struct PlexLinkedUserDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                SettingsPageHeader("Plex Home")
                 if let account {
                     let admin = users.first(where: { $0.isAdmin })
                     let managed = users.filter { !$0.isAdmin }
                     SettingsPanel(
                         title: "On \(account.server.name)",
-                        footer: "The account owner is the main Plex account holder; the others are managed/family users under it and may need a PIN. Plozz asks for the PIN on playback and never stores it."
+                        footer: "PIN-protected users must unlock when their Plozz profile becomes active."
                     ) {
                         // Rows separated by a gap rather than flush dividers so
                         // the focus lift doesn't paint over a divider line.
@@ -111,26 +110,23 @@ struct PlexLinkedUserDetailView: View {
         }
     }
 
-    private var isOwnerSelected: Bool {
+    private func isOwnerSelected(_ admin: PlexHomeUser?) -> Bool {
         guard let account else { return true }
-        return scope.activeProfile.homeUserBinding(forPlexAccount: account.id) == nil
+        let binding = scope.activeProfile.homeUserBinding(forPlexAccount: account.id)
+        return binding == nil || binding?.homeUserID == admin?.id
     }
 
-    /// The single "play as the account owner" row. Uses the admin Home
-    /// user's real name + Plex avatar when available, so this row reads as
-    /// the owner themselves — not a generic placeholder above a duplicate
-    /// admin entry. Selecting it clears the per-account binding (same as
-    /// before: no Home-user switch, admin token, no PIN).
     private func ownerRow(admin: PlexHomeUser?, account: Account) -> some View {
         Button {
-            scope.onSelectPlexHomeUser(account.id, nil)
+            guard let admin else { return }
+            scope.onSelectPlexHomeUser(account.id, admin)
         } label: {
             if let admin {
                 // Same shared row as the managed users, flagged as the owner.
                 PlexHomeUserRow(
                     user: admin,
                     showsOwnerBadge: true,
-                    accessory: isOwnerSelected ? .selected : .none
+                    accessory: isOwnerSelected(admin) ? .selected : .none
                 )
             } else {
                 HStack(spacing: 16) {
@@ -154,7 +150,7 @@ struct PlexLinkedUserDetailView: View {
                         }
                     }
                     Spacer()
-                    if isOwnerSelected {
+                    if isOwnerSelected(admin) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.title3)
                             .settingsRowGreenIndicator()
@@ -166,6 +162,7 @@ struct PlexLinkedUserDetailView: View {
             }
         }
         .buttonStyle(SettingsFocusButtonStyle())
+        .disabled(admin == nil)
     }
 
     private func userRow(_ user: PlexHomeUser, account: Account) -> some View {

@@ -3,8 +3,8 @@ import AVFoundation
 import CoreModels
 import Foundation
 
-enum NativePlaybackFailure {
-    struct VideoFormat: Sendable {
+public enum NativePlaybackFailure {
+    public struct VideoFormat: Sendable {
         let codec: FourCharCode
         let transfer: String?
         let primaries: String?
@@ -69,7 +69,7 @@ enum NativePlaybackFailure {
         return isCurrent() ? latest : nil
     }
 
-    static func classify(
+    public static func classify(
         _ error: NSError?, httpStatus: Int? = nil, convertedFormat: VideoFormat? = nil,
         provider: ProviderKind? = nil, convertingHDRSource: Bool = false
     ) -> StreamingPlaybackFailure {
@@ -88,6 +88,8 @@ enum NativePlaybackFailure {
         let http = httpStatus.flatMap { (400...599).contains($0) ? $0 : nil }
         var kind: StreamingPlaybackFailure.Kind
         if http == 401 || http == 403 { kind = .accessDenied }
+        else if http == 451 { kind = .accessRestricted }
+        else if http == 429 || http == 509 { kind = .rateLimited }
         else if http == 404 || http == 410 { kind = .unavailable }
         else if http == 408 || http == 504 { kind = .timedOut }
         else if let http, http >= 500 { kind = .server }
@@ -98,7 +100,10 @@ enum NativePlaybackFailure {
             case .fileDoesNotExist, .resourceUnavailable: kind = .unavailable
             case .cannotDecodeContentData, .cannotDecodeRawData: kind = .unsupportedFormat
             case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost,
-                 .dnsLookupFailed, .secureConnectionFailed: kind = .network
+                 .dnsLookupFailed, .secureConnectionFailed, .serverCertificateHasBadDate,
+                 .serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
+                 .serverCertificateNotYetValid, .clientCertificateRejected,
+                 .clientCertificateRequired: kind = .network
             default: kind = .unknown
             }
         } else if let av, [AVError.Code.decoderNotFound.rawValue,
@@ -116,7 +121,8 @@ enum NativePlaybackFailure {
         }
         return .init(
             kind: kind, domain: domain, code: evidence?.code, httpStatus: http,
-            provider: kind == .hdrConversion || kind == .hdrConversionUnconfirmed ? provider : nil
+            provider: kind == .hdrConversion || kind == .hdrConversionUnconfirmed ? provider : nil,
+            underlyingErrors: PlaybackFailureEvidence.ErrorCode.chain(error)
         )
     }
 }

@@ -54,6 +54,24 @@ final class OrderedVisibilityListTests: XCTestCase {
         XCTAssertEqual(edit.focusTarget, "y")
     }
 
+    func testMenuEdgeMovesPreserveOtherRowsAndStayWithinTheCurrentSection() throws {
+        let start = Sections(enabled: ["a", "b", "c", "d"], disabled: ["x", "y", "z"])
+        for (action, element, expected) in [
+            (OrderedVisibilityList.Action.moveToTop, "c", Sections(enabled: ["c", "a", "b", "d"], disabled: start.disabled)),
+            (.moveToBottom, "b", Sections(enabled: ["a", "c", "d", "b"], disabled: start.disabled)),
+            (.moveToTop, "z", Sections(enabled: start.enabled, disabled: ["z", "x", "y"])),
+            (.moveToBottom, "x", Sections(enabled: start.enabled, disabled: ["y", "z", "x"]))
+        ] {
+            let edit = try XCTUnwrap(OrderedVisibilityList.applying(action, to: element, in: start, keepingEnabled: ["b"]))
+            XCTAssertEqual(edit.sections, expected)
+            XCTAssertEqual(edit.focusTarget, element)
+        }
+        XCTAssertNil(OrderedVisibilityList.applying(.moveToTop, to: "a", in: start))
+        XCTAssertNil(OrderedVisibilityList.applying(.moveToBottom, to: "d", in: start))
+        XCTAssertNil(OrderedVisibilityList.applying(.moveToTop, to: "x", in: start))
+        XCTAssertNil(OrderedVisibilityList.applying(.moveToBottom, to: "z", in: start))
+    }
+
     func testRequiredItemCanMoveButCannotBeHiddenThroughAnyInteraction() throws {
         let start = Sections(enabled: ["a", "settings"], disabled: ["x"])
         let required: Set<String> = ["settings"]
@@ -72,7 +90,7 @@ final class OrderedVisibilityListTests: XCTestCase {
 
     func testMenuActionsRejectStaleItemsAndPreserveAnAllHiddenGenericList() throws {
         let start = Sections(enabled: ["a"], disabled: ["x"])
-        for action in [OrderedVisibilityList.Action.hide, .show, .moveUp, .moveDown] {
+        for action in [OrderedVisibilityList.Action.hide, .show, .moveUp, .moveDown, .moveToTop, .moveToBottom] {
             XCTAssertNil(OrderedVisibilityList.applying(action, to: "missing", in: start))
         }
         let edit = try XCTUnwrap(OrderedVisibilityList.applying(.hide, to: "a", in: start))

@@ -7,6 +7,354 @@ import XCTest
 
 @MainActor
 final class LiveTVSourcesRuntimeTests: XCTestCase {
+    func testCancelledSourceRetryDoesNotCreateAPageError() async throws {
+        let gate = SourcesRuntimeLoadGate()
+        let fixture = try SourcesRuntimeFixture(gate: gate)
+        defer { fixture.removeOwnedFiles() }
+        let runtime = fixture.runtime()
+        defer { runtime.invalidate() }
+        runtime.activate()
+        let refresh = Task { await runtime.catalog.refresh(sourceID: fixture.source.id) }
+        await gate.waitUntilStarted()
+        refresh.cancel()
+        await gate.release()
+        await refresh.value
+
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertFalse(runtime.catalog.isLoading)
+        XCTAssertTrue(runtime.isCurrent)
+        XCTAssertTrue(runtime.catalog.catalog.channels.isEmpty)
+    }
+
+    func testSourceRetryDoesNotEnrollAnotherAccount() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let runtime = fixture.runtime(activeAccountIDs: ["iptv", "new-account"])
+        defer { runtime.invalidate() }
+        await runtime.restore()
+        let saved = try fixture.store.load()
+        let source = try XCTUnwrap(saved.servers.first)
+        fixture.choices.append(.init(id: "new-account", name: "Other playlist", userName: "IPTV", kind: .iptv))
+        let before = await fixture.provider.checks
+
+        await runtime.catalog.refresh(sourceID: source.id)
+
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertEqual(try fixture.store.load(), saved)
+        let after = await fixture.provider.checks
+        XCTAssertEqual(after - before, 1)
+    }
+
+    func testSourceFailureIsAttributedWithoutADuplicatePageErrorAndCanRetryLocally() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let runtime = fixture.runtime()
+        defer { runtime.invalidate() }
+        await runtime.restore()
+        let source = try XCTUnwrap(runtime.catalog.imports.serverSources.first?.source)
+        await fixture.provider.setFailure(.unauthorized)
+        await runtime.catalog.refresh()
+
+        XCTAssertTrue(runtime.isCurrent)
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertEqual(runtime.catalog.imports.serverSources.first?.failure, .permissionDenied)
+
+        await fixture.provider.setFailure(nil)
+        await runtime.catalog.refresh(sourceID: source.id)
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertNil(runtime.catalog.imports.serverSources.first?.failure)
+        XCTAssertEqual(runtime.catalog.catalog.channels.map(\.name), ["IPTV channel"])
+        let loads = await fixture.loader.loads
+        XCTAssertEqual(loads, 0)
+
+        fixture.hasAccess = false
+        await runtime.catalog.refresh(sourceID: source.id)
+        XCTAssertEqual(runtime.catalog.issue, .authorization)
+        XCTAssertTrue(runtime.catalog.catalog.channels.isEmpty)
+    }
+
+    func testSyncBookkeepingDoesNotRevokeSourcesOrScanAdmission() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try await fixture.seed()
+        let runtime = fixture.runtime()
+        defer { runtime.invalidate() }
+        await runtime.restore()
+        let identity = runtime.authorityID
+        let channels = runtime.catalog.catalog.channels
+
+        var configuration = try fixture.store.load()
+        configuration.syncCheckpoint = .init(profileID: fixture.profile.id, accountEpoch: "sync-generation")
+        configuration.syncCheckpoint?.pendingCaptures["source"] = Data([1, 2, 3])
+        try fixture.store.save(configuration)
+
+        XCTAssertEqual(runtime.authorityID, identity)
+        XCTAssertTrue(runtime.isCurrent, "Cloud sync bookkeeping is not a change to profile access.")
+        runtime.scanBinding.updateCatalog(runtime.catalog.imports.configuration, channels: channels)
+        await runtime.scanBinding.waitUntilPrepared()
+        XCTAssertEqual(runtime.scanBinding.coordinator.sourceIDs, ["source"])
+        XCTAssertEqual(runtime.catalog.catalog.channels, channels)
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertEqual(try fixture.store.load().syncCheckpoint, configuration.syncCheckpoint)
+        let loads = await fixture.loader.loads
+        XCTAssertEqual(loads, 0)
+    }
+
+    func testSyncCheckpointDuringRefreshDoesNotCauseProfileAccessFailure() async throws {
+        let gate = SourcesRuntimeLoadGate()
+        let fixture = try SourcesRuntimeFixture(gate: gate)
+        defer { fixture.removeOwnedFiles() }
+        let runtime = fixture.runtime()
+        defer { runtime.invalidate() }
+        await runtime.restore()
+        let refresh = Task { await runtime.catalog.refresh() }
+        await gate.waitUntilStarted()
+        var configuration = try fixture.store.load()
+        configuration.syncCheckpoint = .init(profileID: fixture.profile.id, accountEpoch: "sync-generation")
+        try fixture.store.save(configuration)
+        await gate.release()
+        await refresh.value
+
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertTrue(runtime.isCurrent)
+        XCTAssertEqual(runtime.catalog.catalog.channels.map(\.name), ["Refreshed channel"])
+        XCTAssertEqual(try fixture.store.load().syncCheckpoint, configuration.syncCheckpoint)
+        let loads = await fixture.loader.loads
+        XCTAssertEqual(loads, 1)
+    }
+
+    func testEmptyEventSourceStaysRegisteredAsEventsAppearAndEnd() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        await fixture.provider.setChannels([])
+        let runtime = fixture.runtime()
+        defer { runtime.invalidate() }
+
+        await runtime.restore()
+        let saved = try fixture.store.load()
+        XCTAssertEqual(saved.servers.map(\.accountID), ["iptv"])
+        XCTAssertTrue(runtime.catalog.catalog.channels.isEmpty)
+        XCTAssertNil(runtime.catalog.issue)
+
+        await runtime.catalog.refresh()
+        XCTAssertEqual(runtime.catalog.imports.serverSources.first?.availability?.status, .noChannels)
+        XCTAssertNil(runtime.catalog.imports.serverSources.first?.failure)
+        await fixture.provider.setChannels([.init(id: "event", name: "Live event")])
+        await runtime.catalog.refresh()
+        XCTAssertEqual(runtime.catalog.catalog.channels.map(\.name), ["Live event"])
+        XCTAssertEqual(runtime.catalog.imports.serverSources.first?.availability?.status, .available)
+
+        await fixture.provider.setChannels([])
+        await runtime.catalog.refresh()
+        XCTAssertTrue(runtime.catalog.catalog.channels.isEmpty)
+        XCTAssertEqual(runtime.catalog.imports.serverSources.first?.availability?.status, .noChannels)
+        XCTAssertEqual(try fixture.store.load(), saved)
+        XCTAssertNil(runtime.catalog.issue)
+        let refreshes = await fixture.provider.refreshes
+        XCTAssertEqual(refreshes, 3)
+    }
+
+    func testSettingsRegistersIPTVWithoutFirstOpeningLiveTVOrRefreshingTheGuide() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let runtime = fixture.runtime()
+
+        await runtime.restore()
+
+        let source = try XCTUnwrap(fixture.store.load().servers.first)
+        XCTAssertEqual(source.accountID, "iptv")
+        XCTAssertEqual(source.name, "Live playlist")
+        XCTAssertTrue(source.isEnabled)
+        XCTAssertEqual(runtime.catalog.imports.configuration.servers, [source])
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertTrue(runtime.isCurrent)
+        XCTAssertEqual(runtime.catalog.catalog.channels.map(\.name), ["IPTV channel"])
+        XCTAssertEqual(runtime.catalog.imports.serverSources.first?.phase, .loaded)
+        XCTAssertEqual(runtime.catalog.imports.serverSources.first?.channelCount, 1)
+        await runtime.restore()
+        let checks = await fixture.provider.checks
+        let loads = await fixture.loader.loads
+        XCTAssertEqual(checks, 1, "Opening an already configured source must remain cache-only.")
+        XCTAssertEqual(loads, 0)
+    }
+
+    func testReopeningSettingsRestoresSavedIPTVWithoutAuthenticationGuideOrPlaybackRequests() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let initial = fixture.runtime()
+        await initial.restore()
+        initial.invalidate()
+
+        let reopened = fixture.runtime()
+        await reopened.restore()
+        defer { reopened.invalidate() }
+
+        XCTAssertEqual(reopened.catalog.catalog.channels.map(\.name), ["IPTV channel"])
+        XCTAssertEqual(reopened.catalog.imports.serverSources.first?.phase, .loaded)
+        XCTAssertNil(reopened.catalog.imports.serverSources.first?.failure)
+        let checks = await fixture.provider.checks
+        let refreshes = await fixture.provider.refreshes
+        let guides = await fixture.provider.guides
+        XCTAssertEqual(checks, 1)
+        XCTAssertEqual(refreshes, 0)
+        XCTAssertEqual(guides, 0)
+    }
+
+    func testSettingsRetriesFailedIPTVRegistrationAndPublishesItsChannels() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        fixture.secure.failWrites = true
+        let runtime = fixture.runtime()
+
+        await runtime.restore()
+        XCTAssertEqual(runtime.catalog.issue, .enrollment(.configurationNotSaved))
+        XCTAssertTrue(try fixture.store.load().servers.isEmpty)
+        fixture.secure.failWrites = false
+        await runtime.catalog.refresh()
+
+        XCTAssertNil(runtime.catalog.issue)
+        XCTAssertEqual(try fixture.store.load().servers.map(\.accountID), ["iptv"])
+        XCTAssertEqual(runtime.catalog.catalog.channels.map(\.name), ["IPTV channel"])
+    }
+
+    func testSettingsDoesNotRestoreSuppressedOrDisabledIPTV() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        fixture.suppressed = ["iptv"]
+        let runtime = fixture.runtime()
+
+        await runtime.restore()
+        XCTAssertTrue(try fixture.store.load().servers.isEmpty)
+        fixture.suppressed = []
+        let disabled = LiveTVServerSource(
+            id: "disabled", name: "Disabled playlist", accountID: "iptv", isEnabled: false
+        )
+        try fixture.store.save(.init(servers: [disabled]))
+        await runtime.restore()
+
+        XCTAssertEqual(try fixture.store.load().servers, [disabled])
+        let checks = await fixture.provider.checks
+        XCTAssertEqual(checks, 0)
+    }
+
+    func testSavedIPTVSurvivesProviderFailureAccountReadmissionAndReopeningWithoutDuplicates() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let runtime = fixture.runtime()
+        await runtime.restore()
+        let saved = try fixture.store.load()
+        await fixture.provider.setFailure(.serverUnreachable)
+        await runtime.catalog.refresh()
+        XCTAssertEqual(try fixture.store.load(), saved)
+        XCTAssertEqual(runtime.catalog.imports.configuration.servers, saved.servers)
+        runtime.invalidate()
+
+        let choices = fixture.choices
+        fixture.choices = []
+        fixture.accountIdentity = "temporarily-unavailable"
+        let unavailable = fixture.runtime()
+        await unavailable.restore()
+        XCTAssertEqual(try fixture.store.load(), saved)
+        unavailable.invalidate()
+
+        fixture.choices = choices
+        fixture.accountIdentity = "recovered"
+        await fixture.provider.setFailure(nil)
+        let reopened = fixture.runtime()
+        defer { reopened.invalidate() }
+        await reopened.restore()
+        await reopened.catalog.refresh()
+        XCTAssertEqual(try fixture.store.load(), saved)
+        XCTAssertEqual(reopened.catalog.imports.configuration.servers, saved.servers)
+        XCTAssertEqual(reopened.catalog.catalog.channels.map(\.name), ["IPTV channel"])
+    }
+
+    func testSavedIPTVSurvivesTransientSecureStorageFailureAndColdReadmission() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let initial = fixture.runtime()
+        await initial.restore()
+        let saved = try fixture.store.load()
+        initial.invalidate()
+        fixture.secure.failReads = true
+        let unreadable = fixture.runtime()
+        await unreadable.restore()
+        XCTAssertEqual(unreadable.catalog.issue, .configuration)
+        unreadable.invalidate()
+
+        fixture.secure.failReads = false
+        let reopened = fixture.runtime()
+        defer { reopened.invalidate() }
+        await reopened.restore()
+        XCTAssertEqual(try fixture.store.load(), saved)
+        XCTAssertEqual(reopened.catalog.imports.configuration.servers, saved.servers)
+        XCTAssertEqual(reopened.catalog.catalog.channels.map(\.name), ["IPTV channel"])
+    }
+
+    func testLateIPTVRegistrationCannotSaveAfterProfileAccessChanges() async throws {
+        let gate = SourcesRuntimeLoadGate()
+        let fixture = try SourcesRuntimeFixture(providerGate: gate)
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let runtime = fixture.runtime()
+        let restore = Task { await runtime.restore() }
+        await gate.waitUntilStarted()
+
+        fixture.hasAccess = false
+        runtime.invalidate()
+        await gate.release()
+        await restore.value
+
+        XCTAssertTrue(try fixture.store.load().servers.isEmpty)
+        XCTAssertTrue(runtime.catalog.imports.configuration.servers.isEmpty)
+        XCTAssertFalse(runtime.isCurrent)
+    }
+
+    func testRemovalDuringIPTVRegistrationWinsOverAutomaticEnrollment() async throws {
+        let gate = SourcesRuntimeLoadGate()
+        let fixture = try SourcesRuntimeFixture(providerGate: gate)
+        defer { fixture.removeOwnedFiles() }
+        try fixture.addIPTVChoice()
+        let runtime = fixture.runtime()
+        let restore = Task { await runtime.restore() }
+        await gate.waitUntilStarted()
+
+        fixture.suppressed = ["iptv"]
+        await gate.release()
+        await restore.value
+
+        XCTAssertTrue(try fixture.store.load().servers.isEmpty)
+        XCTAssertNil(runtime.catalog.issue)
+    }
+
+    func testPresentationStateDoesNotReadSourcesButOperationsStillRevalidateThem() async throws {
+        let fixture = try SourcesRuntimeFixture()
+        defer { fixture.removeOwnedFiles() }
+        let runtime = fixture.runtime()
+        await runtime.restore()
+        let reads = fixture.secure.reads
+        for _ in 0..<20 { XCTAssertTrue(runtime.isPresentationCurrent) }
+        XCTAssertEqual(fixture.secure.reads, reads)
+
+        fixture.accountIdentity = "new-account-generation"
+        XCTAssertFalse(runtime.isPresentationCurrent)
+        XCTAssertEqual(fixture.secure.reads, reads)
+        fixture.accountIdentity = "account-generation"
+        try fixture.store.save(.empty)
+        XCTAssertFalse(runtime.isCurrent, "Operations must reject the obsolete durable configuration")
+        runtime.invalidate()
+        XCTAssertFalse(runtime.isPresentationCurrent)
+    }
+
     func testLoaderIsSharedOnlyForTheExactProfileAndNamespace() {
         let profileID = UUID().uuidString
         let root = LiveTVCatalogStorage.loader(profileID: profileID, namespace: nil)
@@ -41,6 +389,7 @@ final class LiveTVSourcesRuntimeTests: XCTestCase {
         let imports = runtime.catalog.imports
 
         await runtime.catalog.refresh()
+        await runtime.scanBinding.waitUntilPrepared()
 
         XCTAssertTrue(imports === runtime.catalog.imports)
         XCTAssertTrue(runtime.isCurrent)
@@ -221,6 +570,7 @@ private final class SourcesRuntimeFixture {
     let cache: LiveTVIndexedCache
     let secure = SourcesRuntimeSecureStore()
     let loader: SourcesRuntimeLoader
+    let provider: SourcesRuntimeProvider
     let store: LiveTVSourcesStore
     let preferences: LiveTVPreferencesStore
     let source: LiveTVPlaylistSource
@@ -228,9 +578,12 @@ private final class SourcesRuntimeFixture {
     var hasAccess = true
     var accountIdentity = "account-generation"
     var parentalPIN: ParentalPIN?
+    var choices: [LiveTVServerChoice] = []
+    var suppressed: Set<String> = []
 
-    init(gate: SourcesRuntimeLoadGate? = nil) throws {
+    init(gate: SourcesRuntimeLoadGate? = nil, providerGate: SourcesRuntimeLoadGate? = nil) throws {
         loader = SourcesRuntimeLoader(gate: gate)
+        provider = SourcesRuntimeProvider(gate: providerGate)
         defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         let root = try FileManager.default.url(
             for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
@@ -249,7 +602,7 @@ private final class SourcesRuntimeFixture {
         try store.save(.init(playlists: [source]))
     }
 
-    func runtime() -> LiveTVSourcesRuntime {
+    func runtime(activeAccountIDs: [String]? = nil) -> LiveTVSourcesRuntime {
         LiveTVSourcesRuntime(
             profileID: "actual-root-owner", store: store,
             approvals: LiveTVSourceApprovalStore(
@@ -261,10 +614,26 @@ private final class SourcesRuntimeFixture {
             ),
             context: { [weak self] in
                 guard let self, self.hasAccess else { return nil }
-                return .init(profile: self.profile, parentalPIN: self.parentalPIN, activeAccountIDs: [])
+                return .init(
+                    profile: self.profile, parentalPIN: self.parentalPIN,
+                    activeAccountIDs: activeAccountIDs ?? self.choices.map(\.id)
+                )
             },
-            accountAuthorizationID: { [weak self] in self?.accountIdentity ?? "" }
+            accountAuthorizationID: { [weak self] in self?.accountIdentity ?? "" },
+            serverProviderResolver: { [weak self] id in
+                guard let self, self.hasAccess, self.choices.contains(where: { $0.id == id }) else { return nil }
+                return .init(
+                    accountID: id, authorizationID: self.accountIdentity, kind: .iptv, provider: self.provider
+                )
+            },
+            serverChoices: { [weak self] in self?.choices ?? [] },
+            suppressedAccountIDs: { [weak self] in self?.suppressed ?? [] }
         )
+    }
+
+    func addIPTVChoice() throws {
+        try store.save(.empty)
+        choices = [.init(id: "iptv", name: "Live playlist", userName: "IPTV", kind: .iptv)]
     }
 
     func seed() async throws {
@@ -283,6 +652,48 @@ private final class SourcesRuntimeFixture {
             do { try FileManager.default.removeItem(at: directory) }
             catch { XCTFail("Could not remove this test's catalog.") }
         }
+    }
+}
+
+private actor SourcesRuntimeProvider: ServerLiveTVProviding {
+    let gate: SourcesRuntimeLoadGate?
+    private(set) var checks = 0
+    private(set) var refreshes = 0
+    private(set) var guides = 0
+    private var channels: [ServerLiveTVChannel] = [.init(id: "channel", name: "IPTV channel")]
+    private var failure: AppError?
+
+    init(gate: SourcesRuntimeLoadGate?) { self.gate = gate }
+
+    func setChannels(_ channels: [ServerLiveTVChannel]) { self.channels = channels }
+    func setFailure(_ failure: AppError?) { self.failure = failure }
+
+    func cachedLiveTVCatalog() -> ServerLiveTVCatalogSnapshot? {
+        .init(channels: channels, supportsGuide: true)
+    }
+
+    func liveTVAvailability() async throws -> ServerLiveTVAvailability {
+        checks += 1
+        await gate?.suspend()
+        if let failure { throw failure }
+        return .init(status: channels.isEmpty ? .noChannels : .available, channelCount: channels.count)
+    }
+
+    func refreshLiveTVAvailability() async throws -> ServerLiveTVAvailability {
+        refreshes += 1
+        return try await liveTVAvailability()
+    }
+
+    func liveTVChannels() async throws -> [ServerLiveTVChannel] {
+        channels
+    }
+
+    func liveTVGuide(channelIDs: [String], from: Date, to: Date) async throws -> [ServerLiveTVProgramme] {
+        guides += 1
+        return []
+    }
+    func openLiveTVChannel(id: String) async throws -> any LiveTVStreamLease {
+        throw ServerLiveTVError.tunerUnavailable
     }
 }
 
@@ -338,19 +749,32 @@ private final class SourcesRuntimeSecureStore: SecureStoring, @unchecked Sendabl
     private let lock = NSLock()
     private var values: [String: String] = [:]
     private var readFailure = false
+    private var writeFailure = false
+    private var readCount = 0
+    var reads: Int { lock.withLock { readCount } }
     var failReads: Bool {
         get { lock.withLock { readFailure } }
         set { lock.withLock { readFailure = newValue } }
     }
+    var failWrites: Bool {
+        get { lock.withLock { writeFailure } }
+        set { lock.withLock { writeFailure = newValue } }
+    }
 
     func readString(for key: String) throws -> String? {
         try lock.withLock {
+            readCount += 1
             if readFailure { throw LiveTVSourcesStoreError.loadFailed }
             return values[key]
         }
     }
     func string(for key: String) -> String? { try? readString(for: key) }
-    func setString(_ value: String, for key: String) throws { lock.withLock { values[key] = value } }
+    func setString(_ value: String, for key: String) throws {
+        try lock.withLock {
+            if writeFailure { throw LiveTVSourcesStoreError.saveFailed }
+            values[key] = value
+        }
+    }
     func removeValue(for key: String) throws { _ = lock.withLock { values.removeValue(forKey: key) } }
 }
 #endif

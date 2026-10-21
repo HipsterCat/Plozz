@@ -19,6 +19,9 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
     public var requestFailed: Bool
     public var requestStatus: MediaSeasonRequestStatus?
     public var isPresentInLibrary: Bool
+    /// Season premiere calendar day, stored at midnight UTC like MediaItem.releaseDate.
+    public var premiereDate: Date?
+    public var hasDownloadActivity: Bool
 
     public init(
         number: Int,
@@ -26,7 +29,9 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
         status: MediaAvailabilityStatus,
         requestFailed: Bool = false,
         requestStatus: MediaSeasonRequestStatus? = nil,
-        isPresentInLibrary: Bool = false
+        isPresentInLibrary: Bool = false,
+        premiereDate: Date? = nil,
+        hasDownloadActivity: Bool = false
     ) {
         self.number = number
         self.title = title
@@ -34,6 +39,8 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
         self.requestFailed = requestFailed
         self.requestStatus = requestStatus
         self.isPresentInLibrary = isPresentInLibrary
+        self.premiereDate = premiereDate
+        self.hasDownloadActivity = hasDownloadActivity
     }
 
     /// Request-service state stays authoritative for eligibility. Local episodes
@@ -63,6 +70,19 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
     }
 
     public var statusTitle: LocalizedStringResource {
+        statusTitle()
+    }
+
+    public func isAwaitingRelease(now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        effectiveRequestStatus == .processing
+            && coverageStatus != .partiallyAvailable
+            && !hasDownloadActivity
+            && SeasonEpisodeAvailability.scheduled(
+                airDate: premiereDate, now: now, calendar: calendar
+            ) == .unaired
+    }
+
+    public func statusTitle(now: Date = Date(), calendar: Calendar = .current) -> LocalizedStringResource {
         let coverage = coverageStatus
         if coverage == .available { return "Available" }
         if hasRequestFailure {
@@ -84,6 +104,9 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
         }
         if requestStatus == .completed { return "Request Completed" }
         if effectiveRequestStatus == .pending { return "Requested" }
+        if isAwaitingRelease(now: now, calendar: calendar) {
+            return "Requested · Unreleased"
+        }
         if effectiveRequestStatus == .processing { return "Processing" }
         return switch coverage {
         case .pending: "Requested"
@@ -99,6 +122,7 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
         if hasRequestFailure || requestStatus == .declined {
             return "exclamationmark.triangle.fill"
         }
+        if isAwaitingRelease() { return "calendar" }
         switch effectiveRequestStatus {
         case .pending: return "clock"
         case .processing: return "arrow.triangle.2.circlepath"
@@ -275,7 +299,9 @@ public struct MediaRequestAvailability: Sendable, Equatable {
             title: preferred?.title ?? "Season \(number)",
             status: .pending,
             requestStatus: .pending,
-            isPresentInLibrary: preferred?.isPresentInLibrary ?? false
+            isPresentInLibrary: preferred?.isPresentInLibrary ?? false,
+            premiereDate: preferred?.premiereDate,
+            hasDownloadActivity: preferred?.hasDownloadActivity ?? false
         )
     }
 
@@ -302,7 +328,9 @@ public struct MediaRequestAvailability: Sendable, Equatable {
             status: coverage,
             requestFailed: effectiveWorkflow == .failed,
             requestStatus: effectiveWorkflow,
-            isPresentInLibrary: lhs.isPresentInLibrary || rhs.isPresentInLibrary
+            isPresentInLibrary: lhs.isPresentInLibrary || rhs.isPresentInLibrary,
+            premiereDate: [lhs.premiereDate, rhs.premiereDate].compactMap { $0 }.min(),
+            hasDownloadActivity: lhs.hasDownloadActivity || rhs.hasDownloadActivity
         )
     }
 

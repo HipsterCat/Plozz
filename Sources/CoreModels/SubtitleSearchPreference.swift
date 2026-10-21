@@ -10,7 +10,7 @@ import Foundation
 //     equivalent knob), by filtering + ranking the candidate list.
 // Kept accessibility-forward: a viewer who needs SDH sets it once, per profile.
 
-/// How hearing-impaired (SDH) subtitle candidates are treated in a search. Raw
+/// How SDH tracks are selected for playback and subtitle searches. Raw
 /// values are the Plex `hearingImpaired` parameter (0–3).
 public enum HearingImpairedPreference: Int, Codable, CaseIterable, Sendable {
     /// Prefer non-SDH subtitles (SDH allowed, ranked lower). Plex default.
@@ -30,22 +30,22 @@ public enum HearingImpairedPreference: Int, Codable, CaseIterable, Sendable {
         case .preferNonSDH:
             return LocalizedStringResource(
                 "Prefer Non-SDH",
-                comment: "Subtitle search preference option for hearing-impaired (SDH) subtitles."
+                comment: "Subtitle playback and search preference for subtitles for the deaf or hard of hearing (SDH)."
             )
         case .preferSDH:
             return LocalizedStringResource(
                 "Prefer SDH",
-                comment: "Subtitle search preference option for hearing-impaired (SDH) subtitles."
+                comment: "Subtitle playback and search preference for subtitles for the deaf or hard of hearing (SDH)."
             )
         case .onlySDH:
             return LocalizedStringResource(
                 "Only SDH",
-                comment: "Subtitle search preference option for hearing-impaired (SDH) subtitles."
+                comment: "Subtitle playback and search preference for subtitles for the deaf or hard of hearing (SDH)."
             )
         case .onlyNonSDH:
             return LocalizedStringResource(
                 "Only Non-SDH",
-                comment: "Subtitle search preference option for hearing-impaired (SDH) subtitles."
+                comment: "Subtitle playback and search preference for subtitles for the deaf or hard of hearing (SDH)."
             )
         }
     }
@@ -54,23 +54,23 @@ public enum HearingImpairedPreference: Int, Codable, CaseIterable, Sendable {
         switch self {
         case .preferNonSDH:
             return LocalizedStringResource(
-                "Show subtitles for the deaf or hard-of-hearing lower in the list.",
-                comment: "Explanation shown under the Prefer Non-SDH subtitle search option."
+                "Use regular subtitles when available.",
+                comment: "Prefer regular subtitles over SDH when automatically selecting or searching; SDH remains a fallback."
             )
         case .preferSDH:
             return LocalizedStringResource(
-                "Show subtitles for the deaf or hard-of-hearing at the top of the list.",
-                comment: "Explanation shown under the Prefer SDH subtitle search option."
+                "Use SDH when available; otherwise use regular subtitles.",
+                comment: "SDH playback and search preference. SDH includes speaker identification and sound descriptions."
             )
         case .onlySDH:
             return LocalizedStringResource(
-                "Only show subtitles for the deaf or hard-of-hearing (SDH).",
-                comment: "Explanation shown under the Only SDH subtitle search option."
+                "Use only SDH. Leave subtitles off if unavailable.",
+                comment: "Strict automatic SDH selection; the viewer can still manually select any available track."
             )
         case .onlyNonSDH:
             return LocalizedStringResource(
-                "Never show subtitles for the deaf or hard-of-hearing.",
-                comment: "Explanation shown under the Only Non-SDH subtitle search option."
+                "Use only regular subtitles. Leave subtitles off if unavailable.",
+                comment: "Strict automatic non-SDH selection; the viewer can still manually select any available track."
             )
         }
     }

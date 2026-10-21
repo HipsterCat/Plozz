@@ -234,10 +234,12 @@ struct SeerMediaDetails: Decodable {
 struct SeerSeasonSummary: Decodable {
     var name: String?
     var seasonNumber: Int
+    var airDate: String?
 
-    init(name: String? = nil, seasonNumber: Int) {
+    init(name: String? = nil, seasonNumber: Int, airDate: String? = nil) {
         self.name = name
         self.seasonNumber = seasonNumber
+        self.airDate = airDate
     }
 }
 

@@ -186,22 +186,35 @@ private struct ThemeCardButtonBody: View {
     let isSelected: Bool
     let cornerRadius: CGFloat
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.settingsFormTextInset) private var textInset
+
+    private var isContained: Bool {
+        #if os(tvOS)
+        textInset > 0
+        #else
+        false
+        #endif
+    }
+
+    private var corner: CGFloat {
+        isContained ? SettingsRowMetrics.formRowCornerRadius : cornerRadius
+    }
 
     var body: some View {
         configuration.label
             .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .fill(.ultraThinMaterial)
                     .overlay(
                         // Accent wash marks the ACTIVE theme so selection reads
                         // at a glance, even when another card is focused.
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        RoundedRectangle(cornerRadius: corner, style: .continuous)
                             .fill(accent.opacity(isSelected ? 0.22 : 0))
                     )
             )
             // Resting border: a soft accent ring when selected, else a hairline.
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .strokeBorder(
                         isSelected ? accent.opacity(0.7) : Color.primary.opacity(0.08),
                         lineWidth: isSelected ? 2 : 1
@@ -209,12 +222,12 @@ private struct ThemeCardButtonBody: View {
             )
             // Focus outline (accent), shown only when focused.
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .strokeBorder(accent, lineWidth: 4)
                     .opacity(isFocused ? 1 : 0)
             )
             .shadow(color: .black.opacity(isFocused ? 0.28 : 0), radius: isFocused ? 14 : 0, y: isFocused ? 6 : 0)
-            .scaleEffect(isFocused ? 1.01 : 1)
+            .scaleEffect(isFocused && !isContained ? 1.01 : 1)
             .animation(.easeOut(duration: 0.16), value: isFocused)
             .animation(.easeOut(duration: 0.16), value: isSelected)
     }
@@ -275,6 +288,9 @@ public struct PreviewCard<Swatch: View>: View {
     private let accent: Color
     private let compact: Bool
     private let swatchHeight: CGFloat?
+    private let swatchAspectRatio: CGFloat?
+    private let titleLineLimit: Int?
+    private let titleSizeGroup: [LocalizedStringResource]
     private let action: () -> Void
     private let swatch: () -> Swatch
 
@@ -285,6 +301,9 @@ public struct PreviewCard<Swatch: View>: View {
         accent: Color,
         compact: Bool = false,
         swatchHeight: CGFloat? = nil,
+        swatchAspectRatio: CGFloat? = nil,
+        titleLineLimit: Int? = 1,
+        titleSizeGroup: [LocalizedStringResource] = [],
         action: @escaping () -> Void,
         @ViewBuilder swatch: @escaping () -> Swatch
     ) {
@@ -294,21 +313,43 @@ public struct PreviewCard<Swatch: View>: View {
         self.accent = accent
         self.compact = compact
         self.swatchHeight = swatchHeight
+        self.swatchAspectRatio = swatchAspectRatio
+        self.titleLineLimit = titleLineLimit
+        self.titleSizeGroup = titleSizeGroup
         self.action = action
         self.swatch = swatch
+    }
+
+    private var titleFont: Font {
+        #if os(tvOS)
+        if compact { return SettingsRowMetrics.titleFont }
+        #endif
+        return compact ? .headline : .title3.weight(.semibold)
     }
 
     public var body: some View {
         Button(action: action) {
             VStack(spacing: compact ? 10 : 18) {
-                swatch()
-                    .frame(height: swatchHeight ?? (compact ? 124 : 200))
+                if let swatchAspectRatio {
+                    swatch().aspectRatio(swatchAspectRatio, contentMode: .fit)
+                } else {
+                    swatch().frame(height: swatchHeight ?? (compact ? 124 : 200))
+                }
 
                 VStack(spacing: compact ? 2 : 6) {
-                    Text(title)
-                        .font(compact ? .headline : .title3.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                    ZStack(alignment: .top) {
+                        // Keep related titles the same height without fixed line counts.
+                        ForEach(titleSizeGroup.indices, id: \.self) { index in
+                            Text(titleSizeGroup[index])
+                                .hidden()
+                                .accessibilityHidden(true)
+                        }
+                        Text(title)
+                    }
+                    .font(titleFont)
+                    .lineLimit(titleLineLimit)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: false, vertical: true)
                     if !compact, let detail {
                         Text(detail)
                             .font(.footnote)

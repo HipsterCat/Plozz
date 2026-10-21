@@ -20,6 +20,32 @@ final class AggregatedLibraryProviderTests: XCTestCase {
         try await provider.items(in: "lib", kind: .movie, page: PageRequest(startIndex: start, limit: limit))
     }
 
+    func testCombinedBrowseDoesNotAttachConflictingCachedSources() async throws {
+        var first = movie("first", title: "Same Title", year: 2020, tmdb: "123")
+        first.providerIDs["Imdb"] = "tt111"
+        var second = first
+        second.id = "second"
+        second.providerIDs["Imdb"] = "tt222"
+        let backend = FakeMediaProvider(allItems: [first, second])
+        var sparseFirst = first
+        sparseFirst.providerIDs = ["Tmdb": "123"]
+        var sparseSecond = second
+        sparseSecond.providerIDs = ["Tmdb": "123"]
+        let index = IdentityIndex()
+        await index.ingest([sparseFirst, sparseSecond], accountID: "server")
+        let snapshot = await index.snapshot()
+        let provider = AggregatedLibraryProvider(
+            sources: [source("server", backend)],
+            identitySources: { snapshot.sourceRefs(for: $0) }
+        )
+
+        let result = try await page(provider, start: 0, limit: 20)
+        XCTAssertEqual(result.items.count, 2)
+        for card in result.items {
+            XCTAssertEqual(card.sources.map(\.itemID), [card.id])
+        }
+    }
+
     func testMergesServersInSortOrderWithoutFullScan() async throws {
         // The grid claims a sort in its own menu, so the stitched result has to
         // honour it: a k-way merge on the sort key, NOT a round-robin interleave
@@ -83,6 +109,149 @@ final class AggregatedLibraryProviderTests: XCTestCase {
         XCTAssertEqual(result.items.map(\.id), ["j0", "j1", "j2"], "Offline server dropped; the other still browses")
         XCTAssertEqual(result.totalCount, 3)
         XCTAssertFalse(result.hasMore)
+    }
+
+    func testAllOfflineThrowsAndRetryCanRecover() async throws {
+        let source = FakeMediaProvider(allItems: [movie("m", title: "Movie", year: 2024, tmdb: "1")])
+        source.alwaysFail = true
+        let provider = AggregatedLibraryProvider(sources: [self.source("owner", source)])
+        do {
+            _ = try await page(provider, start: 0, limit: 20)
+            XCTFail("Unavailable libraries must not appear empty")
+        } catch {
+            XCTAssertEqual(LibrarySourceFailure.underlying(error) as? AppError, .serverUnreachable)
+        }
+        source.alwaysFail = false
+        let recovered = try await page(provider, start: 0, limit: 20)
+        XCTAssertEqual(recovered.items.map(\.id), ["m"])
+    }
+
+    func testCompactQueryUsesNewestWatchHistoryWithoutLosingRewatchProgress() throws {
+        var old = movie("p", title: "Dune", year: 2021, tmdb: "1").taggingSource("plex")
+        old.isPlayed = true
+        old.lastPlayedAt = Date(timeIntervalSince1970: 100)
+        old.librarySortValues = .init(watched: true)
+        var recent = movie("j", title: "Dune", year: 2021, tmdb: "1").taggingSource("jelly")
+        recent.runtime = 100
+        recent.resumePosition = 25
+        recent.playedPercentage = 0.25
+        recent.lastPlayedAt = Date(timeIntervalSince1970: 200)
+        recent.librarySortValues = .init(watched: true)
+        let provider = AggregatedLibraryProvider(sources: [
+            source("plex", FakeMediaProvider(allItems: [old])),
+            source("jelly", FakeMediaProvider(allItems: [recent]))
+        ])
+        let merged = try XCTUnwrap(provider.libraryQueryMergeInventory([
+            LibraryQueryRecord(old), LibraryQueryRecord(recent)
+        ]).first)
+        XCTAssertTrue(merged.completed, "A rewatch retains historical completion")
+        XCTAssertFalse(merged.isPlayed)
+        XCTAssertTrue(merged.matches(.init(filter: .inProgress)))
+        XCTAssertFalse(merged.matches(.init(filter: .unwatched)))
+        XCTAssertEqual(merged.progress, 0.25)
+        recent.librarySortValues?.watched = false
+        let markedUnwatched = try XCTUnwrap(provider.libraryQueryMergeInventory([
+            LibraryQueryRecord(old), LibraryQueryRecord(recent)
+        ]).first)
+        XCTAssertFalse(markedUnwatched.completed, "Newer explicit history wins over another server's older completion")
+    }
+
+    func testHubIdentifiersDistinguishLibrariesOnTheSameAccount() async throws {
+        let source = FakeMediaProvider(allItems: [])
+        source.recommendationHubs = [
+            LibrarySection(id: "native", title: "Recommended", items: [
+                movie("movie", title: "Movie", year: 2024, tmdb: "1")
+            ])
+        ]
+        let provider = AggregatedLibraryProvider(sources: [
+            .init(accountID: "account", containerID: "first", provider: source),
+            .init(accountID: "account", containerID: "second", provider: source)
+        ])
+        let hubs = try await provider.libraryHubs(libraryID: "merged", kind: .movie, limit: 10)
+        XCTAssertEqual(hubs.count, 2)
+        XCTAssertEqual(Set(hubs.map(\.id)).count, 2)
+    }
+
+    func testRecommendationsRetainHealthyAccountAndSourceIdentity() async throws {
+        let offline = FakeMediaProvider(allItems: [])
+        offline.continueWatchingError = .serverUnreachable
+        offline.recommendationHubError = .serverUnreachable
+        let healthy = FakeMediaProvider(allItems: [])
+        healthy.continueWatchingItems = [
+            movie("playing", title: "Playing", year: 2020, tmdb: "100")
+                .taggingLibrary("lib-healthy")
+        ]
+        healthy.recommendationHubs = [
+            LibrarySection(id: "native", title: "Because You Watched",
+                           localizedTitle: "Recommended", localizedTitleSuffix: " · Movies", items: [
+                movie("suggested", title: "Suggested", year: 2021, tmdb: "101")
+            ])
+        ]
+        let provider = AggregatedLibraryProvider(sources: [
+            source("offline", offline), source("healthy", healthy)
+        ])
+
+        let watching = try await provider.continueWatching(limit: 10, inLibraries: ["merged"])
+        XCTAssertEqual(watching.map(\.id), ["playing"])
+        XCTAssertEqual(watching.first?.sourceAccountID, "healthy")
+        let hubs = try await provider.libraryHubs(libraryID: "merged", kind: .movie, limit: 10)
+        XCTAssertEqual(hubs.map(\.id), ["healthy\u{1F}lib-healthy:native"])
+        XCTAssertEqual(hubs.first?.items.first?.libraryID, "lib-healthy")
+        XCTAssertEqual(hubs.first?.items.first?.sourceAccountID, "healthy")
+        XCTAssertEqual(hubs.first?.localizedTitle, LocalizedStringResource("Recommended"))
+        XCTAssertEqual(hubs.first?.localizedTitleSuffix, " · Movies · \(healthy.session.server.name)")
+
+        healthy.recommendationHubError = .serverUnreachable
+        do {
+            _ = try await provider.libraryHubs(libraryID: "merged", kind: .movie, limit: 10)
+            XCTFail("An entirely failed recommendation feed must be retryable")
+        } catch {
+            XCTAssertEqual(LibrarySourceFailure.underlying(error) as? AppError, .serverUnreachable)
+        }
+    }
+
+    func testContinueWatchingMergesSourcesAndOrdersByRecencyBeforeLimiting() async throws {
+        var a = movie("a", title: "Dune", year: 2021, tmdb: "1").taggingLibrary("lib-a")
+        var b = movie("b", title: "Dune", year: 2021, tmdb: "1").taggingLibrary("lib-b")
+        var arrival = movie("arrival", title: "Arrival", year: 2016, tmdb: "2").taggingLibrary("lib-a")
+        var heat = movie("heat", title: "Heat", year: 1995, tmdb: "3").taggingLibrary("lib-b")
+        a.lastPlayedAt = Date(timeIntervalSince1970: 10)
+        b.lastPlayedAt = Date(timeIntervalSince1970: 30)
+        arrival.lastPlayedAt = Date(timeIntervalSince1970: 20)
+        heat.lastPlayedAt = Date(timeIntervalSince1970: 40)
+        b.resumePosition = 120
+        let first = FakeMediaProvider(allItems: [a, arrival])
+        let second = FakeMediaProvider(allItems: [b, heat])
+        first.continueWatchingItems = [a, arrival]
+        second.continueWatchingItems = [b, heat]
+        let provider = AggregatedLibraryProvider(sources: [source("a", first), source("b", second)])
+        let items = try await provider.continueWatching(limit: 2, inLibraries: ["lib-a"])
+        XCTAssertEqual(items.map(\.title), ["Heat", "Dune"])
+        let dune = try XCTUnwrap(items.last)
+        XCTAssertEqual(Set(dune.allSourceAccountIDs), ["a", "b"])
+        XCTAssertEqual(Set(dune.sources.compactMap(\.libraryID)), ["lib-a", "lib-b"])
+        XCTAssertEqual(dune.lastPlayedAt, b.lastPlayedAt)
+        XCTAssertEqual(dune.resumePosition, b.resumePosition)
+    }
+
+    @MainActor
+    func testRecommendedContinueWatchingRetainsEveryAccountQualifiedLibrary() async throws {
+        let a = movie("a", title: "First", year: 2024, tmdb: "1").taggingLibrary("lib-a")
+        let b = movie("b", title: "Second", year: 2024, tmdb: "2").taggingLibrary("lib-b")
+        let first = FakeMediaProvider(allItems: [a])
+        let second = FakeMediaProvider(allItems: [b])
+        first.continueWatchingItems = [a, b]
+        second.continueWatchingItems = [b, a]
+        let provider = AggregatedLibraryProvider(sources: [source("a", first), source("b", second)])
+        let model = LibraryBrowseViewModel(provider: provider, containerID: "lib-a", containerKind: .movie)
+        await model.loadFirstPageIfNeeded()
+        let sections = try XCTUnwrap(model.recommendationState.value)
+        let watching = try XCTUnwrap(sections.first { $0.id == "continueWatching" }).items
+        XCTAssertEqual(watching.map(\.id), ["a", "b"])
+        XCTAssertEqual(watching.map(\.sourceAccountID), ["a", "b"])
+        XCTAssertEqual(watching.map(\.libraryID), ["lib-a", "lib-b"])
+        XCTAssertFalse(provider.contains(b.taggingSource("a"), inLibrary: "lib-a"))
+        XCTAssertFalse(provider.contains(a.taggingSource("foreign"), inLibrary: "lib-a"))
     }
 
     func testTransientFailureDoesNotPermanentlyExhaustSource() async throws {

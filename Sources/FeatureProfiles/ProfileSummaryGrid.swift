@@ -25,6 +25,7 @@ public struct ProfileSummaryGrid: View {
     private let spacing: CGFloat
     private let nameFont: Font
     private let nameLineLimit: Int?
+    private let focusableProfiles: Bool
 
     public init(
         profiles: [Profile],
@@ -32,7 +33,8 @@ public struct ProfileSummaryGrid: View {
         itemWidth: CGFloat,
         spacing: CGFloat,
         nameFont: Font,
-        nameLineLimit: Int? = 1
+        nameLineLimit: Int? = 1,
+        focusableProfiles: Bool = false
     ) {
         self.profiles = profiles
         self.avatarSize = avatarSize
@@ -40,6 +42,7 @@ public struct ProfileSummaryGrid: View {
         self.spacing = spacing
         self.nameFont = nameFont
         self.nameLineLimit = nameLineLimit
+        self.focusableProfiles = focusableProfiles
     }
 
     public var body: some View {
@@ -54,7 +57,7 @@ public struct ProfileSummaryGrid: View {
             ForEach(profiles, id: \.id) { profile in
                 VStack(spacing: avatarSize * 0.11) {
                     ProfileAvatarView(profile: profile, size: avatarSize)
-                    Text(profile.name)
+                    ProfileNameLabel(profile: profile)
                         .font(nameFont)
                         .lineLimit(nameLineLimit)
                         .fixedSize(horizontal: false, vertical: true)
@@ -65,6 +68,11 @@ public struct ProfileSummaryGrid: View {
                         .minimumScaleFactor(0.8)
                 }
                 .frame(width: itemWidth)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("setup-summary-profile-\(profile.id)")
+                #if os(tvOS)
+                .focusable(focusableProfiles)
+                #endif
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

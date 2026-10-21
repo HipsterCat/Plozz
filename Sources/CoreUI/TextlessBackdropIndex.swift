@@ -1,3 +1,4 @@
+import CoreNetworking
 import Foundation
 
 /// The small on-disk record of which shows have textless wide art.
@@ -18,8 +19,7 @@ import Foundation
 ///
 /// It is a cache, not a source of truth: it lives in Caches (the OS may delete
 /// it), entries expire, and losing it costs one launch of re-resolving. That is
-/// what lets it skip the locking, budgeting and atomic-write machinery a real
-/// store would need.
+/// what lets its writes be asynchronous while first-frame reads stay synchronous.
 @MainActor
 public final class TextlessBackdropIndex {
     public static let sharedIndex = TextlessBackdropIndex()
@@ -32,7 +32,7 @@ public final class TextlessBackdropIndex {
     /// is what keeps the synchronous read cheap.
     private static let maximumEntries = 400
 
-    private struct Entry: Codable {
+    private struct Entry: Codable, Sendable {
         /// `nil` records a conclusive "there is none", which is the whole point of
         /// the file — it is what lets a logo be suppressed on evidence rather than
         /// on a genre guess.
@@ -42,15 +42,28 @@ public final class TextlessBackdropIndex {
 
     private let fileURL: URL
     private let fileManager: FileManager
+    private let writeData: @Sendable (Data, URL) throws -> Void
+    private let writeQueue = DispatchQueue(label: "com.plozz.textless-backdrop-index", qos: .utility)
     private var entries: [String: Entry] = [:]
     private var loaded = false
-    /// Set when the in-memory map has changes not yet written. The write is
-    /// coalesced to the end of the runloop turn so a row that resolves twenty
-    /// shows at once writes once, not twenty times.
+    /// Coalesce same-turn answers and changes arriving during an in-flight write
+    /// into the next snapshot instead of queuing one disk operation per answer.
     private var needsWrite = false
+    private var writeTask: Task<Void, Never>?
+    private var writeError: (any Error)?
 
-    public init(directory: URL? = nil, fileManager: FileManager = .default) {
+    public convenience init(directory: URL? = nil, fileManager: FileManager = .default) {
+        self.init(directory: directory, fileManager: fileManager, writeData: {
+            try $0.write(to: $1, options: .atomic)
+        })
+    }
+
+    init(
+        directory: URL?, fileManager: FileManager = .default,
+        writeData: @escaping @Sendable (Data, URL) throws -> Void
+    ) {
         self.fileManager = fileManager
+        self.writeData = writeData
         let base = directory ?? fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
             .first!
             .appendingPathComponent("plozz-textless-backdrops", isDirectory: true)
@@ -92,15 +105,28 @@ public final class TextlessBackdropIndex {
     }
 
     private func scheduleWrite() {
-        guard !needsWrite else { return }
         needsWrite = true
-        Task { @MainActor [weak self] in
-            self?.writeNow()
+        guard writeTask == nil else { return }
+        writeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { writeTask = nil }
+            while needsWrite {
+                needsWrite = false
+                trimEntries()
+                do {
+                    try await persist(entries)
+                    writeError = nil
+                } catch {
+                    needsWrite = true
+                    writeError = error
+                    PlozzLog.networking.error("Textless artwork index write failed (code \((error as NSError).code))")
+                    break
+                }
+            }
         }
     }
 
-    private func writeNow() {
-        needsWrite = false
+    private func trimEntries() {
         // Oldest first, so a long history sheds the answers least likely to be
         // needed rather than whatever the dictionary happened to order last.
         if entries.count > Self.maximumEntries {
@@ -108,17 +134,32 @@ public final class TextlessBackdropIndex {
                 .prefix(Self.maximumEntries)
             entries = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
         }
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        try? fileManager.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: fileURL, options: .atomic)
     }
 
-    /// Writes any pending changes immediately. For tests, which cannot wait on a
-    /// coalesced runloop hop.
-    func flushForTesting() {
-        writeNow()
+    private func persist(_ snapshot: [String: Entry]) async throws {
+        let fileURL = fileURL
+        let fileManager = fileManager
+        let writeData = writeData
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            writeQueue.async {
+                do {
+                    let data = try JSONEncoder().encode(snapshot)
+                    try fileManager.createDirectory(
+                        at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+                    )
+                    try writeData(data, fileURL)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Drains pending writes without blocking the caller's executor.
+    func flushForTesting() async throws {
+        if needsWrite { scheduleWrite() }
+        await writeTask?.value
+        if let writeError { throw writeError }
     }
 }

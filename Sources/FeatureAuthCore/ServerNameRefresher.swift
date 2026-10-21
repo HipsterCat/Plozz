@@ -3,7 +3,7 @@ import CoreModels
 import CoreNetworking
 import ProviderJellyfin
 
-/// One-shot, cross-platform self-heal for stale server names.
+/// One-shot, cross-platform refresh of server names and redirected API addresses.
 ///
 /// Historically iOS added Jellyfin/Emby accounts with a PLACEHOLDER name
 /// (`ProviderKind.displayName`, e.g. "Jellyfin") and never fetched the server's real
@@ -12,10 +12,11 @@ import ProviderJellyfin
 /// existing accounts still carry the stale value.
 ///
 /// This refresher re-reads each managed (MediaBrowser: Jellyfin/Emby) server's public
-/// system info (no auth required) and, when the resolved name differs, rewrites the
-/// stored account with the correct name via `add(_:token:)` (which upserts metadata).
+/// system info without credentials. A resolved address is adopted only when the
+/// server ID still matches. Metadata updates never rewrite credentials or revive
+/// an account removed while discovery was in flight.
 /// It is:
-///   • idempotent (a matching name is a no-op),
+///   • idempotent (matching name and address are a no-op),
 ///   • non-destructive (offline/unreachable servers are skipped, tokens untouched),
 ///   • shared by tvOS + iOS so both platforms converge identically.
 public struct ServerNameRefresher: Sendable {
@@ -27,9 +28,8 @@ public struct ServerNameRefresher: Sendable {
         self.http = http
     }
 
-    /// Refresh managed server names. Returns the number of accounts updated. Safe to
-    /// call on every launch; only reachable servers whose name actually changed are
-    /// rewritten.
+    /// Refresh managed server names and addresses. Returns the number of accounts
+    /// updated; unchanged and unreachable servers are not rewritten.
     @discardableResult
     public func refresh() async -> Int {
         let accounts = accountStore.loadAccounts()
@@ -37,27 +37,40 @@ public struct ServerNameRefresher: Sendable {
         var updated = 0
 
         for account in accounts where account.server.provider.usesMediaBrowserAPI {
-            guard let token = accountStore.token(for: account.id) else { continue }
             let client = JellyfinClient(
                 baseURL: account.server.baseURL,
                 deviceProfile: JellyfinDeviceProfile(deviceID: deviceID),
                 providerKind: account.server.provider,
                 http: http
             )
-            guard let info = try? await client.publicSystemInfo() else { continue }
+            let info: MediaServer
+            do {
+                try Task.checkCancellation()
+                info = try await client.publicSystemInfo()
+                try Task.checkCancellation()
+            } catch {
+                if error is CancellationError || (error as? AppError) == .cancelled { return updated }
+                PlozzLog.auth.info("Server metadata refresh failed: \(String(describing: error))")
+                continue
+            }
             // `publicSystemInfo` already applies the canonical ServerName ?? host ??
             // "<Provider> Server" fallback, so a non-placeholder here is authoritative.
-            guard !info.name.isEmpty, info.name != account.server.name else { continue }
+            let addressChanged = info.baseURL != account.server.baseURL
+            if addressChanged, info.id != account.server.id {
+                PlozzLog.auth.error("Server metadata refresh rejected a redirected server identity mismatch")
+                continue
+            }
+            guard !info.name.isEmpty,
+                  info.name != account.server.name || addressChanged else { continue }
 
             var server = account.server
             server.name = info.name
+            server.baseURL = info.baseURL
             if server.version == nil { server.version = info.version }
-            var refreshed = account
-            refreshed.server = server
             do {
-                try accountStore.add(refreshed, token: token)
+                try accountStore.updateServerMetadata(expected: account, server: server)
                 updated += 1
-                PlozzLog.auth.info("ServerNameRefresher: \(account.server.name) → \(info.name)")
+                PlozzLog.auth.info("Server metadata refreshed addressChanged=\(addressChanged)")
             } catch {
                 PlozzLog.auth.error("ServerNameRefresher: failed to update \(account.id): \(error.localizedDescription)")
             }

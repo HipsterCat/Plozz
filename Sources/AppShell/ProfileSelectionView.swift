@@ -123,7 +123,7 @@ struct ProfileSelectionView: View {
         .onExitCommand {
             if canCancel { appState.profileFlow.cancelProfileSelection() }
         }
-        .sheet(item: $route, onDismiss: {
+        .plozzSheet(item: $route, onDismiss: {
             // Perform a parked hand-off only now that the previous sheet is
             // genuinely gone; doing it at the tap loses the second sheet.
             if let next = pendingRoute {
@@ -199,7 +199,7 @@ struct ProfileSelectionView: View {
                 )
             }
         }
-        .fullScreenCover(item: $pendingAction, onDismiss: {
+        .plozzFullScreenCover(item: $pendingAction, onDismiss: {
             // The authorized action was parked rather than presented from under
             // this cover; raise it now that the cover has actually gone.
             if let next = pendingRoute {

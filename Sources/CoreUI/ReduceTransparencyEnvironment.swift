@@ -15,9 +15,9 @@ private struct PlozzReduceTransparencyKey: EnvironmentKey {
     static let defaultValue: Bool = false
 }
 
-/// As `PlozzReduceTransparencyKey`, plus performance.
+/// An explicit surface override for previews; normal panels follow transparency.
 private struct PlozzReducePanelGlassKey: EnvironmentKey {
-    static let defaultValue: Bool = false
+    static let defaultValue: Bool? = nil
 }
 
 /// Whether the display is currently being driven in HDR.
@@ -31,22 +31,11 @@ public extension EnvironmentValues {
         set { self[PlozzReduceTransparencyKey.self] = newValue }
     }
 
-    /// Reduce transparency for LARGE surfaces only — panels, cards, anything
-    /// with a broad backdrop sample drawn over live video.
-    ///
-    /// Everything above, OR the device and the content being unable to afford
-    /// glass. The split exists because the cost of this material is
-    /// proportional to the area behind it: a panel spanning the screen
-    /// resamples the whole frame, while a capsule button samples a sliver, and
-    /// giving up both to protect the frame rate costs the interface far more
-    /// than it saves.
-    ///
-    /// Accessibility is deliberately NOT split this way — a viewer who cannot
-    /// read text over glass cannot read it on a button either, so
-    /// `plozzReduceTransparency` still applies everywhere and this is only ever
-    /// wider than it, never narrower.
+    /// Panels follow the same resolved accessibility/profile preference as small
+    /// controls. Hardware and source metadata no longer switch their material.
+    /// An explicit override remains available for material previews and tests.
     var plozzReducePanelGlass: Bool {
-        get { self[PlozzReducePanelGlassKey.self] }
+        get { self[PlozzReducePanelGlassKey.self] ?? plozzReduceTransparency }
         set { self[PlozzReducePanelGlassKey.self] = newValue }
     }
 
@@ -80,9 +69,7 @@ public extension View {
         _ shape: S,
         raised: Bool = false
     ) -> some View {
-        background {
-            shape.fill(raised ? PlozzFrostedSurface.raised : PlozzFrostedSurface.base)
-        }
+        modifier(PlozzFrostedBackgroundModifier(shape: shape, raised: raised))
     }
 
     /// The shared hairline edge for a frosted surface, compensated for HDR.
@@ -95,17 +82,30 @@ public extension View {
     }
 }
 
+private struct PlozzFrostedBackgroundModifier<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let raised: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content.background {
+            shape.fill(PlozzFrostedSurface.fill(colorScheme: colorScheme, raised: raised))
+        }
+    }
+}
+
 private struct PlozzFrostedBorderModifier<S: InsettableShape>: ViewModifier {
     let shape: S
     let visible: Bool
 
     @Environment(\.plozzHDRDisplayActive) private var hdrDisplayActive
+    @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         content.overlay(
             shape.strokeBorder(
                 visible
-                    ? PlozzFrostedSurface.borderColor(hdrDisplayActive: hdrDisplayActive)
+                    ? PlozzFrostedSurface.borderColor(hdrDisplayActive: hdrDisplayActive, colorScheme: colorScheme)
                     : .clear,
                 lineWidth: PlozzFrostedSurface.borderWidth
             )
@@ -137,6 +137,13 @@ public enum PlozzFrostedSurface {
     /// surrounds it — the same relationship glass gets from its white tint.
     public static let raised = Color(white: 0.24).opacity(0.8)
 
+    public static func fill(colorScheme: ColorScheme, raised: Bool = false) -> Color {
+        if colorScheme == .light {
+            return Color(white: raised ? 0.78 : 0.94).opacity(raised ? 0.9 : 0.92)
+        }
+        return raised ? Self.raised : base
+    }
+
     public static let borderWidth: CGFloat = 1
 
     /// The edge, compensated for the display being in HDR mode.
@@ -145,8 +152,8 @@ public enum PlozzFrostedSurface {
     /// composited into that signal — so SDR white maps to a higher output level
     /// than the same value reaches in SDR mode, and a hairline tuned against a
     /// still backdrop reads as a bright line across someone's film.
-    public static func borderColor(hdrDisplayActive: Bool) -> Color {
-        Color.white.opacity(hdrDisplayActive ? 0.10 : 0.16)
+    public static func borderColor(hdrDisplayActive: Bool, colorScheme: ColorScheme = .dark) -> Color {
+        (colorScheme == .light ? Color.black : .white).opacity(hdrDisplayActive ? 0.10 : 0.16)
     }
 
     /// For call sites with no way to know — previews and anything outside the

@@ -54,7 +54,7 @@ func mapWebDAVError(_ error: Error) -> MediaTransportError {
         return .sourceChanged(reason: transportError.description)
 
     // Range/seek unsupported by the server for this resource — terminal.
-    case .rangeNotSupported, .seekableRequiresStrongETag:
+    case .rangeNotSupported, .seekableRequiresStrongETag, .seekableRequiresValidator:
         return .unsupportedRange(reason: transportError.description)
 
     // Protocol/policy/config violations — terminal. Retrying can't fix a

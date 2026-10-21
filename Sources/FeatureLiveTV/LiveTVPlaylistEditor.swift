@@ -1,5 +1,6 @@
 import PlozzCoreUI
 import CoreModels
+import CoreNetworking
 import FeatureLiveTVCore
 import Observation
 import SwiftUI
@@ -7,7 +8,7 @@ import SwiftUI
 struct LiveTVPlaylistEditor: View {
     @State private var model: LiveTVPlaylistEditorModel
     @State private var checkRequest: UUID?
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
     let isEditing: Bool
     let save: (LiveTVPlaylistEditorModel.ValidatedInput) throws -> Void
 
@@ -19,7 +20,7 @@ struct LiveTVPlaylistEditor: View {
         self.isEditing = isEditing
         self.save = save
         _model = State(initialValue: LiveTVPlaylistEditorModel(
-            name: name, playlistURL: playlistURL, guideURLs: guideURLs
+            name: name, playlistURL: playlistURL, guideURLs: guideURLs, isEditing: isEditing
         ))
     }
 
@@ -27,40 +28,20 @@ struct LiveTVPlaylistEditor: View {
         @Bindable var model = model
         LiveTVSettingsPage(title: "IPTV source") {
             SettingsSectionGroup("Playlist") {
-                LiveTVAddressField(title: "Playlist or live HLS URL", text: $model.playlistAddress)
-                    .accessibilityIdentifier("live-tv-playlist-url")
-                TextField("Name (optional)", text: $model.name)
-            }
-            .disabled(model.isChecking)
-
-            SettingsSectionGroup("Program guide") {
-                ForEach($model.guideAddresses) { $guide in
-                    HStack(spacing: 20) {
-                        LiveTVAddressField(title: "XMLTV guide URL (optional)", text: $guide.address)
-                        Button("Remove guide", systemImage: "minus.circle") {
-                            let id = guide.id
-                            model.guideAddresses.removeAll { $0.id == id }
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                    }
-                    .contextMenu {
-                        Button("Move guide earlier") { model.moveGuide(guide.id, by: -1) }
-                            .disabled(model.guideAddresses.first?.id == guide.id)
-                        Button("Move guide later") { model.moveGuide(guide.id, by: 1) }
-                            .disabled(model.guideAddresses.last?.id == guide.id)
-                    }
-                }
-                Button("Add another guide", systemImage: "plus") {
-                    model.guideAddresses.append(.init())
-                }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                LiveTVSetupField(
+                    title: "Playlist or live HLS URL", text: $model.playlistAddress, isAddress: true,
+                    identifier: "live-tv-playlist-url", example: "https://example.com/channels.m3u"
+                )
+                LiveTVSetupField(title: "Name (optional)", text: $model.name)
             } footer: {
-                Text("Optional XMLTV or .xml.gz. List preferred guides first.")
+                Text("Add channels with an M3U, M3U8 or live HLS URL.")
             }
             .disabled(model.isChecking)
 
-            SettingsSectionGroup {
+            LiveTVGuideFields(guides: $model.guideAddresses)
+                .disabled(model.isChecking)
+
+            VStack(alignment: .leading, spacing: 12) {
                 if model.usesUnencryptedAddresses {
                     Text("HTTP is unencrypted. Prefer HTTPS.")
                         .font(.caption)
@@ -84,17 +65,20 @@ struct LiveTVPlaylistEditor: View {
                         checkRequest = UUID()
                     }
                 } label: {
-                    if model.isChecking {
-                        Label("Cancel check", systemImage: "xmark")
-                    } else if model.currentReview != nil {
-                        Label("Save source", systemImage: "checkmark")
-                    } else if isEditing {
-                        Label("Save changes", systemImage: "checkmark")
-                    } else {
-                        Label("Add source", systemImage: "plus")
+                    Group {
+                        if model.isChecking {
+                            Text("Cancel check")
+                        } else if model.currentReview != nil {
+                            Text("Save source")
+                        } else if isEditing {
+                            Text("Save changes")
+                        } else {
+                            Text("Add source")
+                        }
                     }
+                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .plozzActionButton(role: model.isChecking ? .secondary : .primary)
                 .accessibilityIdentifier("live-tv-playlist-action")
                 if let issue = model.issue {
                     Label {
@@ -104,10 +88,14 @@ struct LiveTVPlaylistEditor: View {
                     }
                     .fixedSize(horizontal: false, vertical: true)
                 }
-            } footer: {
                 Text("Checks the playlist, not individual streams.")
+                    .font(.footnote)
+                    .settingsRowSecondary()
             }
         }
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task(id: checkRequest) {
             guard let request = checkRequest else { return }
             await model.check()
@@ -118,21 +106,6 @@ struct LiveTVPlaylistEditor: View {
             }
         }
         .onDisappear { model.cancelCheck() }
-    }
-}
-
-private struct LiveTVAddressField: View {
-    let title: LocalizedStringResource
-    @Binding var text: String
-
-    var body: some View {
-        TextField(text: $text) { Text(title) }
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .privacySensitive()
-            #if os(iOS)
-            .keyboardType(.URL)
-            #endif
     }
 }
 
@@ -212,15 +185,21 @@ final class LiveTVPlaylistEditorModel {
     private var review: Review?
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private let loader: any LiveTVSourceLoading
+    @ObservationIgnored private let setupDiagnostics: IPTVSetupDiagnostics
+    @ObservationIgnored private let isEditing: Bool
+    @ObservationIgnored private var diagnosticAttempt: IPTVSetupAttempt?
 
     init(
         name: String = "", playlistURL: URL? = nil, guideURLs: [URL] = [],
+        isEditing: Bool = false, setupDiagnostics: IPTVSetupDiagnostics = .shared,
         loader: any LiveTVSourceLoading = LiveTVSourceLoader()
     ) {
         self.name = name
         self.playlistAddress = playlistURL?.absoluteString ?? ""
-        self.guideAddresses = guideURLs.isEmpty ? [.init()] : guideURLs.map { .init(address: $0.absoluteString) }
+        self.guideAddresses = guideURLs.map { .init(address: $0.absoluteString) }
         self.loader = loader
+        self.isEditing = isEditing
+        self.setupDiagnostics = setupDiagnostics
     }
 
     var currentReview: Review? {
@@ -274,67 +253,100 @@ final class LiveTVPlaylistEditorModel {
     }
 
     func check() async {
-        revision &+= 1
+        cancelCheck()
         let request = revision
         isChecking = false
         review = nil
         issue = nil
+        let attempt = beginDiagnostic()
+        diagnosticAttempt = attempt
+        var readyToSave = false
+        defer {
+            if !readyToSave {
+                attempt?.finish(.init(.cancelled))
+                if request == revision { diagnosticAttempt = nil }
+            }
+        }
         let input: ValidatedInput
         switch validatedInputResult {
         case .success(let value):
             input = value
         case .failure(let failure):
             issue = failure
+            attempt?.finish(.init(.invalidInput))
             return
         }
         isChecking = true
         defer { if request == revision { isChecking = false } }
         do {
-            let imported = try await loader.loadPlaylist(from: input.playlistURL)
+            attempt?.advance(to: .playlist)
+            let imported = try await IPTVSetupDiagnostics.$current.withValue(attempt) {
+                try await loader.loadPlaylist(from: input.playlistURL)
+            }
             guard !Task.isCancelled, request == revision, input == validatedInput else { return }
+            attempt?.record(entries: imported.entryCount, skippedEntries: imported.skippedEntryCount)
             guard !imported.channels.isEmpty else {
                 issue = .noChannels
+                attempt?.finish(.init(.empty))
                 return
             }
             review = Review(
                 input: input, channelCount: imported.channels.count,
                 skippedEntryCount: imported.skippedEntryCount
             )
+            readyToSave = true
         } catch is CancellationError {
             return
         } catch let failure as LiveTVSourceImportError {
             guard request == revision, !Task.isCancelled, failure != .cancelled else { return }
+            attempt?.finish(.sanitized(failure))
             issue = .download(failure)
         } catch {
             guard request == revision, !Task.isCancelled else { return }
+            attempt?.finish(.sanitized(error))
             issue = .download(.downloadFailed)
         }
     }
 
     func cancelCheck() {
+        diagnosticAttempt?.finish(.init(.cancelled))
+        diagnosticAttempt = nil
         revision &+= 1
         isChecking = false
     }
 
     func save(using persist: (ValidatedInput) throws -> Void) -> Bool {
         guard let review = currentReview else {
+            diagnosticAttempt?.finish(.init(.cancelled))
+            diagnosticAttempt = nil
+            beginDiagnostic()?.finish(.init(.invalidInput))
             issue = .checkRequired
             return false
         }
+        let attempt = diagnosticAttempt ?? beginDiagnostic()
+        defer { diagnosticAttempt = nil }
+        attempt?.advance(to: .persistence)
         do {
             try persist(review.input)
+            attempt?.finish()
             issue = nil
             return true
         } catch LiveTVSourceManagementModel.MutationError.accessDenied {
+            attempt?.finish(.init(.accessDenied))
             issue = .accessDenied
             return false
         } catch LiveTVSourceManagementModel.MutationError.changedSource {
+            attempt?.finish(.init(.sourceChanged))
             issue = .sourceChanged
             return false
         } catch {
+            attempt?.finish(.init(.storage))
             issue = .saveFailed
             return false
         }
     }
 
+    private func beginDiagnostic() -> IPTVSetupAttempt? {
+        setupDiagnostics.begin(source: .playlistURL, authentication: .url, entry: isEditing ? .editSource : .addSource)
+    }
 }

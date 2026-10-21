@@ -6,6 +6,10 @@
 	<string>$(ANILIST_CLIENT_ID)</string>
 	<key>AniListClientSecret</key>
 	<string>$(ANILIST_CLIENT_SECRET)</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).downloads.*</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -30,6 +34,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>plozz</string>
+				<string>$(PRODUCT_BUNDLE_IDENTIFIER).external-player</string>
 			</array>
 		</dict>
 	</array>
@@ -37,6 +42,11 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>infuse</string>
+		<string>vlc-x-callback</string>
+	</array>
 	<key>LastFmAPIKey</key>
 	<string>$(LASTFM_API_KEY)</string>
 	<key>LastFmSharedSecret</key>
@@ -60,6 +70,8 @@
 	<string>Plozz uses your local network to discover media servers and network shares.</string>
 	<key>OMDBAPIKey</key>
 	<string>$(OMDB_API_KEY)</string>
+	<key>PlozzDevelopmentFeature</key>
+	<string>$(PLOZZ_DEV_FEATURE)</string>
 	<key>PlozzReleaseChannel</key>
 	<string>$(PLOZZ_RELEASE_CHANNEL)</string>
 	<key>PlozzReleaseID</key>
@@ -78,8 +90,6 @@
 	<string>$(TVDB_API_KEY)</string>
 	<key>TraktClientID</key>
 	<string>$(TRAKT_CLIENT_ID)</string>
-	<key>TraktClientSecret</key>
-	<string>$(TRAKT_CLIENT_SECRET)</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Bungee-Regular.ttf</string>
@@ -110,6 +120,7 @@
 	<array>
 		<string>audio</string>
 		<string>remote-notification</string>
+		<string>processing</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
@@ -129,5 +140,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>WetrakrClientID</key>
+	<string>$(WETRAKR_CLIENT_ID)</string>
 </dict>
 </plist>

@@ -1,5 +1,7 @@
 import Foundation
 import CoreModels
+import CoreNetworking
+import FeatureHomeCore
 
 /// One backend source that participates in an aggregated cross-server library
 /// browse session: which account, that account's own container id for the
@@ -58,11 +60,15 @@ public struct AggregatedLibrarySource: Sendable {
 /// fetches further batches when the caller scrolls past what's already merged.
 /// Each merged card keeps every server's source ref (via the merger) so tapping
 /// it opens a detail view with a working server picker and unified watch-state.
-public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting, @unchecked Sendable {
+public final class AggregatedLibraryProvider: MediaLibraryQueryProviding, LibraryQueryFailureRecovering, CapabilityReporting, @unchecked Sendable {
     public let kind: ProviderKind
     public let session: UserSession
 
-    private let sources: [AggregatedLibrarySource]
+    let sources: [AggregatedLibrarySource]
+    let inventoryCounts = InventoryCounts()
+    let queryRecovery = QueryRecovery()
+    let inventoryServerInfo: [String: SourceServerInfo]
+    let inventoryIdentitySources: @Sendable (MediaItem) -> [MediaSourceRef]
     private let cache: Cache
     private let collectionCache: Cache
     private let videoPlaylistCache = VideoPlaylistSnapshotCache()
@@ -81,6 +87,42 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
     private enum BrowseContent: Equatable, Sendable {
         case titles
         case collections
+    }
+
+    actor QueryRecovery {
+        private var excluded: Set<String> = []
+        func sources() -> Set<String> { excluded }
+        func reset() { excluded = [] }
+        func exclude(_ failed: Set<String>, from all: Set<String>) -> Bool {
+            let next = excluded.union(failed.intersection(all))
+            guard next != excluded, next != all else { return false }
+            excluded = next
+            return true
+        }
+    }
+
+    public func resetLibraryQueryRecovery() async {
+        await queryRecovery.reset()
+    }
+
+    public func recoverLibraryQuery(after failure: LibrarySourceFailure) async -> Bool {
+        guard (failure.underlyingError as? AppError) == .serverUnreachable else { return false }
+        let recovered = await queryRecovery.exclude(failure.sourceKeys, from: Set(sources.map(\.sourceKey)))
+        if recovered {
+            PlozzLog.app.error("Aggregation: rebuilding unpublished query without unavailable sources")
+        }
+        return recovered
+    }
+
+    func attributedFailure(_ error: Error, sources failed: [AggregatedLibrarySource]) -> Error {
+        guard !(error is CancellationError), (error as? AppError) != .cancelled else { return error }
+        var seen: Set<String> = []
+        let servers = failed.map(\.provider.session.server).filter {
+            seen.insert("\($0.provider.rawValue):\($0.identityKey)").inserted
+        }
+        return LibrarySourceFailure(
+            underlyingError: LibrarySourceFailure.underlying(error),
+            servers: servers, sourceKeys: Set(failed.map(\.sourceKey)))
     }
 
     /// How many times one fill retries a silent source before emitting past it.
@@ -157,11 +199,14 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
         /// state — offsets, buffers, exhaustion, totals and the running merge — is
         /// only meaningful for ONE ordering, so a changed sort has to throw it away.
         private var activeSort: CoreModels.SortDescriptor?
+        private var activeFilters: LibraryFilters = .all
 
         func initialize(with sourceIDs: [String]) {
             guard offsets.isEmpty else { return }
             for id in sourceIDs { offsets[id] = 0 }
         }
+
+        func hasSuccessfulSource() -> Bool { !totals.isEmpty }
 
         /// Resets everything when the caller asks for a different ordering.
         ///
@@ -169,9 +214,11 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
         /// provider instance, so without this the aggregate would answer the new
         /// sort out of a buffer built for the old one — a sort menu that appears to
         /// do nothing, or worse, silently mixes two orderings.
-        func prepare(for sort: CoreModels.SortDescriptor, sourceIDs: [String], force: Bool = false) {
-            guard force || activeSort != sort else { return }
+        func prepare(for sort: CoreModels.SortDescriptor, sourceIDs: [String], force: Bool = false,
+                     filters: LibraryFilters = .all) {
+            guard force || activeSort != sort || activeFilters != filters else { return }
             activeSort = sort
+            activeFilters = filters
             offsets = Dictionary(uniqueKeysWithValues: sourceIDs.map { ($0, 0) })
             totals.removeAll()
             exhausted.removeAll()
@@ -268,7 +315,7 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
                         if !exhausted.contains(key), !stalled.contains(key) { return emitted }
                         continue
                     }
-                    if best == nil || MediaItemSortOrder.isOrderedBefore(head, best!, sort: sort) {
+                    if best == nil || MediaItemSortOrder.isOrderedBefore(head, best!, sort: sort, identityTieBreak: false) {
                         best = head
                         bestKey = key
                     }
@@ -396,6 +443,8 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
     ) {
         precondition(!sources.isEmpty, "AggregatedLibraryProvider requires at least one source")
         self.sources = sources
+        self.inventoryServerInfo = serverInfo
+        self.inventoryIdentitySources = identitySources
         self.cache = Cache(
             serverInfo: serverInfo,
             identitySources: identitySources,
@@ -419,6 +468,98 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
     public func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
     public func latest(limit: Int) async throws -> [MediaItem] { [] }
     public func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
+
+    public func contains(_ item: MediaItem, inLibrary _: String) -> Bool {
+        sources.contains { source in
+            (item.sourceAccountID == source.accountID && item.libraryID == source.containerID)
+                || item.sources.contains {
+                    $0.accountID == source.accountID && $0.libraryID == source.containerID
+                }
+        }
+    }
+
+    public func continueWatching(limit: Int, inLibraries _: [String]?) async throws -> [MediaItem] {
+        guard limit > 0 else { return [] }
+        let results = await withTaskGroup(of: (Int, Result<[MediaItem], Error>).self) { group in
+            for (index, source) in sources.enumerated() {
+                group.addTask {
+                    do {
+                        let items = try await source.provider.continueWatching(
+                            limit: limit, inLibraries: [source.containerID]
+                        )
+                        return (index, .success(items.filter { $0.libraryID == source.containerID }.map {
+                            $0.taggingSource(source.accountID)
+                        }))
+                    } catch {
+                        return (index, .failure(error))
+                    }
+                }
+            }
+            var bySource: [Int: [MediaItem]] = [:]
+            var firstError: Error?
+            for await (index, result) in group {
+                switch result {
+                case .success(let items): bySource[index] = items
+                case .failure(let error):
+                    firstError = firstError ?? error
+                    PlozzLog.app.error("Continue Watching failed for library source \(self.sources[index].accountID): \(String(describing: error))")
+                }
+            }
+            return (bySource, firstError)
+        }
+        if results.0.isEmpty, let error = results.1 {
+            throw attributedFailure(error, sources: sources)
+        }
+        let merged = MediaItemMerger.merge(
+            sources.indices.flatMap { results.0[$0] ?? [] },
+            serverInfo: { inventoryServerInfo[$0] }
+        )
+        return Array(HomeAggregator.sortedByRecency(merged).prefix(limit))
+    }
+
+    public func libraryHubs(libraryID _: String, kind: MediaItemKind, limit: Int) async throws -> [LibrarySection] {
+        let results = await withTaskGroup(of: (Int, Result<[LibrarySection], Error>).self) { group in
+            for (index, source) in sources.enumerated() {
+                group.addTask {
+                    do {
+                        let sections = try await source.provider.libraryHubs(
+                            libraryID: source.containerID, kind: source.kind ?? kind, limit: limit
+                        )
+                        return (index, .success(sections.map { section in
+                            LibrarySection(
+                                id: "\(source.sourceKey):\(section.id)",
+                                title: "\(section.title) · \(source.provider.session.server.name)",
+                                localizedTitle: section.localizedTitle,
+                                localizedTitleSuffix: (section.localizedTitleSuffix ?? "")
+                                    + " · \(source.provider.session.server.name)",
+                                style: section.style,
+                                items: section.items.map {
+                                    $0.taggingSource(source.accountID).taggingLibrary(source.containerID)
+                                }
+                            )
+                        }))
+                    } catch {
+                        return (index, .failure(error))
+                    }
+                }
+            }
+            var result: [Int: [LibrarySection]] = [:]
+            var firstError: Error?
+            for await (index, outcome) in group {
+                switch outcome {
+                case .success(let sections): result[index] = sections
+                case .failure(let error):
+                    firstError = firstError ?? error
+                    PlozzLog.app.error("Recommendation hubs failed for library source \(self.sources[index].accountID): \(String(describing: error))")
+                }
+            }
+            return (result, firstError)
+        }
+        if results.0.isEmpty, let error = results.1 {
+            throw attributedFailure(error, sources: sources)
+        }
+        return sources.indices.flatMap { results.0[$0] ?? [] }
+    }
 
     /// Protocol-conformance fallback only — **not** the routing path for a user
     /// action. The grid uses paged title or collection discovery, and every
@@ -507,23 +648,28 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
             let grouped = try await withThrowingTaskGroup(of: (Int, [MediaItem]).self) { group in
                 for (index, source) in eligible.enumerated() {
                     group.addTask {
-                        var start = 0
-                        var items: [MediaItem] = []
-                        while true {
-                            try Task.checkCancellation()
-                            let page = try await source.provider.videoPlaylists(
-                                in: source.containerID,
-                                page: PageRequest(startIndex: start, limit: 100, sort: page.sort)
-                            )
-                            guard page.startIndex == start,
-                                  !page.items.isEmpty || start >= page.totalCount else {
-                                throw AppError.invalidResponse
+                        do {
+                            var start = 0
+                            var items: [MediaItem] = []
+                            while true {
+                                try Task.checkCancellation()
+                                let page = try await source.provider.videoPlaylists(
+                                    in: source.containerID,
+                                    page: PageRequest(startIndex: start, limit: 100, sort: page.sort)
+                                )
+                                guard page.startIndex == start,
+                                      !page.items.isEmpty || start >= page.totalCount else {
+                                    throw AppError.invalidResponse
+                                }
+                                items += page.items.map { $0.taggingSource(source.accountID) }
+                                start += page.items.count
+                                if start >= page.totalCount { break }
                             }
-                            items += page.items.map { $0.taggingSource(source.accountID) }
-                            start += page.items.count
-                            if start >= page.totalCount { break }
+                            return (index, items)
+                        } catch {
+                            try Self.checkQueryCancellation(error)
+                            throw self.attributedFailure(error, sources: [source])
                         }
-                        return (index, items)
                     }
                 }
                 var results: [(Int, [MediaItem])] = []
@@ -571,7 +717,7 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
         // a half-reset cache or fold a page fetched under the old ordering.
         await cache.prepare(
             for: page.sort, sourceIDs: sourceIDs,
-            force: content == .collections && page.startIndex == 0
+            force: content == .collections && page.startIndex == 0, filters: page.filters
         )
         /// Sources that have used up their in-fill retries and are being emitted
         /// past. Scoped per call so a blip never persists into the next request.
@@ -601,6 +747,7 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
                     into: hungry,
                     kind: kind,
                     sort: page.sort,
+                    filters: page.filters,
                     limit: page.limit,
                     content: content,
                     cache: cache,
@@ -695,6 +842,7 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
         into sourceKeys: [String],
         kind: MediaItemKind,
         sort: CoreModels.SortDescriptor,
+        filters: LibraryFilters,
         limit: Int,
         content: BrowseContent,
         cache: Cache,
@@ -713,7 +861,7 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
                         return (source.sourceKey, source.accountID, nil, nil)
                     }
                     let offset = await cache.offset(for: source.sourceKey)
-                    let request = PageRequest(startIndex: offset, limit: chunkSize, sort: sort)
+                    let request = PageRequest(startIndex: offset, limit: chunkSize, sort: sort, filters: filters)
                     do {
                         let page: MediaPage
                         if content == .collections {
@@ -746,14 +894,24 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
         }
 
         try Task.checkCancellation()
+        if results.contains(where: { $0.error == .cancelled }) { throw CancellationError() }
         // A missing source must not turn a collection list into an empty or
         // complete-looking success. Keep title browsing's existing resilience.
         if content == .collections || requiresAllSources, let error = results.compactMap(\.error).first {
-            throw error
+            let failed = Set(results.filter { $0.error != nil }.map(\.sourceKey))
+            throw attributedFailure(error, sources: targets.filter { failed.contains($0.sourceKey) })
+        }
+        if results.allSatisfy({ $0.page == nil }),
+           !(await cache.hasSuccessfulSource()),
+           let error = results.compactMap(\.error).first {
+            throw attributedFailure(error, sources: targets)
         }
         var produced: Set<String> = []
         for result in results {
             guard let page = result.page else {
+                if result.error != nil {
+                    PlozzLog.app.error("Aggregation: page unavailable for account \(result.accountID)")
+                }
                 // No page this round: the source was either already exhausted
                 // (short-circuited above without a fetch) or hit a transient
                 // error / offline blip on this page. Either way, contribute nothing

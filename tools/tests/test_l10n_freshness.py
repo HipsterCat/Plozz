@@ -45,6 +45,9 @@ class ExtractionFreshnessTests(unittest.TestCase):
         self.toolchain = patch.object(freshness, "toolchain_fingerprint", return_value="toolchain-A")
         self.toolchain.start()
         self.addCleanup(self.toolchain.stop)
+        ownership = patch.object(freshness, "phase_paths", return_value=(set(), set()))
+        ownership.start()
+        self.addCleanup(ownership.stop)
         self.receipt = freshness.ExtractionReceipt(self.root, self.derived, self.workspace, "arm64")
 
     def write(self, name, text):
@@ -75,7 +78,6 @@ class ExtractionFreshnessTests(unittest.TestCase):
             lambda: self.write("Package.resolved", '{"pins":[{"identity":"changed"}]}'),
             lambda: self.write("project.yml", "name: Changed"),
             lambda: self.write("Config/Secrets.local.xcconfig", "PRIVATE_KEY = different"),
-            lambda: self.write("App/Resources/Localizable.xcstrings", '{"strings":{"new":{}}}'),
             lambda: self.write("tools/new-generator.sh", "exit 1"),
         ]
         for mutate in mutations:
@@ -83,6 +85,18 @@ class ExtractionFreshnessTests(unittest.TestCase):
                 self.record()
                 mutate()
                 self.assertFalse(self.matches())
+
+    def test_catalog_and_snapshot_updates_reuse_extraction_not_validation(self):
+        self.record()
+        self.write("App/Resources/Localizable.xcstrings", '{"strings":{"new":{}}}')
+        self.write("tools/l10n-source-snapshot.json", '{"updated":"source"}')
+        self.assertTrue(self.matches())
+        # The caller still synchronizes and validates the current catalog.
+        result, build, validate, sync = self.execute(self.args(), validation=1)
+        self.assertEqual(result, 1)
+        build.assert_not_called()
+        validate.assert_called_once()
+        sync.assert_called_once()
 
     def test_same_size_and_mtime_source_edit_still_invalidates(self):
         self.record()
@@ -164,17 +178,87 @@ class ExtractionFreshnessTests(unittest.TestCase):
         self.write(".build/packages/workspace-state.json", '{"changed":true}')
         self.assertFalse(self.matches())
 
-    def test_dirty_or_replaced_checkout_invalidates_even_with_same_package_lock(self):
+    def test_workspace_artifact_order_and_json_format_do_not_invalidate(self):
+        state = {
+            "version": 6,
+            "object": {
+                "artifacts": [
+                    {"packageRef": {"identity": "one"}, "path": "/one", "source": {"checksum": "one"}},
+                    {"packageRef": {"identity": "two"}, "path": "/two", "source": {"checksum": "two"}},
+                ],
+                "dependencies": [{"identity": "one", "revision": "pin-one"}],
+            },
+        }
+        self.write(".build/packages/workspace-state.json", json.dumps(state, indent=2))
+        self.record()
+        state["object"]["artifacts"].reverse()
+        self.write(".build/packages/workspace-state.json", json.dumps(state, sort_keys=True))
+        self.assertTrue(self.matches())
+
+    def test_real_workspace_input_changes_still_invalidate(self):
+        baseline = {
+            "version": 6,
+            "object": {
+                "artifacts": [
+                    {"packageRef": {"identity": "one"}, "path": "/one", "source": {"checksum": "one"}},
+                    {"packageRef": {"identity": "two"}, "path": "/two", "source": {"checksum": "two"}},
+                ],
+                "dependencies": [{"identity": "one", "revision": "pin-one"}],
+                "orderedValues": ["first", "second"],
+            },
+        }
+        mutations = [
+            lambda obj: obj["artifacts"][0]["source"].update(checksum="changed"),
+            lambda obj: obj["artifacts"][0].update(path="/changed"),
+            lambda obj: obj["artifacts"][0]["packageRef"].update(identity="changed"),
+            lambda obj: obj["artifacts"].pop(),
+            lambda obj: obj["artifacts"].append(obj["artifacts"][0]),
+            lambda obj: obj["dependencies"][0].update(revision="pin-two"),
+            lambda obj: obj["orderedValues"].reverse(),
+        ]
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                self.write(".build/packages/workspace-state.json", json.dumps(baseline))
+                self.record()
+                changed = json.loads(json.dumps(baseline))
+                mutate(changed["object"])
+                self.write(".build/packages/workspace-state.json", json.dumps(changed))
+                self.assertFalse(self.matches())
+
+    def test_malformed_workspace_state_is_not_reusable_evidence(self):
+        for invalid in ("{broken", "null", "[]"):
+            with self.subTest(invalid=invalid):
+                self.write(".build/packages/workspace-state.json", "{}")
+                self.record()
+                self.write(".build/packages/workspace-state.json", invalid)
+                self.assertFalse(self.matches())
+                with self.assertRaises(freshness.FreshnessError):
+                    self.receipt.record(self.receipt.inputs())
+
+    def test_package_status_uses_a_longer_bounded_budget_than_metadata(self):
+        checkout = self.workspace / "checkouts/Dependency"
+        checkout.mkdir(parents=True)
+        with patch.object(freshness.subprocess, "check_output", side_effect=[b"", b"pin-one"]) as run:
+            freshness.package_workspace_fingerprint(self.root, self.workspace)
+        status, head = run.call_args_list
+        self.assertEqual(status.args[0], ("git", "status", "--porcelain", "--untracked-files=all"))
+        self.assertEqual(status.kwargs["timeout"], 120)
+        self.assertEqual(head.args[0], ("git", "rev-parse", "HEAD"))
+        self.assertEqual(head.kwargs["timeout"], 30)
+
+    def test_dirty_replaced_or_timed_out_checkout_invalidates_even_with_same_package_lock(self):
         checkout = self.workspace / "checkouts/Dependency"
         checkout.mkdir(parents=True)
         original = freshness.command
-        state = {"dirty": False, "head": "pin-one"}
-        def command(root, *args):
+        state = {"dirty": False, "head": "pin-one", "timeout": False}
+        def command(root, *args, timeout=30):
             if root == checkout:
                 if args[1] == "status":
+                    if state["timeout"]:
+                        raise subprocess.TimeoutExpired(args, timeout)
                     return b" M Source.swift\n" if state["dirty"] else b""
                 return state["head"].encode()
-            return original(root, *args)
+            return original(root, *args, timeout=timeout)
         with patch.object(freshness, "command", side_effect=command):
             self.record()
             state["dirty"] = True
@@ -183,6 +267,11 @@ class ExtractionFreshnessTests(unittest.TestCase):
             self.assertTrue(self.matches())
             state["head"] = "pin-two"
             self.assertFalse(self.matches())
+            state["head"] = "pin-one"
+            state["timeout"] = True
+            self.assertFalse(self.matches())
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.record()
 
     def test_parent_push_hook_environment_does_not_redirect_dependency_git(self):
         checkout = self.workspace / "checkouts/Dependency"
@@ -229,7 +318,7 @@ class ExtractionFreshnessTests(unittest.TestCase):
                       reuse_if_unchanged=True, check=True)
         return argparse.Namespace(**{**values, **overrides})
 
-    def execute(self, args, *, build=None, sync=None):
+    def execute(self, args, *, build=None, sync=None, validation=0):
         patches = [
             patch.object(SYNC, "REPO", self.root),
             patch.object(SYNC, "CATALOG", self.catalog),
@@ -242,7 +331,7 @@ class ExtractionFreshnessTests(unittest.TestCase):
                 self.derived / "Build/Intermediates.noindex/Objects-normal/arm64/Example.stringsdata"
             ]),
             patch.object(SYNC, "check_conflicts", return_value=0),
-            patch.object(SYNC, "validate_catalog", return_value=0),
+            patch.object(SYNC, "validate_catalog", return_value=validation),
             patch.object(SYNC, "sync", side_effect=sync),
         ]
         active = [p.start() for p in patches]
@@ -295,6 +384,7 @@ class ExtractionFreshnessTests(unittest.TestCase):
         self.assertFalse(self.receipt.path.exists())
 
     def prepare_hook(self):
+        self.write("tools/main-landing.py", (TOOLS / "main-landing.py").read_text())
         self.write("tools/l10n-guard.sh", '#!/bin/sh\necho guard >> "$HOOK_LOG"\n')
         (self.root / "tools/l10n-guard.sh").chmod(0o755)
         for name in ("l10n-sync.py", "l10n-export-source.py"):
@@ -307,37 +397,48 @@ raise SystemExit(7 if os.environ.get("FAIL_STEP")==Path(__file__).name else 0)
 """)
         return self.write(".githooks/pre-push", (TOOLS.parent / ".githooks/pre-push").read_text())
 
-    def test_main_hook_keeps_guards_and_uses_one_validating_extraction_check(self):
-        hook = self.prepare_hook()
+    def run_hook(self, update, **overrides):
+        env = {**os.environ, "HOOK_LOG": str(self.root / "hook.log"), **overrides}
+        # Stub checks in this independent repository do not inherit the caller's locks.
+        for name in ("PLOZZ_MAIN_LANDING_FD", "APPLE_BUILD_LEASE_LOCK_FD", "APPLE_BUILD_LEASE_PROOF_FD"):
+            env.pop(name, None)
+        return subprocess.run(["bash", str(self.root / ".githooks/pre-push")], cwd=self.root,
+                              input=update, text=True, capture_output=True, env=env)
+
+    def test_main_hook_validates_catalog_without_rebuilding_at_publication(self):
+        self.prepare_hook()
         log = self.root / "hook.log"
-        result = subprocess.run(["bash", str(hook)], cwd=self.root,
-                                input="feature a refs/heads/main b\n", text=True,
-                                capture_output=True, env={**os.environ, "HOOK_LOG": str(log)})
+        result = self.run_hook("feature a refs/heads/main b\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = log.read_text().splitlines()
         self.assertEqual(lines[0], "guard")
         calls = [json.loads(line) for line in lines[1:]]
         sync = [call for call in calls if call[0] == "l10n-sync.py"]
         self.assertEqual(len(sync), 1)
-        self.assertIn("--check", sync[0])
-        self.assertIn("--reuse-if-unchanged", sync[0])
+        self.assertEqual(sync[0], ["l10n-sync.py", "--validate-only"])
         self.assertIn("--check-snapshot", calls[-1])
 
     def test_hook_stops_on_failed_check_and_leaves_feature_push_fast(self):
-        hook = self.prepare_hook()
+        self.prepare_hook()
         log = self.root / "hook.log"
-        env = {**os.environ, "HOOK_LOG": str(log), "FAIL_STEP": "l10n-sync.py"}
-        result = subprocess.run(["bash", str(hook)], cwd=self.root,
-                                input="feature a refs/heads/main b\n", text=True,
-                                capture_output=True, env=env)
+        result = self.run_hook("feature a refs/heads/main b\n", FAIL_STEP="l10n-sync.py")
         self.assertEqual(result.returncode, 7)
         self.assertNotIn("l10n-export-source.py", log.read_text())
         log.unlink()
-        result = subprocess.run(["bash", str(hook)], cwd=self.root,
-                                input="feature a refs/heads/feature b\n", text=True,
-                                capture_output=True, env=env)
+        result = self.run_hook("feature a refs/heads/feature b\n", FAIL_STEP="l10n-sync.py")
         self.assertEqual(result.returncode, 0)
         self.assertFalse(log.exists())
+
+    def test_isolated_hook_does_not_borrow_parent_lock_descriptors(self):
+        self.prepare_hook()
+        with patch.dict(os.environ, {
+            "PLOZZ_MAIN_LANDING_FD": "99999",
+            "APPLE_BUILD_LEASE_LOCK_FD": "99998",
+            "APPLE_BUILD_LEASE_PROOF_FD": "99997",
+        }):
+            result = self.run_hook("feature a refs/heads/main b\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--check-snapshot", (self.root / "hook.log").read_text())
 
 
 if __name__ == "__main__":

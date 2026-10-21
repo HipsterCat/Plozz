@@ -84,6 +84,31 @@ final class JellyfinLibraryChannelTests: XCTestCase {
         XCTAssertTrue(query["Fields"]?.contains("Genres") == true)
         XCTAssertEqual(requests.count, 1)
     }
+
+    func testRemoteDeclaredSizeSurvivesCatalogToPlaybackValidation() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let remote = json.replacingOccurrences(
+                of: "\"Container\":\"mkv\"",
+                with: "\"Container\":\"mkv\",\"IsRemote\":true,\"Size\":26367188,\"Name\":\"📦 26.2 GB\""
+            )
+            let http = LibraryChannelHTTP([
+                "/Users/user/Items": "{\"Items\":[\(remote)],\"TotalRecordCount\":1}",
+                "/Users/user/Items/episode": remote
+            ])
+            let provider = provider(kind: kind, http: http)
+            let page = try await provider.libraryChannelItems(
+                in: "library", kind: .episode, page: PageRequest(startIndex: 0, limit: 1)
+            )
+            let item = try XCTUnwrap(page.items.first)
+            let scheduled = try LibraryChannelItem(
+                item: item, library: .init(accountID: "account", libraryID: "library"),
+                serverID: "server", userID: "user"
+            )
+            XCTAssertEqual(scheduled.sourceSizeBytes, 26_200_000_000)
+            let request = try await provider.libraryChannelPlayback(for: scheduled)
+            XCTAssertTrue(request.suppressOrdinaryWatchReporting)
+        }
+    }
 }
 
 private actor LibraryChannelHTTP: HTTPClient {

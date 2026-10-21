@@ -76,7 +76,7 @@ public struct PlayerTouchCardStrip: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: PlayerTouchLayout.cardSpacing) {
             tabRow
             if let openPanel {
                 card(for: openPanel)
@@ -141,7 +141,7 @@ public struct PlayerTouchCardStrip: View {
     }
 
     private var tabRow: some View {
-        HStack(spacing: 20) {
+        HStack(spacing: 8) {
             tab(.info, title: Text("Info"))
             // Hidden entirely when there is no cast: a tab that opens an empty
             // card is worse than an absent one.
@@ -168,7 +168,7 @@ public struct PlayerTouchCardStrip: View {
         } label: {
             title
         }
-        .buttonStyle(PlayerTabButtonStyle(focused: false, selected: openPanel == category))
+        .playerTouchTab(selected: openPanel == category)
         .reportSubtitleControlsFrame(in: model.subtitleLayout, region: .tab(String(describing: category)))
         // Makes the whole pill tappable, including its padding.
         //
@@ -238,9 +238,9 @@ public struct PlayerTouchCardStrip: View {
 ///
 /// A hand-built bar rather than a `Slider`, because the stock control brings a
 /// grab handle and a fixed track that read as a form field rather than as a
-/// timeline. This matches `ScrubBar`: a thin capsule at rest, a thicker one
-/// while touched, a slim knob rather than a thumb, and a dimmer fill behind the
-/// played portion.
+/// timeline. Like `ScrubBar`, it is a thin capsule at rest and a thicker one
+/// while touched, with a dimmer buffered fill behind the played portion.
+/// Touch progress uses only the advancing fill, without a separate playhead.
 ///
 /// It grows on touch-down and STAYS grown for the whole drag, which is the tvOS
 /// behaviour and also the useful one — a bar that shrinks back the instant you
@@ -250,16 +250,17 @@ public struct PlayerTouchScrubBar: View {
     private let currentSeconds: TimeInterval
     private let duration: TimeInterval
     private let bufferedFraction: Double
+    private let segments: [MediaSegment]
     private let onScrub: (TimeInterval) -> Void
     private let onScrubbingChanged: (Bool) -> Void
+    private let feedback: TouchFeedback
 
     @State private var isTouching = false
+    @GestureState private var isDragging = false
+    @State private var scrubStartSeconds: TimeInterval = 0
 
-    /// Resting and touched heights, matching `ScrubBar`'s 12 / 20.
-    private static let restingHeight: CGFloat = 12
-    private static let touchedHeight: CGFloat = 20
     /// Generous enough to hit without aiming, independent of the bar's own
-    /// height — a 12pt target would be unusable, and thickening the bar to
+    /// height — an 8pt target would be unusable, and thickening the bar to
     /// reach 44 would make it a slab.
     private static let touchTargetHeight: CGFloat = 44
 
@@ -267,56 +268,29 @@ public struct PlayerTouchScrubBar: View {
         currentSeconds: TimeInterval,
         duration: TimeInterval,
         bufferedFraction: Double,
+        segments: [MediaSegment] = [],
         onScrub: @escaping (TimeInterval) -> Void,
-        onScrubbingChanged: @escaping (Bool) -> Void
+        onScrubbingChanged: @escaping (Bool) -> Void,
+        feedback: TouchFeedback = .shared
     ) {
         self.currentSeconds = currentSeconds
         self.duration = duration
         self.bufferedFraction = bufferedFraction
+        self.segments = segments
         self.onScrub = onScrub
         self.onScrubbingChanged = onScrubbingChanged
+        self.feedback = feedback
     }
 
     public var body: some View {
         GeometryReader { geo in
             let width = max(geo.size.width, 1)
             let fraction = duration > 0 ? min(max(currentSeconds / duration, 0), 1) : 0
-            let knobX = width * fraction
-            let barHeight = isTouching ? Self.touchedHeight : Self.restingHeight
-            // Thinner than tvOS's 4/8. A remote's knob is read across a room and
-            // has to survive that distance; a finger's is read at arm's length
-            // and sits directly under the thing pointing at it, so the same
-            // weight weighs more here.
-            let knobWidth: CGFloat = isTouching ? 6 : 3
-            // FLUSH at rest, exactly as `ScrubBar` is: the knob is the bar's own
-            // height until the bar is touched, so nothing protrudes above or
-            // below the track. It was 24 against a 12pt bar, which is what made
-            // the whole control read as oversized when nothing was happening.
-            let knobHeight: CGFloat = isTouching ? 32 : barHeight
 
-            ZStack(alignment: .leading) {
-                PlayerScrubTrackSurface(height: barHeight)
-                Capsule().fill(.white.opacity(0.14))
-                    .frame(width: width * CGFloat(min(max(bufferedFraction, 0), 1)), height: barHeight)
-                // Square trailing edge so the played portion meets the knob
-                // flush instead of tucking a curve behind it.
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 10,
-                    bottomLeadingRadius: 10,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 0,
-                    style: .continuous
-                )
-                .fill(.white.opacity(isTouching ? 0.9 : 0.62))
-                .frame(width: knobX, height: barHeight)
-                // Square at rest, rounded once lifted — a rounded cap on a knob
-                // the same height as the track just erodes the played edge.
-                RoundedRectangle(cornerRadius: isTouching ? knobWidth / 2 : 0, style: .continuous)
-                    .fill(.white)
-                    .frame(width: knobWidth, height: knobHeight)
-                    .offset(x: knobX - knobWidth / 2)
-                    .shadow(radius: isTouching ? 4 : 0)
-            }
+            PlayerTouchScrubTrack(
+                width: width, progressFraction: fraction, bufferedFraction: bufferedFraction,
+                segments: segments, duration: duration, isTouching: isTouching
+            )
             .frame(maxHeight: .infinity, alignment: .center)
             .animation(.easeOut(duration: 0.12), value: isTouching)
             .contentShape(Rectangle())
@@ -324,8 +298,10 @@ public struct PlayerTouchScrubBar: View {
                 // `minimumDistance: 0` so a tap anywhere on the bar seeks there
                 // rather than needing a drag to register at all.
                 DragGesture(minimumDistance: 0)
+                    .updating($isDragging) { _, dragging, _ in dragging = true }
                     .onChanged { value in
                         if !isTouching {
+                            scrubStartSeconds = currentSeconds
                             isTouching = true
                             onScrubbingChanged(true)
                         }
@@ -337,9 +313,59 @@ public struct PlayerTouchScrubBar: View {
                         onScrub(duration * Double(x / width))
                         isTouching = false
                         onScrubbingChanged(false)
+                        if duration.isFinite, duration > 0, duration * Double(x / width) != scrubStartSeconds {
+                            feedback.emit(.selection)
+                        }
                     }
             )
         }
         .frame(height: Self.touchTargetHeight)
+        .onChange(of: isDragging) { _, dragging in
+            if !dragging, isTouching {
+                isTouching = false
+                onScrubbingChanged(false)
+            }
+        }
+    }
+}
+
+@available(tvOS, unavailable)
+struct PlayerTouchScrubTrack: View {
+    let width: CGFloat
+    let progressFraction: Double
+    let bufferedFraction: Double
+    let segments: [MediaSegment]
+    let duration: TimeInterval
+    let isTouching: Bool
+    private static let restingHeight: CGFloat = 8
+    private static let touchedHeight: CGFloat = 20
+
+    var body: some View {
+        let height = isTouching ? Self.touchedHeight : Self.restingHeight
+        ZStack(alignment: .leading) {
+            PlayerScrubTrackSurface(height: height)
+            Capsule().fill(Color.white.opacity(0.14))
+                .frame(width: width * CGFloat(min(max(bufferedFraction, 0), 1)), height: height)
+            PlayerTouchProgressFill(isActive: isTouching)
+                .frame(width: width * CGFloat(progressFraction), height: height)
+        }
+        .mask {
+            // The threshold stays fixed while the track expands on touch.
+            PlayerSkipMarkerTrack(
+                segments: segments, duration: duration, height: height,
+                minimumSectionWidth: Self.touchedHeight
+            )
+            .equatable()
+        }
+        .frame(width: width, height: height)
+    }
+}
+
+@available(tvOS, unavailable)
+struct PlayerTouchProgressFill: View {
+    let isActive: Bool
+
+    var body: some View {
+        Rectangle().fill(Color.white.opacity(isActive ? 0.9 : 0.62))
     }
 }

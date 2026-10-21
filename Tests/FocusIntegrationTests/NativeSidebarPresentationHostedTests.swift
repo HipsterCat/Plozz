@@ -1,12 +1,116 @@
 import CoreModels
+import CoreUI
 import Observation
 import SwiftUI
 import UIKit
+import Vision
 import XCTest
 @testable import AppShell
 
 @MainActor
 final class NativeSidebarPresentationHostedTests: XCTestCase {
+    func testSettingsDefersSidebarConstructionFromPinnedAndTopBarNavigation() async throws {
+        for initialStyle in [NavigationStyle.rail, .tabBar] {
+            let fixture = try await makeFixture()
+            defer { fixture.close() }
+            let model = ShellModel(style: initialStyle)
+            fixture.window.rootViewController = UIHostingController(rootView: SettingsShell(model: model))
+            try await waitUntil { model.pages[initialStyle]?.window != nil }
+            let original = try XCTUnwrap(model.pages[initialStyle])
+
+            model.showsSettings = true
+            try await waitUntil { model.settingsButton?.window != nil }
+            let settings = try XCTUnwrap(model.settingsButton)
+            let focusSystem = try XCTUnwrap(UIFocusSystem.focusSystem(for: fixture.window))
+            focusSystem.requestFocusUpdate(to: settings)
+            focusSystem.updateFocusIfNeeded()
+            try await waitUntil { settings.isFocused }
+
+            for style in [NavigationStyle.sidebar, .rail, .tabBar, .sidebar] {
+                model.style = style
+                fixture.window.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(100))
+                XCTAssertEqual(model.creations, [initialStyle: 1],
+                               "Changing a preference must not build hidden navigation.")
+                XCTAssertTrue(settings.isFocused)
+                XCTAssertTrue(model.pages[initialStyle] === original)
+                XCTAssertNotNil(original.window)
+            }
+
+            model.showsSettings = false
+            try await waitUntil { model.pages[.sidebar]?.window != nil }
+            XCTAssertEqual(model.creations[.sidebar], 1)
+            XCTAssertNil(original.window)
+            let sidebar = try XCTUnwrap(model.pages[.sidebar])
+            model.showsSettings = true
+            try await waitUntil { model.settingsButton?.window != nil }
+            model.showsSettings = false
+            try await waitUntil { model.settingsButton?.window == nil }
+            XCTAssertTrue(model.pages[.sidebar] === sidebar)
+            XCTAssertEqual(model.creations[.sidebar], 1, "Ordinary Settings visits must retain the active tab.")
+        }
+    }
+
+    func testSettingsFirstLaunchDoesNotConstructHiddenSidebar() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let model = ShellModel(style: .sidebar)
+        model.showsSettings = true
+        fixture.window.rootViewController = UIHostingController(rootView: SettingsShell(model: model))
+        try await waitUntil { model.settingsButton?.window != nil }
+        XCTAssertTrue(model.creations.isEmpty)
+        model.showsSettings = false
+        try await waitUntil { model.pages[.sidebar]?.window != nil }
+        XCTAssertEqual(model.creations, [.sidebar: 1])
+    }
+
+    func testNativeSidebarDisplaysOfflineStatusAndRemovesItAfterRecovery() async throws {
+        for appearance in [UIUserInterfaceStyle.dark, .light] {
+            let fixture = try await makeFixture()
+            defer { fixture.close() }
+            // Set traits before constructing the native sidebar, not during its focus transition.
+            fixture.window.overrideUserInterfaceStyle = appearance
+            let model = LibraryStatusModel()
+            let host = UIHostingController(rootView: LibraryStatusSidebar(model: model)
+                .environment(\.locale, Locale(identifier: "en_US")))
+            fixture.window.rootViewController = host
+            let focusSystem = try XCTUnwrap(UIFocusSystem.focusSystem(for: fixture.window))
+            for offline in [false, true, false] {
+                model.isOffline = offline
+                let deadline = ContinuousClock.now + .seconds(5)
+                var presentation: (image: UIImage, labels: [String])?
+                repeat {
+                    fixture.window.layoutIfNeeded()
+                    focusSystem.requestFocusUpdate(to: host)
+                    focusSystem.updateFocusIfNeeded()
+                    try await Task.sleep(for: .milliseconds(100))
+                    let image = UIGraphicsImageRenderer(bounds: fixture.window.bounds).image { _ in
+                        XCTAssertTrue(fixture.window.drawHierarchy(in: fixture.window.bounds, afterScreenUpdates: true))
+                    }
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.recognitionLanguages = ["en-US"]
+                    request.customWords = ["Offline"]
+                    try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+                    let labels = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                    presentation = (image, labels)
+                    if labels.contains(where: { $0.contains("Movies") }),
+                       labels.filter({ $0.contains("Offline") }).count == (offline ? 2 : 0) {
+                        break
+                    }
+                } while ContinuousClock.now < deadline
+                let (image, labels) = try XCTUnwrap(presentation)
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "Native sidebar \(appearance == .dark ? "dark" : "light") offline=\(offline)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                XCTAssertTrue(labels.contains { $0.contains("Movies") }, "\(labels)")
+                XCTAssertEqual(labels.filter { $0.contains("Offline") }.count, offline ? 2 : 0, "\(labels)")
+                XCTAssertEqual(model.selection, "home", "Reachability updates must not select another tab.")
+            }
+        }
+    }
+
     func testLiveTVWaitsForFirstVisitThenRetainsStateWithinItsProfile() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -58,7 +162,15 @@ final class NativeSidebarPresentationHostedTests: XCTestCase {
     }
 
     func testInactiveAndUnpresentedPagesCannotAcceptFocus() async throws {
-        let fixture = try await makeFixture()
+        try await exercisePresentation(sharedPinnedHost: false)
+    }
+
+    func testDestinationPresentationCompletesInsidePinnedFocusHost() async throws {
+        try await exercisePresentation(sharedPinnedHost: true)
+    }
+
+    private func exercisePresentation(sharedPinnedHost: Bool) async throws {
+        let fixture = try await makeFixture(sharedPinnedHost: sharedPinnedHost)
         defer { fixture.close() }
         try await waitUntil { fixture.model.buttons[.home]?.isFocused == true }
         let inactive = try XCTUnwrap(fixture.model.buttons[.settings])
@@ -79,13 +191,13 @@ final class NativeSidebarPresentationHostedTests: XCTestCase {
         XCTAssertEqual(fixture.model.prematureFocusCount, 0)
     }
 
-    private func makeFixture() async throws -> Fixture {
+    private func makeFixture(sharedPinnedHost: Bool = false) async throws -> Fixture {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
         }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
-        return Fixture(scene: scene)
+        return Fixture(scene: scene, sharedPinnedHost: sharedPinnedHost)
     }
 
     private func waitUntil(_ predicate: @MainActor () -> Bool) async throws {
@@ -102,11 +214,18 @@ final class NativeSidebarPresentationHostedTests: XCTestCase {
         let window: UIWindow
         let previous: UIWindow?
 
-        init(scene: UIWindowScene) {
+        init(scene: UIWindowScene, sharedPinnedHost: Bool) {
             previous = scene.windows.first(where: \.isKeyWindow)
             window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
-            window.rootViewController = UIHostingController(rootView: Pages(model: model))
+            window.rootViewController = UIHostingController(rootView: Group {
+                if sharedPinnedHost {
+                    NavigationRailFocusHost { [model] _ in Pages(model: model) }
+                        .ignoresSafeArea()
+                } else {
+                    Pages(model: model)
+                }
+            })
             window.makeKeyAndVisible()
             window.layoutIfNeeded()
         }
@@ -116,6 +235,89 @@ final class NativeSidebarPresentationHostedTests: XCTestCase {
             window.rootViewController = nil
             model.buttons.removeAll()
             previous?.makeKeyAndVisible()
+        }
+    }
+
+    @MainActor @Observable
+    fileprivate final class ShellModel {
+        var style: NavigationStyle
+        var showsSettings = false
+        @ObservationIgnored var creations: [NavigationStyle: Int] = [:]
+        @ObservationIgnored var pages: [NavigationStyle: UIButton] = [:]
+        @ObservationIgnored weak var settingsButton: UIButton?
+
+        init(style: NavigationStyle) { self.style = style }
+    }
+
+    private struct SettingsShell: View {
+        let model: ShellModel
+
+        var body: some View {
+            SettingsNavigationShell(style: model.style, showsSettings: model.showsSettings) { style in
+                ShellButton(model: model, style: style)
+                    .id(style)
+            } settings: {
+                ShellButton(model: model, style: nil)
+            }
+        }
+    }
+
+    private struct ShellButton: UIViewRepresentable {
+        let model: ShellModel
+        let style: NavigationStyle?
+
+        func makeUIView(context: Context) -> UIButton {
+            let button = UIButton(type: .system)
+            button.setTitle(style?.rawValue ?? "Settings", for: .normal)
+            if let style {
+                model.creations[style, default: 0] += 1
+                model.pages[style] = button
+            } else {
+                model.settingsButton = button
+            }
+            return button
+        }
+
+        func updateUIView(_ button: UIButton, context: Context) {
+            button.isEnabled = context.environment.isEnabled
+        }
+    }
+
+    @MainActor @Observable
+    fileprivate final class LibraryStatusModel {
+        var isOffline = false
+        var selection = "home"
+        let library = AggregatedLibrary(
+            accountID: "fixture", accountName: "Fixture", serverName: "Fixture", providerKind: .plex,
+            library: MediaLibrary(id: "movies", title: "Movies", kind: .movie)
+        )
+    }
+
+    private struct LibraryStatusSidebar: View {
+        @Bindable var model: LibraryStatusModel
+
+        var body: some View {
+            let entries = [
+                NavigationRailLibraryEntry(
+                    key: model.library.key, library: model.library, isOffline: model.isOffline),
+                NavigationRailLibraryEntry(
+                    key: NavigationLibraryLayout.allLibrariesKey, library: nil, isOffline: model.isOffline)
+            ]
+            TabView(selection: $model.selection) {
+                Tab(value: "home") {
+                    AnyView(Color.clear)
+                } label: {
+                    AnyView(Label("Home", systemImage: "house"))
+                }
+                ForEach(entries, id: \.key) { entry in
+                    Tab(value: entry.key) {
+                        AnyView(Color.clear)
+                    } label: {
+                        AnyView(MainTabView.navigationLibraryLabel(entry))
+                    }
+                }
+            }
+            .tabViewStyle(.sidebarAdaptable)
         }
     }
 

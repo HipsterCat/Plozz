@@ -31,6 +31,7 @@ struct MusicLandingView: View {
             // Never clip a focused card's lift, shadow or border.
             .scrollClipDisabled()
         }
+        .navigationEntryFocus(viewModel.state == .idle || viewModel.state.isLoading ? .pending : nil)
         .task { if case .idle = viewModel.state { await viewModel.load() } }
         // Refresh the rails once a play has actually been recorded on the server,
         // so "Recently Played" reflects what was just listened to without needing
@@ -75,14 +76,17 @@ struct MusicLandingView: View {
             if !content.recentlyPlayed.isEmpty {
                 MusicRow(title: "Recently Played", trailing: trailing) {
                     ForEach(content.recentlyPlayed) { item in
-                        switch item {
-                        case let .album(album):
-                            AlbumCard(album: album) { onSelectRoute(.album(album)) }
-                        case let .track(track):
-                            RecentTrackCard(track: track) { onPlayTrack(track) }
-                        case let .playlist(playlist):
-                            PlaylistCard(playlist: playlist) { onSelectRoute(.playlist(playlist)) }
+                        Group {
+                            switch item {
+                            case let .album(album):
+                                AlbumCard(album: album) { onSelectRoute(.album(album)) }
+                            case let .track(track):
+                                RecentTrackCard(track: track) { onPlayTrack(track) }
+                            case let .playlist(playlist):
+                                PlaylistCard(playlist: playlist) { onSelectRoute(.playlist(playlist)) }
+                            }
                         }
+                        .navigationEntryFocus(.content)
                     }
                 }
             }
@@ -122,6 +126,7 @@ struct MusicLandingView: View {
     private func entryTiles(trailing: AnyView?) -> some View {
         HStack(alignment: .center, spacing: metrics.cardSpacing) {
             BrowseButton(title: "Playlists") { onSelectRoute(.grid(.playlist)) }
+                .navigationEntryFocus(.fallback)
             BrowseButton(title: "Albums") { onSelectRoute(.grid(.album)) }
             BrowseButton(title: "Artists") { onSelectRoute(.grid(.artist)) }
             BrowseButton(title: "Genres") { onSelectRoute(.grid(.genre)) }
@@ -577,6 +582,7 @@ struct ArtistDetailView: View {
         }
         .scrollClipDisabled()
         .task { await viewModel.load() }
+        .detailOpenFeedback()
     }
 }
 
@@ -595,7 +601,7 @@ struct AlbumDetailView: View {
         MusicDetailLayout(
             tracks: viewModel.tracks,
             artworkFallback: viewModel.album.artworkURL,
-            nowPlayingTrackID: controller.currentTrack?.id,
+            nowPlayingTrack: controller.currentTrack,
             isPlaying: controller.isPlaying,
             hasNowPlaying: controller.hasActivePlayback,
             onPlayTrack: { play(from: $0) }
@@ -603,6 +609,7 @@ struct AlbumDetailView: View {
             infoColumn
         }
         .defaultFocus($playFocused, true)
+        .detailOpenFeedback()
         .task {
             await viewModel.load()
             // Play is disabled until tracks exist, so a declarative default alone
@@ -655,7 +662,7 @@ struct AlbumDetailView: View {
 
     private func play(from track: MusicTrack?) {
         guard let provider = viewModel.provider, !viewModel.tracks.isEmpty else { return }
-        let start = track.flatMap { t in viewModel.tracks.firstIndex(where: { $0.id == t.id }) } ?? 0
+        let start = track.flatMap { t in viewModel.tracks.firstIndex(where: { $0.isSameQueueEntry(as: t) }) } ?? 0
         controller.play(
             tracks: viewModel.tracks,
             startIndex: start,
@@ -701,7 +708,7 @@ struct PlaylistDetailView: View {
             artworkFallback: viewModel.playlist.artworkURL,
             showArtist: true,
             showArtwork: true,
-            nowPlayingTrackID: controller.currentTrack?.id,
+            nowPlayingTrack: controller.currentTrack,
             isPlaying: controller.isPlaying,
             hasNowPlaying: controller.hasActivePlayback,
             onPlayTrack: { play(from: $0) }
@@ -709,6 +716,7 @@ struct PlaylistDetailView: View {
             infoColumn
         }
         .defaultFocus($playFocused, true)
+        .detailOpenFeedback()
         .task {
             await viewModel.load()
             // Play is disabled until tracks exist, so a declarative default alone
@@ -748,7 +756,7 @@ struct PlaylistDetailView: View {
 
     private func play(from track: MusicTrack?) {
         guard let provider = viewModel.provider, !viewModel.tracks.isEmpty else { return }
-        let start = track.flatMap { t in viewModel.tracks.firstIndex(where: { $0.id == t.id }) } ?? 0
+        let start = track.flatMap { t in viewModel.tracks.firstIndex(where: { $0.isSameQueueEntry(as: t) }) } ?? 0
         controller.play(
             tracks: viewModel.tracks,
             startIndex: start,
@@ -830,7 +838,7 @@ struct MusicDetailLayout<InfoColumn: View>: View {
     var artworkFallback: URL?
     var showArtist: Bool = false
     var showArtwork: Bool = false
-    var nowPlayingTrackID: String? = nil
+    var nowPlayingTrack: MusicTrack? = nil
     var isPlaying: Bool = false
     /// Whether the Now Playing card is currently shown in the info column. When
     /// it isn't, the (shorter) column is nudged down so it reads as more
@@ -916,7 +924,7 @@ struct MusicDetailLayout<InfoColumn: View>: View {
                         artworkFallback: artworkFallback,
                         showArtist: showArtist,
                         showArtwork: showArtwork,
-                        nowPlayingTrackID: nowPlayingTrackID,
+                        nowPlayingTrack: nowPlayingTrack,
                         isPlaying: isPlaying,
                         onPlayTrack: onPlayTrack
                     )
@@ -956,7 +964,7 @@ struct TrackListView: View {
     var showArtwork: Bool = false
     /// The id of the track currently loaded in the player (if any), so the row
     /// shows an animated equalizer instead of its track number.
-    var nowPlayingTrackID: String? = nil
+    var nowPlayingTrack: MusicTrack? = nil
     /// Whether the player is actively playing (vs paused) — drives whether the
     /// equalizer bars animate or sit still.
     var isPlaying: Bool = false
@@ -968,7 +976,7 @@ struct TrackListView: View {
         // (8000+ → out-of-memory crash).
         LazyVStack(spacing: 4) {
             ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
-                let isCurrent = track.id == nowPlayingTrackID
+                let isCurrent = nowPlayingTrack.map { track.isSameQueueEntry(as: $0) } ?? false
                 Button { onPlayTrack(track) } label: {
                     HStack(spacing: 20) {
                         leadingAccessory(track: track, index: index, isCurrent: isCurrent)
@@ -1016,6 +1024,19 @@ struct TrackListView: View {
         #endif
     }
 
+    func trackArtwork(for track: MusicTrack) -> MusicArtworkImage {
+        MusicArtworkImage(
+            url: track.artworkURL ?? artworkFallback,
+            systemPlaceholder: "music.note",
+            cornerRadius: 8,
+            variant: .musicThumbnail,
+            asyncFallbackURL: MusicArtworkFallback.trackCover(
+                title: track.title, album: track.albumTitle, artist: track.artistName
+            ),
+            pinIdentity: track.id
+        )
+    }
+
     /// The leading column of a track row. Playlists show the track's own album
     /// artwork (with a now-playing equalizer overlaid when it's the current
     /// track); albums keep the numbered list, swapping the number for an
@@ -1023,13 +1044,7 @@ struct TrackListView: View {
     @ViewBuilder
     private func leadingAccessory(track: MusicTrack, index: Int, isCurrent: Bool) -> some View {
         if showArtwork {
-            MusicArtworkImage(
-                url: track.artworkURL ?? artworkFallback,
-                systemPlaceholder: "music.note",
-                cornerRadius: 8,
-                variant: .musicThumbnail,
-                pinIdentity: track.id
-            )
+            trackArtwork(for: track)
             .frame(width: 72, height: 72)
             .overlay {
                 if isCurrent {

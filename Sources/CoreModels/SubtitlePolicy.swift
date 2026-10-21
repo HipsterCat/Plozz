@@ -112,11 +112,15 @@ public struct SubtitlePolicy: Codable, Equatable, Sendable {
 
         /// Feeds this rule into the existing pure selector so the policy never
         /// re-implements the selection logic — it only chooses the inputs.
-        public func decision(candidates: [SubtitleCandidate]) -> SubtitleDecision {
+        public func decision(
+            candidates: [SubtitleCandidate],
+            hearingImpairedPreference: HearingImpairedPreference? = nil
+        ) -> SubtitleDecision {
             SubtitleSelector.decide(
                 candidates: candidates,
                 mode: mode,
-                preferredLanguage: preferredLanguage
+                preferredLanguage: preferredLanguage,
+                hearingImpairedPreference: hearingImpairedPreference
             )
         }
     }

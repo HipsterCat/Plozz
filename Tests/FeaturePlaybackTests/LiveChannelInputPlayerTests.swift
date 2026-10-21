@@ -162,7 +162,7 @@ final class LiveChannelInputPlayerTests: XCTestCase {
         defer { model.stop() }
         var failures = 0
         var updates = 0
-        model.setSessionReporting(.init(id: UUID(), update: { _ in updates += 1 }, failed: { failures += 1 }))
+        model.setSessionReporting(.init(id: UUID(), update: { _ in updates += 1 }, failed: { _ in failures += 1 }))
         await model.start()
         model.refreshFromEngine()
         XCTAssertEqual(model.phase, .failed(.library(.mediaChanged)))
@@ -194,7 +194,7 @@ final class LiveChannelInputPlayerTests: XCTestCase {
         let model = LiveChannelPlayerModel(engine: engine, input: .libraryChannel(id: UUID(), authorizationID: "fixture"))
         defer { model.stop() }
         var failures = 0
-        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { failures += 1 }))
+        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { _ in failures += 1 }))
         await model.start()
         engine.recoverableProgrammeIssue = .playbackFailed
         engine.liveSnapshot.phase = .failed
@@ -239,7 +239,7 @@ final class LiveChannelInputPlayerTests: XCTestCase {
         let model = LiveChannelPlayerModel(engine: engine, input: .libraryChannel(id: UUID(), authorizationID: "fixture"))
         defer { model.stop() }
         var failures = 0
-        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { failures += 1 }))
+        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { _ in failures += 1 }))
         await model.start()
         engine.recoverableProgrammeIssue = .mediaChanged
         engine.liveSnapshot.phase = .failed
@@ -339,7 +339,7 @@ final class LiveChannelInputPlayerTests: XCTestCase {
         defer { model.stop() }
         let reportingID = UUID()
         var failures = 0
-        model.setSessionReporting(.init(id: reportingID, update: { _ in }, failed: { failures += 1 }))
+        model.setSessionReporting(.init(id: reportingID, update: { _ in }, failed: { _ in failures += 1 }))
         await model.start()
         XCTAssertEqual(model.selectedAudioID, 2)
         XCTAssertEqual(model.selectedSubtitleID, 5)

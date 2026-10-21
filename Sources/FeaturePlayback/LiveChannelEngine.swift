@@ -1,4 +1,5 @@
 #if canImport(AVFoundation)
+import CoreGraphics
 import CoreModels
 import Foundation
 
@@ -25,6 +26,25 @@ public enum LiveChannelEnginePhase: Equatable, Sendable {
 
 public enum LiveChannelEngineRoute: String, Equatable, Sendable {
     case none, nativeHLS, localHLS, software, audio
+
+    var diagnosticsMode: PlaybackDiagnostics.PlaybackMode {
+        switch self {
+        case .nativeHLS: .directPlay
+        case .localHLS, .software: .plozzigen
+        case .none, .audio: .unknown
+        }
+    }
+
+    /// Playback Info's name for the route. Developer-facing, so not translated.
+    public var diagnosticName: String? { // l10n:content — engine route names
+        switch self {
+        case .none: nil
+        case .nativeHLS: "Native HLS (AVPlayer)"
+        case .localHLS: "Ingest → loopback HLS"
+        case .software: "Software decode"
+        case .audio: "Audio only"
+        }
+    }
 }
 
 public struct LiveChannelEngineSnapshot: Equatable, Sendable {
@@ -76,6 +96,9 @@ public struct LiveChannelOutputPolicy: Equatable, Sendable {
 @MainActor
 public protocol LiveChannelEngine: VideoEngine {
     var liveSnapshot: LiveChannelEngineSnapshot { get }
+    var livePlaybackFailureDiagnostic: PlaybackFailureDiagnostic? { get }
+    /// The engine will publish its terminal failure after a bounded diagnostic read.
+    var isCapturingLiveFailureDiagnostic: Bool { get }
     var onLiveSourceReset: (@MainActor () -> Void)? { get set }
     /// A scheduled media boundary resets tracks/cues, not the channel or decoder owner.
     var onProgrammeChanged: (@MainActor () -> Void)? { get set }
@@ -87,9 +110,14 @@ public protocol LiveChannelEngine: VideoEngine {
     func loadChannel(_ input: LiveChannelInput) async throws
     func loadLive(url: URL, httpHeaders: [String: String]) async
     func seekToLiveEdge() async
+    /// A scrub preview `seconds` into the seekable window (from its oldest end),
+    /// or nil when the engine can't produce one.
+    func liveScrubThumbnail(secondsIntoWindow seconds: TimeInterval, maxWidth: Int) async -> CGImage?
 }
 
 public extension LiveChannelEngine {
+    var livePlaybackFailureDiagnostic: PlaybackFailureDiagnostic? { nil }
+    var isCapturingLiveFailureDiagnostic: Bool { false }
     var supportsConcurrentPlayback: Bool { false }
     var recoverableProgrammeIssue: LibraryChannelError? { nil }
     var currentLibraryItem: LibraryChannelItem? { nil }
@@ -99,6 +127,7 @@ public extension LiveChannelEngine {
     }
     func configureLiveOutput(_ policy: LiveChannelOutputPolicy) {}
     func setWatching(_ isWatching: Bool) {}
+    func liveScrubThumbnail(secondsIntoWindow seconds: TimeInterval, maxWidth: Int) async -> CGImage? { nil }
     func loadChannel(_ input: LiveChannelInput) async throws {
         switch input {
         case .stream(let url, let headers):

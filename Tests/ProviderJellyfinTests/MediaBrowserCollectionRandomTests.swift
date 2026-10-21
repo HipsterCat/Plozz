@@ -7,7 +7,7 @@ import FoundationNetworking
 @testable import ProviderJellyfin
 
 final class MediaBrowserCollectionRandomTests: XCTestCase {
-    func testRandomScopesAll201CandidatesBeforeOneStableSnapshotShuffle() async throws {
+    func testRandomListsAll201CollectionsBeforeOneStableSnapshotShuffle() async throws {
         for kind: ProviderKind in [.jellyfin, .emby] {
             for serverCap in [200, 47] {
                 let http = RandomCollectionPagesHTTPClient(serverCap: serverCap)
@@ -48,8 +48,9 @@ final class MediaBrowserCollectionRandomTests: XCTestCase {
                 let candidateQueries = queries.filter { $0["IncludeItemTypes"] == "BoxSet" }
                 XCTAssertGreaterThan(candidateQueries.count, 1)
                 XCTAssertTrue(candidateQueries.allSatisfy {
-                    $0["SortBy"] == "SortName" && $0["SortOrder"] == "Ascending"
+                    $0["SortBy"] == "SortName" && $0["SortOrder"] == "Ascending" && $0["ParentId"] == "movies"
                 })
+                XCTAssertEqual(queries.count, candidateQueries.count, "Random sorting must not restore membership scanning.")
                 XCTAssertTrue(candidateQueries.contains { (Int($0["StartIndex"] ?? "0") ?? 0) > 0 })
                 XCTAssertTrue(queries.filter { $0["ParentId"] != nil }.allSatisfy {
                     $0["SortBy"] == "SortName" && $0["SortOrder"] == "Ascending"

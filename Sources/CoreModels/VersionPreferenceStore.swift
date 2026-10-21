@@ -14,6 +14,7 @@ import Foundation
 /// — version preference is a convenience, not critical state, so it needs no
 /// schema or migration. Per-profile scoped via `namespace`.
 public protocol VersionPreferenceStoring: Sendable {
+    var remembersSeriesVersions: Bool { get }
     /// The remembered `MediaVersion.id` for `titleID`, or `nil` if none.
     func preferredVersionID(forTitle titleID: String) -> String?
     /// Remembers `versionID` as the preferred version for `titleID`. Passing
@@ -36,6 +37,12 @@ public protocol VersionPreferenceStoring: Sendable {
 }
 
 public extension VersionPreferenceStoring {
+    var remembersSeriesVersions: Bool { true }
+
+    func shouldRememberVersion(for item: MediaItem) -> Bool {
+        remembersSeriesVersions || (item.seriesID == nil && item.kind != .series && item.kind != .season)
+    }
+
     /// Defaults keep existing lightweight test/preview stores source-compatible.
     func preferredVersionDescriptor(forTitle titleID: String) -> MediaVersionDescriptor? {
         nil
@@ -63,17 +70,23 @@ public final class VersionPreferenceStore: VersionPreferenceStoring, @unchecked 
     private let defaults: UserDefaults
     private let baseKey: String
     private let descriptorKey: String
+    private let playbackSettings: PlaybackSettingsStore
 
     /// - Parameter namespace: per-profile scope. `nil` (the default/primary
     ///   profile) uses the legacy un-suffixed key; other profiles pass their
     ///   `Profile.id`.
     public init(defaults: UserDefaults = .standard, namespace: String? = nil) {
         self.defaults = defaults
+        self.playbackSettings = PlaybackSettingsStore(defaults: defaults, namespace: namespace)
         self.baseKey = SettingsKey.scoped("com.plozz.playback.preferredVersions", namespace: namespace)
         self.descriptorKey = SettingsKey.scoped(
             "com.plozz.playback.preferredVersionShapes",
             namespace: namespace
         )
+    }
+
+    public var remembersSeriesVersions: Bool {
+        playbackSettings.load().rememberVersionPerSeries
     }
 
     public func preferredVersionID(forTitle titleID: String) -> String? {

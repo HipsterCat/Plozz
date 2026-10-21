@@ -181,6 +181,54 @@ final class SeerMapperTests: XCTestCase {
         XCTAssertEqual(availability.requestPickerSeasons.map(\.number), [2, 3, 4])
     }
 
+    func testSeasonPremiereDecodesFromExistingDetailsAndExplainsApprovedRequest() throws {
+        let data = Data("""
+        {
+          "seasons": [
+            {"seasonNumber": 1, "name": "Season 1", "airDate": "2099-10-20"},
+            {"seasonNumber": 2, "airDate": null},
+            {"seasonNumber": 3, "airDate": ""},
+            {"seasonNumber": 4, "airDate": "not-a-date"},
+            {"seasonNumber": 5}
+          ],
+          "mediaInfo": {"status": 3, "requests": [
+            {"status": 2, "seasons": [{"seasonNumber": 1, "status": 2}]}
+          ]}
+        }
+        """.utf8)
+        let details = try JSONDecoder().decode(SeerMediaDetails.self, from: data)
+        let mapped = SeerMapper.requestAvailability(from: details)
+        let premiere = try XCTUnwrap(MediaItem.calendarDayReleaseDate(from: "2099-10-20"))
+        XCTAssertEqual(mapped.seasons.first?.premiereDate, premiere)
+        XCTAssertTrue(mapped.seasons.dropFirst().allSatisfy { $0.premiereDate == nil })
+        let presentation = SeasonRequestPresentation(availability: mapped, now: premiere.addingTimeInterval(-604_800))
+        XCTAssertEqual(String(localized: presentation.title), "S1 Requested · Unreleased")
+        XCTAssertEqual(presentation.systemImage, "calendar")
+    }
+
+    func testAnyDownloadQueueEvidencePreventsClaimingOnlyReleaseIsPending() throws {
+        let premiere = try XCTUnwrap(MediaItem.calendarDayReleaseDate(from: "2099-10-20"))
+        for queue in [
+            SeerDownloadingItem(size: 100, sizeLeft: 50),
+            SeerDownloadingItem(size: 100, sizeLeft: 100),
+            SeerDownloadingItem()
+        ] {
+            let details = SeerMediaDetails(
+                mediaInfo: SeerMediaInfo(status: 3, downloadStatus: [queue], requests: [
+                    SeerMediaRequest(status: 2, seasons: [SeerRequestedSeason(seasonNumber: 1, status: 2)])
+                ]),
+                seasons: [SeerSeasonSummary(seasonNumber: 1, airDate: "2099-10-20")]
+            )
+            let mapped = SeerMapper.requestAvailability(from: details)
+            let requested = try XCTUnwrap(mapped.seasons.first)
+            XCTAssertTrue(requested.hasDownloadActivity)
+            XCTAssertFalse(requested.isAwaitingRelease(now: premiere.addingTimeInterval(-604_800)))
+            XCTAssertEqual(String(localized: SeasonRequestPresentation(
+                availability: mapped, now: premiere.addingTimeInterval(-604_800)
+            ).title), "S1 Processing")
+        }
+    }
+
     func testFailedParentDoesNotRegressAnExplicitlyCompletedSeason() {
         let details = SeerMediaDetails(
             mediaInfo: SeerMediaInfo(requests: [

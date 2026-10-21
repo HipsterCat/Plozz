@@ -267,7 +267,7 @@ public actor SimklWatchlistDestination:
             return SimklIDs(mal: Int(externalID.value))
         case .aniDB:
             return SimklIDs(anidb: Int(externalID.value))
-        case .trakt, .plex:
+        case .trakt, .plex, .wetrakr:
             // Not identifiers Simkl knows about.
             return SimklIDs()
         }

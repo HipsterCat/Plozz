@@ -1,5 +1,6 @@
 import XCTest
 import CoreModels
+import CoreNetworking
 @testable import FeatureHome
 
 /// Verifies the instant-launch behaviour: `HomeViewModel` hydrates the last
@@ -221,6 +222,117 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         XCTAssertFalse(home.isRefreshing)
     }
 
+    func testContinueWatchingDetailsFollowFailureAndClearAfterRecovery() async throws {
+        for kind in [ProviderKind.plex, .jellyfin, .emby] {
+            for merged in [true, false] {
+                let provider = FakeMediaProvider(allItems: [], kind: kind)
+                provider.continueWatchingError = .invalidResponse
+                provider.continueWatchingGate = {
+                    HTTPResponseDiagnostics.recordHTTPFailure(status: 503)
+                }
+                let visibility = HomeLibraryVisibility(mergeLibrariesOnHome: merged)
+                let home = HomeViewModel(
+                    accounts: [resolved(provider, accountID: "private-account")],
+                    layoutStore: InMemoryHomeLayoutStore(), currentVisibility: { visibility }
+                )
+                await home.load()
+                let diagnostic = try XCTUnwrap(home.continueWatchingDiagnostic)
+                XCTAssertEqual(diagnostic.provider, kind)
+                XCTAssertEqual(diagnostic.operation, .homeContinueWatching)
+                XCTAssertEqual(diagnostic.failures.first?.error, home.rowFailures[.continueWatching])
+                XCTAssertEqual(diagnostic.failures.first?.http, [.init(route: .continueWatching, httpStatus: 503)])
+                XCTAssertFalse(diagnostic.supportText.contains("private-account"))
+
+                provider.continueWatchingError = nil
+                await home.load(showLoadingState: false)
+                XCTAssertNil(home.continueWatchingDiagnostic)
+                XCTAssertNil(home.rowFailures[.continueWatching])
+            }
+        }
+    }
+
+    func testContinueWatchingDetailsMatchFirstFailedAccountNotFirstAccount() async throws {
+        let healthy = FakeMediaProvider(allItems: [], kind: .jellyfin)
+        let failed = FakeMediaProvider(allItems: [], kind: .plex)
+        failed.continueWatchingError = .decoding
+        let later = FakeMediaProvider(allItems: [], kind: .emby)
+        later.continueWatchingError = .unauthorized
+        let home = HomeViewModel(
+            accounts: [resolved(healthy, accountID: "healthy"), resolved(failed, accountID: "failed"),
+                       resolved(later, accountID: "later")],
+            layoutStore: InMemoryHomeLayoutStore()
+        )
+        await home.load()
+        XCTAssertEqual(home.rowFailures[.continueWatching], .decoding)
+        XCTAssertEqual(home.continueWatchingDiagnostic?.provider, .plex)
+        XCTAssertEqual(home.continueWatchingDiagnostic?.failures.first?.error, .decoding)
+        failed.continueWatchingError = .cancelled
+        later.continueWatchingError = nil
+        await home.load(showLoadingState: false)
+        XCTAssertNil(home.continueWatchingDiagnostic, "Cancellation must not create a shareable failure report.")
+    }
+
+    func testResumeFailureWaitsForReconciledContentBeforePublication() async throws {
+        for merged in [true, false] {
+            for healthyCount in [0, 4] {
+                let pause = HomeResumePublicationPause(detailReads: healthyCount)
+                defer { pause.release.open() }
+                var accounts = (0..<healthyCount).map { index in
+                    let provider = FakeMediaProvider(allItems: [], kind: .plex)
+                    provider.continueWatchingItems = [
+                        MediaItem(id: "resume-\(index)", title: "Resume \(index)", kind: .movie)
+                    ]
+                    return resolved(provider, accountID: "healthy-\(index)")
+                }
+                let offline = FakeMediaProvider(allItems: [], kind: .jellyfin)
+                offline.continueWatchingError = .serverUnreachable
+                accounts.append(resolved(offline, accountID: "offline"))
+                let visibility = HomeLibraryVisibility(mergeLibrariesOnHome: merged)
+                let home = HomeViewModel(
+                    accounts: accounts, layoutStore: InMemoryHomeLayoutStore(),
+                    contentStore: InMemoryHomeContentStore(),
+                    currentVisibility: { visibility },
+                    recentlyAppliedRecency: {
+                        await pause.waitForPublication()
+                        return [:]
+                    }
+                )
+                let load = Task { await home.load() }
+                let deadline = ContinuousClock.now + .seconds(2)
+                while !(await pause.isWaiting), ContinuousClock.now < deadline { await Task.yield() }
+                let isWaiting = await pause.isWaiting
+                XCTAssertTrue(isWaiting, "Hold the publication after every server has settled.")
+                XCTAssertTrue(home.loadingRows.contains(.continueWatching))
+                XCTAssertNil(home.rowFailures[.continueWatching],
+                             "Publishing a failure before its usable cards tears down the loading focus target.")
+                XCTAssertNil(home.continueWatchingDiagnostic)
+                let row = try XCTUnwrap(HomeRow.rows(
+                    for: try XCTUnwrap(home.state.value), isLibraryVisible: { _ in true },
+                    loadingRows: home.loadingRows, failures: home.rowFailures
+                ).first { $0.kind == .continueWatching })
+                XCTAssertNil(row.failure)
+                XCTAssertGreaterThan(row.loadingPlaceholderCount, 0)
+
+                pause.release.open()
+                await load.value
+                XCTAssertEqual(home.state.value?.continueWatching.map(\.id),
+                               (0..<healthyCount).map { "resume-\($0)" })
+                XCTAssertEqual(home.rowFailures[.continueWatching], .serverUnreachable,
+                               "Retain the source failure; only an empty settled row presents its error.")
+                XCTAssertEqual(home.continueWatchingDiagnostic?.provider, .jellyfin)
+                XCTAssertEqual(home.continueWatchingDiagnostic?.failures.first?.error, .serverUnreachable)
+                XCTAssertTrue(home.loadingRows.isEmpty)
+                let settledRow = try XCTUnwrap(HomeRow.rows(
+                    for: try XCTUnwrap(home.state.value), isLibraryVisible: { _ in true },
+                    loadingRows: home.loadingRows, failures: home.rowFailures
+                ).first { $0.kind == .continueWatching })
+                XCTAssertEqual(settledRow.items.count, healthyCount)
+                XCTAssertEqual(settledRow.loadingPlaceholderCount, 0)
+                XCTAssertEqual(settledRow.failure, .serverUnreachable)
+            }
+        }
+    }
+
     func testVisibilityChangeDuringCachedLaunchCancelsAndReplacesTheOldLoad() async {
         let gate = HomeRefreshGate()
         defer { gate.open() }
@@ -261,6 +373,90 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         XCTAssertEqual(provider.librariesCallCount, 2)
         XCTAssertEqual(home.state.value?.latest.map(\.id), ["new"])
         XCTAssertTrue(home.loadingRows.isEmpty)
+    }
+
+    func testVisibilityChangeWithoutAnotherViewTaskCannotStrandLoadingRows() async {
+        for merged in [true, false] {
+            let gate = HomeRefreshGate()
+            defer { gate.open() }
+            let provider = FakeMediaProvider(allItems: [])
+            provider.latestItems = [MediaItem(id: "latest", title: "Latest", kind: .movie)]
+            provider.continueWatchingItems = [MediaItem(id: "resume", title: "Resume", kind: .movie)]
+            provider.continueWatchingGate = { await gate.wait() }
+            var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: merged)
+            let home = HomeViewModel(
+                accounts: [resolved(provider, accountID: "a")],
+                layoutStore: InMemoryHomeLayoutStore(),
+                currentVisibility: { visibility }
+            )
+
+            let load = Task { await home.loadIfNeeded(for: visibility) }
+            let startedDeadline = Date().addingTimeInterval(1)
+            while Date() < startedDeadline, home.state.value?.latest.first?.id != "latest" {
+                await Task.yield()
+            }
+            XCTAssertEqual(home.state.value?.latest.first?.id, "latest")
+            XCTAssertTrue(home.loadingRows.contains(.continueWatching))
+
+            // Settings can change while Home's view-owned task is absent.
+            visibility.setGlobalRowEnabled(false, for: .watchlist)
+            gate.open()
+            await load.value
+            let finishedDeadline = Date().addingTimeInterval(2)
+            while Date() < finishedDeadline, home.isRefreshing || provider.librariesCallCount < 2 {
+                await Task.yield()
+            }
+
+            XCTAssertEqual(provider.librariesCallCount, 2, "The model must replace its obsolete load.")
+            XCTAssertFalse(home.isRefreshing)
+            XCTAssertTrue(home.loadingRows.isEmpty, "A discarded result must not leave permanent skeletons.")
+            XCTAssertEqual(home.state.value?.continueWatching.map(\.id), ["resume"])
+        }
+    }
+
+    func testVisibilityChangeDuringFinalReconciliationDoesNotCompleteObsoleteLoad() async {
+        for merged in [true, false] {
+            let pause = HomeResumePublicationPause(detailReads: 2)
+            let replacementGate = HomeRefreshGate()
+            defer {
+                pause.release.open()
+                replacementGate.open()
+            }
+            let provider = FakeMediaProvider(allItems: [])
+            provider.continueWatchingItems = [MediaItem(id: "resume", title: "Resume", kind: .movie)]
+            var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: merged)
+            let home = HomeViewModel(
+                accounts: [resolved(provider, accountID: "a")],
+                layoutStore: InMemoryHomeLayoutStore(),
+                currentVisibility: { visibility },
+                recentlyAppliedRecency: {
+                    await pause.waitForPublication()
+                    return [:]
+                }
+            )
+            let load = Task { await home.load() }
+            let deadline = ContinuousClock.now + .seconds(2)
+            while !(await pause.isWaiting), ContinuousClock.now < deadline { await Task.yield() }
+            let isWaiting = await pause.isWaiting
+            XCTAssertTrue(isWaiting, "Pause final reconciliation after detail and progressive publication.")
+            XCTAssertFalse(home.loadingRows.contains(.continueWatching))
+
+            visibility.setGlobalRowEnabled(false, for: .watchlist)
+            provider.continueWatchingGate = { await replacementGate.wait() }
+            pause.release.open()
+            await load.value
+            let restartedDeadline = ContinuousClock.now + .seconds(2)
+            while provider.librariesCallCount < 2, ContinuousClock.now < restartedDeadline { await Task.yield() }
+            XCTAssertEqual(provider.librariesCallCount, 2)
+            XCTAssertTrue(home.loadingRows.contains(.continueWatching),
+                          "The obsolete final result must not mark the cold load complete.")
+
+            replacementGate.open()
+            let finishedDeadline = ContinuousClock.now + .seconds(2)
+            while home.isRefreshing, ContinuousClock.now < finishedDeadline { await Task.yield() }
+            XCTAssertFalse(home.isRefreshing)
+            XCTAssertTrue(home.loadingRows.isEmpty)
+        }
     }
 
     func testRestartedColdLoadStillPublishesRowsAfterResumeHadArrived() async {
@@ -337,7 +533,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         XCTAssertEqual(afterCancellation, beforeCancellation)
     }
 
-    func testFirstDetailCanResumeBeforeOtherServersAndHomeMetadataFinish() async {
+    func testFirstDetailCanResumeBeforeOtherServersAndHomeMetadataFinish() async throws {
         for merged in [true, false] {
             let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "fast")
             let episode = MediaItem(
@@ -372,7 +568,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
                 crossServerSourceResolver: nil,
                 continueWatchingSnapshot: { home.continueWatchingForDetail }
             )
-            let detail = environment.makeViewModel(for: show, libraryOrigin: nil)
+            let detail = try environment.makeViewModel(for: show, libraryOrigin: nil)
             XCTAssertEqual(detail.serverResumeEpisode?.id, episode.id, "merged=\(merged)")
             XCTAssertEqual(detail.serverResumeEpisode?.resumePosition, 867)
             home.applyWatchedState(MediaItemMutation(
@@ -651,6 +847,22 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
 private actor HomeProgressCounter {
     private(set) var count = 0
     func record() { count += 1 }
+}
+
+private actor HomeResumePublicationPause {
+    nonisolated let release = HomeRefreshGate()
+    private let detailReads: Int
+    private var reads = 0
+    private(set) var isWaiting = false
+
+    init(detailReads: Int) { self.detailReads = detailReads }
+
+    func waitForPublication() async {
+        reads += 1
+        guard reads > detailReads else { return }
+        isWaiting = true
+        await release.wait()
+    }
 }
 
 private final class HomeRefreshGate: @unchecked Sendable {

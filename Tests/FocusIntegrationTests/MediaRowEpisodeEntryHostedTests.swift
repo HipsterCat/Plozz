@@ -5,11 +5,308 @@ import PlozzCoreUI
 #if os(tvOS)
 import Observation
 import UIKit
+import Vision
 #endif
 
 #if os(tvOS)
 @MainActor
 final class MediaRowEpisodeEntryHostedTests: XCTestCase {
+    func testCaptionSamplingDistinguishesAnimationFromAJump() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        let ink = UIView(frame: CGRect(x: 100, y: 100, width: 80, height: 20))
+        ink.backgroundColor = .white
+        host.view.backgroundColor = .black
+        host.view.addSubview(ink)
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        await waitUntil { ink.layer.presentation()?.frame.minY == 100 }
+        let region = CGRect(x: 96, y: 96, width: 88, height: 64)
+        let start = try titleInkY(in: captionImage(window, region: region))
+        UIView.animate(withDuration: 0.18) { ink.frame.origin.y = 116 }
+        let animated = try await titleMotion(window, region: region)
+        XCTAssertEqual(try XCTUnwrap(animated.last), start + 16, accuracy: 1)
+        XCTAssertTrue(animated.contains { $0 > start + 2 && $0 < start + 14 })
+
+        UIView.performWithoutAnimation { ink.frame.origin.y = 100 }
+        await waitUntil { ink.layer.presentation()?.frame.minY == 100 }
+        UIView.performWithoutAnimation { ink.frame.origin.y = 116 }
+        let jumped = try await titleMotion(window, region: region)
+        XCTAssertEqual(try XCTUnwrap(jumped.last), start + 16, accuracy: 1)
+        XCTAssertFalse(jumped.contains { $0 > start + 2 && $0 < start + 14 },
+                       "Sampling must not invent intermediate motion for an unanimated change.")
+    }
+
+    func testEpisodeTitleAnimatesDownAndBackWithoutMovingTheRow() async throws {
+        try await assertCaptionMotion(loading: false)
+    }
+
+    func testLoadingCaptionUsesTheSameFocusMotionAsEpisodes() async throws {
+        try await assertCaptionMotion(loading: true)
+    }
+
+    private func assertCaptionMotion(loading: Bool) async throws {
+        let artwork = try await seedImage()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        defer { previous?.makeKeyAndVisible() }
+        for style in CardFocusStyle.allCases {
+            let model = EpisodeEntryFixture()
+            model.focusStyle = style
+            model.resumeTarget = "episode-motion"
+            var episode = MediaItem(
+                id: model.resumeTarget, title: "The Hidden Room", kind: .episode,
+                episodeNumber: 4, posterURL: artwork
+            )
+            episode.overview = "A secret behind the door."
+            model.items = loading ? [] : [episode]
+            model.phase = loading ? .loading : .ready
+            let host = EpisodeEntryHost(model: model)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            window.rootViewController = host
+            host.view.backgroundColor = .black
+            host.row.view.backgroundColor = .clear
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            host.view.layoutIfNeeded()
+            await waitUntil { model.appeared && host.heroIsFocused }
+            try await Task.sleep(for: .milliseconds(400))
+            let before = screenshot(window)
+            let title = try recognizedText(loading ? "Loading episodes" : "The Hidden Room", in: before)
+            let push = PlozzMetrics.standard.focusCaptionPush
+            let region = CGRect(
+                x: title.minX - 2, y: title.minY - 2,
+                width: title.width + 4, height: title.height + push + 4
+            )
+            let rowFrame = host.row.view.frame
+            let initialY = try titleInkY(in: captionImage(window, region: region))
+            let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+            host.prefersRow = true
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            let entering = try await titleMotion(window, region: region)
+            XCTAssertFalse(host.heroIsFocused)
+            XCTAssertTrue(model.events.contains(loading ? "placeholder" : episode.id))
+            let focusedY = try XCTUnwrap(entering.last)
+            XCTAssertEqual(focusedY - initialY, reduceMotion ? 0 : push, accuracy: 2,
+                           "\(style): the title itself must move down by the reserved clearance.")
+            if !loading {
+                _ = try recognizedText("A secret behind the door", in: screenshot(window))
+            }
+            capture(window, system: system, name: "episode-caption-focused-\(style)-\(loading)-\(reduceMotion)")
+
+            host.prefersRow = false
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            let leaving = try await titleMotion(window, region: region)
+            XCTAssertTrue(host.heroIsFocused)
+            XCTAssertEqual(try XCTUnwrap(leaving.last), initialY, accuracy: 2)
+            XCTAssertEqual(host.row.view.frame, rowFrame, "Caption movement must not shift or resize the rail.")
+            if reduceMotion {
+                XCTAssertTrue((entering + leaving).allSatisfy { abs($0 - initialY) <= 2 },
+                              "\(style): Reduce Motion must keep the title stationary.")
+            } else {
+                for samples in [entering, leaving] {
+                    XCTAssertTrue(samples.contains { $0 > initialY + 2 && $0 < focusedY - 2 },
+                                  "\(style): title movement must animate, not jump between endpoints: \(samples)")
+                }
+            }
+            let attachment = XCTAttachment(string: "initial=\(initialY)\nentering=\(entering)\nleaving=\(leaving)")
+            attachment.name = "episode-title-motion-\(style)-\(loading)-\(reduceMotion)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    private func recognizedText(_ value: String, in image: UIImage) throws -> CGRect {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
+        try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+        let observation = try XCTUnwrap(request.results?.first {
+            $0.topCandidates(1).first?.string.contains(value) == true
+        }, "Missing rendered text: \(value)")
+        let bounds = observation.boundingBox
+        return CGRect(
+            x: bounds.minX * image.size.width, y: (1 - bounds.maxY) * image.size.height,
+            width: bounds.width * image.size.width, height: bounds.height * image.size.height
+        )
+    }
+
+    private func captionImage(_ window: UIWindow, region: CGRect) throws -> UIImage {
+        let presentation = try XCTUnwrap(window.layer.presentation())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        // Sample composited pixels without asking UIKit to snapshot/layout the whole hierarchy.
+        return UIGraphicsImageRenderer(size: region.size, format: format).image { context in
+            context.cgContext.translateBy(x: -region.minX, y: -region.minY)
+            presentation.render(in: context.cgContext)
+        }
+    }
+
+    private func titleMotion(_ window: UIWindow, region: CGRect) async throws -> [CGFloat] {
+        var positions: [CGFloat] = []
+        let deadline = ContinuousClock.now + .milliseconds(650)
+        repeat {
+            positions.append(try titleInkY(in: captionImage(window, region: region)))
+            try await Task.sleep(for: .milliseconds(10))
+        } while ContinuousClock.now < deadline
+        return positions
+    }
+
+    private func titleInkY(in image: UIImage) throws -> CGFloat {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
+        try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(
+                data: buffer.baseAddress, width: cgImage.width, height: cgImage.height,
+                bitsPerComponent: 8, bytesPerRow: cgImage.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+        }
+        let firstRow = (0..<cgImage.height).first { y in
+            (0..<cgImage.width).filter { x in
+                let index = (y * cgImage.width + x) * 4
+                return bytes[index] > 220 && bytes[index + 1] > 220 && bytes[index + 2] > 220
+            }.count >= 3
+        }
+        return CGFloat(try XCTUnwrap(firstRow, "The episode title must remain rendered during focus changes."))
+    }
+
+    func testDetailEpisodeLabelsHonorPresetsAndOverrides() async throws {
+        let image = try await seedImage()
+        let episode = MediaItem(
+            id: "episode-label-fixture", title: "The Hidden Room", kind: .episode,
+            episodeNumber: 4, posterURL: image
+        )
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for style in [CardFocusStyle.system, .highlight] {
+            for (preference, override, visible) in [
+                (CardCaptionPreference.recommended, CardCaptionOverride.automatic, true),
+                (.show, .automatic, true), (.hide, .automatic, false),
+                (.hide, .show, true), (.show, .hide, false),
+            ] {
+                var settings = CardCaptionSettings(preference: preference)
+                settings.setOverride(override, for: .episodes)
+                let host = UIHostingController(
+                    rootView:
+                        EpisodeColumnCard(item: episode, action: {})
+                        .environment(\.plozzCardCaptionView, .episodes)
+                        .environment(\.plozzCardCaptionSettings, settings)
+                        .environment(\.plozzCardFocusStyle, style)
+                        .environment(\.themePalette, .dark)
+                        .preferredColorScheme(.dark)
+                )
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                window.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(400))
+                let rendered = screenshot(window)
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                try VNImageRequestHandler(cgImage: XCTUnwrap(rendered.cgImage)).perform([request])
+                let copy = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(
+                    separator: " ")
+                XCTAssertEqual(
+                    copy.contains("The Hidden Room"), visible, "\(style) / \(preference) / \(override): \(copy)")
+                XCTAssertEqual(
+                    copy.contains("E4"), visible, "\(style): the episode designation belongs to the caption.")
+                let attachment = XCTAttachment(image: rendered)
+                attachment.name = "detail-episode-labels-\(style)-\(preference)-\(override)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
+    func testContinueWatchingCaptionsHonorPresetsAndHomeOverrides() async throws {
+        let image = try await seedImage(variants: ArtworkImageVariant.allCases)
+        let item = MediaItem(
+            id: "series-caption-fixture", title: "Moonrise", kind: .movie,
+            backdropURL: image
+        )
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for style in [CardFocusStyle.system, .highlight] {
+            for cardStyle in CardStyle.allCases {
+                for (preference, override, visible) in [
+                    (CardCaptionPreference.recommended, CardCaptionOverride.automatic, false),
+                    (.show, .automatic, true), (.hide, .automatic, false),
+                    (.recommended, .show, true), (.show, .hide, false), (.hide, .show, true),
+                ] {
+                    var settings = CardCaptionSettings(preference: preference)
+                    settings.setOverride(override, for: .home)
+                    let host = UIHostingController(
+                        rootView:
+                            PosterCardView(
+                                item: item, style: .landscape, showsSeriesArtwork: true,
+                                enablesAsyncArtworkFallback: false, action: {}
+                            )
+                            .frame(width: 500)
+                            .environment(\.plozzCardCaptionView, .home)
+                            .environment(\.plozzCardCaptionSettings, settings)
+                            .environment(\.plozzCardFocusStyle, style)
+                            .environment(\.plozzCardStyle, cardStyle)
+                            .environment(\.themePalette, .dark)
+                            .preferredColorScheme(.dark)
+                    )
+                    window.rootViewController = host
+                    window.makeKeyAndVisible()
+                    window.layoutIfNeeded()
+                    try await Task.sleep(for: .milliseconds(500))
+                    let rendered = screenshot(window)
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.recognitionLanguages = ["en-US"]
+                    try VNImageRequestHandler(cgImage: XCTUnwrap(rendered.cgImage)).perform([request])
+                    let titles = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                        .filter { $0.localizedCaseInsensitiveContains("Moonrise") }
+                    XCTAssertEqual(
+                        titles.count, visible ? 2 : 1,
+                        "\(style) / \(cardStyle) / \(preference) / \(override): \(titles)")
+                    let attachment = XCTAttachment(image: rendered)
+                    attachment.name = "series-caption-\(style)-\(cardStyle)-\(preference)-\(override)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
+            }
+        }
+    }
+
     func testEntranceGateKeepsTheEpisodePreviewOutOfFocusUntilEnabled() async throws {
         let image = try await seedImage()
         let model = EpisodeEntryFixture()
@@ -118,6 +415,8 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
             window.rootViewController = host
+            host.view.backgroundColor = .black
+            host.row.view.backgroundColor = .clear
             window.makeKeyAndVisible()
             defer {
                 window.isHidden = true
@@ -158,11 +457,31 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
             capture(window, system: system, name: "episode-at-screen-edge-\(style)")
 
             let offset = scroll.contentOffset
+            let unobscured = screenshot(window)
             model.navigationInset = 64
             try await assertRedPixel(
                 in: window, x: Int(insetEdge) + 2, y: y, present: false,
-                message: "The visible sidebar must still hide scrolling \(style) artwork under its icons."
+                message: "The visible sidebar must dim scrolling \(style) artwork under its icons."
             )
+            let underSidebar = screenshot(window)
+            for x in [2, Int(insetEdge) + 2] {
+                let original = try pixel(unobscured, x: x, y: y)
+                let faint = try pixel(underSidebar, x: x, y: y)
+                XCTAssertGreaterThan(original[0], 150, "Sample actual artwork, including at the physical screen edge.")
+                XCTAssertEqual(Double(faint[0]), Double(original[0]) * 0.1, accuracy: 3,
+                               "Retain 10% of \(style) artwork beneath the pinned sidebar.")
+            }
+            for offset in [12, 16, 20, 30, 42, 46, 50, 54, 58, 64] {
+                let x = Int(insetEdge) + offset
+                let original = try pixel(unobscured, x: x, y: y)
+                let faded = try pixel(underSidebar, x: x, y: y)
+                // The 48pt feather starts at 16pt and is fully opaque at 64pt.
+                let t = max(0, min(1, (Double(offset - 16) + 0.5) / 48))
+                let opacity = 0.1 + 0.9 * t * t * (3 - 2 * t)
+                XCTAssertGreaterThan(original[0], 150)
+                XCTAssertEqual(Double(faded[0]), Double(original[0]) * opacity, accuracy: 3,
+                               "Keep the \(style) feather 48pt wide, starting at 16pt with its opaque edge at 64pt.")
+            }
             try await assertRedPixel(
                 in: window, x: Int(insetEdge) + 64, y: y,
                 message: "The visible sidebar must keep \(style) artwork opaque past its feather."
@@ -202,6 +521,71 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
 
     func testSystemFocusHandsOffAndRestoresTheBrowsedEpisode() async throws {
         try await assertEpisodeHandoff(focusStyle: .system)
+    }
+
+    func testReenteringEpisodesKeepsTheBrowsedCardInPlace() async throws {
+        let image = try await seedImage()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        defer { previous?.makeKeyAndVisible() }
+        for style in CardFocusStyle.allCases {
+            let model = EpisodeEntryFixture()
+            model.focusStyle = style
+            model.resumeTarget = "episode-0"
+            model.items = (0..<20).map {
+                MediaItem(id: "episode-\($0)", title: "Episode \($0)", kind: .episode,
+                          episodeNumber: $0 + 1, posterURL: image)
+            }
+            model.phase = .ready
+            let host = EpisodeEntryHost(model: model)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            host.view.layoutIfNeeded()
+            await waitUntil { model.appeared && host.heroIsFocused }
+            let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+            host.prefersRow = true
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            await waitUntil { model.events.last == "episode-0" }
+            let scroll = try XCTUnwrap(horizontalScroll(in: host.row.view))
+            await waitUntil { self.neighbor(of: system.focusedItem, in: host.row.view, toLeft: false) != nil }
+            let next = try XCTUnwrap(neighbor(of: system.focusedItem, in: host.row.view, toLeft: false))
+            host.preferredItem = next
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            await waitUntil { system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(next) }
+            await waitUntil { model.events.last?.hasPrefix("episode-") == true && model.events.last != "episode-0" }
+            let browsedID = try XCTUnwrap(model.events.last)
+            try await waitForScrollToSettle(scroll)
+            let originalOffset = scroll.contentOffset.x
+
+            for _ in 0..<3 {
+                host.preferredItem = nil
+                host.prefersRow = false
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                await waitUntil { host.heroIsFocused }
+                model.active = true
+                model.resetToken += 1
+                try await Task.sleep(for: .milliseconds(400))
+                XCTAssertEqual(scroll.contentOffset.x, originalOffset, accuracy: 1,
+                               "\(style): leaving a row must not leading-align an already-visible episode.")
+                let reports = model.events.count
+                host.prefersRow = true
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                await waitUntil { model.events.count > reports && model.events.last == browsedID }
+                XCTAssertEqual(scroll.contentOffset.x, originalOffset, accuracy: 1)
+            }
+            capture(window, system: system, name: "episode-reentry-position-\(style)")
+        }
     }
 
     private func assertEpisodeHandoff(focusStyle: CardFocusStyle) async throws {
@@ -255,8 +639,8 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
 
         // Browse a different real card, return to the hero, and change the server's
         // resume target. Re-entry must preserve the viewer's browse position.
-        await waitUntil { self.leftNeighbor(of: system.focusedItem, in: host.row.view) != nil }
-        let browsed = try XCTUnwrap(leftNeighbor(of: system.focusedItem, in: host.row.view))
+        await waitUntil { self.neighbor(of: system.focusedItem, in: host.row.view, toLeft: true) != nil }
+        let browsed = try XCTUnwrap(neighbor(of: system.focusedItem, in: host.row.view, toLeft: true))
         let beforeBrowsing = model.events.count
         host.preferredItem = browsed
         system.requestFocusUpdate(to: host)
@@ -284,7 +668,9 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
         capture(window, system: system, name: "episode-entry-remembered")
     }
 
-    private func leftNeighbor(of focused: (any UIFocusItem)?, in root: UIView) -> (any UIFocusItem)? {
+    private func neighbor(
+        of focused: (any UIFocusItem)?, in root: UIView, toLeft: Bool
+    ) -> (any UIFocusItem)? {
         guard let focused, let current = frame(focused, in: root) else { return nil }
         var seen = Set<ObjectIdentifier>()
         func items(_ view: UIView) -> [any UIFocusItem] {
@@ -295,9 +681,23 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
             guard seen.insert(ObjectIdentifier(item)).inserted,
                   item.canBecomeFocused, let rect = frame(item, in: root),
                   rect.width > 300, rect.width < 800,
-                  rect.midX < current.midX - 20 else { return nil }
+                  toLeft ? rect.midX < current.midX - 20 : rect.midX > current.midX + 20 else { return nil }
             return (item, rect)
-        }.max { $0.1.midX < $1.1.midX }?.0
+        }.min { abs($0.1.midX - current.midX) < abs($1.1.midX - current.midX) }?.0
+    }
+
+    private func waitForScrollToSettle(_ scroll: UIScrollView) async throws {
+        let deadline = ContinuousClock.now + .seconds(4)
+        var previous = scroll.contentOffset
+        var stableSamples = 0
+        while stableSamples < 10, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+            let current = scroll.contentOffset
+            stableSamples = abs(current.x - previous.x) < 0.1 && abs(current.y - previous.y) < 0.1
+                ? stableSamples + 1 : 0
+            previous = current
+        }
+        XCTAssertEqual(stableSamples, 10, "The native scroll must settle before measuring re-entry.")
     }
 
     private func frame(_ item: any UIFocusItem, in root: UIView) -> CGRect? {
@@ -362,7 +762,7 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
         XCTAssertTrue(condition(), "Native hosted episode entry did not reach the expected destination")
     }
 
-    private func seedImage() async throws -> URL {
+    private func seedImage(variants: [ArtworkImageVariant] = [.landscapeCard]) async throws -> URL {
         let url = URL(string: "https://episode-entry.example.test/\(UUID()).png")!
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -371,17 +771,19 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
             $0.fill(CGRect(x: 0, y: 0, width: 16, height: 9))
         }
         let data = try XCTUnwrap(image.pngData())
-        let requestURL = ArtworkImageVariant.landscapeCard.requestURL(for: url)
-        let response = try XCTUnwrap(HTTPURLResponse(
-            url: requestURL, statusCode: 200, httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "image/png", "Cache-Control": "max-age=3600"]
-        ))
         let cache = try XCTUnwrap(ArtworkSession.shared.configuration.urlCache)
-        cache.storeCachedResponse(CachedURLResponse(response: response, data: data),
-                                  for: URLRequest(url: requestURL))
-        let decoded = await ArtworkImageCache.shared.image(for: url, variant: .landscapeCard)
-        _ = try XCTUnwrap(decoded)
-        cache.removeCachedResponse(for: URLRequest(url: requestURL))
+        for variant in variants {
+            let requestURL = variant.requestURL(for: url)
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: requestURL, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "image/png", "Cache-Control": "max-age=3600"]
+            ))
+            cache.storeCachedResponse(CachedURLResponse(response: response, data: data),
+                                      for: URLRequest(url: requestURL))
+            let decoded = await ArtworkImageCache.shared.image(for: url, variant: variant)
+            _ = try XCTUnwrap(decoded)
+            cache.removeCachedResponse(for: URLRequest(url: requestURL))
+        }
         return url
     }
 }
@@ -392,6 +794,7 @@ private final class EpisodeEntryFixture {
     var items: [MediaItem] = []
     var phase = MediaRowEpisodeEntry.Phase.loading
     var active = true
+    var resetToken = 0
     var entryEnabled = true
     var resumeTarget = "episode-998"
     var focusStyle = CardFocusStyle.highlight
@@ -407,6 +810,7 @@ private struct EpisodeEntryFixtureView: View {
         MediaRowView(
             title: nil, items: model.items, presentation: .episodeColumn,
             initialScrollID: model.resumeTarget, defaultFocusID: model.resumeTarget,
+            focusResetToken: model.resetToken,
             onFocusEntered: { model.active = false },
             onFocusChange: { if let item = $0 { model.events.append(item.id) } },
             episodeEntry: MediaRowEpisodeEntry(
@@ -420,6 +824,8 @@ private struct EpisodeEntryFixtureView: View {
         )
         .frame(height: 520)
         .environment(\.plozzCardFocusStyle, model.focusStyle)
+        .environment(\.plozzCardCaptionView, .episodes)
+        .preferredColorScheme(.dark)
         .environment(\.plozzPinnedSidebarActive, model.pinnedSidebarActive)
         .environment(\.plozzNavigationContentInset, model.navigationInset)
         .onAppear { model.appeared = true }

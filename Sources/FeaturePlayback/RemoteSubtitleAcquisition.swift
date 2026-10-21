@@ -19,9 +19,8 @@ protocol RemoteSubtitleAcquisitionHost: AnyObject {
     func hotLoadDownloadedSubtitle(_ track: MediaTrack, preferredLanguage: String?, forced: Bool) -> Int
     /// Selects a menu subtitle track by id.
     func selectDownloadedSubtitle(id: Int, userInitiated: Bool)
-    /// Whether the primary subtitle is currently "Off" — auto-download only
-    /// auto-selects the fetched track when nothing is already shown.
-    var isPrimarySubtitleOff: Bool { get }
+    /// Nothing is shown and the viewer has not explicitly chosen Off or a track.
+    var canAutoSelectDownloadedSubtitle: Bool { get }
 }
 
 extension RemoteSubtitleAcquisitionHost {
@@ -157,7 +156,8 @@ final class RemoteSubtitleAcquisition {
                 try Task.checkCancellation()
                 await MainActor.run { [weak self] in
                     guard !Task.isCancelled, let self, self.context == context, let host = self.host else { return }
-                    if let track {
+                    if var track {
+                        track.isHearingImpaired = track.isHearingImpaired || subtitle.isHearingImpaired
                         let id = host.hotLoadDownloadedSubtitle(track, preferredLanguage: language, forced: subtitle.isForced)
                         host.selectDownloadedSubtitle(id: id, userInitiated: true)
                         host.setSubtitleDownloadState(.added)
@@ -209,12 +209,18 @@ final class RemoteSubtitleAcquisition {
                 PlozzLog.playback.info("Auto-downloaded subtitle for item")
                 try Task.checkCancellation()
                 await MainActor.run { [weak self] in
-                    guard !Task.isCancelled, let self, self.context == context, let host = self.host, let track else { return }
+                    guard !Task.isCancelled, let self, self.context == context, let host = self.host, var track else { return }
+                    track.isHearingImpaired = track.isHearingImpaired || best.isHearingImpaired
+                    guard LanguageMatch.matches(track.language ?? language, language),
+                          preference.hearingImpaired.allows(isHearingImpaired: track.isSDHSubtitle) else {
+                        PlozzLog.playback.error("Downloaded subtitle did not match the requested language or SDH restriction.")
+                        return
+                    }
                     // Only hot-load; don't yank the viewer's current selection —
                     // register the row so they can pick it, and select it only if
                     // nothing is currently shown.
                     let id = host.hotLoadDownloadedSubtitle(track, preferredLanguage: language, forced: best.isForced)
-                    if host.isPrimarySubtitleOff {
+                    if host.canAutoSelectDownloadedSubtitle {
                         host.selectDownloadedSubtitle(id: id, userInitiated: false)
                     }
                 }

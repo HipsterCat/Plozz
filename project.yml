@@ -47,6 +47,12 @@ settings:
     # Display-only date/revision version from the selected catalog entry.
     # Empty for local builds; never written to CFBundleShortVersionString.
     PLOZZ_RELEASE_VERSION: ""
+    PLOZZ_DEV_FEATURE_LABEL: ""
+  configs:
+    Debug:
+      PLOZZ_DEV_FEATURE: "$(PLOZZ_DEV_FEATURE_LABEL)"
+    Release:
+      PLOZZ_DEV_FEATURE: ""
 
 # Local Swift package providing all modular feature/code libraries.
 packages:
@@ -61,6 +67,7 @@ targets:
     sources:
       - path: App/Plozz
       - path: App/Resources/Assets.xcassets
+      - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/Fonts
       # The single app-owned String Catalog. SwiftUI/Foundation lookups compiled
       # into the Swift package modules resolve against `Bundle.main`, so ALL UI
@@ -73,6 +80,10 @@ targets:
       # the FIRST copy a new user sees, so it has to be translated too.
       - path: App/Resources/InfoPlist.xcstrings
       - path: App/Resources/ReleaseNotes.json
+      - path: App/Resources/LibassNotices.txt
+      - path: App/Resources/LibTrueHDNotices.txt
+      - path: App/Resources/LibTrueHDLicense.txt
+      - path: App/Resources/LibTrueHDApacheLicense.txt
     info:
       path: App/Resources/Info.plist
       properties:
@@ -107,6 +118,7 @@ targets:
         PlozzReleaseChannel: "$(PLOZZ_RELEASE_CHANNEL)"
         PlozzReleaseID: "$(PLOZZ_RELEASE_ID)"
         PlozzReleaseVersion: "$(PLOZZ_RELEASE_VERSION)"
+        PlozzDevelopmentFeature: "$(PLOZZ_DEV_FEATURE)"
         # Background audio keeps music playing while the user browses other
         # screens or the tvOS screensaver starts. Required for the music MVP's
         # background/Now-Playing behaviour (AVAudioSession .playback).
@@ -185,14 +197,10 @@ targets:
         # default (e.g. a contributor without the key), which disables the TVDB tier
         # and leaves the keyless providers powering enrichment. Attribution required.
         TVDBAPIKey: "$(TVDB_API_KEY)"
-        # Trakt OAuth application credentials, powering per-profile watch-history
-        # sync (scrobbling). Substituted from the TRAKT_CLIENT_ID /
-        # TRAKT_CLIENT_SECRET build settings (gitignored
-        # Config/Secrets.local.xcconfig). Empty by default, which disables Trakt
-        # sync (the Settings panel shows it as unavailable and scrobbling is a
-        # no-op). Create an app at https://trakt.tv/oauth/applications to get these.
+        # Public client ID for secretless PKCE/device-code OAuth.
+        # Config/Secrets.local.xcconfig supplies the registration-specific value.
         TraktClientID: "$(TRAKT_CLIENT_ID)"
-        TraktClientSecret: "$(TRAKT_CLIENT_SECRET)"
+        WetrakrClientID: "$(WETRAKR_CLIENT_ID)"
         # MyAnimeList client ID for anime tracking (device-code OAuth). Substituted
         # from MAL_CLIENT_ID build setting (gitignored Config/Secrets.local.xcconfig).
         # Empty by default, which disables MAL sync.
@@ -207,7 +215,7 @@ targets:
         AniListClientID: "$(ANILIST_CLIENT_ID)"
         AniListClientSecret: "$(ANILIST_CLIENT_SECRET)"
         # Last.fm music scrobbling. The API key + shared secret sign every call
-        # on-device (like Trakt/Simkl above, whose secrets also ship here) so the
+        # on-device (unlike secretless Trakt/Simkl authentication) so the
         # TV can run the no-typing desktop-auth poll flow. Substituted from
         # LASTFM_API_KEY / LASTFM_SHARED_SECRET (gitignored
         # Config/Secrets.local.xcconfig). Empty by default, which disables
@@ -225,7 +233,7 @@ targets:
           # Sync & Setup device pairing ("set up from another device"): the TV
           # advertises this service so a configured phone/tablet can find it and
           # transfer setup over the local network.
-          - _plozz-pair._tcp
+          - ${PLOZZ_PAIRING_SERVICE_TYPE}
         # Jellyfin servers are user-controlled and frequently plain HTTP — on the
         # LAN, behind a reverse proxy, or over Tailscale (the 100.64.0.0/10 CGNAT
         # range, which is NOT covered by NSAllowsLocalNetworking). Since the user
@@ -240,7 +248,12 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.thatcube.Plozz.deeplink
             CFBundleURLSchemes:
-              - plozz
+              - ${PLOZZ_URL_SCHEME}
+              - "$(PRODUCT_BUNDLE_IDENTIFIER).external-player"
+        LSApplicationQueriesSchemes:
+          - nativeplayer
+          - infuse
+          - vlc-x-callback
     settings:
       base:
         # ${PLOZZ_ID_SUFFIX} is EMPTY for a normal (canonical) build → the real
@@ -297,6 +310,7 @@ targets:
       # it stays free of CoreModels and the rest of the app's stack.
       - path: Sources/TopShelfKit/TopShelfSnapshot.swift
       - path: Sources/TopShelfKit/TopShelfStore.swift
+      - path: Sources/TopShelfKit/TopShelfContentBuilder.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz${PLOZZ_ID_SUFFIX}.TopShelf
@@ -319,10 +333,15 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: App/PlozziOS
+      - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/Fonts
       # Same shared catalog as the tvOS target — see the note there.
       - path: App/Resources/Localizable.xcstrings
       - path: App/Resources/ReleaseNotes.json
+      - path: App/Resources/LibassNotices.txt
+      - path: App/Resources/LibTrueHDNotices.txt
+      - path: App/Resources/LibTrueHDLicense.txt
+      - path: App/Resources/LibTrueHDApacheLicense.txt
     info:
       path: App/PlozziOS/Info.plist
       properties:
@@ -334,8 +353,11 @@ targets:
         PlozzReleaseChannel: "$(PLOZZ_RELEASE_CHANNEL)"
         PlozzReleaseID: "$(PLOZZ_RELEASE_ID)"
         PlozzReleaseVersion: "$(PLOZZ_RELEASE_VERSION)"
+        PlozzDevelopmentFeature: "$(PLOZZ_DEV_FEATURE)"
         UILaunchScreen: {}
         UIRequiresFullScreen: false
+        BGTaskSchedulerPermittedIdentifiers:
+          - "$(PRODUCT_BUNDLE_IDENTIFIER).downloads.*"
         # remote-notification lets CloudKit (CKSyncEngine) wake the app to pull
         # config changes pushed from another device on the same Apple ID.
         UIBackgroundModes:
@@ -346,6 +368,7 @@ targets:
           # backgrounded.
           - audio
           - remote-notification
+          - processing
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -385,7 +408,7 @@ targets:
           - _jellyfin._tcp
           - _smb._tcp
           # Sync & Setup device pairing ("set up another device") over the LAN.
-          - _plozz-pair._tcp
+          - ${PLOZZ_PAIRING_SERVICE_TYPE}
         NSCameraUsageDescription: "Plozz uses the camera to scan the setup code shown on your other device."
         OMDBAPIKey: "$(OMDB_API_KEY)"
         TMDBBearerToken: "$(TMDB_BEARER_TOKEN)"
@@ -404,9 +427,13 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.thatcube.Plozz.deeplink
             CFBundleURLSchemes:
-              - plozz
+              - ${PLOZZ_URL_SCHEME}
+              - "$(PRODUCT_BUNDLE_IDENTIFIER).external-player"
+        LSApplicationQueriesSchemes:
+          - infuse
+          - vlc-x-callback
         TraktClientID: "$(TRAKT_CLIENT_ID)"
-        TraktClientSecret: "$(TRAKT_CLIENT_SECRET)"
+        WetrakrClientID: "$(WETRAKR_CLIENT_ID)"
         SimklClientID: "$(SIMKL_CLIENT_ID)"
         AniListClientID: "$(ANILIST_CLIENT_ID)"
         AniListClientSecret: "$(ANILIST_CLIENT_SECRET)"
@@ -442,8 +469,15 @@ targets:
     platform: tvOS
     sources:
       - path: Tests/FocusHost
+      - path: Tests/PlaybackPresentationSupport/PlaybackFailureFixture.swift
+      - path: Tests/LiveTVPresentationSupport/IPTVOrganizationFixture.swift
+      - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
+      - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
       - path: Tests/FeatureLiveTVRemoteTests/NavigationRailFixture.swift
       - path: App/Resources/Assets.xcassets
+      - path: App/Resources/CommunityAssets.xcassets
+      - path: App/Resources/Localizable.xcstrings
+      - path: App/Resources/ReleaseNotes.json
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.FocusHost
@@ -471,9 +505,42 @@ targets:
     platform: iOS
     sources:
       - path: Tests/iOSPresentationHost
+      - path: Tests/PlaybackPresentationSupport/PlaybackFailureFixture.swift
+      - path: Tests/LiveTVPresentationSupport/IPTVOrganizationFixture.swift
+      - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
+      - path: Tests/SubtitlePresentationSupport/Fixtures/four-three.mp4
+        buildPhase: resources
+      - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
+      - path: App/Resources/Localizable.xcstrings
+      - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
+      - path: App/PlozziOS/Assets.xcassets
+      - path: App/Resources/CommunityAssets.xcassets
+      - path: App/Resources/ReleaseNotes.json
+    info:
+      path: Tests/iOSPresentationHost/Info.plist
+      properties:
+        BGTaskSchedulerPermittedIdentifiers:
+          - "$(PRODUCT_BUNDLE_IDENTIFIER).downloads.*"
+        UIBackgroundModes:
+          - audio
+          - processing
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiresFullScreen: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.PresentationHost
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -487,6 +554,15 @@ targets:
     platform: iOS
     sources:
       - path: Tests/iOSPresentationTests
+      - path: Tests/FeaturePlaybackTests/SubtitleOverlayGeometryTests.swift
+      - path: Tests/FocusIntegrationTests/LiveTVSourcesRuntimeHostedTests.swift
+      - path: Tests/FocusIntegrationTests/PINRequirementPresentationTests.swift
+      - path: Tests/HomePresentationSupport
+      - path: Tests/TestSupportPerformance
+      - path: Tests/PerformancePresentationSupport
+      - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
+      - path: Tests/AppearancePresentationSupport
+      - path: Tests/CoreUITests/DialogSurfaceTests.swift
       - path: Tests/AuthPresentationSupport
       - path: Tests/SubtitlePresentationSupport
         excludes: ["Fixtures"]
@@ -505,11 +581,31 @@ targets:
       - package: Plozz
         product: AppShelliOS
 
+  PlozziOSInteractionTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/iOSInteractionTests
+      - path: Tests/PlaybackPresentationSupport/PlaybackFailureInteractionTests.swift
+      - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
+      - path: Tests/HomeRemoteTests/ServerAddressNavigationInteractionTests.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.InteractionTests
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: PlozziOSPresentationHost
+    dependencies:
+      - target: PlozziOSPresentationHost
+
   PlozzHomeRemoteTests:
     type: bundle.ui-testing
     platform: tvOS
     sources:
       - path: Tests/HomeRemoteTests
+      - path: Tests/PlaybackPresentationSupport/PlaybackFailureInteractionTests.swift
+      - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
+      - path: Sources/FeatureHomeCore/LibraryTraversalEvidence.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.HomeRemoteTests
@@ -520,6 +616,13 @@ targets:
     platform: tvOS
     sources:
       - path: Tests/FocusIntegrationTests
+      - path: Tests/HomePresentationSupport
+      - path: Tests/TestSupportPerformance
+      - path: Tests/PerformancePresentationSupport
+      - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
+      - path: Tests/FeatureLiveTVTests/LiveTVGuideFocusTests.swift
+      - path: Tests/AppearancePresentationSupport
+      - path: Tests/CoreUITests/DialogSurfaceTests.swift
       - path: Tests/AuthPresentationSupport
       - path: Tests/SubtitlePresentationSupport
         excludes: ["Fixtures"]
@@ -546,6 +649,16 @@ targets:
         product: AppShell
 
 schemes:
+  PlozziOSInteractionTests:
+    build:
+      targets:
+        PlozziOSPresentationHost: all
+        PlozziOSInteractionTests: [test]
+    test:
+      config: Debug
+      targets:
+        - PlozziOSInteractionTests
+
   PlozziOSPresentationTests:
     build:
       targets:

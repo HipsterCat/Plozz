@@ -1,3 +1,4 @@
+#if os(tvOS)
 import CoreModels
 import FeatureHome
 import Foundation
@@ -528,3 +529,4 @@ private actor WatchRefreshProvider: MediaProvider {
     func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
     nonisolated func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }
+#endif

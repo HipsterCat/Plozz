@@ -5,11 +5,16 @@ final class ProductionHomeNavigationTests: XCTestCase {
     func testNavigateProductionHomeWithNativeCards() throws {
         #if targetEnvironment(simulator)
         continueAfterFailure = false
+        let attach = ProcessInfo.processInfo.environment["PLOZZ_PERFORMANCE_ATTACH"] == "1"
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
-        app.launchArguments = ["--production-home-fixture"]
-        app.launchEnvironment["PLZPERF_ANIMATIONS"] = "1"
-        app.launch()
-        defer { app.terminate() }
+        if attach {
+            XCTAssertEqual(app.state, .runningForeground, "The profiling runner must own the already-running fixture.")
+        } else {
+            app.launchArguments = ["--production-home-fixture"]
+            app.launchEnvironment["PLZPERF_ANIMATIONS"] = "1"
+            app.launch()
+        }
+        defer { if !attach { app.terminate() } }
         XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
         let hero = app.buttons["home-hero-action-row"]
         XCTAssertTrue(hero.waitForExistence(timeout: 20))

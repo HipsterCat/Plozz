@@ -42,37 +42,46 @@ struct PlozziOSProfileSettingsView: View {
     var body: some View {
         List {
             if let profile {
-                SettingsSectionGroup {
-                    ProfileActionsList(
-                        profile: profile,
-                        syncEnabled: SyncSetupFeatureFlag().isEnabled,
-                        offersPlexPINReuse: profile.playsAsPINProtectedPlexUser,
-                        hasParentalPIN: appModel.profiles.parentalPIN != nil,
-                        // Sealed only when this profile is BOTH a Kids Profile
-                        // and the one currently open: a grown-up editing a
-                        // child's profile from their own is exactly who should
-                        // be able to change it.
-                        restrictedActionsSealed: profile.isKids
-                            && appModel.profiles.activeProfileID == profileID
-                            && appModel.profiles.parentalPIN != nil
-                            && !isParentalUnlocked,
-                        onEditAppearance: { route = .appearance },
-                        onEditLock: { route = .lockSetup },
-                        onCreateParentalPIN: { route = .parentalSetup },
-                        onSetLock: { appModel.setLock($0, forProfile: profileID) },
-                        onSetKids: { appModel.setKidsProfile($0, forProfile: profileID) },
-                        onSetParentalPIN: { appModel.profiles.setParentalPIN($0) },
-                        validatePlexPIN: {
-                            await appModel.plexHomeUsers.validatePlexPIN(
-                                $0,
-                                forProfile: profileID
-                            )
-                        },
-                        onDelete: canDelete ? { appModel.removeProfile(profileID) } : nil,
-                        isUnlocked: appModel.isUnlockedThisRun(profileID),
-                        onUnlock: { appModel.noteUnlocked(profileID) }
-                    )
-                }
+                ProfileActionsList(
+                    profile: profile,
+                    syncEnabled: SyncSetupFeatureFlag().isEnabled,
+                    offersPlexPINReuse: profile.playsAsPINProtectedPlexUser,
+                    hasParentalPIN: appModel.profiles.parentalPIN != nil,
+                    // Sealed only when this profile is BOTH a Kids Profile
+                    // and the one currently open: a grown-up editing a
+                    // child's profile from their own is exactly who should
+                    // be able to change it.
+                    restrictedActionsSealed: profile.isKids
+                        && appModel.profiles.activeProfileID == profileID
+                        && appModel.profiles.parentalPIN != nil
+                        && !isParentalUnlocked,
+                    groupsActions: true,
+                    automaticSignIn: AutomaticSignInSettings(
+                        isEnabled: Binding(
+                            get: { appModel.plexHomeUsers.automaticallySignIn },
+                            set: { appModel.setAutomaticallySignIn($0) }
+                        ),
+                        error: appModel.plexHomeUsers.automaticSignInError
+                    ),
+                    onEditAppearance: { route = .appearance },
+                    onEditLock: { route = .lockSetup },
+                    onCreateParentalPIN: { route = .parentalSetup },
+                    onSetLock: { appModel.setLock($0, forProfile: profileID) },
+                    onSetKids: { appModel.setKidsProfile($0, forProfile: profileID) },
+                    onSetParentalPIN: { appModel.profiles.setParentalPIN($0) },
+                    validatePlexPIN: {
+                        await appModel.plexHomeUsers.validatePlexPIN(
+                            $0,
+                            forProfile: profileID
+                        )
+                    },
+                    onDelete: canDelete ? { appModel.removeProfile(profileID) } : nil,
+                    isUnlocked: appModel.isUnlockedThisRun(profileID),
+                    onUnlock: { appModel.noteUnlocked(profileID) }
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
             }
         }

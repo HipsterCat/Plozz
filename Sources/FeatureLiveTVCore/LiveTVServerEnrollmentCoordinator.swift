@@ -32,18 +32,72 @@ public final class LiveTVServerEnrollmentCoordinator {
     public func refresh(
         choices: [LiveTVServerChoice],
         resolver: @escaping LiveTVServerProviderResolver,
+        store: any LiveTVSourcesStoring,
+        suppressedAccountIDs: @MainActor () throws -> Set<String>,
+        isAuthorized: @MainActor () -> Bool,
+        diagnosticProfileID: String? = nil
+    ) async -> [String] {
+        guard isAuthorized() else { invalidate(); return [] }
+        return await refresh(
+            choices: choices, resolver: resolver, configuration: { try store.load() },
+            suppressedAccountIDs: suppressedAccountIDs,
+            apply: { updated in
+                guard isAuthorized() else { throw CommitError.authorizationChanged }
+                let current = try store.load()
+                let suppressed = try suppressedAccountIDs()
+                guard updated.playlists == current.playlists,
+                      current.servers.allSatisfy({ updated.servers.contains($0) }),
+                      updated.servers.allSatisfy({ source in
+                          current.servers.contains(source) || !suppressed.contains(source.accountID)
+                      }) else { throw CommitError.configurationChanged }
+                try updated.validate()
+                try store.save(updated)
+            },
+            diagnosticProfileID: diagnosticProfileID
+        )
+    }
+
+    private enum CommitError: Error {
+        case authorizationChanged, configurationChanged
+    }
+
+    @discardableResult
+    public func refresh(
+        choices: [LiveTVServerChoice],
+        resolver: @escaping LiveTVServerProviderResolver,
         configuration: @MainActor () throws -> LiveTVSourcesConfiguration,
         suppressedAccountIDs: @MainActor () throws -> Set<String>,
-        apply: @MainActor (LiveTVSourcesConfiguration) throws -> Void
+        apply: @MainActor (LiveTVSourcesConfiguration) throws -> Void,
+        diagnosticProfileID: String? = nil
     ) async -> [String] {
         generation &+= 1
         let request = generation
+        var diagnosticIDs: [LiveTVSourceDiagnostics.Identity: String] = [.request: UUID().uuidString]
+        diagnosticIDs[.profile] = diagnosticProfileID
+        LiveTVSourceDiagnostics.shared.record(
+            .enrollmentStarted, identities: diagnosticIDs, counts: [.choices: choices.count, .generation: request]
+        )
+        func decision(
+            _ account: String, _ reason: LiveTVSourceDiagnostics.Reason, error: (any Error)? = nil,
+            channels: Int = 0
+        ) {
+            LiveTVSourceDiagnostics.shared.record(
+                .enrollmentDecision, identities: diagnosticIDs.merging([.account: account]) { _, new in new },
+                counts: [.channels: channels], reason: reason, error: error
+            )
+        }
         var seen: Set<String> = []
         let choices = choices.filter {
-            [.plex, .jellyfin, .emby].contains($0.kind) && seen.insert($0.id).inserted
+            [.plex, .jellyfin, .emby, .iptv].contains($0.kind) && seen.insert($0.id).inserted
         }
         statuses = choices.map { LiveTVServerEnrollmentStatus(choice: $0) }
         var added: [String] = []
+        defer {
+            LiveTVSourceDiagnostics.shared.record(
+                .enrollmentFinished, identities: diagnosticIDs, counts: [.added: added.count],
+                flags: [.cancelled: Task.isCancelled, .current: request == generation]
+            )
+        }
         for choice in choices {
             guard request == generation, !Task.isCancelled else { return added }
             let currentConfiguration: LiveTVSourcesConfiguration
@@ -53,14 +107,16 @@ public final class LiveTVServerEnrollmentCoordinator {
                 suppressed = try suppressedAccountIDs()
             }
             catch {
+                decision(choice.id, .storage, error: error)
                 update(choice.id) { $0.phase = .failed; $0.failure = .configurationNotSaved }
                 continue
             }
-            guard !suppressed.contains(choice.id) else { continue }
+            guard !suppressed.contains(choice.id) else { decision(choice.id, .suppressed); continue }
             let existing = currentConfiguration.servers.first { $0.accountID == choice.id }
-            if let existing, !existing.isEnabled { continue }
+            if let existing, !existing.isEnabled { decision(choice.id, .disabled); continue }
             guard let context = resolver(choice.id), context.accountID == choice.id,
                   context.kind == choice.kind, !context.authorizationID.isEmpty else {
+                decision(choice.id, .accountUnavailable)
                 update(choice.id) { $0.phase = .failed; $0.failure = .accountUnavailable }
                 continue
             }
@@ -72,6 +128,7 @@ public final class LiveTVServerEnrollmentCoordinator {
                 guard let current = resolver(choice.id), current.accountID == context.accountID,
                       current.kind == context.kind,
                       current.authorizationID == context.authorizationID else {
+                    decision(choice.id, .authorizationChanged)
                     update(choice.id) { $0.phase = .failed; $0.failure = .accountUnavailable }
                     continue
                 }
@@ -79,9 +136,13 @@ public final class LiveTVServerEnrollmentCoordinator {
                     $0.phase = .loaded
                     $0.availability = availability
                 }
-                guard availability.hasChannels,
-                      availability.status == .available
-                        || availability.status == .unsupportedPlaybackMode else { continue }
+                let hasPlayableCatalog = availability.hasChannels
+                    && (availability.status == .available || availability.status == .unsupportedPlaybackMode)
+                let waitingForIPTVChannels = choice.kind == .iptv && availability.status == .noChannels
+                guard hasPlayableCatalog || waitingForIPTVChannels else {
+                    decision(choice.id, .unavailable, channels: availability.channelCount)
+                    continue
+                }
                 var latest: LiveTVSourcesConfiguration
                 let currentSuppression: Set<String>
                 do {
@@ -89,12 +150,14 @@ public final class LiveTVServerEnrollmentCoordinator {
                     currentSuppression = try suppressedAccountIDs()
                 }
                 catch {
+                    decision(choice.id, .storage, error: error)
                     update(choice.id) { $0.phase = .failed; $0.failure = .configurationNotSaved }
                     continue
                 }
-                guard !currentSuppression.contains(choice.id) else { continue }
+                guard !currentSuppression.contains(choice.id) else { decision(choice.id, .suppressed); continue }
                 if let existing = latest.servers.first(where: { $0.accountID == choice.id }) {
                     update(choice.id) { $0.sourceID = existing.id }
+                    decision(choice.id, .alreadyConfigured, channels: availability.channelCount)
                     continue
                 }
                 let source = LiveTVServerSource(
@@ -106,6 +169,7 @@ public final class LiveTVServerEnrollmentCoordinator {
                     try latest.validate()
                     try apply(latest)
                 } catch {
+                    decision(choice.id, .storage, error: error)
                     update(choice.id) {
                         $0.phase = .failed
                         $0.failure = .configurationNotSaved
@@ -113,11 +177,13 @@ public final class LiveTVServerEnrollmentCoordinator {
                     continue
                 }
                 added.append(source.id)
+                decision(choice.id, .saved, channels: availability.channelCount)
                 update(choice.id) { $0.sourceID = source.id }
             } catch {
                 guard request == generation else { return added }
                 if Task.isCancelled || error is CancellationError
                     || (error as? AppError) == .cancelled || (error as? URLError)?.code == .cancelled {
+                    decision(choice.id, .cancelled)
                     update(choice.id) { $0.phase = .idle }
                     return added
                 }
@@ -125,6 +191,11 @@ public final class LiveTVServerEnrollmentCoordinator {
                     $0.phase = .failed
                     $0.failure = LiveTVServerImportError.sanitized(error, fallback: .serviceUnavailable)
                 }
+                LiveTVSourceDiagnostics.shared.record(
+                    .enrollmentDecision,
+                    identities: diagnosticIDs.merging([.account: choice.id]) { _, new in new },
+                    flags: [.failed: true], error: error
+                )
             }
         }
         return added

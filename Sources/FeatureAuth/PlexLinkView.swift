@@ -125,14 +125,7 @@ public struct PlexLinkView: View {
                             .minimumScaleFactor(0.5)
 
                         HStack(spacing: 32) {
-                            Text(code)
-                                .font(.plozzCode(size: 96))
-                                .tracking(12)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.6)
-                                .padding(.horizontal, 48)
-                                .padding(.vertical, 24)
-                                .background { codePanel }
+                            ConnectionCodeView(code, size: 96)
 
                             LinkCodeExpiryCountdown(
                                 expiresAt: expiresAt,
@@ -182,18 +175,6 @@ public struct PlexLinkView: View {
             .fill(palette.cardSurface)
             .overlay {
                 shape.strokeBorder(palette.cardBorder.opacity(0.45), lineWidth: 1)
-            }
-    }
-
-    private var codePanel: some View {
-        let shape = RoundedRectangle(
-            cornerRadius: PlozzTheme.Metrics.Radius.panel,
-            style: .continuous
-        )
-        return shape
-            .fill(palette.cardSurface)
-            .overlay {
-                shape.fill(Color.black.opacity(palette.isLight ? 0.06 : 0.26))
             }
     }
 

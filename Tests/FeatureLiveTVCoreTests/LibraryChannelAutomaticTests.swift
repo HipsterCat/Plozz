@@ -51,6 +51,8 @@ final class LibraryChannelAutomaticTests: XCTestCase {
         series.kind = .series
         items += [series, movie("invalid", runtime: nil), movie("zero", runtime: 0), movie("nan", runtime: .nan)]
         let (service, provider, _) = try await service(items: items)
+        PerformanceDiagnostics.shared.start()
+        defer { PerformanceDiagnostics.shared.stop() }
         let summary = try await service.refreshAutomaticChannels(at: now)
         XCTAssertEqual(summary.channelCount, 2)
         XCTAssertEqual(summary.eligibleItemCount, 752)
@@ -66,6 +68,14 @@ final class LibraryChannelAutomaticTests: XCTestCase {
         let details = await provider.details
         XCTAssertEqual(details, 0)
         XCTAssertTrue(try service.portableState().snapshots.flatMap(\.items).allSatisfy { $0.kind != .series })
+        let snapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+        let diagnostic = try XCTUnwrap((snapshot.recent + snapshot.slow).first { $0.operation == .automaticChannels })
+        XCTAssertEqual(diagnostic.operation, .automaticChannels)
+        XCTAssertEqual(diagnostic.outcome, .succeeded)
+        XCTAssertEqual(diagnostic.metrics.accounts, 1)
+        XCTAssertEqual(diagnostic.metrics.items, items.count)
+        XCTAssertEqual(diagnostic.metrics.rows, summary.channelCount)
+        XCTAssertTrue(PerformanceDiagnostics.shared.snapshot()?.active.isEmpty == true)
     }
 
     func testPreparationProgressReportsActualPagesAndOrderedStages() async throws {
@@ -411,6 +421,32 @@ final class LibraryChannelAutomaticTests: XCTestCase {
         XCTAssertEqual(service.definitions, previous)
     }
 
+    func testProviderCancellationRecordsCancelledWithoutCancellingCaller() async throws {
+        let store = LibraryDefinitionMemory()
+        let (service, provider, _) = try await service(items: [movie("old")], store: store)
+        _ = try await service.refreshAutomaticChannels(at: now)
+        let previous = try store.load()
+        await provider.beforeNextPage { throw CancellationError() }
+        PerformanceDiagnostics.shared.start()
+        defer { PerformanceDiagnostics.shared.stop() }
+
+        XCTAssertFalse(Task.isCancelled)
+        do {
+            _ = try await service.refreshAutomaticChannels(at: now.addingTimeInterval(10))
+            XCTFail("A provider's cancellation must propagate to the caller.")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertFalse(Task.isCancelled)
+        XCTAssertEqual(try store.load(), previous)
+        XCTAssertEqual(service.definitions, previous)
+        let snapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+        let records = (snapshot.recent + snapshot.slow).filter { $0.operation == .automaticChannels }
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.outcome, .cancelled)
+        XCTAssertTrue(snapshot.active.isEmpty)
+    }
+
     func testCancellationContextLossAndGlobalDisableFenceInFlightRefresh() async throws {
         for action in ["cancel", "context", "update", "disable"] {
             let store = LibraryDefinitionMemory()
@@ -419,6 +455,8 @@ final class LibraryChannelAutomaticTests: XCTestCase {
             let gate = LibraryAutomaticGate()
             await provider.replaceItems([movie("new")])
             await provider.beforeNextPage { await gate.pause() }
+            PerformanceDiagnostics.shared.start()
+            defer { PerformanceDiagnostics.shared.stop() }
             let refresh = Task { try await service.refreshAutomaticChannels(at: now.addingTimeInterval(10)) }
             await gate.entered()
             switch action {
@@ -438,6 +476,15 @@ final class LibraryChannelAutomaticTests: XCTestCase {
             }
             XCTAssertEqual(try store.load(), expected)
             XCTAssertEqual(service.definitions, expected)
+            let snapshot = try XCTUnwrap(PerformanceDiagnostics.shared.snapshot())
+            let diagnostic = try XCTUnwrap(
+                (snapshot.recent + snapshot.slow).first { $0.operation == .automaticChannels }
+            )
+            XCTAssertEqual(
+                diagnostic.outcome,
+                action == "cancel" ? .cancelled : .failed
+            )
+            XCTAssertTrue(PerformanceDiagnostics.shared.snapshot()?.active.isEmpty == true)
         }
     }
 

@@ -1,12 +1,1014 @@
 #if os(tvOS)
-import PlozzCoreUI
+@testable import PlozzCoreUI
+@testable import AppShell
+import CoreModels
+@testable import FeatureHome
 import Observation
 import SwiftUI
 import UIKit
+import TVUIKit
 import XCTest
 
 @MainActor
 final class HomeVerticalMotionHostedTests: XCTestCase {
+    func testHorizontalRowsKeepPartlyVisibleCardsThroughTheScreenEdge() async throws {
+        let art = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 180)).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 180))
+        }
+        let server = try LibraryArtworkServer(images: ["edge": try XCTUnwrap(art.pngData())])
+        defer { server.stop() }
+        let port = try await server.start()
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/edge/\(UUID())"))
+        func red(_ image: UIImage, at point: CGPoint) throws -> UInt8 {
+            let crop = try XCTUnwrap(image.cgImage?.cropping(to: CGRect(origin: point, size: CGSize(width: 1, height: 1))))
+            var pixel = [UInt8](repeating: 0, count: 4)
+            try pixel.withUnsafeMutableBytes {
+                let context = try XCTUnwrap(CGContext(
+                    data: $0.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+                ))
+                context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            }
+            return pixel[0]
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        defer { previous?.makeKeyAndVisible() }
+        for showcase in [false, true] {
+            for pinned in [false, true] {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+                let host = MotionFocusHost(rootView: AnyView(
+                    PortraitRowPeekFixture(showcase: showcase, pinned: pinned, artworkURL: url)
+                        .environment(\.plozzCardStyle, .borderless)
+                        .environment(\.plozzCardFocusStyle, .system)
+                ))
+                host.view.backgroundColor = .black
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                defer {
+                    window.isHidden = true
+                    window.rootViewController = nil
+                }
+                try await Task.sleep(for: .milliseconds(700))
+                let posters = focusItems(in: window).compactMap { $0 as? NativePosterButton }
+                let first = try XCTUnwrap(posters.first { $0.accessibilityLabel == "Peek 0" })
+                host.target = try XCTUnwrap(posters.first { $0.accessibilityLabel == "Peek 3" })
+                let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+                system.requestFocusUpdate(to: host)
+                system.updateFocusIfNeeded()
+                try await Task.sleep(for: .milliseconds(400))
+                let start = first.convert(first.bounds, to: window)
+                let next = try XCTUnwrap(posters.first { $0.accessibilityLabel == "Peek 1" })
+                let pitch = next.convert(next.bounds, to: window).minX - start.minX
+                var parent = first.superview
+                while let view = parent, !(view is UIScrollView) { parent = view.superview }
+                let scroll = try XCTUnwrap(parent as? UIScrollView)
+                let initialOffset = scroll.contentOffset.x
+                for trailing in [false, true] {
+                    let card: NativePosterButton
+                    let edgeOffset: CGFloat
+                    if trailing {
+                        scroll.setContentOffset(CGPoint(
+                            x: initialOffset + pitch, y: scroll.contentOffset.y
+                        ), animated: false)
+                        try await Task.sleep(for: .milliseconds(100))
+                        card = try XCTUnwrap(focusItems(in: window).compactMap { $0 as? NativePosterButton }
+                            .first { $0.accessibilityLabel == "Peek 7" })
+                        edgeOffset = scroll.contentOffset.x + card.convert(card.bounds, to: window).minX - window.bounds.maxX
+                    } else {
+                        card = first
+                        edgeOffset = initialOffset + start.maxX
+                    }
+                    for remaining: CGFloat in [120, 60, 30, 60, 120] {
+                        scroll.setContentOffset(CGPoint(
+                            x: edgeOffset + (trailing ? remaining : -remaining), y: scroll.contentOffset.y
+                        ), animated: false)
+                        try await Task.sleep(for: .milliseconds(100))
+                        let artwork = try XCTUnwrap(card.image)
+                        XCTAssertGreaterThan(try red(artwork, at: CGPoint(
+                            x: artwork.size.width * artwork.scale / 2, y: artwork.size.height * artwork.scale / 2
+                        )), 250, "Load real white artwork before checking visibility.")
+                        let frame = card.convert(card.bounds, to: window)
+                        XCTAssertEqual(trailing ? window.bounds.maxX - frame.minX : frame.maxX, remaining, accuracy: 1)
+                        let format = UIGraphicsImageRendererFormat()
+                        format.scale = 1
+                        format.preferredRange = .standard
+                        let image = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { _ in
+                            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+                        }
+                        let attachment = XCTAttachment(image: image)
+                        attachment.name = "row-edge-\(showcase)-\(pinned)-\(trailing)-\(remaining)"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+                        XCTAssertTrue(card.window === window, "Keep the partly visible native card mounted.")
+                        XCTAssertGreaterThan(try red(image, at: CGPoint(
+                            x: trailing ? window.bounds.maxX - remaining + 10 : remaining - 10, y: start.midY
+                        )), pinned && !trailing ? 20 : 200,
+                        "Visible artwork vanished: showcase=\(showcase), pinned=\(pinned), trailing=\(trailing), remaining=\(remaining).")
+                    }
+                }
+            }
+        }
+    }
+
+    func testPortraitRowsShowQuarterOfSeventhPosterWithEitherNavigation() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        defer { previous?.makeKeyAndVisible() }
+        let layouts = [false, true].flatMap { showcase in [false, true].map { (showcase, $0) } }
+        for cardStyle in CardStyle.allCases {
+            for (showcase, pinned) in layouts {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+                let host = UIHostingController(rootView:
+                    PortraitRowPeekFixture(showcase: showcase, pinned: pinned)
+                        .environment(\.plozzCardStyle, cardStyle)
+                        .environment(\.plozzCardFocusStyle, .system)
+                )
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                defer {
+                    window.isHidden = true
+                    window.rootViewController = nil
+                }
+                try await Task.sleep(for: .milliseconds(500))
+                window.layoutIfNeeded()
+                func frame(_ title: String) throws -> CGRect {
+                    let item = try XCTUnwrap(focusItems(in: window).first {
+                        ($0 as? NSObject)?.accessibilityLabel == title
+                    })
+                    if let poster = item as? NativePosterButton {
+                        return try restingPosterFrame(poster, in: window)
+                    }
+                    if let card = item as? TVCardView {
+                        return card.convert(CGRect(
+                            x: (card.bounds.width - card.contentSize.width) / 2,
+                            y: (card.bounds.height - card.contentSize.height) / 2,
+                            width: card.contentSize.width, height: card.contentSize.height
+                        ), to: window)
+                    }
+                    if let view = item as? UIView {
+                        return view.convert(view.bounds, to: window)
+                    }
+                    return window.convert(item.frame, from: try XCTUnwrap(item.focusItemContainer).coordinateSpace)
+                }
+                let firstFrame = try frame("Peek 0")
+                let seventhFrame = try frame("Peek 6")
+                let fraction = (window.bounds.maxX - seventhFrame.minX) / seventhFrame.width
+                XCTAssertEqual(fraction, 0.25, accuracy: 0.03, "\(cardStyle), showcase=\(showcase), pinned=\(pinned)")
+                XCTAssertEqual(firstFrame.minX, pinned ? 144 : 80, accuracy: 0.5)
+            }
+        }
+    }
+
+    func testPortraitSkeletonsMatchLoadedRowWidthsWithEitherNavigation() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        defer { previous?.makeKeyAndVisible() }
+        for pinned in [false, true] {
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            func content(loading: Bool) -> some View {
+                PortraitRowPeekFixture(showcase: true, pinned: pinned, isLoading: loading)
+                    .environment(\.plozzCardStyle, .borderless)
+                    .environment(\.plozzCardFocusStyle, .system)
+            }
+            let host = UIHostingController(rootView: content(loading: true))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            func frames(in view: UIView, loaded: Bool) throws -> [CGRect] {
+                if let poster = view as? NativePosterButton {
+                    if loaded, poster.accessibilityLabel?.hasPrefix("Peek ") != true { return [] }
+                    return [try restingPosterFrame(poster, in: window)]
+                }
+                return try view.subviews.flatMap { try frames(in: $0, loaded: loaded) }.sorted { $0.minX < $1.minX }
+            }
+            try await Task.sleep(for: .milliseconds(500))
+            let loadingFrames = try frames(in: window, loaded: false)
+            XCTAssertGreaterThanOrEqual(loadingFrames.count, 7)
+            host.rootView = content(loading: false)
+            try await Task.sleep(for: .milliseconds(500))
+            let loadedFrames = try frames(in: window, loaded: true)
+            XCTAssertGreaterThanOrEqual(loadedFrames.count, 7)
+            for (loading, loaded) in zip(loadingFrames.prefix(7), loadedFrames.prefix(7)) {
+                XCTAssertEqual(loading.minX, loaded.minX, accuracy: 0.5)
+                XCTAssertEqual(loading.width, loaded.width, accuracy: 0.5)
+            }
+        }
+    }
+
+    private func restingPosterFrame(_ poster: NativePosterButton, in window: UIWindow) throws -> CGRect {
+        poster.convert(poster.bounds, to: window)
+    }
+
+    func testPinnedPortraitResizeKeepsFocusAndUsesTheNewSlotPitch() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        func content(inset: CGFloat) -> AnyView {
+            AnyView(PortraitRowPeekFixture(showcase: true, pinned: true, navigationInset: inset)
+                .environment(\.plozzCardStyle, .borderless)
+                .environment(\.plozzCardFocusStyle, .system))
+        }
+        let host = MotionFocusHost(rootView: content(inset: 64))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        func poster(_ title: String) throws -> NativePosterButton {
+            try XCTUnwrap(focusItems(in: window).compactMap { $0 as? NativePosterButton }
+                .first { $0.accessibilityLabel == title })
+        }
+        let focused = try poster("Peek 2")
+        let focus = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        host.target = focused
+        focus.requestFocusUpdate(to: host)
+        focus.updateFocusIfNeeded()
+        XCTAssertTrue(focus.focusedItem === focused)
+        let originalWidth = focused.bounds.width
+        host.rootView = content(inset: 0)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertTrue(focus.focusedItem === focused)
+        XCTAssertGreaterThan(focused.bounds.width, originalWidth)
+        let first = try poster("Peek 0")
+        let second = try poster("Peek 1")
+        let pitch = second.convert(second.bounds, to: window).minX - first.convert(first.bounds, to: window).minX
+        XCTAssertEqual(
+            pitch,
+            PlozzMetrics.standard.portraitRowSlotWidth(viewportWidth: 1840, leadingInset: 0, cardStyle: .borderless)
+                + PlozzMetrics.standard.cardSpacing,
+            accuracy: 0.5
+        )
+        let seventh = try poster("Peek 6")
+        host.target = seventh
+        focus.requestFocusUpdate(to: host)
+        focus.updateFocusIfNeeded()
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertTrue(focus.focusedItem === seventh)
+        var ancestor = seventh.superview
+        while let view = ancestor, !(view is UIScrollView) { ancestor = view.superview }
+        let scroll = try XCTUnwrap(ancestor as? UIScrollView)
+        let position = (scroll.contentOffset.x + scroll.adjustedContentInset.left) / pitch
+        XCTAssertGreaterThan(position, 0, "Focusing the partially visible poster must actually scroll the row.")
+        XCTAssertEqual(position, position.rounded(), accuracy: 0.01)
+    }
+
+    func testColdShowcaseWaitsForFirstRowInsteadOfEnteringDiscover() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let fixture = LoadingHomeRows()
+        fixture.firstRowReady = false
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let host = MotionFocusHost(rootView: AnyView(
+            LoadingHomeRowsView(fixture: fixture, seriesArtwork: true)
+                .environment(\.plozzCardStyle, .borderless)
+                .environment(\.plozzCardFocusStyle, .system)
+                .frame(width: 1920, height: 1080)
+                .ignoresSafeArea()
+        ))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let focus = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        focus.requestFocusUpdate(to: window)
+        focus.updateFocusIfNeeded()
+        XCTAssertFalse(host.focusEvents.contains { $0.contains("Discover") },
+                       "An already-realized lower row must not win startup while the first row cannot accept focus.")
+        fixture.items = [MediaItem(id: "continue-0", title: "Continue 0", kind: .episode)]
+        fixture.firstRowReady = true
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual((focus.focusedItem as? NSObject)?.accessibilityLabel, "Continue 0")
+        XCTAssertFalse(host.focusEvents.contains { $0.contains("Discover") },
+                       "Startup must enter Continue Watching directly, not bounce through Discover.")
+        XCTAssertEqual(fixture.activeRowID, "continue")
+        let discover = try XCTUnwrap(focusItems(in: window).first {
+            ($0 as? NSObject)?.accessibilityLabel == "Discover 0"
+        })
+        host.target = discover
+        focus.requestFocusUpdate(to: host)
+        focus.updateFocusIfNeeded()
+        XCTAssertTrue(focus.focusedItem === discover, "The startup gate must release normal access to lower rows.")
+        host.target = nil
+        fixture.items = [MediaItem(id: "continue-new", title: "Continue New", kind: .episode)]
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertTrue(focus.focusedItem === discover, "Later Continue Watching arrivals must not reclaim focus from the user.")
+    }
+
+    func testContinueWatchingArrivalKeepsFocusOutOfDiscover() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        defer { previous?.makeKeyAndVisible() }
+        for focusStyle in CardFocusStyle.allCases {
+            for (cardStyle, cached, seriesArtwork) in CardStyle.allCases.flatMap({ style in
+                [false, true].flatMap { cached in [false, true].map { (style, cached, $0) } }
+            }) {
+                let fixture = LoadingHomeRows()
+                if cached {
+                    fixture.items = (0..<4).map {
+                        MediaItem(id: "cached-\($0)", title: "Cached \($0)", kind: .episode)
+                    }
+                }
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+                let host = MotionFocusHost(rootView: AnyView(
+                    LoadingHomeRowsView(fixture: fixture, seriesArtwork: seriesArtwork)
+                        .environment(\.plozzCardStyle, cardStyle)
+                        .environment(\.plozzCardFocusStyle, focusStyle)
+                        .frame(width: 1920, height: 1080)
+                        .ignoresSafeArea()
+                ))
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                defer {
+                    window.isHidden = true
+                    window.rootViewController = nil
+                }
+                try await Task.sleep(for: .milliseconds(300))
+                let focus = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+                focus.requestFocusUpdate(to: window)
+                focus.updateFocusIfNeeded()
+                let candidates = focusItems(in: window).compactMap { item -> (any UIFocusItem, CGRect)? in
+                    guard (item as? UIControl)?.isEnabled != false,
+                          let frame = NavigationRowFocusRequester.frame(of: item, relativeTo: window),
+                          frame.width > 100, frame.height > 100 else { return nil }
+                    return (item, frame)
+                }.sorted {
+                    if abs($0.1.midY - $1.1.midY) > 1 { return $0.1.midY < $1.1.midY }
+                    return cached ? $0.1.minX > $1.1.minX : $0.1.minX < $1.1.minX
+                }
+                let loading = try XCTUnwrap(candidates.first?.0, "\(focusStyle)-\(cardStyle)")
+                host.target = loading
+                focus.requestFocusUpdate(to: host)
+                focus.updateFocusIfNeeded()
+                XCTAssertTrue(focus.focusedItem === loading, "Activate the actual Continue Watching target before \(cached ? "refresh" : "loading").")
+                host.target = nil
+                host.focusEvents = []
+                if cached {
+                    fixture.items = []
+                    try await Task.sleep(for: .milliseconds(300))
+                    XCTAssertFalse(host.focusEvents.contains { $0.contains("Discover") },
+                                   "Replacing cached cards with waiting slots must not hand focus to Discover: \(focusStyle)-\(cardStyle), \(host.focusEvents)")
+                }
+                fixture.items = (0..<4).map {
+                    MediaItem(id: "continue-\($0)", title: "Continue \($0)", kind: .episode)
+                }
+                try await Task.sleep(for: .milliseconds(500))
+                let focused = try XCTUnwrap(focus.focusedItem)
+                if let label = (focused as? NSObject)?.accessibilityLabel {
+                    XCTAssertEqual(label, "Continue 0", "\(focusStyle)-\(cardStyle)")
+                }
+                let focusedFrame = try XCTUnwrap(NavigationRowFocusRequester.frame(of: focused, relativeTo: window))
+                let targetFrames = fixture.items.compactMap { self.firstSource($0.id, in: window) }
+                    .map { $0.convert($0.bounds, to: window) }
+                XCTAssertTrue(targetFrames.contains { $0.contains(CGPoint(x: focusedFrame.midX, y: focusedFrame.midY)) },
+                              "Actual focus must remain inside Continue Watching: \(focusStyle)-\(cardStyle), seriesArtwork=\(seriesArtwork), \(focusedFrame), \(targetFrames)")
+                XCTAssertFalse(host.focusEvents.contains { $0.contains("Discover") },
+                               "Loading must hand off directly, not focus Discover and bounce back: \(host.focusEvents)")
+                XCTAssertEqual(fixture.activeRowID, "continue")
+            }
+        }
+    }
+
+    private func firstSource(_ id: String, in view: UIView) -> DetailTransitionSourceView? {
+        if let source = view as? DetailTransitionSourceView, source.reference?.itemKey == id { return source }
+        return view.subviews.lazy.compactMap { self.firstSource(id, in: $0) }.first
+    }
+
+    private func focusItems(in window: UIWindow) -> [any UIFocusItem] {
+        var containers: [any UIFocusItemContainer] = [window]
+        var seen = Set<ObjectIdentifier>()
+        var result: [any UIFocusItem] = []
+        while let container = containers.popLast() {
+            guard seen.insert(ObjectIdentifier(container)).inserted else { continue }
+            let frame = container.coordinateSpace.convert(window.bounds, from: window)
+            for item in container.focusItems(in: frame) {
+                if let children = item.focusItemContainer { containers.append(children) }
+                if let view = item as? UIView { containers.append(view) }
+                if item.canBecomeFocused, !(item is UIScrollView) { result.append(item) }
+            }
+        }
+        return result
+    }
+
+    func testNativeScrollDoesNotSkipItsStartWhenTheCommitIsDelayed() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIViewController()
+        let scroll = UIScrollView(frame: CGRect(x: 100, y: 100, width: 800, height: 700))
+        scroll.contentSize = CGSize(width: 800, height: 2400)
+        let position = FocusHeroNativeScrollPosition.PositionView()
+        position.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        scroll.addSubview(position)
+        window.rootViewController?.view.addSubview(scroll)
+        let motion = FocusHeroRowMotion()
+        let mask = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        window.rootViewController?.view.addSubview(mask)
+        motion.mask = mask
+        motion.height = 340
+        motion.heightStops = [.init(offset: 0, height: 340), .init(offset: 480, height: 510)]
+        position.rowMotion = motion
+        window.makeKeyAndVisible()
+        defer {
+            position.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        position.move(to: 0, rowID: "first")
+        try await Task.sleep(for: .milliseconds(100))
+        func commitAfterBusyWork() {
+            CATransaction.begin()
+            motion.height = 510
+            position.move(to: 480, rowID: "second")
+            Thread.sleep(forTimeInterval: 0.15)
+            CATransaction.commit()
+        }
+        commitAfterBusyWork()
+        try await Task.sleep(for: .milliseconds(25))
+        let firstY = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+        XCTAssertLessThan(firstY, 100, "A delayed commit must not skip the first half of the visible transition.")
+        let height = try XCTUnwrap(FocusHeroHeightStop.height(at: firstY, in: motion.heightStops))
+        let expectedMask = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
+            - height - FocusHeroLayout.activeTitleLift - 6 - FocusHeroLayout.fadeBand
+        XCTAssertEqual(try XCTUnwrap(mask.layer.presentation()).affineTransform().ty, expectedMask, accuracy: 8,
+                       "The mask must start with the viewport, not race ahead during the blocked commit.")
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(try XCTUnwrap(scroll.layer.presentation()).bounds.minY, 480, accuracy: 0.5)
+    }
+
+    func testLateHeightMeasurementRefreshesAnUnchangedInFlightDestination() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = FocusHeroModel()
+        let heights = LateRowHeights()
+        let rows = (0..<2).map { FocusHeroRow(id: "late-\($0)", itemIDs: [], leadItem: nil) }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            FocusHeroScrollingRows(rows: rows, model: model) { row, _ in
+                Color.gray.frame(height: (row.id == rows[0].id ? heights.first : 510)
+                                 + FocusHeroLayout.rowBottomTightening)
+            }
+            .frame(width: 1920, height: 1080)
+            .ignoresSafeArea()
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let scroll = try XCTUnwrap(firstScrollView(in: window))
+        let mask = try XCTUnwrap(model.motion.mask)
+        model.activate(rows[1], in: rows)
+        try await Task.sleep(for: .milliseconds(70))
+        let destination = scroll.contentOffset.y
+        let key = "plozz.home.viewport-height"
+        let beganAt = try XCTUnwrap(mask.layer.animation(forKey: key)).beginTime
+        heights.first = 400
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertEqual(scroll.contentOffset.y, destination, accuracy: 0.5)
+        XCTAssertGreaterThan(try XCTUnwrap(mask.layer.animation(forKey: key)).beginTime, beganAt,
+                             "A revised height path must retarget even if the viewport destination is unchanged.")
+        try await Task.sleep(for: .seconds(1))
+        let bottom = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
+        XCTAssertEqual(mask.transform.ty, bottom - 510 - FocusHeroLayout.activeTitleLift - 6 - FocusHeroLayout.fadeBand,
+                       accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(scroll.layer.presentation()).bounds.minY, destination, accuracy: 0.5)
+    }
+
+    func testReturningToARealizedRowDoesNotRebuildItsCardMenus() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = FocusHeroModel()
+        let menus = MotionMenuHandler()
+        let rows = (0..<5).map { index in
+            let items = (0..<30).map {
+                MediaItem(id: "row-\(index)-\($0)", title: "Item \(index)-\($0)", kind: .movie)
+            }
+            return FocusHeroRow(id: "row-\(index)", itemIDs: items.map(\.id), leadItem: items[0], items: items)
+        }
+        model.activate(rows[0], in: rows)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let host = MotionFocusHost(rootView: AnyView(
+            FocusHeroScrollingRows(rows: rows, model: model) { row, reporter in
+                MediaRowView(
+                    title: Text(verbatim: row.id), items: row.items,
+                    style: row.id == rows[0].id ? .landscape : .poster,
+                    showsSeriesArtwork: row.id == rows[0].id,
+                    onFocusChange: { if let item = $0 { reporter.focusedItem(item) } },
+                    onCardFocused: reporter.cardFocused,
+                    reservesLoadingFocus: row.id == rows[0].id,
+                    playsOnSelect: row.id == rows[0].id,
+                    onSelect: { _ in }
+                )
+            }
+            .environment(\.plozzCardStyle, .borderless)
+            .environment(\.plozzCardFocusStyle, .system)
+            .mediaItemActionHandler(menus)
+            .modifier(MotionNavigatorScope(model: model, menus: menus))
+            .frame(width: 1920, height: 1080)
+            .ignoresSafeArea()
+        ))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        func focus(_ index: Int) throws {
+            func posters(_ view: UIView) -> [NativePosterButton] {
+                (view as? NativePosterButton).map { [$0] } ?? view.subviews.flatMap(posters)
+            }
+            let target = try XCTUnwrap(posters(host.view).first { $0.accessibilityLabel == "Item \(index)-0" })
+            host.target = target
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            XCTAssertTrue(target.isFocused)
+        }
+        for index in 1...4 {
+            try focus(index)
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        let before = menus.builds
+        XCTAssertGreaterThanOrEqual(before.count, 20, "Realize visible cards before counting return-path rebuilds.")
+        for index in (0..<4).reversed() {
+            try focus(index)
+            try await Task.sleep(for: .milliseconds(110))
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(menus.builds, before, "Moving existing rows must not rebuild their action lists.")
+    }
+
+    func testUpwardMomentumResizesOnlyWhenTheShortRowActuallyArrives() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = FocusHeroModel()
+        let references = MotionReferences()
+        let rows = (0..<5).map { FocusHeroRow(id: "row-\($0)", itemIDs: [], leadItem: nil) }
+        let heights: [CGFloat] = [340, 510, 510, 510, 510]
+        for (row, height) in zip(rows, heights) { model.record(height: height, for: row.id) }
+        model.activate(rows[4], in: rows)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            FocusHeroScrollingRows(rows: rows, model: model) { row, _ in
+                Color.gray.frame(height: (row.id == rows[0].id ? heights[0] : heights[1])
+                                 + FocusHeroLayout.rowBottomTightening)
+                    .overlay(alignment: .bottomLeading) {
+                        if row.id == rows[0].id {
+                            MotionProbe(references: references, shared: true).frame(width: 80, height: 30)
+                        }
+                    }
+            }
+            .frame(width: 1920, height: 1080)
+            .background(.black)
+            .ignoresSafeArea()
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let scroll = try XCTUnwrap(firstScrollView(in: window))
+        let mask = try XCTUnwrap(model.motion.mask)
+        let shortRow = try XCTUnwrap(references.shared)
+        let tallMaskY = mask.transform.ty
+        for index in [3, 2, 1] {
+            model.activate(rows[index], in: rows)
+            try await Task.sleep(for: .milliseconds(110))
+        }
+        let beforeY = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+        try await Task.sleep(for: .milliseconds(30))
+        let arrivingY = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+        XCTAssertLessThan(arrivingY, beforeY - 30, "Arrive with real upward momentum, not from rest.")
+        XCTAssertEqual(try XCTUnwrap(mask.layer.presentation()).affineTransform().ty, tallMaskY, accuracy: 1)
+        let tuckedY = visibleY(shortRow, in: window) + arrivingY
+        model.activate(rows[0], in: rows)
+        let changedAt = CACurrentMediaTime()
+        var samples: [String] = []
+        var maximumHeightDifference: CGFloat = 0
+        var maximumTuckDifference: CGFloat = 0
+        var prematureHeightTravel: CGFloat = 0
+        var tallRowSamples = 0
+        for _ in 0..<8 {
+            try await Task.sleep(for: .milliseconds(20))
+            let elapsed = CACurrentMediaTime() - changedAt
+            let maskY = try XCTUnwrap(mask.layer.presentation()).affineTransform().ty
+            let offset = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+            let progress = min(1, max(0, offset / (heights[1] + FocusHeroLayout.rowSpacing)))
+            let expected = tallMaskY + (heights[1] - heights[0])
+                * (1 - progress * progress * (3 - 2 * progress))
+            maximumHeightDifference = max(maximumHeightDifference, abs(maskY - expected))
+            if offset > heights[1] + FocusHeroLayout.rowSpacing + 1 {
+                tallRowSamples += 1
+                prematureHeightTravel = max(prematureHeightTravel, abs(maskY - tallMaskY))
+            }
+            let untuck = visibleY(shortRow, in: window) + offset - tuckedY
+            let expectedUntuck = FocusHeroLayout.rowSpring.value(
+                target: FocusHeroLayout.rowTuck, initialVelocity: 0, time: elapsed
+            )
+            maximumTuckDifference = max(maximumTuckDifference, abs(untuck - expectedUntuck))
+            samples.append("elapsed=\(elapsed) scroll=\(offset) mask=\(maskY) expected=\(expected) untuck=\(untuck) expectedUntuck=\(expectedUntuck)")
+        }
+        let attachment = XCTAttachment(string: samples.joined(separator: "\n"))
+        attachment.name = "Upward poster-row momentum entering Continue Watching"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertLessThan(maximumHeightDifference, 8,
+                          "Height must follow the arriving row's actual viewport position instead of a separate clock.")
+        XCTAssertLessThan(maximumTuckDifference, 8,
+                          "The returning short row must release concealment continuously without interrupting its native motion.")
+        XCTAssertGreaterThan(tallRowSamples, 0, "Keep traversing tall rows after the final Up press.")
+        XCTAssertLessThan(prematureHeightTravel, 2,
+                          "The hero and clipping edge must not resize while the viewport is still traversing equal-height poster rows.")
+    }
+
+    func testHeightChangingRowsKeepHeroAlignedWithNativePresentation() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = FocusHeroModel()
+        let references = MotionReferences()
+        let rows = (0..<2).map { FocusHeroRow(id: "row-\($0)", itemIDs: [], leadItem: nil) }
+        let heights: [CGFloat] = [340, 510]
+        for (row, height) in zip(rows, heights) { model.record(height: height, for: row.id) }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            ZStack(alignment: .topLeading) {
+                FocusHeroScrollingRows(rows: rows, model: model) { row, _ in
+                    Color.gray.frame(height: (row.id == rows[0].id ? heights[0] : heights[1])
+                                     + FocusHeroLayout.rowBottomTightening)
+                }
+                FocusHeroColumnMotion(
+                    content: MotionProbe(references: references, shared: true).frame(width: 80, height: 30),
+                    model: model
+                )
+            }
+            .frame(width: 1920, height: 1080)
+            .background(.black)
+            .ignoresSafeArea()
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let scroll = try XCTUnwrap(firstScrollView(in: window))
+        let column = try XCTUnwrap(references.shared)
+        let mask = try XCTUnwrap(model.motion.mask)
+        let initialY = visibleY(column, in: window)
+        let initialMaskY = mask.transform.ty
+        let distance = heights[1] + FocusHeroLayout.rowSpacing
+        var maximumDifference: CGFloat = 0
+        var maximumMaskDifference: CGFloat = 0
+        var samples: [String] = []
+        for index in [1, 0, 1, 0] {
+            model.activate(rows[index], in: rows)
+            for _ in 0..<6 {
+                try await Task.sleep(for: .milliseconds(20))
+                let offset = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+                let progress = min(1, max(0, offset / distance))
+                let heightProgress = progress * progress * (3 - 2 * progress)
+                let expectedY = initialY - (heights[1] - heights[0]) * heightProgress
+                let columnY = visibleY(column, in: window)
+                let maskY = try XCTUnwrap(mask.layer.presentation()).affineTransform().ty
+                maximumDifference = max(maximumDifference, abs(columnY - expectedY))
+                let expectedMaskY = initialMaskY - (heights[1] - heights[0]) * heightProgress
+                maximumMaskDifference = max(maximumMaskDifference, abs(maskY - expectedMaskY))
+                samples.append("row=\(index) scroll=\(offset) column=\(columnY) expected=\(expectedY) mask=\(maskY) expectedMask=\(expectedMaskY)")
+            }
+        }
+        let attachment = XCTAttachment(string: samples.joined(separator: "\n"))
+        attachment.name = "Height-changing row and hero presentation"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertLessThan(maximumDifference, 8,
+                          "Continue Watching and poster-row height changes must follow the native slide, including reversals.")
+        XCTAssertLessThan(maximumMaskDifference, 8, "The outgoing-row concealment must share the same motion.")
+    }
+
+    func testPinnedShowcaseRowsRetainArtworkBehindIconsAndThroughTheScreenEdge() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = FocusHeroModel()
+        let rows = [FocusHeroRow(id: "underlay", itemIDs: [], leadItem: nil)]
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let host = UIHostingController(rootView:
+            FocusHeroScrollingRows(rows: rows, model: model) { _, _ in
+                PinnedSidebarLeadingFade(isActive: true, inset: 64, verticalOverhang: 64) {
+                    ScrollView(.horizontal) {
+                        Color.white.frame(width: 3200, height: 300)
+                    }
+                    .scrollClipDisabled()
+                }
+                .frame(height: 300)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea(.container, edges: [.vertical, .trailing])
+        )
+        host.view.backgroundColor = .black
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        func horizontalScroll(in view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width {
+                return scroll
+            }
+            return view.subviews.lazy.compactMap { horizontalScroll(in: $0) }.first
+        }
+        let scroll = try XCTUnwrap(horizontalScroll(in: window))
+        scroll.setContentOffset(CGPoint(x: 240, y: scroll.contentOffset.y), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+        let frame = scroll.convert(scroll.bounds, to: window)
+        let contentLeading = frame.minX + scroll.adjustedContentInset.left - 64
+        XCTAssertEqual(contentLeading, 80, accuracy: 1, "Viewport expansion must not move the visible sidebar feather.")
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        format.preferredRange = .standard
+        let image = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Pinned Showcase artwork beneath the sidebar"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let cg = try XCTUnwrap(image.cgImage)
+        XCTAssertEqual(cg.bitsPerPixel, 32)
+        let bytes = Array(try XCTUnwrap(cg.dataProvider?.data) as Data)
+        let y = Int(frame.midY)
+        for x in [2, 49, Int(contentLeading) - 2, Int(contentLeading) + 16] {
+            let offset = y * cg.bytesPerRow + x * 4
+            XCTAssertEqual(Double(bytes[offset]), 25.5, accuracy: 3,
+                           "Keep 10% of scrolling artwork at x=\(x), including behind the icons.")
+        }
+        for distance in [20, 30, 42, 50, 54, 58, 64] {
+            let offset = y * cg.bytesPerRow + (Int(contentLeading) + distance) * 4
+            let t = min(1, (Double(distance - 16) + 0.5) / 48)
+            let opacity = 0.1 + 0.9 * t * t * (3 - 2 * t)
+            XCTAssertEqual(Double(bytes[offset]), 255 * opacity, accuracy: 3,
+                           "Keep the requested 48pt feather without moving its start at distance=\(distance).")
+        }
+    }
+
+    func testRapidCompositorMovesKeepRowsPaintedBetweenDestinations() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = FocusHeroModel()
+        let rows = (0..<12).map { FocusHeroRow(id: "row-\($0)", itemIDs: [], leadItem: nil) }
+        // Known heights reproduce revisiting real rows without conflating lazy
+        // realization with initial measurement or provider loading.
+        for row in rows {
+            model.record(height: 480 - FocusHeroLayout.rowBottomTightening, for: row.id)
+        }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            FocusHeroScrollingRows(rows: rows, model: model) { _, _ in
+                Color.white.frame(height: 480)
+            }
+            .frame(width: 1920, height: 1080)
+            .background(.black)
+            .ignoresSafeArea()
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let scroll = try XCTUnwrap(firstScrollView(in: window))
+        var intermediateSamples = 0
+        var minimumPaintedPixels = 350
+        var previousSpring: (key: String, beganAt: CFTimeInterval)?
+        for index in Array(1...8) + Array((0...7).reversed()) {
+            model.activate(rows[index], in: rows)
+            try await Task.sleep(for: .milliseconds(90))
+            if let previousSpring {
+                let retained = try XCTUnwrap(scroll.layer.animation(forKey: previousSpring.key))
+                XCTAssertEqual(retained.beginTime, previousSpring.beganAt,
+                               "Rapid retargets must not cancel or restart the previous native spring.")
+            }
+            let springs = (scroll.layer.animationKeys() ?? []).compactMap { key -> (String, CASpringAnimation)? in
+                guard let spring = scroll.layer.animation(forKey: key) as? CASpringAnimation else { return nil }
+                XCTAssertTrue(spring.isAdditive)
+                return (key, spring)
+            }
+            let newest = try XCTUnwrap(springs.max { $0.1.beginTime < $1.1.beginTime })
+            previousSpring = (newest.0, newest.1.beginTime)
+            let presentedY = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+            if abs(scroll.contentOffset.y - presentedY) > 20 {
+                intermediateSamples += 1
+                minimumPaintedPixels = min(minimumPaintedPixels, try paintedRowPixels(in: window))
+            }
+        }
+        XCTAssertGreaterThan(intermediateSamples, 8, "Exercise the slide, not only settled destinations.")
+        XCTAssertGreaterThan(minimumPaintedPixels, 150,
+                             "Rows visible in the presentation viewport must not be recycled for the logical destination.")
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(scroll.contentOffset.y, 0, accuracy: 0.5)
+        XCTAssertGreaterThan(try paintedRowPixels(in: window), 300)
+    }
+
+    func testCompositorScrollHasIntermediatePresentationAndContinuousReversal() async throws {
+        continueAfterFailure = false
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIViewController()
+        let scroll = UIScrollView(frame: CGRect(x: 100, y: 100, width: 800, height: 700))
+        scroll.contentSize = CGSize(width: 800, height: 2400)
+        let position = FocusHeroNativeScrollPosition.PositionView()
+        position.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        scroll.addSubview(position)
+        window.rootViewController?.view.addSubview(scroll)
+        window.makeKeyAndVisible()
+        defer {
+            position.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        position.move(to: 0, rowID: "first")
+        try await Task.sleep(for: .milliseconds(100))
+        position.move(to: 480, rowID: "second")
+        try await Task.sleep(for: .milliseconds(100))
+        var before = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+        XCTAssertEqual(scroll.contentOffset.y, 480)
+        XCTAssertGreaterThan(before, 1)
+        XCTAssertLessThan(before, 479)
+        XCTAssertFalse((scroll.layer.animationKeys() ?? []).isEmpty)
+        var previousVelocity: CGFloat = 0
+        for (row, destination) in [("third", CGFloat(960)), ("fourth", CGFloat(1440))] {
+            let sampleTime = CACurrentMediaTime()
+            let sampleY = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+            try await Task.sleep(for: .milliseconds(40))
+            let beforeTime = CACurrentMediaTime()
+            before = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+            previousVelocity = (before - sampleY) / (beforeTime - sampleTime)
+            XCTAssertGreaterThan(previousVelocity, 300)
+            position.move(to: destination, rowID: row)
+            try await Task.sleep(for: .milliseconds(40))
+            let after = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+            let velocity = (after - before) / (CACurrentMediaTime() - beforeTime)
+            XCTAssertGreaterThan(velocity, previousVelocity * 0.65,
+                                 "Another Down must carry motion forward instead of restarting from rest.")
+        }
+        before = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+        position.move(to: 0, rowID: "first")
+        try await Task.sleep(for: .milliseconds(20))
+        let reversed = try XCTUnwrap(scroll.layer.presentation()).bounds.minY
+        XCTAssertEqual(reversed, before, accuracy: max(80, previousVelocity * 0.06),
+                       "Reversal must start at the painted position, not the old target.")
+        XCTAssertGreaterThan(reversed, before,
+                             "Reversal must brake the forward momentum, not instantly reverse its velocity.")
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(scroll.contentOffset.y, 0)
+        XCTAssertEqual(try XCTUnwrap(scroll.layer.presentation()).bounds.minY, 0, accuracy: 0.5)
+    }
+
+    func testNativeShowcaseColumnMatchesPaintedOffsetAfterRelayoutAndReversal() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let original = MotionState()
+        let references = MotionReferences()
+        let model = FocusHeroModel()
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            HStack(alignment: .top, spacing: 40) {
+                OriginalMotionFixture(state: original, references: references)
+                IsolatedShowcaseMotionFixture(model: model, references: references)
+                    .frame(width: 200, height: 120)
+            }
+            .padding(.top, 400)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        let first = try XCTUnwrap(references.original)
+        let second = try XCTUnwrap(references.shared)
+        for height in [CGFloat(340), 390, 440, 490, 540, 490, 440, 390, 340] {
+            let offset = max(FocusHeroLayout.lowestSlotTop,
+                             FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing) - height)
+                - FocusHeroLayout.lowestSlotTop
+            model.motion.height = height
+            model.motion.applyTargets()
+            original.y = offset
+            try await Task.sleep(for: .milliseconds(25))
+            window.setNeedsLayout()
+            window.layoutIfNeeded()
+            let positions = try pixelPositions(first, second, in: window)
+            XCTAssertEqual(positions.0, positions.1, accuracy: 1, "Isolated drawing must preserve the original pixels.")
+            XCTAssertEqual(visibleY(first, in: window), visibleY(second, in: window), accuracy: 0.5)
+        }
+    }
+
     func testSharedOffsetMatchesOriginalMotionAndReversal() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
@@ -101,6 +1103,28 @@ final class HomeVerticalMotionHostedTests: XCTestCase {
         return layer.convert(layer.bounds, to: window.layer.presentation() ?? window.layer).minY
     }
 
+    private func firstScrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView { return scroll }
+        return view.subviews.lazy.compactMap { self.firstScrollView(in: $0) }.first
+    }
+
+    private func paintedRowPixels(in window: UIWindow) throws -> Int {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        format.preferredRange = .standard
+        let image = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+        let cg = try XCTUnwrap(image.cgImage)
+        XCTAssertEqual(cg.bitsPerPixel, 32)
+        let bytes = Array(try XCTUnwrap(cg.dataProvider?.data) as Data)
+        return (600..<950).filter { y in
+            let offset = y * cg.bytesPerRow + 1000 * 4
+            return bytes[offset] > 245 && bytes[offset + 1] > 245 && bytes[offset + 2] > 245
+        }.count
+    }
+
     private func pixelPositions(_ first: UIView, _ second: UIView, in window: UIWindow) throws -> (CGFloat, CGFloat) {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -129,10 +1153,135 @@ private final class MotionState {
     var y: CGFloat = 0
 }
 
+@MainActor @Observable
+private final class LateRowHeights {
+    var first: CGFloat = 340
+}
+
 @MainActor
 private final class MotionReferences {
     var original: UIView?
     var shared: UIView?
+}
+
+private final class MotionFocusHost: UIHostingController<AnyView> {
+    weak var target: (any UIFocusEnvironment)?
+    var focusEvents: [String] = []
+    override var preferredFocusEnvironments: [any UIFocusEnvironment] {
+        target.map { [$0] } ?? super.preferredFocusEnvironments
+    }
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        if let item = context.nextFocusedItem as? NSObject {
+            focusEvents.append(item.accessibilityLabel ?? "")
+        }
+    }
+}
+
+@MainActor @Observable
+private final class LoadingHomeRows {
+    var items: [MediaItem] = []
+    var activeRowID: String?
+    var firstRowReady = true
+}
+
+private struct PortraitRowPeekFixture: View {
+    let showcase: Bool
+    let pinned: Bool
+    var navigationInset: CGFloat? = nil
+    var isLoading = false
+    var artworkURL: URL? = nil
+    private var items: [MediaItem] {
+        (0..<10).map {
+            MediaItem(id: "peek-\($0)", title: "Peek \($0)", kind: .movie,
+                      fallbackArtworkURL: artworkURL, allowsTitleBasedMetadataMatching: false)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if showcase {
+                FocusHeroHomeView(
+                    rows: [.init(id: "peek", itemIDs: isLoading ? [] : items.map(\.stablePresentationID),
+                                 leadItem: isLoading ? nil : items.first, items: isLoading ? [] : items,
+                                 isPlaceholder: isLoading)],
+                    settings: .default, spoilerSettings: .default,
+                    navigationStyle: pinned ? .rail : .tabBar, isFrontmost: true
+                ) { _, _ in row }
+            } else {
+                ScrollView(.vertical) { row }
+                    .ignoresSafeArea(.container, edges: pinned ? [.vertical, .trailing] : .vertical)
+            }
+        }
+        .environment(\.plozzNavigationContentInset, navigationInset ?? (pinned ? 64 : 0))
+        .environment(\.plozzPinnedSidebarActive, pinned)
+    }
+
+    private var row: some View {
+        MediaRowView(
+            title: Text("Peek"), items: isLoading ? [] : items,
+            loadingPlaceholderCount: isLoading ? 10 : 0, onSelect: { _ in }
+        )
+    }
+}
+
+private struct LoadingHomeRowsView: View {
+    let fixture: LoadingHomeRows
+    let seriesArtwork: Bool
+
+    var body: some View {
+        let discover = (0..<4).map { MediaItem(id: "discover-\($0)", title: "Discover \($0)", kind: .movie) }
+        let rows = [
+            FocusHeroRow(id: "continue", itemIDs: fixture.items.map(\.stablePresentationID),
+                         leadItem: fixture.items.first, items: fixture.items, isPlaceholder: fixture.items.isEmpty),
+            FocusHeroRow(id: "discover", itemIDs: discover.map(\.stablePresentationID), leadItem: discover.first, items: discover)
+        ]
+        FocusHeroHomeView(
+            rows: rows, settings: .default, spoilerSettings: .default,
+            navigationStyle: .rail, isFrontmost: true
+        ) { row, reporter in
+            MediaRowView(
+                title: Text(verbatim: row.id), items: row.items,
+                style: row.id == "continue" ? .landscape : .poster,
+                showsSeriesArtwork: row.id == "continue" && seriesArtwork,
+                onFocusEntered: {
+                    fixture.activeRowID = row.id
+                    reporter.entered()
+                },
+                onFocusChange: { if let item = $0 { reporter.focusedItem(item) } },
+                onCardFocused: {
+                    fixture.activeRowID = row.id
+                    reporter.cardFocused($0)
+                },
+                loadingPlaceholderCount: row.isPlaceholder ? 8 : 0,
+                reservesLoadingFocus: row.id == "continue",
+                onSelect: { _ in }
+            )
+            .disabled(row.id == "continue" && !fixture.firstRowReady)
+        }
+    }
+}
+
+@MainActor
+private struct MotionNavigatorScope: ViewModifier {
+    let model: FocusHeroModel
+    let menus: MotionMenuHandler
+
+    func body(content: Content) -> some View {
+        content.mediaItemNavigator { [rowID = model.activeRowID] _ in
+            menus.routedFrom = rowID
+        }
+    }
+}
+
+private final class MotionMenuHandler: MediaItemActionHandling {
+    var routedFrom: String?
+    var builds: [String: Int] = [:]
+    func actions(for item: MediaItem, context: MediaItemActionContext) -> [MediaItemAction] {
+        builds[item.id, default: 0] += 1
+        return [.markWatched, .addToWatchlist]
+    }
+    func perform(_ action: MediaItemAction, on item: MediaItem, context: MediaItemActionContext) {}
 }
 
 private struct OriginalMotionFixture: View {
@@ -154,6 +1303,18 @@ private struct SharedMotionFixture: View {
         MotionProbe(references: references, shared: true)
             .frame(width: 200, height: 120)
             .modifier(HomeVerticalMotion(y: state.y))
+    }
+}
+
+private struct IsolatedShowcaseMotionFixture: View {
+    let model: FocusHeroModel
+    let references: MotionReferences
+
+    var body: some View {
+        FocusHeroColumnMotion(
+            content: MotionProbe(references: references, shared: true).frame(width: 200, height: 120),
+            model: model
+        )
     }
 }
 

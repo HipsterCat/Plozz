@@ -140,6 +140,12 @@ enum ShareCatalogReadProjection {
             copy.productionYear = value
             copy.metadataProvenance[.productionYear] = attribution(for: .productionYear)
         }
+        if let row = fields[.premiereDate],
+           let value = CatalogJSON.decode(String.self, row.valueJSON),
+           let date = MediaItem.calendarDayReleaseDate(from: value) {
+            copy.releaseDate = date
+            copy.metadataProvenance[.premiereDate] = attribution(for: .premiereDate)
+        }
         // seasonNumber/episodeNumber are EPISODE-only (C1, final projection boundary):
         // even if a stray value reached persistence, never overlay it onto a
         // non-episode item.
@@ -190,17 +196,23 @@ enum ShareCatalogReadProjection {
         metadataConfig: MetadataEnrichmentConfig = MetadataEnrichmentConfig()
     ) -> MediaItem {
         var copy = item
+        func permitted(_ url: URL?) -> URL? {
+            guard let url else { return nil }
+            if let source = item.artworkMetadataSource(for: url),
+               metadataConfig.disabledSources.contains(source) { return nil }
+            return url
+        }
+        copy.posterURL = permitted(item.posterURL)
+        copy.seriesPosterURL = permitted(item.seriesPosterURL)
+        copy.backdropURL = permitted(item.backdropURL)
+        copy.heroBackdropURL = permitted(item.heroBackdropURL)
+        copy.fallbackArtworkURL = permitted(item.fallbackArtworkURL)
+        copy.logoURL = permitted(item.logoURL)
         guard !selections.isEmpty else { return copy }
         var byPlacement = Dictionary(uniqueKeysWithValues: copy.artworkSelections.map { ($0.placement, $0) })
         for selection in selections where !selection.references.isEmpty {
-            if onlineArtworkOutranksLocal(
-                for: selection.placement,
-                in: copy,
-                config: metadataConfig
-            ) {
-                byPlacement.removeValue(forKey: selection.placement)
-                continue
-            }
+            // The catalog is household-shared. Retain local alternatives so each
+            // profile and artwork surface can choose its own source at presentation.
             byPlacement[selection.placement] = selection
             let field: MetadataField
             switch selection.placement {
@@ -212,107 +224,45 @@ enum ShareCatalogReadProjection {
             case .banner, .seasonBanner: continue
             default: continue
             }
-            copy.metadataProvenance[field] = MetadataAttribution(source: .localArtwork, sourceURL: nil)
+            // The URL fields still contain the external image. Do not relabel
+            // those URLs as local merely because a sidecar is also available.
+            let hasURL: Bool
+            switch field {
+            case .posterURL: hasURL = copy.posterURL != nil || copy.seriesPosterURL != nil
+            case .logoURL: hasURL = copy.logoURL != nil
+            default: hasURL = false
+            }
+            if !hasURL {
+                copy.metadataProvenance[field] = MetadataAttribution(source: .localArtwork, sourceURL: nil)
+            }
         }
         copy.artworkSelections = byPlacement.values.sorted { $0.placement.rawValue < $1.placement.rawValue }
         return copy
-    }
-
-    private static func onlineArtworkOutranksLocal(
-        for placement: ArtworkPlacement,
-        in item: MediaItem,
-        config: MetadataEnrichmentConfig
-    ) -> Bool {
-        func outranks(
-            precedenceField: MetadataField,
-            provenanceField: MetadataField,
-            hasValue: Bool
-        ) -> Bool {
-            guard hasValue,
-                  let source = item.metadataProvenance[provenanceField]?.source,
-                  ![.localNFO, .server, .localArtwork, .embedded, .filename, .generated]
-                    .contains(source)
-            else { return false }
-            // Legacy enrichment rows predate exact provider provenance but are still
-            // known to be online. Preserve the preference for those cached records.
-            if source == .legacyUnknown { return config.preferOnlineArtwork }
-            let precedence = config.precedenceSources(
-                for: precedenceField,
-                query: MetadataQuery(item)
-            )
-            guard let onlineIndex = precedence.firstIndex(of: source),
-                  let localIndex = precedence.firstIndex(of: .localArtwork) else {
-                return false
-            }
-            return onlineIndex < localIndex
-        }
-
-        switch placement {
-        case .homeHero:
-            return outranks(
-                precedenceField: .homeHero,
-                provenanceField: .backdropURL,
-                hasValue: item.heroBackdropURL != nil || item.backdropURL != nil
-            )
-        case .detailBackdrop:
-            return outranks(
-                precedenceField: .detailBackdrop,
-                provenanceField: .backdropURL,
-                hasValue: item.heroBackdropURL != nil || item.backdropURL != nil
-            )
-        case .poster:
-            return outranks(
-                precedenceField: .posterURL,
-                provenanceField: .posterURL,
-                hasValue: item.posterURL != nil
-            )
-        case .seasonPoster:
-            return outranks(
-                precedenceField: .seasonPoster,
-                provenanceField: .posterURL,
-                hasValue: item.posterURL != nil
-            )
-        case .seriesPoster:
-            return outranks(
-                precedenceField: .posterURL,
-                provenanceField: .posterURL,
-                hasValue: item.seriesPosterURL != nil || item.posterURL != nil
-            )
-        case .logo:
-            return outranks(
-                precedenceField: .logoURL,
-                provenanceField: .logoURL,
-                hasValue: item.logoURL != nil
-            )
-        case .episodeThumbnail:
-            return outranks(
-                precedenceField: .episodeThumbnail,
-                provenanceField: .posterURL,
-                hasValue: item.posterURL != nil
-            ) || outranks(
-                precedenceField: .episodeThumbnail,
-                provenanceField: .backdropURL,
-                hasValue: item.backdropURL != nil
-            )
-        case .banner:
-            return false
-        case .seasonBanner:
-            return false
-        default:
-            return false
-        }
     }
 
     /// Merge an already-fetched enrichment record onto an item. Extracted from
     /// `withEnrichment` so the JOINed grid queries can reuse the exact same merge.
     static func applyEnrichment(_ item: MediaItem, _ rec: EnrichmentRecord) -> MediaItem {
         var copy = item
+        for url in [
+            item.posterURL, item.seriesPosterURL, item.backdropURL,
+            item.heroBackdropURL, item.fallbackArtworkURL, item.logoURL
+        ].compactMap({ $0 }) {
+            copy.recordArtworkMetadataSource(item.artworkMetadataSource(for: url) ?? .server, for: url)
+        }
         if copy.metadataProvenance[.title] == nil {
             copy.metadataProvenance[.title] = MetadataAttribution(source: .filename)
         }
-        func adopt(_ field: MetadataField) {
+        func adopt(_ field: MetadataField, artworkURL: URL? = nil) {
             if let attribution = rec.provenance[field] {
                 copy.metadataProvenance[field] = attribution
+            } else if [.posterURL, .backdropURL, .logoURL].contains(field) {
+                copy.metadataProvenance[field] = MetadataAttribution(source: .legacyUnknown)
+            }
+            if let artworkURL {
+                copy.recordArtworkMetadataSource(
+                    rec.provenance[field]?.source ?? .legacyUnknown, for: artworkURL
+                )
             }
         }
         // Merge ids (don't clobber any already present).
@@ -321,6 +271,9 @@ enum ShareCatalogReadProjection {
             for (k, v) in rec.providerIDs where ids[k] == nil {
                 ids[k] = v
                 adopt(.providerID(k))
+            }
+            if item.kind == .episode || item.kind == .season {
+                ids.mergeSeriesProviderIDs(from: rec.providerIDs)
             }
             copy.providerIDs = ids
         }
@@ -344,19 +297,19 @@ enum ShareCatalogReadProjection {
         }
         if copy.posterURL == nil, let poster = rec.posterURL {
             copy.posterURL = poster
-            adopt(.posterURL)
+            adopt(.posterURL, artworkURL: poster)
         }
         if copy.backdropURL == nil, let backdrop = rec.backdropURL {
             copy.backdropURL = backdrop
-            adopt(.backdropURL)
+            adopt(.backdropURL, artworkURL: backdrop)
         }
         if copy.heroBackdropURL == nil, let backdrop = rec.backdropURL {
             copy.heroBackdropURL = backdrop
-            adopt(.backdropURL)
+            adopt(.backdropURL, artworkURL: backdrop)
         }
         if copy.logoURL == nil, let logo = rec.logoURL {
             copy.logoURL = logo
-            adopt(.logoURL)
+            adopt(.logoURL, artworkURL: logo)
         }
         // Display-title upgrade (series/movies only, never episodes): overlay the
         // resolved canonical name when it's IDENTICAL, MORE SPECIFIC (current is a
@@ -381,7 +334,7 @@ enum ShareCatalogReadProjection {
         if item.kind == .episode {
             if copy.seriesPosterURL == nil, let poster = rec.posterURL {
                 copy.seriesPosterURL = poster
-                adopt(.posterURL)
+                adopt(.posterURL, artworkURL: poster)
             }
             copy.posterURL = item.posterURL // keep episode's own (none yet) — series art via fallback field
             // …and actually populate that fallback field. `rec` is the SERIES'
@@ -391,7 +344,7 @@ enum ShareCatalogReadProjection {
             // so without it every hidden episode on a share rendered blank.
             if copy.fallbackArtworkURL == nil, let backdrop = rec.backdropURL {
                 copy.fallbackArtworkURL = backdrop
-                adopt(.backdropURL)
+                adopt(.backdropURL, artworkURL: backdrop)
             }
         }
         return copy
@@ -410,18 +363,10 @@ enum ShareCatalogReadProjection {
         )
     }
 
-    /// Build an episode item from a row selecting
-    /// `rel_path, title, [kind|series_title], ...` — the two episode query shapes
-    /// share column *names*, so read episode fields by a fixed layout:
-    /// col0 rel_path, col1 title, col2 series_title, col3 season, col4 episode,
-    /// col5 library, col6 year (used by `episodes(...)`), OR the `item(id:)` layout.
+    /// Accepts two fixed projections:
+    /// - Season: rel_path, title, series_title, season, episode, library, year.
+    /// - Item/inventory: rel_path, title, kind, library, year, series_title, series_key, season, episode.
     static func episodeItem(from stmt: OpaquePointer?, seriesKey: String) -> MediaItem {
-        // Read by name-agnostic positions used by the two callers. To stay robust,
-        // pull values via helper that tolerates either layout is overkill; instead
-        // both callers pass compatible column orders. `episodes(...)`:
-        //   0 rel_path,1 title,2 series_title,3 season,4 episode,5 library,6 year
-        // `item(id:)`:
-        //   0 rel_path,1 title,2 kind,3 library,4 year,5 series_title,6 series_key,7 season,8 episode
         let colCount = sqlite3_column_count(stmt)
         let relPath = CatalogConnection.columnText(stmt, 0) ?? ""
         let title = CatalogConnection.columnText(stmt, 1) ?? relPath

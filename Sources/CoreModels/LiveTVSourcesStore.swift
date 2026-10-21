@@ -23,10 +23,17 @@ public final class LiveTVSourcesStore: LiveTVSourcesStoring, @unchecked Sendable
     public static let baseKey = "com.plozz.liveTV.sources"
     private let secureStore: any SecureStoring
     private let key: String
+    private let namespace: String?
+    private let diagnostics: LiveTVSourceDiagnostics
     private let lock = NSLock()
 
-    public init(secureStore: any SecureStoring, namespace: String? = nil) {
+    public init(
+        secureStore: any SecureStoring, namespace: String? = nil,
+        diagnostics: LiveTVSourceDiagnostics = .shared
+    ) {
         self.secureStore = secureStore
+        self.namespace = namespace
+        self.diagnostics = diagnostics
         key = SettingsKey.scoped(Self.baseKey, namespace: namespace)
     }
 
@@ -37,6 +44,15 @@ public final class LiveTVSourcesStore: LiveTVSourcesStoring, @unchecked Sendable
     }
 
     public func save(_ configuration: LiveTVSourcesConfiguration) throws {
+        var completed = false
+        var failure: (any Error)?
+        defer {
+            if !completed {
+                diagnostics.record(
+                    .sourceSaveFailed, identities: [.namespace: namespace ?? "default"], error: failure
+                )
+            }
+        }
         try configuration.validate()
         let value: String
         do {
@@ -54,7 +70,10 @@ public final class LiveTVSourcesStore: LiveTVSourcesStoring, @unchecked Sendable
         _ = try loadLocked()
         do {
             try secureStore.setString(value, for: key)
+            diagnostics.configuration(configuration, namespace: namespace, event: .sourceSave)
+            completed = true
         } catch {
+            failure = error
             throw LiveTVSourcesStoreError.saveFailed
         }
     }
@@ -64,18 +83,37 @@ public final class LiveTVSourcesStore: LiveTVSourcesStoring, @unchecked Sendable
         do {
             value = try secureStore.readString(for: key)
         } catch {
+            diagnostics.record(
+                .sourceReadFailed, identities: [.namespace: namespace ?? "default"],
+                reason: .storage, error: error, deduplicate: true
+            )
             throw LiveTVSourcesStoreError.loadFailed
         }
-        guard let value else { return .empty }
+        guard let value else {
+            diagnostics.record(
+                .sourceMissing, identities: [.namespace: namespace ?? "default"],
+                flags: [.defaultNamespace: namespace == nil], deduplicate: true
+            )
+            return .empty
+        }
         do {
             let configuration = try JSONDecoder().decode(
                 LiveTVSourcesConfiguration.self, from: Data(value.utf8)
             )
             try configuration.validate()
+            diagnostics.configuration(configuration, namespace: namespace)
             return configuration
         } catch LiveTVSourcesStoreError.unsupportedVersion {
+            diagnostics.record(
+                .sourceReadFailed, identities: [.namespace: namespace ?? "default"],
+                reason: .invalidConfiguration, deduplicate: true
+            )
             throw LiveTVSourcesStoreError.unsupportedVersion
         } catch {
+            diagnostics.record(
+                .sourceReadFailed, identities: [.namespace: namespace ?? "default"],
+                reason: .invalidConfiguration, error: error, deduplicate: true
+            )
             throw LiveTVSourcesStoreError.invalidStoredValue
         }
     }

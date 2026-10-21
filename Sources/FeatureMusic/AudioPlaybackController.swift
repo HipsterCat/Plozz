@@ -261,6 +261,8 @@ public final class AudioPlaybackController {
     /// (best-effort). Bound to the play session's provider; `nil` disables
     /// reporting (e.g. a provider that isn't a `MediaProvider`).
     private var reporter: PlaybackReporter?
+    @ObservationIgnored private let reports = MusicPlaybackReportQueue()
+    @ObservationIgnored private let scrobbles = MusicPlaybackReportQueue()
     /// A second, provider-INDEPENDENT reporter for the global Last.fm scrobbler.
     /// Last.fm is one account per user (not tied to Plex/Jellyfin), so it fans out
     /// from the same lifecycle events as `reporter` but is set once (by AppShell,
@@ -292,6 +294,20 @@ public final class AudioPlaybackController {
     private var currentArtwork: MPMediaItemArtwork?
     #endif
     private var artworkLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var artworkPolicy = ArtworkPresentationPolicy(area: .music)
+
+    public func updateArtworkPolicy(_ policy: ArtworkPresentationPolicy) {
+        let policy = policy.forArea(.music)
+        guard artworkPolicy != policy else { return }
+        artworkPolicy = policy
+        #if canImport(MediaPlayer)
+        currentArtwork = nil
+        if nowPlaying.isActive, let currentTrack {
+            updateNowPlayingInfo()
+            loadArtwork(for: currentTrack)
+        }
+        #endif
+    }
     /// The next track pre-enqueued *behind* the current one — the "treadmill"
     /// (WWDC 2016 §503 / 2019 §501). Resolving the upcoming track's URL and
     /// `insert`ing its item into the live queue ahead of time lets AVFoundation
@@ -428,7 +444,7 @@ public final class AudioPlaybackController {
         let clampedStart = min(max(startIndex, 0), tracks.count - 1)
         // Tapping the song that's already playing shouldn't restart it — just
         // surface the full-screen player again (the Music tab observes the token).
-        if hasActivePlayback, currentTrack?.id == tracks[clampedStart].id {
+        if hasActivePlayback, currentTrack?.isSameQueueEntry(as: tracks[clampedStart]) == true {
             if !nowPlaying.isActive { resume() }
             playbackStartToken &+= 1
             return
@@ -437,6 +453,7 @@ public final class AudioPlaybackController {
         // in the new queue's reporter — otherwise a cross-account hand-off would
         // route its stop (and any scrobble) to the wrong server.
         reportStopIfNeeded(position: currentTime)
+        clearPreparedNext(removeFromPlayer: true)
         self.resolver = resolveStreamURL
         self.lyricsResolver = resolveLyrics
         self.lyricsRefresher = refreshLyrics
@@ -464,6 +481,7 @@ public final class AudioPlaybackController {
         // in the new queue's reporter — otherwise a cross-account hand-off would
         // route its stop (and any scrobble) to the wrong server.
         reportStopIfNeeded(position: currentTime)
+        clearPreparedNext(removeFromPlayer: true)
         self.resolver = resolveStreamURL
         self.lyricsResolver = resolveLyrics
         self.lyricsRefresher = refreshLyrics
@@ -967,8 +985,9 @@ public final class AudioPlaybackController {
         // starts) shows the album art, like Apple Music/Spotify. Bounded so a
         // slow artwork download never holds up the Now Playing card itself.
         #if canImport(UIKit)
-        if let artURL = track.artworkURL,
-           let image = await bannerArtworkImage(artURL),
+        let policy = artworkPolicy
+        if let image = await bannerArtworkImage(track, policy: policy),
+           artworkPolicy == policy,
            currentTrack?.id == track.id {
             currentArtwork = Self.makeArtwork(from: image)
         }
@@ -1254,7 +1273,7 @@ public final class AudioPlaybackController {
     /// Fires a single best-effort report for `track` to its owning server. All
     /// state bookkeeping (which track is live, throttle timestamp) is handled by
     /// the callers below; this just logs and dispatches. The network report runs
-    /// on a detached task so a slow server never blocks the controller. Once a
+    /// asynchronously in lifecycle order so a slow server never blocks playback. Once a
     /// `.stop` has been delivered — the point where the server records the play —
     /// we bump `recentPlayReportToken` so the landing rail can refresh.
     private func fireReport(_ event: PlaybackEvent, for track: MusicTrack, position: TimeInterval) {
@@ -1262,6 +1281,8 @@ public final class AudioPlaybackController {
         // enough to warrant dispatching; Last.fm can be connected even when the
         // active provider isn't a reporting `MediaProvider`.
         guard reporter != nil || scrobbleObserver != nil else { return }
+        let reporter = reporter
+        let scrobbleObserver = scrobbleObserver
         // Prefer the duration the engine actually learned from the AVPlayerItem —
         // some servers omit it from track metadata, and the Plex scrobble decision
         // needs a real length (a missing/zero duration would suppress it entirely).
@@ -1269,10 +1290,19 @@ public final class AudioPlaybackController {
         MusicReportDiagnostics.emit(
             "dispatch \(event.rawValue) pos=\(Int(position))s id=\(track.id) '\(track.title)'"
         )
-        Task {
-            await reporter?(track, event, position, resolvedDuration)
-            await scrobbleObserver?(track, event, position, resolvedDuration)
-            if event == .stop { self.recentPlayReportToken &+= 1 }
+        if let reporter {
+            reports.enqueue(accountID: track.sourceAccountID, event: event) { [weak self] in
+                await reporter(track, event, position, resolvedDuration)
+                if event == .stop { self?.recentPlayReportToken &+= 1 }
+            }
+        }
+        if let scrobbleObserver {
+            // Last.fm is one shared sink: preserve playback order across accounts,
+            // independently of how quickly either provider acknowledges its reports.
+            scrobbles.enqueue(accountID: nil, event: event) { [weak self] in
+                await scrobbleObserver(track, event, position, resolvedDuration)
+                if reporter == nil, event == .stop { self?.recentPlayReportToken &+= 1 }
+            }
         }
     }
 
@@ -1814,19 +1844,16 @@ public final class AudioPlaybackController {
     private func loadArtwork(for track: MusicTrack) {
         #if canImport(MediaPlayer) && canImport(UIKit)
         artworkLoadTask?.cancel()
-        guard let url = track.artworkURL else { return }
-        if let cached = ArtworkImageCache.shared.cachedImage(for: url) {
-            currentArtwork = Self.makeArtwork(from: cached)
-            updateNowPlayingInfo()
-            return
-        }
+        let policy = artworkPolicy
         let trackID = track.id
         artworkLoadTask = Task { [weak self] in
-            guard let image = await ArtworkImageCache.shared.image(for: url) else { return }
-            let artwork = Self.makeArtwork(from: image)
+            guard let selected = await MusicArtworkFallback.resolveTrack(track, policy: policy) else { return }
+            let artwork = Self.makeArtwork(from: selected.image)
             await MainActor.run {
                 guard !Task.isCancelled, let self, self.nowPlaying.isActive,
-                      self.currentTrack?.id == trackID else { return }
+                      self.currentTrack?.id == trackID,
+                      self.currentTrack?.sourceAccountID == track.sourceAccountID,
+                      self.artworkPolicy == policy else { return }
                 self.currentArtwork = artwork
                 self.updateNowPlayingInfo()
             }
@@ -1838,10 +1865,9 @@ public final class AudioPlaybackController {
     /// Returns the track's artwork for the initial Now Playing publish, serving a
     /// cached copy instantly and otherwise waiting only briefly for the download
     /// so the system banner can include it without stalling the card.
-    private func bannerArtworkImage(_ url: URL) async -> UIImage? {
-        if let cached = ArtworkImageCache.shared.cachedImage(for: url) { return cached }
+    private func bannerArtworkImage(_ track: MusicTrack, policy: ArtworkPresentationPolicy) async -> UIImage? {
         return await withTaskGroup(of: UIImage?.self) { group in
-            group.addTask { await ArtworkImageCache.shared.image(for: url) }
+            group.addTask { await MusicArtworkFallback.resolveTrack(track, policy: policy)?.image }
             group.addTask { try? await Task.sleep(nanoseconds: 700_000_000); return nil }
             let result = await group.next() ?? nil
             group.cancelAll()
@@ -1856,5 +1882,39 @@ public final class AudioPlaybackController {
         NowPlayingSession.artwork(from: image)
     }
     #endif
+}
+
+/// Slow servers cannot accumulate obsolete heartbeats or delay another account.
+@MainActor
+final class MusicPlaybackReportQueue {
+    private struct Report {
+        let event: PlaybackEvent
+        let send: @MainActor () async -> Void
+    }
+
+    private final class Lane {
+        var pending: [Report] = []
+    }
+
+    private var lanes: [String: Lane] = [:]
+
+    func enqueue(accountID: String?, event: PlaybackEvent, send: @escaping @MainActor () async -> Void) {
+        let key = accountID ?? ""
+        let existing = lanes[key]
+        let lane = existing ?? Lane()
+        if event == .progress || event == .stop {
+            lane.pending.removeAll { $0.event == .progress }
+        }
+        lane.pending.append(Report(event: event, send: send))
+        guard existing == nil else { return }
+        lanes[key] = lane
+        Task { [weak self] in
+            while !lane.pending.isEmpty {
+                let report = lane.pending.removeFirst()
+                await report.send()
+            }
+            self?.lanes[key] = nil
+        }
+    }
 }
 #endif

@@ -309,7 +309,7 @@ final class WebDAVClientIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(probeRange.get(), "bytes=0-0")
         XCTAssertEqual(probeEncoding.get(), "identity")
-        XCTAssertEqual(probeResult.etag.opaqueTag, "strong-1")
+        XCTAssertEqual(try XCTUnwrap(probeResult.etag).opaqueTag, "strong-1")
         XCTAssertEqual(probeResult.totalLength, 1000)
         XCTAssertEqual(probeResult.resourceURL, url)
 

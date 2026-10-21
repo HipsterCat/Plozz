@@ -315,6 +315,8 @@ private struct ProfileTile: View {
             contentSuppliesProjection: true
         )
         .plozzCircularFocusStyle()
+        .accessibilityLabel(profile.name)
+        .accessibilityValue(profile.isLocked ? Text(ProfileLockCopy.title) : Text(verbatim: ""))
     }
 }
 
@@ -378,7 +380,7 @@ private struct ProfileTileLabel: View {
                 ProfileAvatarView(profile: profile, size: ProfilePickerLayout.avatarSize)
             }
 
-            Text(profile.name)
+            ProfileNameLabel(profile: profile)
                 .font(ProfilePickerLayout.nameFont)
                 .foregroundStyle(isFocused ? palette.primaryText : palette.secondaryText)
                 .lineLimit(1)

@@ -6,7 +6,8 @@ import XCTest
 final class LibraryAlphabetTests: XCTestCase {
     private func model(_ provider: FakeMediaProvider) -> LibraryBrowseViewModel {
         LibraryBrowseViewModel(provider: provider, containerID: "movies", containerKind: .movie,
-                               pageSize: 10, defaults: UserDefaults(suiteName: UUID().uuidString)!)
+                               pageSize: 10, defaults: UserDefaults(suiteName: UUID().uuidString)!,
+                               initialContentMode: .titles)
     }
 
     private func provider(count: Int = 100) -> FakeMediaProvider {
@@ -269,6 +270,28 @@ final class LibraryAlphabetTests: XCTestCase {
         XCTAssertEqual(vm.letterEntries.count, 2)
     }
 
+    func testUnsupportedIndexHidesControlsAndClearsPriorFailureWithoutHidingTitles() async {
+        let source = provider()
+        source.alphabetError = .serverUnreachable
+        let vm = model(source)
+        await vm.loadFirstPage()
+        await waitForIndex(vm)
+        XCTAssertNotNil(vm.alphabet.message)
+
+        source.alphabetError = nil
+        source.alphabetEntries = []
+        vm.retryLetterIndex()
+        await waitForIndex(vm)
+
+        XCTAssertNil(vm.alphabet.message)
+        XCTAssertFalse(vm.alphabet.isVisible)
+        XCTAssertFalse(vm.showsLetterRail)
+        XCTAssertEqual(vm.totalCount, 100)
+        XCTAssertEqual(vm.loadedCount, 10)
+        await vm.itemAppeared(at: 70)
+        XCTAssertNotNil(vm.item(at: 70))
+    }
+
     func testFailedLandingPageNeverPublishesScrollDestination() async {
         let source = provider()
         source.failAtStartIndex = 70
@@ -386,7 +409,7 @@ final class AggregatedLibraryAlphabetTests: XCTestCase {
         do {
             _ = try await provider.letterPosition(in: "lib", kind: .movie, letter: "Z", sort: .default)
             XCTFail("An unavailable source must produce retryable feedback")
-        } catch { XCTAssertEqual(error as? AppError, .serverUnreachable) }
+        } catch { XCTAssertEqual(LibrarySourceFailure.underlying(error) as? AppError, .serverUnreachable) }
         source.alwaysFail = false
         let position = try await provider.letterPosition(in: "lib", kind: .movie, letter: "Z", sort: .default)
         XCTAssertNil(position, "The failed fill must release its gate for retry")

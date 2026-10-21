@@ -1,4 +1,5 @@
 #if canImport(AVFoundation)
+import AVFoundation
 import CoreModels
 import XCTest
 #if canImport(UIKit)
@@ -183,6 +184,63 @@ final class SeekScrubCoordinatorTests: XCTestCase {
         XCTAssertFalse(engine.isPaused)
     }
 
+    func testResumeConfirmDoesNotKickBufferedPlayerAndAcceptsRecoveredClock() async {
+        for status in [AVPlayer.TimeControlStatus.waitingToPlayAtSpecifiedRate, .playing] {
+            let (sut, _, engine, controls) = makeSUT()
+            defer { sut.cancelAll() }
+            engine.nowPlayingPlayer = SeekTimeControlPlayer(status: status)
+            sut.requestSeek(to: 15)
+            await waitUntil { engine.playCount == 1 && !controls.isSeeking }
+            // Observe multiple retry intervals while the buffered output is stationary.
+            try? await Task.sleep(for: .seconds(1))
+            XCTAssertEqual(engine.pauseCount, 0)
+            XCTAssertEqual(engine.playCount, 1)
+            XCTAssertTrue(controls.isResumeConfirming)
+            engine.startAdvancingClock()
+            await waitUntil { !controls.isResumeConfirming }
+            XCTAssertEqual(engine.pauseCount, 0)
+            XCTAssertEqual(engine.playCount, 1)
+            XCTAssertFalse(controls.isPaused)
+        }
+    }
+
+    func testResumeConfirmStillKicksAPausedNativePlayer() async {
+        let (sut, _, engine, _) = makeSUT()
+        defer { sut.cancelAll() }
+        engine.nowPlayingPlayer = SeekTimeControlPlayer(status: .paused)
+        sut.requestSeek(to: 15)
+        await waitUntil { engine.pauseCount > 0 && engine.playCount > 1 }
+    }
+
+    func testResumeConfirmBoundsAnIndefinitelyWaitingPlayer() async {
+        let (sut, _, engine, controls) = makeSUT()
+        defer { sut.cancelAll() }
+        engine.nowPlayingPlayer = SeekTimeControlPlayer(status: .waitingToPlayAtSpecifiedRate)
+        let start = ContinuousClock.now
+        sut.requestSeek(to: 15)
+        await waitUntil(timeout: 20) { controls.intendsPause && !controls.isResumeConfirming }
+        let elapsed = start.duration(to: ContinuousClock.now)
+        XCTAssertGreaterThanOrEqual(elapsed, .seconds(14))
+        XCTAssertLessThan(elapsed, .seconds(20))
+        XCTAssertTrue(controls.isPaused)
+        XCTAssertEqual(engine.pauseCount, 0, "A waiting player must not receive disruptive retry kicks.")
+        XCTAssertEqual(engine.playCount, 1)
+    }
+
+    func testCancellingBufferedResumeCannotPlayAgainOrGiveUpLater() async {
+        let (sut, _, engine, controls) = makeSUT()
+        defer { sut.cancelAll() }
+        engine.nowPlayingPlayer = SeekTimeControlPlayer(status: .waitingToPlayAtSpecifiedRate)
+        sut.requestSeek(to: 15)
+        await waitUntil { engine.playCount == 1 && !controls.isSeeking }
+        sut.cancelResumeConfirm()
+        try? await Task.sleep(for: .milliseconds(650))
+        XCTAssertFalse(controls.isResumeConfirming)
+        XCTAssertFalse(controls.intendsPause)
+        XCTAssertEqual(engine.playCount, 1)
+        XCTAssertEqual(engine.pauseCount, 0)
+    }
+
     // MARK: teardown
 
     func testCancelResumeConfirmClearsFlag() async {
@@ -219,6 +277,75 @@ final class SeekScrubCoordinatorTests: XCTestCase {
 #if canImport(UIKit)
 @MainActor
 final class PlayerScrubInputTests: XCTestCase {
+    func testInstalledPanRoutesTapWithoutCompetingTouchRecognizers() throws {
+        let (controller, model, recorder) = makeInput()
+        defer { controller.viewDidDisappear(false) }
+        let recognizers = controller.view.gestureRecognizers ?? []
+        let pan = try XCTUnwrap(recognizers.compactMap { $0 as? PlayerSurfacePanGestureRecognizer }.first)
+        let tap = try XCTUnwrap(pan.onStationaryTap)
+        tap()
+        XCTAssertFalse(model.timelineClock.isEnabled)
+        XCTAssertTrue(model.controlsVisible)
+        tap()
+        XCTAssertTrue(model.timelineClock.isEnabled)
+        tap()
+        XCTAssertFalse(model.controlsVisible)
+        #if os(tvOS)
+        XCTAssertTrue(model.timelineClock.isEnabled, "The outgoing clock labels must survive the fade.")
+        #else
+        XCTAssertFalse(model.timelineClock.isEnabled)
+        #endif
+        XCTAssertTrue(recorder.targets.isEmpty)
+        XCTAssertTrue(recognizers.compactMap { $0 as? UITapGestureRecognizer }.allSatisfy {
+            $0.allowedTouchTypes.isEmpty
+        }, "Touch taps must not install a recognizer that can delay the existing pan.")
+    }
+
+    func testLightTapsCycleControlsThenClockThenHiddenWithoutPausingOrSeeking() {
+        let (controller, model, recorder) = makeInput()
+        defer { controller.viewDidDisappear(false) }
+        model.isPaused = false
+        controller.handleSurfaceTap()
+        XCTAssertTrue(model.controlsVisible)
+        XCTAssertFalse(model.timelineClock.isEnabled)
+        XCTAssertFalse(model.isPaused)
+        XCTAssertTrue(recorder.targets.isEmpty)
+        controller.handleSurfaceTap()
+        XCTAssertTrue(model.timelineClock.isEnabled)
+        XCTAssertTrue(model.controlsVisible)
+        controller.handleSurfaceTap()
+        #if os(tvOS)
+        XCTAssertTrue(model.timelineClock.isEnabled, "The third tap only fades the current labels.")
+        #else
+        XCTAssertFalse(model.timelineClock.isEnabled)
+        #endif
+        XCTAssertFalse(model.controlsVisible)
+        controller.handleSurfaceTap()
+        XCTAssertTrue(model.controlsVisible)
+        XCTAssertFalse(model.timelineClock.isEnabled)
+        XCTAssertFalse(model.isPaused)
+    }
+
+    func testClockModeDoesNotDelayFirstScrubSampleOrAllowTapDuringTraversal() {
+        let (controller, model, recorder) = makeInput()
+        defer { controller.viewDidDisappear(false) }
+        controller.handleSurfaceTap()
+        controller.handleSurfaceTap()
+        let gesture = ScrubInputPan()
+        gesture.phase = .began
+        gesture.travel = CGPoint(x: 100, y: 0)
+        controller.handlePan(gesture)
+        XCTAssertTrue(model.isScrubbing)
+        XCTAssertEqual(model.scrubSeconds, 100 + (100 - 18) * 0.18, accuracy: 0.001)
+        XCTAssertTrue(recorder.targets.isEmpty)
+        controller.handleSurfaceTap()
+        XCTAssertTrue(model.timelineClock.isEnabled, "A tap cannot change mode during a flick-bridged scrub.")
+        gesture.phase = .ended
+        controller.handlePan(gesture)
+        XCTAssertEqual(recorder.targets.count, 1)
+        XCTAssertFalse(model.isScrubbing)
+    }
+
     func testBeganSampleMovesPreviewWhileAnEarlierSeekIsPending() {
         let (controller, model, recorder) = makeInput()
         defer { controller.viewDidDisappear(false) }
@@ -398,6 +525,17 @@ private final class ScrubInputPan: UIPanGestureRecognizer {
 
 // MARK: - Spies
 
+private final class SeekTimeControlPlayer: AVPlayer, @unchecked Sendable {
+    private let reportedStatus: AVPlayer.TimeControlStatus
+
+    init(status: AVPlayer.TimeControlStatus) {
+        reportedStatus = status
+        super.init()
+    }
+
+    override var timeControlStatus: AVPlayer.TimeControlStatus { reportedStatus }
+}
+
 @MainActor
 private final class SeekSpyHost: SeekScrubCoordinatorHost {
     private let engine: SeekSpyEngine
@@ -444,6 +582,7 @@ private final class SeekSpyEngine: VideoEngine {
     var lastSeekTarget: TimeInterval? { seekLog.last?.target }
     var playCount = 0
     var pauseCount = 0
+    var nowPlayingPlayer: AVPlayer?
 
     /// When true, `currentTime` advances with wall-clock while playing, so the
     /// resume-confirm loop observes forward motion and resolves.
@@ -456,6 +595,11 @@ private final class SeekSpyEngine: VideoEngine {
             return baseTime + Date().timeIntervalSince(started)
         }
         return baseTime
+    }
+
+    func startAdvancingClock() {
+        autoAdvance = true
+        playStartedAt = Date()
     }
 
     func load(request: PlaybackRequest, startPosition: TimeInterval) async {

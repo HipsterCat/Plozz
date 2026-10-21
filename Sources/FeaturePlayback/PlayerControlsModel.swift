@@ -4,6 +4,17 @@ import CoreGraphics
 import Observation
 import SwiftUI
 import CoreModels
+import CoreUI
+
+@MainActor
+@Observable
+public final class SubtitleAppearanceModel {
+    public var style: SubtitleStyle = .default
+    public var rendersHDR = false
+    public var primaryIsBurnedIn = false
+
+    public init() {}
+}
 
 /// A selectable audio or subtitle option for the in-player track menu.
 ///
@@ -105,7 +116,7 @@ public enum SubtitleDownloadState: Equatable, Sendable {
 public final class ControlBarEntryModel {
     /// The two ways focus enters the control layer, one per direction.
     public enum Entry: Equatable, Sendable {
-        /// Up from the scrub surface: land in the track row (Speed/Audio/Subtitles).
+        /// Up from the scrub surface: land in the track row (Playback/Audio/Subtitles).
         case trackControls
         /// Down from the scrub surface: open the Info card with its tab focused.
         case info
@@ -213,6 +224,7 @@ public final class InfoCardModel {
     public var openTitlePage: ((MediaItem) -> Void)?
     /// Ordered artwork candidates (image → backdrop → poster) for the thumbnail.
     public var artworkURLs: [URL] = []
+    public var artworkItem: MediaItem?
     /// Pre-formatted runtime label (e.g. "37 min") for the meta line.
     public var runtimeLabel: String = ""   // l10n:content — formatted upstream
     /// Compact season/episode tag for the metadata row (e.g. "S2 · E7"). Empty for
@@ -323,9 +335,8 @@ public final class SkipGestureModel {
 @MainActor
 @Observable
 public final class SkipSegmentsModel {
-    /// Server-detected skippable segments (intros/credits) for the playing item.
-    /// Populated by the view model only when the per-profile Skip Intros setting is
-    /// on; empty otherwise, so no skip button is ever offered.
+    /// Available server/community skip ranges for the playing item. Loaded under
+    /// the existing skip/Up Next policy; timeline annotations do not fetch more.
     public var segments: [MediaSegment] = []
 
     /// Set while the user has dismissed the skip button for the *current* segment,
@@ -359,6 +370,7 @@ public final class SkipSegmentsModel {
 @MainActor
 @Observable
 public final class PlayerControlsModel {
+    public var artworkPolicy = ArtworkPresentationPolicy(area: .playback)
     // MARK: Live playback (written by the view model)
     public var duration: TimeInterval = 0
     public var currentSeconds: TimeInterval = 0
@@ -407,6 +419,7 @@ public final class PlayerControlsModel {
 
     // MARK: Track menus
     public let versions = PlayerVersionMenuModel()
+    public let videoZoom = PlayerVideoZoomModel()
     public var audioOptions: [PlayerTrackOption] = []
     public var subtitleOptions: [PlayerTrackOption] = []
     /// Eligible tracks for the **second** (dual) subtitle line, as an ordered
@@ -441,13 +454,29 @@ public final class PlayerControlsModel {
     /// view model seeds this from the profile's persisted style and updates it
     /// on every edit, keeping the live overlay, this mirror, and persistence in
     /// lock-step.
-    public var subtitleStyle: SubtitleStyle = .default
+    public let subtitleAppearance = SubtitleAppearanceModel()
+    public var subtitleStyle: SubtitleStyle {
+        get { subtitleAppearance.style }
+        set { subtitleAppearance.style = newValue }
+    }
+    public var primarySubtitleIsBurnedIn: Bool {
+        get { subtitleAppearance.primaryIsBurnedIn }
+        set { subtitleAppearance.primaryIsBurnedIn = newValue }
+    }
+    public var subtitleStyleAdjustable: Bool {
+        !primarySubtitleIsBurnedIn || secondarySubtitleOptions.contains {
+            $0.isSelected && $0.id != PlayerTrackOption.offID
+        }
+    }
 
     /// Whether the subtitle overlay is currently rendering over an HDR frame
     /// (the panel is being driven to an HDR/DV display mode). Only then does the
     /// style's `hdrLuminanceScale` do anything, so the menu shows the "HDR
     /// Brightness" row exclusively while this is true — no dead control on SDR.
-    public var subtitlesRenderHDR: Bool = false
+    public var subtitlesRenderHDR: Bool {
+        get { subtitleAppearance.rendersHDR }
+        set { subtitleAppearance.rendersHDR = newValue }
+    }
 
     // MARK: Live tunables (mirrors of engine state)
     /// What the active engine supports — drives which rows the options menu
@@ -469,7 +498,17 @@ public final class PlayerControlsModel {
     public var dialogEnhanceEnabled: Bool = false
 
     // MARK: Transport UI state (written by the input controller)
-    public var controlsVisible: Bool = false
+    public var controlsVisible: Bool = false {
+        didSet {
+            #if os(tvOS)
+            // Keep the outgoing labels intact until the controls have faded.
+            if controlsVisible && !oldValue { timelineClock.isEnabled = false }
+            #else
+            if !controlsVisible { timelineClock.isEnabled = false }
+            #endif
+        }
+    }
+    public let timelineClock = PlayerTimelineClock()
     /// Transient global bounds of visible bottom controls, excluding the scrim.
     public let subtitleLayout = SubtitleControlsLayout()
     public var isScrubbing: Bool = false
@@ -488,7 +527,7 @@ public final class PlayerControlsModel {
     /// keeps this god object's observable surface from growing — see
     /// `ControlBarEntryModel`.
     public let controlBar = ControlBarEntryModel()
-    /// True while an options menu (Audio & Subtitles / Speed / A·V Sync / Info)
+    /// True while an options menu (Audio & Subtitles / Playback / A·V Sync / Info)
     /// is open above the control bar. The input controller keeps the transport
     /// pinned visible while a menu is open and only lets the idle auto-hide fire
     /// once every menu is closed — navigating the bar's buttons still times out.
@@ -522,7 +561,19 @@ public final class PlayerControlsModel {
     /// against the observable surface, so they cost nothing here.
     public let upNextCard = UpNextModel()
 
-    public init() {}
+    #if os(tvOS)
+    let systemAudio: SystemPlaybackAudio
+
+    init(systemAudio: SystemPlaybackAudio) {
+        self.systemAudio = systemAudio
+    }
+    #endif
+
+    public init() {
+        #if os(tvOS)
+        systemAudio = .shared
+        #endif
+    }
 
     /// Where the transport playhead should render: the scrub target while
     /// scrubbing, otherwise the live position.
@@ -539,7 +590,12 @@ public final class PlayerControlsModel {
     }
 
     public var hasSelectableAudio: Bool { audioOptions.count > 1 }
-    public var hasAudioControls: Bool { hasSelectableAudio || engineCapabilities.contains(.dialogEnhance) }
+    public var hasAudioControls: Bool {
+        #if os(tvOS)
+        if !systemAudio.availableSettings.isEmpty { return true }
+        #endif
+        return hasSelectableAudio || engineCapabilities.contains(.dialogEnhance)
+    }
     public var hasSelectableSubtitles: Bool { !subtitleOptions.isEmpty }
 
     /// The skippable segment whose window currently contains the live position,
@@ -728,6 +784,7 @@ public struct UpNextInfo: Equatable, Sendable {
     public let thumbnailURLs: [URL]
     /// Whether to blur the (real) thumbnail — spoiler "blur" mode over the still.
     public let blurThumbnail: Bool
+    public let spoilerSettings: SpoilerSettings
 
     public init(
         episode: MediaItem,
@@ -735,7 +792,8 @@ public struct UpNextInfo: Equatable, Sendable {
         showName: Text,
         metaLine: String?,
         thumbnailURLs: [URL],
-        blurThumbnail: Bool
+        blurThumbnail: Bool,
+        spoilerSettings: SpoilerSettings = .default
     ) {
         self.episode = episode
         self.eyebrow = eyebrow
@@ -743,6 +801,7 @@ public struct UpNextInfo: Equatable, Sendable {
         self.metaLine = metaLine
         self.thumbnailURLs = thumbnailURLs
         self.blurThumbnail = blurThumbnail
+        self.spoilerSettings = spoilerSettings
     }
 }
 #endif

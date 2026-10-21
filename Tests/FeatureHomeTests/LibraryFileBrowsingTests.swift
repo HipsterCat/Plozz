@@ -40,7 +40,7 @@ final class LibraryFileBrowsingTests: XCTestCase {
         XCTAssertEqual(model.fileBrowserLibrary?.id, "share:root")
     }
 
-    func testProvidersWithoutFileBrowsingKeepExistingLibraryActions() {
+    func testProvidersWithoutFileBrowsingKeepExistingLibraryActions() async {
         for kind: ProviderKind in [.jellyfin, .emby, .plex] {
             let model = LibraryBrowseViewModel(
                 provider: FakeMediaProvider(allItems: [], kind: kind),
@@ -48,7 +48,10 @@ final class LibraryFileBrowsingTests: XCTestCase {
                 containerKind: .movie
             )
             XCTAssertNil(model.fileBrowserLibrary)
-            XCTAssertEqual(model.availableSortFields, SortField.allCases)
+            XCTAssertEqual(model.contentMode, .recommended)
+            XCTAssertTrue(model.availableSortFields.isEmpty)
+            await model.setContentMode(.titles)
+            XCTAssertEqual(model.availableSortFields, SortField.legacyFields)
         }
     }
 

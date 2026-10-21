@@ -5,9 +5,152 @@ import FeatureAuthCore
 import FeatureLiveTVCore
 import XCTest
 @testable import AppRuntime
+@testable import FeatureSyncCloud
+@testable import TestSupportPerformance
 
 @MainActor
 final class LiveTVAutomaticChannelsRuntimeTests: XCTestCase {
+    func testPerformanceConfigurationMatrix() async throws {
+        try PerformanceProbe.requireEnabled()
+        for providers in [1, 4] {
+            for channels in [false, true] {
+                for liveTV in [false, true] {
+                    for cloud in [false, true] {
+                        try await measureConfiguration(providers: providers, channels: channels, liveTV: liveTV, cloud: cloud)
+                    }
+                }
+            }
+        }
+    }
+
+    private func measureConfiguration(providers: Int, channels: Bool, liveTV: Bool, cloud: Bool) async throws {
+        let extras = (0..<(providers - 1)).map { index in
+            AutomaticRuntimeProvider(kind: index.isMultiple(of: 2) ? .plex : .jellyfin,
+                                     serverID: "extra-\(index)", itemCount: 500)
+        }
+        let fixture = try Fixture(extraProviders: extras, itemCount: 500)
+        defer { fixture.close() }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: folder) }
+            catch { XCTFail("Could not remove owned matrix fixture: \(error)") }
+        }
+        SyncSetupFeatureFlag(defaults: fixture.defaults).isEnabled = cloud
+        try fixture.settings.setEnabled(channels)
+        let runtime = fixture.runtime()
+        await runtime.refresh(accounts: fixture.accounts)
+        XCTAssertNil(runtime.issue)
+        XCTAssertNil(runtime.automaticChannelsIssue)
+        XCTAssertEqual(runtime.automaticChannelsEnabled, channels)
+        XCTAssertEqual(fixture.accounts.activeAccountIDs.count, providers)
+        if channels { XCTAssertGreaterThan(runtime.automaticChannelCount, 0) }
+
+        let sources = LiveTVSourcesStore(secureStore: fixture.secrets, namespace: fixture.suite)
+        let cache = LiveTVIndexedCache(
+            url: folder.appendingPathComponent("guide.sqlite"), namespace: fixture.suite,
+            authorizationScope: "performance", secureStore: fixture.secrets,
+            importedFilesURL: folder.appendingPathComponent("imports")
+        )
+        if liveTV {
+            try sources.save(.init(playlists: [
+                .init(id: "source", name: "Fixture", playlistURL: URL(string: "https://fixture.invalid/list.m3u")!)
+            ]))
+            let playlist = try LiveTVPlaylistParser().parse("#EXTM3U\n" + (0..<1_000).map {
+                "#EXTINF:-1 tvg-id=\"\($0)\",Channel \($0)\nhttps://fixture.invalid/live/\($0).m3u8\n"
+            }.joined())
+            let imported = try await cache.reconcile(playlist, sourceID: "source")
+            XCTAssertEqual(imported.playlist.channels.count, 1_000)
+        }
+        let absentCatalogRevision = UUID()
+        var identityCaptures = 0
+        let bridge = LiveTVPortableSyncBridge(
+            profiles: fixture.profiles, directory: folder, defaults: fixture.defaults,
+            followsMainSync: true, sourceStore: { _ in sources },
+            definitions: { _ in fixture.definitions }, snapshots: fixture.snapshots,
+            guideCache: { _ in liveTV ? cache : nil },
+            captureIdentityHints: { _ in
+                identityCaptures += 1
+                guard liveTV else { return nil }
+                return try await cache.portableSyncIdentityHints(
+                    configuration: sources.load(), channelIDs: []
+                )
+            },
+            captureIdentityRevision: { _ in
+                guard liveTV else { return absentCatalogRevision }
+                return try await cache.portableSyncRevision(configuration: sources.load())
+            }
+        )
+        bridge.refreshParticipation()
+        let sourceBridge = LiveTVSourceSyncBridge(
+            profiles: fixture.profiles, defaults: fixture.defaults, store: { _ in sources }, cache: { _ in cache }
+        )
+        var records: [String: Data] = [:]
+        var sourceRecords: [String: Data] = [:]
+        var ledger = SyncLedger()
+        let persistence = CloudSyncPersistenceState()
+        var writes = 0
+        var sequence: UInt64 = 0
+        let id = "runtime-p\(providers)-c\(channels ? 1 : 0)-l\(liveTV ? 1 : 0)-s\(cloud ? 1 : 0)"
+        try await PerformanceProbe.measure(self, scenario: id) {
+            var requestsBefore = 0
+            for provider in [fixture.provider] + extras { requestsBefore += await provider.requests.count }
+            let writesBefore = writes
+            let capturesBefore = identityCaptures
+            for _ in 0..<10 {
+                for accountID in fixture.accounts.activeAccountIDs {
+                    XCTAssertNotNil(fixture.accounts.provider(forAccountID: accountID))
+                }
+                await runtime.refresh(accounts: fixture.accounts)
+                if liveTV { XCTAssertEqual(try sources.load().playlists.count, 1) }
+                if cloud {
+                    records = await bridge.capture(fallback: records)
+                    XCTAssertNotEqual(bridge.statuses[fixture.profiles.activeProfileID], .unavailable)
+                    sequence += 1
+                    sourceRecords = try await sourceBridge.capture(.init(
+                        sequence: sequence, authority: LiveTVPortableSyncPreferenceStore.storageEpoch(defaults: fixture.defaults),
+                        records: sourceRecords,
+                        localCaptureDigests: ledger.entries.compactMapValues(\.localCaptureDigest)
+                    ))
+                    _ = ledger.reconcileLocal(desired: records.merging(sourceRecords) { _, new in new }, now: 1)
+                    _ = persistence.writeIfChanged(ledger: ledger, engineRevision: nil) { writes += 1 }
+                }
+            }
+            var requestsAfter = 0
+            for provider in [fixture.provider] + extras { requestsAfter += await provider.requests.count }
+            XCTAssertEqual(requestsAfter, requestsBefore, "Settled runtime refresh must not rediscover provider catalogues.")
+            XCTAssertLessThanOrEqual(writes - writesBefore, 1)
+            if writesBefore > 0 {
+                XCTAssertEqual(writes, writesBefore, "After warmup, unchanged combined state must not persist again.")
+                XCTAssertEqual(identityCaptures, capturesBefore, "Warm captures must reuse the production unchanged-state path.")
+            }
+            if cloud {
+                XCTAssertGreaterThan(identityCaptures, 0, "The initial portable export must actually run.")
+            }
+            return ["providers": providers, "automaticChannels": channels ? 1 : 0,
+                    "liveTV": liveTV ? 1 : 0, "cloudSync": cloud ? 1 : 0, "refreshes": 10,
+                    "providerRequests": requestsAfter - requestsBefore,
+                    "portableRecords": records.count + sourceRecords.count,
+                    "persistenceCalls": writes - writesBefore]
+        }
+        if cloud && liveTV {
+            let capturesBefore = identityCaptures
+            var updated = try sources.load()
+            updated.playlists[0].name = "Changed fixture"
+            try sources.save(updated)
+            _ = await bridge.capture(fallback: records)
+            XCTAssertGreaterThan(identityCaptures, capturesBefore, "A real source edit must invalidate the capture cache.")
+            XCTAssertEqual(bridge.statuses[fixture.profiles.activeProfileID], .ready)
+            sequence += 1
+            let changedSources = try await sourceBridge.capture(.init(
+                sequence: sequence, authority: LiveTVPortableSyncPreferenceStore.storageEpoch(defaults: fixture.defaults),
+                records: sourceRecords,
+                localCaptureDigests: ledger.entries.compactMapValues(\.localCaptureDigest)
+            ))
+            XCTAssertNotEqual(changedSources, sourceRecords, "An acknowledged source must still capture later local edits.")
+        }
+    }
+
     func testOptInIsDurableScopedAndRejectsCorruptValues() throws {
         let secrets = InMemorySecureStore()
         let first = LiveTVAutomaticChannelsStore(secureStore: secrets, namespace: "first")
@@ -116,6 +259,127 @@ final class LiveTVAutomaticChannelsRuntimeTests: XCTestCase {
         XCTAssertEqual(runtime.automaticPreparation.update.stage, .checkingServers)
         let requests = await fixture.provider.requests.count
         XCTAssertEqual(requests, 1, "Cancelled discovery must not restart or fetch items")
+    }
+
+    func testLeavingOneHostDoesNotRevokeTheOtherHostsRestoredChannels() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        try fixture.settings.setEnabled(true)
+        let requested = expectation(description: "Automatic preparation started after restore")
+        let gate = DiscoveryGate()
+        await fixture.provider.requests.beforeNextItems {
+            requested.fulfill()
+            await gate.wait()
+        }
+        let runtime = fixture.runtime()
+        let sourcesHost = Task { await runtime.refresh(accounts: fixture.accounts) }
+        await fulfillment(of: [requested], timeout: 2)
+        XCTAssertNotNil(runtime.authorizationID)
+        XCTAssertTrue(runtime.service.isLoaded)
+
+        let joined = expectation(description: "Guide requested the same runtime")
+        let guideHost = Task {
+            joined.fulfill()
+            await runtime.refresh(accounts: fixture.accounts)
+        }
+        await fulfillment(of: [joined], timeout: 2)
+        sourcesHost.cancel()
+        await gate.resume()
+        await sourcesHost.value
+        await guideHost.value
+
+        XCTAssertNil(runtime.issue, "Leaving Sources is not a profile or server access change")
+        XCTAssertNil(runtime.automaticChannelsIssue)
+        XCTAssertNotNil(runtime.authorizationID)
+        XCTAssertGreaterThan(runtime.automaticChannelCount, 0)
+    }
+
+    func testConcurrentHostsShareInitialDiscoveryEvenWhenOneLeaves() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        try fixture.settings.setEnabled(true)
+        let requested = expectation(description: "Initial discovery started")
+        let gate = DiscoveryGate()
+        await fixture.provider.requests.beforeNextLibraries {
+            requested.fulfill()
+            await gate.wait()
+        }
+        let runtime = fixture.runtime()
+        let guideHost = Task { await runtime.refresh(accounts: fixture.accounts) }
+        await fulfillment(of: [requested], timeout: 2)
+        let joined = expectation(description: "Sources requested the same runtime")
+        let sourcesHost = Task {
+            joined.fulfill()
+            await runtime.refresh(accounts: fixture.accounts)
+        }
+        await fulfillment(of: [joined], timeout: 2)
+        let requestsBeforeRelease = await fixture.provider.requests.count
+        sourcesHost.cancel()
+        await gate.resume()
+        await guideHost.value
+        await sourcesHost.value
+
+        XCTAssertEqual(requestsBeforeRelease, 1, "Hosts must not replace each other's in-flight discovery")
+        XCTAssertNil(runtime.issue)
+        XCTAssertNotNil(runtime.authorizationID)
+        XCTAssertGreaterThan(runtime.automaticChannelCount, 0)
+    }
+
+    func testProfileChangeStillRejectsPreparationAfterItsHostLeaves() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        try fixture.settings.setEnabled(true)
+        let requested = expectation(description: "Preparation started")
+        let gate = DiscoveryGate()
+        await fixture.provider.requests.beforeNextItems {
+            requested.fulfill()
+            await gate.wait()
+        }
+        let runtime = fixture.runtime()
+        let refresh = Task { await runtime.refresh(accounts: fixture.accounts) }
+        await fulfillment(of: [requested], timeout: 2)
+        XCTAssertNotNil(runtime.authorizationID)
+
+        refresh.cancel()
+        let other = fixture.profiles.add(name: "Other")
+        fixture.profiles.select(other.id)
+        XCTAssertNil(runtime.authorizationID)
+        await gate.resume()
+        await refresh.value
+
+        XCTAssertNil(runtime.authorizationID)
+        XCTAssertTrue(try fixture.definitions.load().isEmpty, "Retired profile work must not publish a lineup")
+        XCTAssertFalse(runtime.isPreparingAutomaticChannels)
+    }
+
+    func testChangedCredentialsSupersedeRefreshWithoutLateAuthorityRevocation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        try fixture.settings.setEnabled(true)
+        let requested = expectation(description: "Old credential preparation started")
+        let gate = DiscoveryGate()
+        await fixture.provider.requests.beforeNextItems {
+            requested.fulfill()
+            await gate.wait()
+        }
+        let runtime = fixture.runtime()
+        let oldRefresh = Task { await runtime.refresh(accounts: fixture.accounts) }
+        await fulfillment(of: [requested], timeout: 2)
+        let oldAuthorization = runtime.authorizationID
+        let revision = CredentialRevision()
+        fixture.accounts.credentialRevision = { _ in revision }
+        XCTAssertNil(runtime.authorizationID)
+
+        await runtime.refresh(accounts: fixture.accounts)
+        let currentAuthorization = runtime.authorizationID
+        await gate.resume()
+        await oldRefresh.value
+
+        XCTAssertNil(runtime.issue)
+        XCTAssertNotNil(currentAuthorization)
+        XCTAssertNotEqual(currentAuthorization, oldAuthorization)
+        XCTAssertEqual(runtime.authorizationID, currentAuthorization)
+        XCTAssertGreaterThan(runtime.automaticChannelCount, 0)
     }
 
     func testEnabledDiscoveryFailureIsScopedAndRetryRecovers() async throws {
@@ -291,11 +555,12 @@ final class LiveTVAutomaticChannelsRuntimeTests: XCTestCase {
         let snapshots = LibraryChannelSnapshotStore(databaseURL: nil)
         let settings: LiveTVAutomaticChannelsStore
 
-        init(kind: ProviderKind = .jellyfin, secondary: AutomaticRuntimeProvider? = nil) throws {
+        init(kind: ProviderKind = .jellyfin, secondary: AutomaticRuntimeProvider? = nil,
+             extraProviders: [AutomaticRuntimeProvider] = [], itemCount: Int = 12) throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
             profileStore = ProfileStore(defaults: defaults)
             profiles = ProfilesModel(store: profileStore)
-            provider = AutomaticRuntimeProvider(kind: kind)
+            provider = AutomaticRuntimeProvider(kind: kind, itemCount: itemCount)
             let accountStore = AccountStore(secureStore: secrets)
             try accountStore.add(Account(
                 id: "catalog", server: provider.session.server, userID: "user",
@@ -305,11 +570,21 @@ final class LiveTVAutomaticChannelsRuntimeTests: XCTestCase {
                     id: "offline", server: secondary.session.server, userID: "offline-user",
                     userName: "Offline user", deviceID: accountStore.deviceID()), token: "fixture-token")
             }
-            accountStore.setActiveAccountIDs(secondary == nil ? ["catalog"] : ["catalog", "offline"])
+            for (index, extra) in extraProviders.enumerated() {
+                try accountStore.add(Account(
+                    id: "extra-\(index)", server: extra.session.server, userID: "user-\(index)",
+                    userName: "Fixture", deviceID: accountStore.deviceID()), token: "fixture-token")
+            }
+            let active = (secondary == nil ? ["catalog"] : ["catalog", "offline"])
+                + extraProviders.indices.map { "extra-\($0)" }
+            accountStore.setActiveAccountIDs(active)
             let registry = ProviderRegistry()
             let provider = provider
-            registry.register(kind) { context in
-                context.accountID == "offline" ? (secondary ?? provider) : provider
+            let byID = Dictionary(uniqueKeysWithValues: extraProviders.enumerated().map { ("extra-\($0.offset)", $0.element) })
+            for registeredKind in Set([kind] + extraProviders.map(\.kind)) {
+                registry.register(registeredKind) { context in
+                    byID[context.accountID] ?? (context.accountID == "offline" ? (secondary ?? provider) : provider)
+                }
             }
             accounts = AccountsProvidersModel(
                 accountStore: accountStore, registry: registry, profilesModel: profiles)
@@ -334,10 +609,17 @@ private actor AutomaticRuntimeRequests {
     private(set) var empty = false
     private var unavailable = false
     private var libraryHook: (@Sendable () async -> Void)?
+    private var itemHook: (@Sendable () async -> Void)?
     func beforeNextLibraries(_ hook: @escaping @Sendable () async -> Void) { libraryHook = hook }
+    func beforeNextItems(_ hook: @escaping @Sendable () async -> Void) { itemHook = hook }
     func librariesRequested() async {
         let hook = libraryHook
         libraryHook = nil
+        await hook?()
+    }
+    func itemsRequested() async {
+        let hook = itemHook
+        itemHook = nil
         await hook?()
     }
     func setEmpty(_ value: Bool) { empty = value }
@@ -370,10 +652,12 @@ private struct FailingAutomaticOptInStore: LiveTVAutomaticChannelsStoring {
 private struct AutomaticRuntimeProvider: LibraryChannelCatalogProviding, LibraryChannelPlaybackProviding {
     let requests = AutomaticRuntimeRequests()
     let kind: ProviderKind
+    var serverID = "fixture-server"
+    var itemCount = 12
     var session: UserSession {
         UserSession(
             server: MediaServer(
-                id: "fixture-server", name: "Library", baseURL: URL(string: "https://example.invalid")!,
+                id: serverID, name: "Library", baseURL: URL(string: "https://example.invalid")!,
                 provider: kind),
             userID: "user", userName: "User", deviceID: "device", accessToken: "fixture-token")
     }
@@ -386,8 +670,9 @@ private struct AutomaticRuntimeProvider: LibraryChannelCatalogProviding, Library
 
     func libraryChannelItems(in libraryID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         try await requests.record()
+        await requests.itemsRequested()
         let isEmpty = await requests.empty
-        let items: [MediaItem] = kind == .movie && !isEmpty ? (0..<12).map { index in
+        let items: [MediaItem] = kind == .movie && !isEmpty ? (0..<itemCount).map { index in
             var item = MediaItem(id: "movie-\(index)", title: "Movie \(index)", kind: .movie, runtime: 3_600)
             item.libraryID = libraryID
             item.productionYear = 1990 + index

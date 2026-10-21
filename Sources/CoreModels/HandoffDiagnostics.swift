@@ -85,6 +85,7 @@ public enum HandoffDiagnostics {
         case .serverUnreachable: return "serverUnreachable"
         case .invalidResponse: return "invalidResponse"
         case .unauthorized: return "unauthorized"
+        case .accessRestricted: return "accessRestricted"
         case .invalidCredentials: return "invalidCredentials"
         case .notFound: return "notFound"
         case .conflict: return "conflict"

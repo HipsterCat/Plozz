@@ -26,6 +26,7 @@ final class TopShelfIdentityScopingTests: XCTestCase {
 
         XCTAssertEqual(reference?.id, "12345")
         XCTAssertEqual(reference?.accountID, "plex-1")
+        XCTAssertEqual(reference?.action, .play)
     }
 
     func testAccountlessDeepLinkStillDecodes() {
@@ -39,6 +40,21 @@ final class TopShelfIdentityScopingTests: XCTestCase {
 
     func testForeignURLIsNotAnItemLink() {
         XCTAssertNil(TopShelf.itemReference(from: URL(string: "https://example.com/item/1")!))
+    }
+
+    func testMoreInfoUsesADistinctAccountScopedAction() throws {
+        let play = TopShelf.itemDeepLink(id: "folder:1/episode", accountID: "account & 2")
+        let details = TopShelf.itemDeepLink(id: "folder:1/episode", accountID: "account & 2", action: .details)
+        XCTAssertNotEqual(play, details)
+        let reference = try XCTUnwrap(TopShelf.itemReference(from: details))
+        XCTAssertEqual(reference, .init(id: "folder:1/episode", accountID: "account & 2", action: .details))
+        XCTAssertEqual(TopShelf.itemReference(from: play)?.action, .play)
+    }
+
+    func testMalformedOrAmbiguousActionCannotFallThroughToPlayback() {
+        for query in ["action=unknown", "action=", "action", "action=details&action=play", "account=a&account=b"] {
+            XCTAssertNil(TopShelf.itemReference(from: URL(string: "plozz://item/1?\(query)")!), query)
+        }
     }
 
     /// An older snapshot on disk must still decode after the field was added.

@@ -124,7 +124,7 @@ final class PlozzigenProbePublicationGateTests: XCTestCase {
         ]
 
         let options = PlozzigenVideoEngine.liveLoadOptions(
-            httpHeaders: headers
+            httpHeaders: headers, sourceFormat: .hls
         )
 
         XCTAssertEqual(options.httpHeaders, headers)

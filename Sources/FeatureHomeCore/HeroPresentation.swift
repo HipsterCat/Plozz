@@ -18,6 +18,9 @@ public struct HeroPresentation: Sendable, Equatable {
     public let kind: MediaItemKind
     public let title: String   // l10n:content — media title from the server
     public let artworkReferences: [ArtworkReference]
+    private let libraryArtworkReferences: [ArtworkReference]
+    private let recommendedArtworkReferences: [ArtworkReference]
+    private let providerHomeArtworkReference: ArtworkReference?
     public let logoReferences: [ArtworkReference]
     public let metadataComponents: [String]
     public let metadataText: String?
@@ -48,9 +51,17 @@ public struct HeroPresentation: Sendable, Equatable {
         artworkReferences = Self.artworkReferences(
             for: item,
             style: artworkStyle,
-            surface: surface,
-            drawsLogoOverArtwork: !logos.isEmpty
+            surface: surface
         )
+        libraryArtworkReferences = Self.artworkReferences(
+            for: item, style: artworkStyle, surface: surface,
+            preferringLibrarySelection: true
+        )
+        recommendedArtworkReferences = Self.artworkReferences(
+            for: item, style: artworkStyle, surface: surface,
+            settings: .default
+        )
+        providerHomeArtworkReference = item.artworkReferences(for: .homeHero).first
         logoReferences = logos
         metadataComponents = item.metadataComponents()
         metadataText = metadataComponents.isEmpty
@@ -96,32 +107,51 @@ public struct HeroPresentation: Sendable, Equatable {
         if item.kind == .episode, let parent = nonempty(item.parentTitle) {
             return parent
         }
+
         return nonempty(item.title) ?? item.title
     }
 
-    /// - Parameter drawsLogoOverArtwork: whether the hero will lay a title logo
-    ///   on top of this artwork. A poster is the better shape for a portrait
-    ///   phone, but a poster's whole job is to carry its own title treatment,
-    ///   and no provider marks which of its posters are textless — so leading
-    ///   with one under a logo reliably produced the title twice. A landscape
-    ///   backdrop is the safer surface to write over, and the TMDb fallback
-    ///   already prefers language-neutral (textless) backdrops.
+    public func artworkReferences(preferringLibrarySelection: Bool) -> [ArtworkReference] {
+        preferringLibrarySelection ? libraryArtworkReferences : artworkReferences
+    }
+
+    public func artworkReferences(preference: ArtworkPreference) -> [ArtworkReference] {
+        switch preference {
+        case .recommended: recommendedArtworkReferences
+        case .library: libraryArtworkReferences
+        case .online: artworkReferences
+        }
+    }
+
+    public func artworkReferences(settings: ArtworkSettings, in area: ArtworkArea) -> [ArtworkReference] {
+        let preference = settings.preference(in: area)
+        guard preference == .recommended, area == .details,
+              settings.prefersOnlineArtwork(in: .home), let home = providerHomeArtworkReference else {
+            return artworkReferences(preference: preference)
+        }
+        return artworkReferences.filter { $0 != home } + artworkReferences.filter { $0 == home }
+    }
+
+    /// Library artwork has no reliable text-presence metadata. Prefer a backdrop
+    /// even before a logo arrives; portrait heroes resolve clean online portraits
+    /// separately, without changing ordinary poster selection.
     public static func artworkReferences(
         for item: MediaItem,
         style: HeroArtworkStyle,
         surface: HeroPresentationSurface,
-        drawsLogoOverArtwork: Bool = false
+        preferringLibrarySelection: Bool = false,
+        settings: ArtworkSettings? = nil
     ) -> [ArtworkReference] {
         let landscapePlacement: ArtworkPlacement = surface == .home
             ? .homeHero
             : .detailBackdrop
-        let prefersPoster = style == .compactPortrait && !drawsLogoOverArtwork
-        let placements: [ArtworkPlacement] = prefersPoster
-            ? [.poster, landscapePlacement]
-            : [landscapePlacement, .poster]
+        let placements: [ArtworkPlacement] = [landscapePlacement, .poster]
         var seen = Set<ArtworkReference>()
         return placements
-            .flatMap { item.artworkReferences(for: $0) }
+            .flatMap {
+                settings?.artworkReferences(for: item, placement: $0, in: surface == .home ? .home : .details)
+                    ?? item.artworkReferences(for: $0, preferringLibrarySelection: preferringLibrarySelection)
+            }
             .filter { seen.insert($0).inserted }
     }
 

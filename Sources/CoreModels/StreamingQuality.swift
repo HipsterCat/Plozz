@@ -248,9 +248,19 @@ public enum StreamingNetwork: Sendable, Equatable {
     /// Cost is not an interface type: Wi-Fi/Ethernet can be expensive too.
     /// Keep those paths eligible for the user's local/remote settings.
     public static func classify(
-        isSatisfied: Bool, usesCellular: Bool, usesWiFi: Bool, usesEthernet: Bool
+        isSatisfied: Bool, usesCellular: Bool, usesWiFi: Bool, usesEthernet: Bool,
+        interfacePreference: [Self] = []
     ) -> Self {
         guard isSatisfied else { return .offline }
+        // A path can permit several interfaces. Eligibility is not preference.
+        for network in interfacePreference {
+            switch network {
+            case .wifi where usesWiFi: return .wifi
+            case .wired where usesEthernet: return .wired
+            case .cellular where usesCellular: return .cellular
+            default: continue
+            }
+        }
         if usesCellular { return .cellular }
         if usesWiFi { return .wifi }
         if usesEthernet { return .wired }
@@ -260,8 +270,13 @@ public enum StreamingNetwork: Sendable, Equatable {
 
 public enum StreamingConnection: String, Sendable, Equatable {
     case local, remote, cellular
-    public static func resolve(network: StreamingNetwork, locality: SourceLocality) -> Self {
-        // Unknown/tunneled paths use the conservative mobile policy until proven otherwise.
+    public static func resolve(
+        network: StreamingNetwork, locality: SourceLocality, previousConnection: Self? = nil
+    ) -> Self {
+        // Losing a route is not a transition to cellular. Keep the current
+        // session's selection until iOS reports a usable path again.
+        if network == .offline, let previousConnection { return previousConnection }
+        // An unresolved initial path still keeps the existing conservative limit.
         if network == .cellular || network == .unknown || network == .offline { return .cellular }
         return locality == .local ? .local : .remote
     }
@@ -320,6 +335,7 @@ public struct StreamingPlaybackOptions: Hashable, Sendable {
     public var subtitlesOff = false
     public var subtitleMode: SubtitleMode?
     public var subtitleLanguage: String?
+    public var hearingImpairedPreference: HearingImpairedPreference = .preferNonSDH
     /// Source-time resume intent for a server that prepares its output at that position.
     public var startPosition: TimeInterval?
 
@@ -359,10 +375,14 @@ public struct StreamingPlaybackOptions: Hashable, Sendable {
                 ?? tracks.first {
                     LanguageMatch.matches($0.language, subtitleTrack.language)
                         && $0.isForced == subtitleTrack.isForced && $0.isBitmapSubtitle == subtitleTrack.isBitmapSubtitle
+                        && $0.isSDHSubtitle == subtitleTrack.isSDHSubtitle
                 }
         }
         guard let subtitleMode else { return tracks.first(where: \.isDefault) }
-        return tracks.defaultSubtitleSelection(mode: subtitleMode, preferredLanguage: subtitleLanguage)
+        return tracks.defaultSubtitleSelection(
+            mode: subtitleMode, preferredLanguage: subtitleLanguage,
+            hearingImpairedPreference: hearingImpairedPreference
+        )
     }
 }
 
@@ -380,14 +400,30 @@ public extension StreamingQualityProviding {
     var streamingQualitySupport: StreamingQualitySupport { .standard }
 }
 
+/// Opt-in maintenance of an already-started server rendition, including while paused.
+public protocol StreamingSessionMaintaining: MediaProvider {
+    func maintainStreamingSession(_ request: PlaybackRequest) async throws
+}
+
 public enum StreamingQualityError: Error, Equatable, Sendable {
+    public enum RefusalReason: String, Sendable {
+        case sessionExpired = "session_expired"
+        case transcodingDisabled = "transcoding_disabled"
+        case conversionToolUnavailable = "conversion_tool_unavailable"
+        case hdrTranscodeUnsupported = "hdr_transcode_unsupported"
+        case sourceMismatch, unsupportedHeaders, unsupportedTimeline, nonSeekable, unsupportedDelivery
+        case protocolUnsupported, providerUnavailable, conflictingState, unspecified
+    }
+
     case invalidQuality(StreamingQualityValidationError)
     case unavailable, unsupported
-    case permissionDenied, noCompatibleStream, sourceUnavailable, malformedResponse, negotiationFailed
+    case authenticationRequired, permissionDenied, noCompatibleStream, sourceUnavailable, malformedResponse, negotiationFailed
+    /// A successful inventory lookup explicitly reported no playable sources.
+    case noStreams
     case serverHTTP(Int)
     case plexDecision(Int)
     case codecUnavailable(DirectPlayVideoCodec)
-    case serverRefusal(LocalizedStringResource)
+    case serverRefusal(LocalizedStringResource, reason: RefusalReason? = nil)
     case playback(StreamingPlaybackFailure)
     case startupTimedOut
 
@@ -401,34 +437,38 @@ public enum StreamingQualityError: Error, Equatable, Sendable {
 
     public var userMessage: LocalizedStringResource {
         switch self {
-        case .serverRefusal(let message):
+        case .serverRefusal(let message, _):
             message
         case .invalidQuality(let error):
             error.userMessage
         case .unavailable:
-            "The server didn’t offer a converted stream for these settings. It didn’t report a specific reason. Try another quality, or ask the server owner to check the transcoding log."
+            "The server didn’t offer a converted stream for these settings."
         case .unsupported:
             "This source plays original files and doesn’t support quality conversion."
+        case .authenticationRequired:
+            "The server did not accept playback authorization."
         case .permissionDenied:
-            "The server refused permission to play or convert this title. Ask the server owner to check your account’s playback and transcoding permissions."
+            "The server did not allow playback or conversion of this title."
         case .noCompatibleStream:
-            "The server reported that no compatible stream is available. Check its supported encoders and transcoding settings, or choose another quality."
+            "The server reported that no compatible stream is available."
         case .sourceUnavailable:
-            "The selected version is no longer available on the server. Go back and choose an available version."
+            "The server could not find the requested title or version."
+        case .noStreams:
+            "No streams found"
         case .malformedResponse:
-            "The server’s playback response couldn’t be read. Check the server’s logs and try again."
+            "Plozz couldn’t read the server’s playback response."
         case .negotiationFailed:
-            "The server couldn’t prepare playback and didn’t report a specific cause. Check the server’s logs and try again."
+            "Plozz couldn’t prepare playback. No more specific cause was captured."
         case .serverHTTP(let status):
-            "The server returned HTTP \(String(status)) while preparing playback. Check its transcoding log for the cause. Changing codec may not resolve a server error."
+            "The server returned HTTP \(String(status)) while preparing playback."
         case .plexDecision:
-            "Plex refused the conversion. Check the server’s transcoding settings and log."
+            "Plex did not approve this playback conversion."
         case .codecUnavailable(let codec):
-            "The server didn’t provide \(PlaybackDiagnostics.friendlyCodecName(codec.rawValue) ?? codec.rawValue) for these settings. Check its encoder support and transcoding settings, or choose another quality."
+            "The server didn’t provide \(PlaybackDiagnostics.friendlyCodecName(codec.rawValue) ?? codec.rawValue) for these settings."
         case .playback(let failure):
             failure.userMessage
         case .startupTimedOut:
-            "The server supplied a stream, but playback made no progress before the startup timeout. This doesn’t confirm a codec restriction. Check the server’s transcoding activity and network connection, or try another quality."
+            "The player did not present video before the startup time limit."
         }
     }
 
@@ -436,9 +476,11 @@ public enum StreamingQualityError: Error, Equatable, Sendable {
     public var diagnosticCode: String? {
         switch self {
         case .invalidQuality(let error): "InvalidQuality(\(error.rawValue))"
+        case .authenticationRequired: "PlaybackAuthorizationFailed"
         case .permissionDenied: "NotAllowed"
         case .noCompatibleStream: "NoCompatibleStream"
         case .sourceUnavailable: "MediaSourceUnavailable"
+        case .noStreams: "NoStreamsFound"
         case .malformedResponse: "InvalidPlaybackResponse"
         case .negotiationFailed: "PlaybackNegotiationFailed"
         case .serverHTTP(let status): "HTTP \(status)"
@@ -446,15 +488,19 @@ public enum StreamingQualityError: Error, Equatable, Sendable {
         case .codecUnavailable(let codec): "CodecUnavailable(\(codec.rawValue))"
         case .startupTimedOut: "PlaybackStartupTimeout"
         case .playback(let failure): failure.diagnosticCode
-        default: nil
+        case .serverRefusal(_, let reason): reason?.rawValue
+        case .unavailable: "ConvertedStreamUnavailable"
+        case .unsupported: "ConversionUnsupported"
         }
     }
 }
 
 public struct StreamingPlaybackFailure: Equatable, Sendable {
-    public enum Kind: Sendable {
+    public enum Kind: String, Sendable {
         case network, timedOut, accessDenied, unavailable, unsupportedFormat
         case hdrConversion, hdrConversionUnconfirmed, server, unknown
+        case rateLimited, accessRestricted, storageExhausted, audioOutputFailed
+        case readinessTimedOut, processingFailed
     }
     public enum Domain: String, Sendable { case avFoundation = "AVFoundation", url = "URL", coreMedia = "CoreMedia" }
     public let kind: Kind
@@ -462,20 +508,29 @@ public struct StreamingPlaybackFailure: Equatable, Sendable {
     public let code: Int?
     public let httpStatus: Int?
     public let provider: ProviderKind?
+    public let engineFailure: PlaybackFailureDiagnostic.EngineFailure?
+    public let underlyingErrors: [PlaybackFailureEvidence.ErrorCode]
+    public let providerReason: StreamingQualityError.RefusalReason?
 
     public init(
         kind: Kind, domain: Domain? = nil, code: Int? = nil, httpStatus: Int? = nil,
-        provider: ProviderKind? = nil
+        provider: ProviderKind? = nil,
+        engineFailure: PlaybackFailureDiagnostic.EngineFailure? = nil,
+        underlyingErrors: [PlaybackFailureEvidence.ErrorCode] = [],
+        providerReason: StreamingQualityError.RefusalReason? = nil
     ) {
         self.kind = kind
         self.domain = domain
         self.code = code
         self.httpStatus = httpStatus
         self.provider = provider
+        self.engineFailure = engineFailure
+        self.underlyingErrors = Array(underlyingErrors.filter(\.isValid).prefix(8))
+        self.providerReason = providerReason
     }
 
     public var allowsCodecFallback: Bool {
-        kind == .unsupportedFormat || kind == .unknown || kind == .unavailable || kind == .hdrConversionUnconfirmed
+        kind == .unsupportedFormat || kind == .processingFailed || kind == .unknown || kind == .hdrConversionUnconfirmed
     }
     public var diagnosticCode: String? {
         let components = [
@@ -486,28 +541,49 @@ public struct StreamingPlaybackFailure: Equatable, Sendable {
     }
     public var userMessage: LocalizedStringResource {
         switch kind {
+        case .network where domain == .url && code == URLError.notConnectedToInternet.rawValue:
+            "Your device is offline."
+        case .network where domain == .url
+            && code.map({ [URLError.cannotFindHost.rawValue, URLError.dnsLookupFailed.rawValue].contains($0) }) == true:
+            "The streaming server’s address could not be resolved."
+        case .network where domain == .url && code.map({ (-1206 ... -1200).contains($0) }) == true:
+            "A secure connection to the streaming server could not be established."
         case .network:
-            "The connection to the playback stream was lost or couldn’t be established. Check your connection and the server’s availability."
+            "The connection to the playback stream was lost or couldn’t be established."
         case .timedOut:
-            "The playback stream stopped responding. Check the server’s transcoding activity and network connection."
+            "A request for the playback stream timed out."
+        case .readinessTimedOut:
+            "The player did not become ready before the startup time limit."
         case .accessDenied:
-            "Access to the playback stream was denied. Check your sign-in and the server account’s playback permissions."
+            "Access to the playback stream was denied."
+        case .unavailable where providerReason == .sessionExpired:
+            "The server reported that the playback session expired."
+        case .unavailable where httpStatus == 404:
+            "The server could not find the playback stream."
+        case .unavailable where httpStatus == 410:
+            "The server reported that the playback stream is no longer available."
         case .unavailable:
-            "The playback stream is no longer available. Retry to create a new playback session."
+            "The playback stream is unavailable."
         case .unsupportedFormat:
-            "The player couldn’t decode the stream the server returned. Try H.264 or check the server’s encoder settings."
-        case .hdrConversion where provider == .emby:
-            "Emby returned incompatible HDR video. Enable HDR-to-SDR tone mapping in the server’s transcoding settings (requires Emby Premiere), or choose an SDR version."
+            "The player couldn’t decode this video or audio."
+        case .processingFailed:
+            "The player couldn’t process this video or audio."
         case .hdrConversion:
-            "The server returned incompatible HDR video. Enable HDR-to-SDR tone mapping in the server’s transcoding settings, or choose an SDR version."
-        case .hdrConversionUnconfirmed where provider == .emby:
-            "This HDR conversion couldn’t be played. HDR-to-SDR tone mapping may be needed; Emby requires Premiere for it. Check the server’s transcoding settings or choose an SDR version."
+            "The converted stream contains HDR video that this playback path cannot decode."
         case .hdrConversionUnconfirmed:
-            "This HDR conversion couldn’t be played. Check HDR-to-SDR tone mapping in the server’s transcoding settings or choose an SDR version."
+            "The converted video couldn’t be played. Its output HDR format could not be confirmed."
         case .server:
-            "The server returned an error while serving the playback stream. Its transcoding log can explain why conversion failed."
+            "The streaming server returned an error."
+        case .rateLimited:
+            "The streaming server is limiting requests."
+        case .accessRestricted:
+            "The provider has restricted access to this stream."
+        case .storageExhausted:
+            "Your device ran out of space while preparing video."
+        case .audioOutputFailed:
+            "The player could not start the audio session."
         case .unknown:
-            "The server supplied a stream, but the player couldn’t play it. No specific cause was reported. Check the server’s transcoding log or try another quality."
+            engineFailure?.message ?? "The player couldn’t play this video. No more specific cause was captured."
         }
     }
 }

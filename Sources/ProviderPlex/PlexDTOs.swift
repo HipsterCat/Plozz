@@ -155,11 +155,13 @@ struct PlexMetadata: Decodable {
     /// whenever the agent dated them — including on hub and library listings, so
     /// it does not need the full metadata fetch.
     let originallyAvailableAt: String?
+    let addedAt: Int?
+    let titleSort: String?
     let duration: Int?         // milliseconds
     let viewOffset: Int?       // milliseconds resumed-to
     let viewCount: Int?
     /// Number of watched episodes rolled up onto a series.
-    let viewedLeafCount: Int?
+    var viewedLeafCount: Int?
     /// Epoch-seconds timestamp of the user's last playback, used as the
     /// most-recent-wins tiebreaker when unifying watch-state across servers.
     let lastViewedAt: Int?
@@ -175,7 +177,7 @@ struct PlexMetadata: Decodable {
     let parentThumb: String?
     /// Series episode count or album/playlist track count (`leafCount`) and artist album count
     /// (`childCount`) — used to populate music nodes' counts.
-    let leafCount: Int?
+    var leafCount: Int?
     let childCount: Int?
     /// Composite mosaic art for a playlist (`/playlists/{id}/composite/...`),
     /// used as the playlist's artwork when it has no single cover.
@@ -192,6 +194,7 @@ struct PlexMetadata: Decodable {
     let ratingImage: String?
     /// Audience score (0–10); `audienceRatingImage` names the source.
     let audienceRating: Double?
+    let userRating: Double?
     let audienceRatingImage: String?
     /// The **full** set of critic/audience scores the new Plex Movie agent
     /// records — IMDb, Rotten Tomatoes (critic + audience) and The Movie
@@ -229,6 +232,26 @@ struct PlexMetadata: Decodable {
     /// Plex Pass intro/credits markers, present only when the metadata request
     /// passes `includeMarkers=1`. Offsets are in milliseconds.
     let Marker: [PlexMarker]?
+    let Preferences: PlexItemPreferences?
+}
+
+struct PlexItemPreferences: Decodable {
+    struct Entry: Decodable {
+        let id: String
+        let episodeOrdering: String?
+
+        private enum CodingKeys: String, CodingKey { case id, value }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(String.self, forKey: .id)
+            // Other settings can have numeric/bool values; they are not order metadata.
+            episodeOrdering = id == "episodeOrdering"
+                ? try values.decodeIfPresent(String.self, forKey: .value) : nil
+        }
+    }
+
+    let Setting: [Entry]?
 }
 
 /// One entry from a Plex item's `Image` array. `type` names the variant
@@ -413,8 +436,11 @@ struct PlexStream: Decodable {
     let profile: String?
     let language: String?
     let languageTag: String?
+    let languageCode: String?
     let displayTitle: String?
     let extendedDisplayTitle: String?
+    let title: String? // l10n:content — container track title
+    let hearingImpaired: Bool?
     let selected: Bool?
     let `default`: Bool?
     let forced: Bool?
@@ -426,6 +452,7 @@ struct PlexStream: Decodable {
     let width: Int?
     let height: Int?
     let frameRate: Double?
+    let bitDepth: Int?
     let scanType: String?
     let colorTrc: String?
     let DOVIPresent: Bool?
@@ -456,8 +483,11 @@ struct PlexStream: Decodable {
         profile = c.flexibleString(.profile)
         language = c.flexibleString(.language)
         languageTag = c.flexibleString(.languageTag)
+        languageCode = c.flexibleString(.languageCode)
         displayTitle = c.flexibleString(.displayTitle)
         extendedDisplayTitle = c.flexibleString(.extendedDisplayTitle)
+        title = c.flexibleString(.title)
+        hearingImpaired = c.flexibleBool(.hearingImpaired)
         selected = c.flexibleBool(.selected)
         `default` = c.flexibleBool(.default)
         forced = c.flexibleBool(.forced)
@@ -465,6 +495,7 @@ struct PlexStream: Decodable {
         width = c.flexibleInt(.width)
         height = c.flexibleInt(.height)
         frameRate = c.flexibleDouble(.frameRate)
+        bitDepth = c.flexibleInt(.bitDepth)
         scanType = c.flexibleString(.scanType)
         colorTrc = c.flexibleString(.colorTrc)
         DOVIPresent = c.flexibleBool(.DOVIPresent)
@@ -479,9 +510,10 @@ struct PlexStream: Decodable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, streamType, index, codec, profile, language, languageTag
+        case id, streamType, index, codec, profile, language, languageTag, languageCode
         case displayTitle, extendedDisplayTitle, selected, `default`, forced, key
-        case width, height, frameRate, scanType, colorTrc
+        case title, hearingImpaired
+        case width, height, frameRate, bitDepth, scanType, colorTrc
         case DOVIPresent, DOVIProfile, DOVILevel, DOVIBLPresent, DOVIBLCompatID
         case channels, samplingRate, audioChannelLayout, bitrate
     }
@@ -566,7 +598,7 @@ struct PlexHomeUsersDTO: Decodable {
     let users: [PlexHomeUserDTO]
 }
 
-/// One Plex Home user. `protected`/`hasPassword` mean a PIN is needed to switch.
+/// One Plex Home user. Only `protected` describes its Home PIN, not its account password.
 struct PlexHomeUserDTO: Decodable {
     let id: Int?
     let uuid: String?
@@ -575,7 +607,6 @@ struct PlexHomeUserDTO: Decodable {
     let admin: Bool?
     let restricted: Bool?
     let protected: Bool?
-    let hasPassword: Bool?
     let thumb: String?
 }
 

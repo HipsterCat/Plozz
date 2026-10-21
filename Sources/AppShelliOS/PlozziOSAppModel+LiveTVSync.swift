@@ -29,7 +29,26 @@ extension PlozziOSAppModel {
                 if let bridge { await bridge.accountDidChange() }
                 else { await MainActor.run { LiveTVPortableSyncPreferenceStore.accountDidChange() } }
             },
-            isHydrated: { [weak bridge] in bridge != nil }
+            isHydrated: { [weak bridge] in bridge != nil },
+            applySnapshot: { [weak bridge] snapshot in
+                await bridge?.apply(snapshot.changes, localCaptureDigests: snapshot.localCaptureDigests)
+            }
+        )
+    }
+
+    static func makeLiveTVSourceSyncChannel(
+        bridge: LiveTVSourceSyncBridge?, stateFileURL: URL
+    ) -> CloudConfigSyncService.ChannelConfiguration {
+        .init(
+            schema: .liveTVSourcesV1, stateFileURL: stateFileURL,
+            captureRecords: { $0 }, applyRecords: { _ in },
+            isHydrated: { [weak bridge] in bridge != nil },
+            captureSnapshot: { [weak bridge] snapshot in
+                guard let bridge else { throw CancellationError() }
+                return try await bridge.capture(snapshot)
+            },
+            applySnapshot: { [weak bridge] snapshot in await bridge?.apply(snapshot) },
+            snapshotAuthority: { LiveTVPortableSyncPreferenceStore.storageEpoch() }
         )
     }
 
@@ -38,6 +57,7 @@ extension PlozziOSAppModel {
         liveTVPortableSyncLifecycle = LiveTVPortableSyncLifecycle(
             profiles: profiles, observesLibraryRuntime: true
         ) { [weak self] in
+            self?.liveTVPortableSync?.refreshParticipation()
             self?.scheduleCloudPublish()
         }
         LiveTVPortableSyncPresentation.shared.connect(

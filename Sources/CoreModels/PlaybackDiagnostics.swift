@@ -28,9 +28,8 @@ public struct PlaybackDiagnostics: Equatable, Sendable {
 
         public var displayName: LocalizedStringResource {
             switch self {
-            case .directPlay: return "Direct Play"
+            case .directPlay, .plozzigen: return "Direct Play"
             case .remux: return "Remux (server, lossless)"
-            case .plozzigen: return "Direct Play (Plozzigen)"
             case .transcode: return "Transcode (server)"
             case .unknown: return "Unknown"
             }
@@ -125,6 +124,22 @@ public struct PlaybackDiagnostics: Equatable, Sendable {
         }
     }
 
+    /// Current system audio-session facts, not a detected physical speaker layout.
+    public struct AudioOutput: Equatable, Sendable {
+        public enum Label: Equatable, Sendable {
+            case localized(LocalizedStringResource)
+            case format(String)
+        }
+
+        public var renderingMode: Label?
+        public var connections: [Label]
+
+        public init(renderingMode: Label? = nil, connections: [Label] = []) {
+            self.renderingMode = renderingMode
+            self.connections = connections
+        }
+    }
+
     public var resolution: VideoResolution?
     /// Kept separate when primary VIDEO/AUDIO fields describe a converted stream.
     public var originalSource: MediaSourceMetadata?
@@ -150,6 +165,9 @@ public struct PlaybackDiagnostics: Equatable, Sendable {
     /// Expected output handling for the current audio route, e.g. Atmos passthrough
     /// vs. a route that may collapse to channel-bed audio.
     public var audioOutputDescription: LocalizedStringResource?
+    /// Actual engine processing, independent of source metadata and output hardware.
+    public var audioPipelineDescription: String?
+    public var audioOutput: AudioOutput?
     /// One-line subtitle description, e.g. `SubRip · English`.
     public var subtitleDescription: String?
     public var container: String?
@@ -229,6 +247,8 @@ public struct PlaybackDiagnostics: Equatable, Sendable {
     public var seekableEndSeconds: Double?
     /// Live player state, e.g. `Ready · Playing`, `Loading`, or `Failed: …`.
     public var playbackState: String?
+    /// Live channels only: how the HLS session is tracking the live playlist.
+    public var liveStream: LiveStreamFacts?
 
     public init(
         resolution: VideoResolution? = nil,
@@ -244,6 +264,8 @@ public struct PlaybackDiagnostics: Equatable, Sendable {
         audioSampleRate: Int? = nil,
         audioBitrate: Double? = nil,
         audioOutputDescription: LocalizedStringResource? = nil,
+        audioPipelineDescription: String? = nil,
+        audioOutput: AudioOutput? = nil,
         subtitleDescription: String? = nil,
         container: String? = nil,
         mode: PlaybackMode = .unknown,
@@ -291,6 +313,8 @@ public struct PlaybackDiagnostics: Equatable, Sendable {
         self.audioSampleRate = audioSampleRate
         self.audioBitrate = audioBitrate
         self.audioOutputDescription = audioOutputDescription
+        self.audioPipelineDescription = audioPipelineDescription
+        self.audioOutput = audioOutput
         self.subtitleDescription = subtitleDescription
         self.container = container
         self.mode = mode
@@ -476,21 +500,12 @@ public extension PlaybackDiagnostics {
         capabilities: MediaCapabilities,
         mode: PlaybackMode = .unknown
     ) -> LocalizedStringResource? {
+        // Source codec/channel counts cannot identify APAC, the selected bridge,
+        // or an encoder fallback. Plozzigen reports its running pipeline instead.
+        guard mode != .plozzigen else { return nil }
         let token = (codec ?? "").lowercased().replacingOccurrences(of: "_", with: "-")
         let profileText = (profile ?? "").lowercased()
         let isAtmos = profileText.contains("atmos")
-        // Plozzigen (AetherEngine) bridges codecs AVPlayer can't decode to a
-        // lossless FLAC (>6ch) or EAC3 5.1 stream on-device, so DTS/TrueHD play
-        // without passthrough. Reflect that instead of the AVPlayer caveat.
-        if mode == .plozzigen {
-            switch token {
-            case "dts", "dca", "dts-hd", "dtshd", "dca-ma", "truehd", "mlp":
-                let bridged = (channels ?? 0) > 6 ? "lossless FLAC" : "EAC3 5.1"
-                return "Bridged on-device (\(bridged))"
-            default:
-                break
-            }
-        }
         switch token {
         case "eac3", "ec3", "ec-3", "e-ac-3":
             if isAtmos {
@@ -504,9 +519,9 @@ public extension PlaybackDiagnostics {
         case "truehd", "mlp":
             return isAtmos ? "TrueHD Atmos is not AVPlayer-compatible" : "TrueHD is not AVPlayer-compatible"
         case "dts", "dca":
-            return capabilities.supportsDTSPassthrough ? "DTS passthrough" : "DTS requires Plozzigen decode or a passthrough route"
+            return capabilities.supportsDTSPassthrough ? "DTS passthrough" : "DTS requires AetherEngine decode or a passthrough route"
         case "dts-hd", "dtshd", "dca-ma":
-            return capabilities.supportsDTSPassthrough ? "DTS-HD passthrough" : "DTS-HD requires Plozzigen decode or a passthrough route"
+            return capabilities.supportsDTSPassthrough ? "DTS-HD passthrough" : "DTS-HD requires AetherEngine decode or a passthrough route"
         case "aac", "mp4a", "alac", "mp3", "flac", "pcm", "lpcm":
             return "Decoded by Apple TV"
         default:

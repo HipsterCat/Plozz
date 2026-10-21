@@ -6,6 +6,13 @@ public protocol LibraryChannelSnapshotStoring: Sendable {
     func snapshot(id: UUID, profileID: String) async throws -> LibraryChannelSnapshot?
     func insert(_ snapshot: LibraryChannelSnapshot, profileID: String) async throws
     func retain(ids: Set<UUID>, profileID: String) async throws
+    /// Must change for every committed payload/availability change, including other writers.
+    func changeRevision() async throws -> UUID?
+}
+
+public extension LibraryChannelSnapshotStoring {
+    /// Stores without an authoritative revision keep the full validation path.
+    func changeRevision() async throws -> UUID? { nil }
 }
 
 public struct LibraryChannelSnapshotLease: Sendable {
@@ -26,6 +33,8 @@ public protocol LibraryChannelSnapshotStaging: LibraryChannelSnapshotStoring {
 public actor LibraryChannelSnapshotStore: LibraryChannelSnapshotStaging {
     private let connection: LibrarySnapshotConnection
     private let cacheID: String
+    private var revision = UUID()
+    private var observedChanges: [Int64]?
 
     public init(databaseURL: URL? = LibraryChannelSnapshotStore.defaultURL) {
         connection = LibrarySnapshotConnection(url: databaseURL)
@@ -58,6 +67,22 @@ public actor LibraryChannelSnapshotStore: LibraryChannelSnapshotStaging {
         }
     }
 
+    public func changeRevision() async throws -> UUID? {
+        try connection.open()
+        try connection.checkFileIdentity()
+        let changes = try connection.statement(
+            "SELECT total_changes(),data_version FROM pragma_data_version", values: []
+        ) {
+            guard sqlite3_step($0) == SQLITE_ROW else { throw LibraryChannelError.storageFailed }
+            return [sqlite3_column_int64($0, 0), sqlite3_column_int64($0, 1)]
+        }
+        if observedChanges != changes {
+            observedChanges = changes
+            revision = UUID()
+        }
+        return revision
+    }
+
     public func insert(_ snapshot: LibraryChannelSnapshot, profileID: String) throws {
         try snapshot.validate()
         try connection.open()
@@ -66,11 +91,20 @@ public actor LibraryChannelSnapshotStore: LibraryChannelSnapshotStaging {
             return
         }
         let data = try JSONEncoder().encode(snapshot)
-        guard data.count <= 64_000_000 else { throw LibraryChannelError.catalogTooLarge }
+        guard data.count <= 64_000_000 else {
+            LiveTVSyncLimitDiagnostic.record(.snapshotBytes, observed: data.count, maximum: 64_000_000)
+            throw LibraryChannelError.catalogTooLarge
+        }
         try connection.statement("SELECT COALESCE(SUM(length(payload)),0),COUNT(*) FROM snapshots", values: []) {
             guard sqlite3_step($0) == SQLITE_ROW else { throw LibraryChannelError.storageFailed }
             guard sqlite3_column_int64($0, 0) + Int64(data.count) <= 512_000_000,
-                  sqlite3_column_int64($0, 1) < 3_200 else { throw LibraryChannelError.catalogTooLarge }
+                  sqlite3_column_int64($0, 1) < 3_200 else {
+                LiveTVSyncLimitDiagnostic.record(.snapshotStoreBytes,
+                    observed: Int(sqlite3_column_int64($0, 0)) + data.count, maximum: 512_000_000)
+                LiveTVSyncLimitDiagnostic.record(.snapshotStoreCount,
+                    observed: Int(sqlite3_column_int64($0, 1)) + 1, maximum: 3_200)
+                throw LibraryChannelError.catalogTooLarge
+            }
         }
         try connection.statement("""
             INSERT INTO snapshots(profile,id,payload)
@@ -99,7 +133,11 @@ public actor LibraryChannelSnapshotStore: LibraryChannelSnapshotStaging {
         for snapshot in snapshots {
             try snapshot.validate()
             count += snapshot.items.count
-            guard count <= LibraryChannelPortableState.maximumItems else { throw LibraryChannelError.catalogTooLarge }
+            guard count <= LibraryChannelPortableState.maximumItems else {
+                LiveTVSyncLimitDiagnostic.record(.libraryItems, observed: count,
+                                                  maximum: LibraryChannelPortableState.maximumItems)
+                throw LibraryChannelError.catalogTooLarge
+            }
         }
         let lease = try LibrarySnapshotPins.shared.pin(
             ids: Set(snapshots.map(\.id)), key: pinKey(profileID)
@@ -163,6 +201,7 @@ private final class LibrarySnapshotConnection {
     static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     private let url: URL?
     private var handle: OpaquePointer?
+    private var openedFile: LiveTVSyncFileRevision?
 
     init(url: URL?) { self.url = url }
     deinit { if let handle { sqlite3_close(handle) } }
@@ -195,6 +234,13 @@ private final class LibrarySnapshotConnection {
             throw LibraryChannelError.storageFailed
         }
         handle = opened
+        if let url { openedFile = try LiveTVSyncFileRevision.read(url) }
+    }
+
+    func checkFileIdentity() throws {
+        guard let url else { return }
+        guard let openedFile, let current = try LiveTVSyncFileRevision.read(url),
+              current.isSameFile(as: openedFile) else { throw LibraryChannelError.storageFailed }
     }
 
     func statement<T>(_ sql: String, values: [String], body: (OpaquePointer) throws -> T) throws -> T {

@@ -73,19 +73,38 @@ public struct QuickConnectService: Sendable {
                 let auth = try await client.authenticate(withSecret: challenge.secret)
                 // Fetch the server's real name (no auth required) so the account
                 // doesn't keep the placeholder provider name ("Jellyfin").
-                let info = try? await client.publicSystemInfo()
+                let info: MediaServer?
+                do {
+                    info = try await client.publicSystemInfo()
+                } catch {
+                    try Task.checkCancellation()
+                    if error is CancellationError || (error as? AppError) == .cancelled { throw error }
+                    PlozzLog.auth.info("Public server metadata unavailable after Quick Connect")
+                    info = nil
+                }
+                try Task.checkCancellation()
+                if let info, info.baseURL != server.baseURL,
+                   let authenticatedServerID = auth.serverID, info.id != authenticatedServerID {
+                    PlozzLog.auth.error("Redirected public metadata did not match the authenticated server")
+                    throw AppError.invalidResponse
+                }
                 let resolvedServer = MediaServer(
                     id: auth.serverID ?? info?.id ?? server.id,
                     name: info?.name ?? server.name,
-                    baseURL: server.baseURL,
+                    baseURL: info?.baseURL ?? server.baseURL,
                     provider: .jellyfin,
                     version: info?.version ?? server.version
+                )
+                let resolvedClient = JellyfinClient(
+                    baseURL: resolvedServer.baseURL,
+                    deviceProfile: JellyfinDeviceProfile(deviceID: deviceID),
+                    http: http
                 )
                 return UserSession(
                     server: resolvedServer,
                     userID: auth.userID,
                     userName: auth.userName,
-                    avatarURL: client.userAvatarURL(userID: auth.userID, maxWidth: 120, token: auth.token),
+                    avatarURL: resolvedClient.userAvatarURL(userID: auth.userID, maxWidth: 120, token: auth.token),
                     deviceID: deviceID,
                     accessToken: auth.token
                 )

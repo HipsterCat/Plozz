@@ -1,19 +1,19 @@
 #if os(iOS)
 import AVKit
+import CoreUI
 import FeaturePlayback
 import SwiftUI
 
 /// This node stays mounted when controls hide; it never creates a player.
 ///
-/// Drawn as VOD's top bar (`PlozziOSPlayerTopBar`): glass circles in a row
-/// beside the live overlay's close button.
+/// Drawn as VOD's top bar: one glass group beside the separate close button.
 struct PlozziOSLivePresentationControls: View {
     let context: LiveChannelPresentationContext
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var pictureInPicture = PlozziOSPictureInPictureController()
 
     var body: some View {
-        HStack(spacing: 12) {
+        PlayerGlassControlGroup {
             if context.permitsExternalPresentation {
                 if pictureInPicture.isAvailable || pictureInPicture.continuesPlayback {
                     Button {
@@ -31,8 +31,6 @@ struct PlozziOSLivePresentationControls: View {
                 if nativePlayerAvailable {
                     LiveAirPlayRoutePicker()
                         .frame(width: 44, height: 44)
-                        .background { PlayerGlassCircleSurface() }
-                        .clipShape(Circle())
                         .accessibilityLabel(Text(verbatim: "AirPlay"))
                         .accessibilityValue(pictureInPicture.isAirPlayActive ? "Connected" : "Not connected")
                         .accessibilityIdentifier("live-channel-airplay")
@@ -99,11 +97,14 @@ private struct LiveAirPlayRoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
         picker.prioritizesVideoDevices = true
-        picker.tintColor = .white
-        picker.activeTintColor = .systemBlue
+        picker.tintColor = context.environment.playerControlTint
+        picker.activeTintColor = picker.tintColor
         return picker
     }
 
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        uiView.tintColor = context.environment.playerControlTint
+        uiView.activeTintColor = uiView.tintColor
+    }
 }
 #endif

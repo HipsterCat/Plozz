@@ -6,7 +6,7 @@ import CoreModels
 @MainActor
 final class SubtitleMenuAvailabilityTests: XCTestCase {
     func testDownloadsKeepEmptySubtitleMenuReachableWithoutInventingTracks() {
-        let model = PlayerControlsModel()
+        let model = controlsWithoutSystemAudio()
         model.engineCapabilities = []
         model.subtitleDownload.canSearch = true
 
@@ -17,7 +17,7 @@ final class SubtitleMenuAvailabilityTests: XCTestCase {
     }
 
     func testEmptyUnsupportedSourceHasNoSubtitleControl() {
-        let model = PlayerControlsModel()
+        let model = controlsWithoutSystemAudio()
         model.engineCapabilities = []
 
         XCTAssertFalse(model.subtitleDownload.canSearch)
@@ -27,7 +27,7 @@ final class SubtitleMenuAvailabilityTests: XCTestCase {
 
     func testExistingTracksKeepTheirSelectedFocusWithOrWithoutDownloads() {
         for canSearch in [false, true] {
-            let model = PlayerControlsModel()
+            let model = controlsWithoutSystemAudio()
             model.engineCapabilities = []
             model.subtitleDownload.canSearch = canSearch
             model.subtitleOptions = [
@@ -44,7 +44,7 @@ final class SubtitleMenuAvailabilityTests: XCTestCase {
     }
 
     func testUnselectedTracksFocusTheFirstRealRow() {
-        let model = PlayerControlsModel()
+        let model = controlsWithoutSystemAudio()
         model.subtitleDownload.canSearch = true
         model.subtitleOptions = [
             PlayerTrackOption(id: 7, title: Text("English"), isSelected: false)
@@ -54,7 +54,7 @@ final class SubtitleMenuAvailabilityTests: XCTestCase {
     }
 
     func testTrackRefreshKeepsDownloadsAvailableAndUsesAnExistingFocusTarget() {
-        let model = PlayerControlsModel()
+        let model = controlsWithoutSystemAudio()
         model.engineCapabilities = []
         model.subtitleDownload.canSearch = true
         XCTAssertEqual(model.subtitleTrackListFocus, .download)
@@ -71,35 +71,35 @@ final class SubtitleMenuAvailabilityTests: XCTestCase {
     }
 
     func testDownloadOnlySubtitleControlPreservesOtherControlsAndTheirOrder() {
-        let model = PlayerControlsModel()
+        let model = controlsWithoutSystemAudio()
         model.engineCapabilities = [.playbackSpeed]
         model.audioOptions = [
             PlayerTrackOption(id: 1, title: Text("English"), isSelected: true),
             PlayerTrackOption(id: 2, title: Text("French"), isSelected: false)
         ]
         model.subtitleDownload.canSearch = true
-        XCTAssertEqual(model.trackControlCategories, [.speed, .audio, .subtitles])
+        XCTAssertEqual(model.trackControlCategories, [.playback, .audio, .subtitles])
 
         model.subtitleDownload.canSearch = false
-        XCTAssertEqual(model.trackControlCategories, [.speed, .audio])
+        XCTAssertEqual(model.trackControlCategories, [.playback, .audio])
     }
 }
 
 @MainActor
 final class AudioMenuAvailabilityTests: XCTestCase {
     func testSingleTrackIsReadOnlyAndAbsentFromTVFocusCategories() {
-        let model = PlayerControlsModel()
+        let model = controlsWithoutSystemAudio()
         model.engineCapabilities = [.playbackSpeed]
         XCTAssertFalse(model.hasAudioControls)
         model.audioOptions = [.init(id: 1, title: Text("Dolby Digital 5.1"), isSelected: true)]
         XCTAssertFalse(model.hasSelectableAudio)
         XCTAssertFalse(model.hasAudioControls)
-        XCTAssertEqual(model.trackControlCategories, [.speed])
+        XCTAssertEqual(model.trackControlCategories, [.playback])
         XCTAssertEqual(model.audioOptions.count, 1, "Hiding the control must not discard track metadata")
     }
 
     func testAlternateTrackAndDialogEnhanceEachKeepAudioReachable() {
-        let model = PlayerControlsModel()
+        let model = controlsWithoutSystemAudio()
         model.audioOptions = [
             .init(id: 1, title: Text("English"), isSelected: true),
             .init(id: 2, title: Text("French"), isSelected: false)

@@ -5,8 +5,12 @@ public struct AppVersionIdentity: Equatable, Sendable {
     public let marketingVersion: String
     public let build: String
     public let releaseVersion: String?
+    public let developmentFeature: String?
 
     public var displayVersion: String { releaseVersion ?? marketingVersion }
+    public var displayBuild: String {
+        developmentFeature.map { "\(build) \($0)" } ?? build
+    }
 
     public static var current: Self {
         Self(infoDictionary: Bundle.main.infoDictionary ?? [:])
@@ -21,5 +25,7 @@ public struct AppVersionIdentity: Equatable, Sendable {
         marketingVersion = value("CFBundleShortVersionString") ?? "—"
         build = value("CFBundleVersion") ?? "—"
         releaseVersion = value("PlozzReleaseID") == nil ? nil : value("PlozzReleaseVersion")
+        developmentFeature = value("PlozzReleaseID") == nil && value("PlozzReleaseChannel") == nil
+            ? value("PlozzDevelopmentFeature") : nil
     }
 }

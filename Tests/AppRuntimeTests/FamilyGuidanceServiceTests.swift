@@ -29,7 +29,9 @@ final class FamilyGuidanceServiceTests: XCTestCase {
             let store = ProfileStore(defaults: defaults)
             store.saveProfiles([
                 Profile(id: "owner", name: "Owner"),
-                Profile(id: "child", name: "Child", plexHomeUserID: "child-user", plexHomeUserAccountID: "account")
+                Profile(id: "child", name: "Child").settingHomeUserBinding(
+                    .init(homeUserID: "child-user", name: "Child", requiresPIN: false), forPlexAccount: "account"
+                )
             ])
             store.setActiveProfileID(homeUser ? "child" : "owner")
             profiles = ProfilesModel(store: store)
@@ -63,10 +65,18 @@ final class FamilyGuidanceServiceTests: XCTestCase {
             service = FamilyGuidanceService(accounts: accounts, profiles: profiles, plexHome: home)
         }
 
-        func prepareMissingHomeCloudCredential() async throws {
+        func prepareHomeIdentity() async {
+            home.plexHomeUsersFetch = { _, _ in
+                [PlexHomeUser(id: "child-user", name: "Child", requiresPIN: false)]
+            }
             home.plexHomeUserSwitch = { _, _, _, _ in "INITIAL-CHILD-CLOUD" }
             home.plexServerTokenResolve = { _, _, _ in "CHILD-SERVER" }
-            _ = try await home.resolveDiscoverToken(for: "account")
+            home.ensurePlexIdentityForActiveProfile()
+            await home.waitForPlexPINRequirementCheck()
+        }
+
+        func prepareMissingHomeCloudCredential() async throws {
+            await prepareHomeIdentity()
             home.plexDiscoverTokens.setToken(nil, for: "account")
             home.plexServerTokenResolve = { _, _, _ in nil }
         }
@@ -98,6 +108,7 @@ final class FamilyGuidanceServiceTests: XCTestCase {
     func testHomeUserUsesAccountTokenInsteadOfServerToken() async throws {
         let fixture = try Fixture(homeUser: true)
         defer { fixture.close() }
+        await fixture.prepareHomeIdentity()
         fixture.home.plexDiscoverTokens.setToken("CHILD-CLOUD", for: "account")
         _ = try await fixture.service.loadFamilyGuidance(for: fixture.item)
         let tokens = await fixture.http.tokens
@@ -124,7 +135,7 @@ final class FamilyGuidanceServiceTests: XCTestCase {
         XCTAssertEqual(tokens, ["RECOVERED-CHILD-CLOUD"])
     }
 
-    func testFirstGuidanceLoadRecoversWithoutRebuildingLibraryIdentity() async throws {
+    func testFirstGuidanceLoadWaitsForProfileAuthorization() async throws {
         let fixture = try Fixture(homeUser: true)
         defer { fixture.close() }
         fixture.home.plexHomeUserSwitch = { _, _, _, _ in "RECOVERED-CHILD-CLOUD" }
@@ -132,13 +143,15 @@ final class FamilyGuidanceServiceTests: XCTestCase {
             XCTFail("Opening guidance must not refresh the library's server credential.")
             return "ROTATED-SERVER-CREDENTIAL"
         }
-        let context = fixture.service.contextID
-        let result = try await fixture.service.loadFamilyGuidance(for: fixture.item)
-        guard case .available = result else { return XCTFail("The first attempt must load the review.") }
-        XCTAssertEqual(fixture.service.contextID, context, "Changing this context dismisses the detail and guidance pages.")
-        XCTAssertEqual(fixture.home.resolvedToken(for: "account"), "CHILD-SERVER")
+        do {
+            _ = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+            XCTFail("Guidance must not authorize an unresolved profile.")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unauthorized)
+        }
+        XCTAssertNil(fixture.home.resolvedToken(for: "account"))
         let tokens = await fixture.http.tokens
-        XCTAssertEqual(tokens, ["RECOVERED-CHILD-CLOUD"])
+        XCTAssertTrue(tokens.isEmpty)
     }
 
     func testRetryAfterCloudRecoveryFailureUsesNewScopedCredential() async throws {
@@ -183,6 +196,7 @@ final class FamilyGuidanceServiceTests: XCTestCase {
     func testRetryResolvesCurrentHomeCredentialWithoutOwnerFallback() async throws {
         let fixture = try Fixture(homeUser: true, statuses: [401, 200])
         defer { fixture.close() }
+        await fixture.prepareHomeIdentity()
         fixture.home.plexDiscoverTokens.setToken("OLD-CHILD-CLOUD", for: "account")
         do {
             _ = try await fixture.service.loadFamilyGuidance(for: fixture.item)
@@ -215,6 +229,7 @@ final class FamilyGuidanceServiceTests: XCTestCase {
     func testRevokedHomeCredentialDiscardsAnInFlightResponse() async throws {
         let fixture = try Fixture(homeUser: true, suspended: true)
         defer { fixture.close() }
+        await fixture.prepareHomeIdentity()
         fixture.home.plexDiscoverTokens.setToken("CHILD-CLOUD", for: "account")
         let operation = Task { try await fixture.service.loadFamilyGuidance(for: fixture.item) }
         await fixture.http.waitForRequest()
