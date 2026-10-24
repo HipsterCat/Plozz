@@ -38,6 +38,7 @@ public struct ThemeMusicVolumeControl: View {
                 label: "Theme music volume",
                 textTitle: { Text(Double($0) / 100, format: .percent.precision(.fractionLength(0))) }
             )
+            .environment(\.settingsAdjustmentRepeatSpeed, .fast)
             .accessibilityIdentifier("theme-music-volume")
             #else
             HStack(spacing: 16) {
@@ -69,9 +70,6 @@ public struct ThemeMusicVolumeControl: View {
             }
             .disabled(controller == nil || controller?.isBlocked == true)
             .accessibilityIdentifier("theme-music-preview")
-            Text("Adjusting volume plays a theme from your recent library titles, or an original sample if none is available. Full volume follows your device's volume.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
             if let failure = controller?.failure {
                 Text(failure)
                     .font(.footnote)

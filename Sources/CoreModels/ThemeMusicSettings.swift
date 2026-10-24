@@ -7,7 +7,7 @@ public struct ThemeMusicSettings: Codable, Equatable, Sendable {
 
     public init(
         isEnabled: Bool = false,
-        volume: ThemeMusicVolume = .low
+        volume: ThemeMusicVolume = .default
     ) {
         self.isEnabled = isEnabled
         self.volume = volume
@@ -37,9 +37,10 @@ public struct ThemeMusicVolume: Codable, Equatable, Hashable, Sendable {
     public let level: Double
 
     public init(_ level: Double) {
-        self.level = level.isFinite ? min(1, max(0, level)) : Self.low.level
+        self.level = level.isFinite ? min(1, max(0, level)) : Self.default.level
     }
 
+    public static let `default` = Self(0.25)
     public static let off = Self(0)
     public static let low = Self(0.15)
     public static let medium = Self(0.35)
@@ -52,9 +53,10 @@ public struct ThemeMusicVolume: Codable, Equatable, Hashable, Sendable {
         if let legacy = try? container.decode(String.self) {
             switch legacy {
             case "off": self = .off
+            case "low": self = .low
             case "medium": self = .medium
             case "high": self = .high
-            default: self = .low
+            default: self = .default
             }
         } else {
             self.init(try container.decode(Double.self))

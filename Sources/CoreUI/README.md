@@ -51,6 +51,9 @@ use a text-height focus strip as a smaller action-button variant.
 to 21 visual ticks. `ThemeMusicPreviewControlling` is the Settings-to-runtime
 preview seam; it carries ownership, availability, and errors without coupling
 Settings to the Home feature or a concrete audio player.
+The shared TV adjustment scope defaults to its standard hold-repeat speed.
+`settingsAdjustmentRepeatSpeed` lets dense percentage controls opt into faster
+repeat without changing their single-press increment or other settings controls.
 
 `ChannelLogoArtwork` renders generated Plozz channels with the shared Byline
 layout: a name-first title and inset pixel-mascot signature. Its optional

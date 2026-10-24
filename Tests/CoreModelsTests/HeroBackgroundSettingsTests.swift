@@ -110,7 +110,7 @@ final class HeroBackgroundSettingsTests: XCTestCase {
                 expected.detailMode = .themeMusic
                 backgroundStore.save(expected)
                 XCTAssertEqual(backgroundStore.load(), expected, "A later explicit opt-in must persist.")
-                XCTAssertEqual(musicStore.load().volume, .low)
+                XCTAssertEqual(musicStore.load().volume, .default)
             }
         }
     }

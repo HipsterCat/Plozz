@@ -14,10 +14,8 @@ final class SettingsStepperHostedTests: XCTestCase {
         }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
-        let suite = "ThemeVolumeControl.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let model = ThemeMusicSettingsModel(store: ThemeMusicSettingsStore(defaults: defaults))
+        let store = RecordingThemeMusicStore()
+        let model = ThemeMusicSettingsModel(store: store)
         let preview = PreviewController()
         var resolutionCount = 0
         let previous = scene.windows.first(where: \.isKeyWindow)
@@ -44,15 +42,15 @@ final class SettingsStepperHostedTests: XCTestCase {
         press(.right, input)
         try await waitUntil { preview.previewOwner != nil }
         XCTAssertEqual(resolutionCount, 1)
-        XCTAssertEqual(model.settings.volume.level, 0.16)
-        XCTAssertEqual(preview.volume.level, 0.16)
+        XCTAssertEqual(model.settings.volume.level, 0.26)
+        XCTAssertEqual(preview.volume.level, 0.26)
         let owner = try XCTUnwrap(preview.previewOwner)
-        for expected in [0.17, 0.18, 0.19] {
+        for expected in [0.27, 0.28, 0.29] {
             press(.right, input)
             try await waitUntil { model.settings.volume.level == expected }
         }
         press(.left, input)
-        try await waitUntil { model.settings.volume.level == 0.18 }
+        try await waitUntil { model.settings.volume.level == 0.28 }
         model.settings.volume = ThemeMusicVolume(0.48)
         try await waitUntil { preview.volume.level == 0.48 }
         XCTAssertEqual(model.settings.volume.level, 0.48, "Presenting a saved value must not rewrite it.")
@@ -72,6 +70,22 @@ final class SettingsStepperHostedTests: XCTestCase {
         }
         press(.left, input)
         XCTAssertEqual(model.settings.volume.level, 0)
+        model.settings.volume = ThemeMusicVolume(0.50)
+        try await waitUntil { preview.volume.level == 0.50 }
+        store.clearHistory()
+        input.beginPress(.left)
+        defer { input.stopRepeating() }
+        try await waitUntil(timeout: .seconds(2.5)) { model.settings.volume.level <= 0.15 }
+        input.stopRepeating()
+        let held = store.savedLevels
+        XCTAssertGreaterThanOrEqual(held.count, 35, "A hold must reach 15% from 50% within the fast-repeat budget.")
+        XCTAssertEqual(held.first, 0.49)
+        for (previous, next) in zip([0.50] + held, held) {
+            XCTAssertEqual(previous - next, 0.01, accuracy: 0.000_001, "A fast hold must still visit every percentage.")
+        }
+        let releasedVolume = model.settings.volume
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(model.settings.volume, releasedVolume, "Releasing the remote must cancel fast repeat.")
         XCTAssertEqual(preview.previewOwner, owner)
         XCTAssertEqual(resolutionCount, 1, "Scrubbing must not repeatedly look up library themes.")
         window.isHidden = true
@@ -342,8 +356,8 @@ final class SettingsStepperHostedTests: XCTestCase {
         return .null
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
+    private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         XCTAssertTrue(condition())
     }
@@ -353,6 +367,37 @@ final class SettingsStepperHostedTests: XCTestCase {
         var selection = 15
         var focused = false
         var focusOther = false
+    }
+
+    final class RecordingThemeMusicStore: ThemeMusicSettingsStoring, @unchecked Sendable {
+        private let lock = NSLock()
+        private var settings = ThemeMusicSettings.default
+        private var levels: [Double] = []
+
+        func load() -> ThemeMusicSettings {
+            lock.lock()
+            defer { lock.unlock() }
+            return settings
+        }
+
+        func save(_ settings: ThemeMusicSettings) {
+            lock.lock()
+            defer { lock.unlock() }
+            self.settings = settings
+            levels.append(settings.volume.level)
+        }
+
+        var savedLevels: [Double] {
+            lock.lock()
+            defer { lock.unlock() }
+            return levels
+        }
+
+        func clearHistory() {
+            lock.lock()
+            defer { lock.unlock() }
+            levels.removeAll()
+        }
     }
 
     @Observable final class PreviewController: ThemeMusicPreviewControlling {

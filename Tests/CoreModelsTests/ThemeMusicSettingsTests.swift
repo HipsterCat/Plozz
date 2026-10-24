@@ -23,6 +23,7 @@ final class ThemeMusicSettingsTests: XCTestCase {
         let settings = ThemeMusicSettings.default
         XCTAssertFalse(settings.isEnabled)
         XCTAssertFalse(settings.shouldPlay)
+        XCTAssertEqual(settings.volume.level, 0.25)
     }
 
     func testShouldPlayRequiresEnabledAndAudibleVolume() {
@@ -42,8 +43,8 @@ final class ThemeMusicSettingsTests: XCTestCase {
         XCTAssertEqual(ThemeMusicVolume(0.73).gain, 0.73)
         XCTAssertEqual(ThemeMusicVolume(-1).gain, 0)
         XCTAssertEqual(ThemeMusicVolume(2).gain, 1)
-        XCTAssertEqual(ThemeMusicVolume(.nan), .low)
-        XCTAssertEqual(ThemeMusicVolume(.infinity), .low)
+        XCTAssertEqual(ThemeMusicVolume(.nan), .default)
+        XCTAssertEqual(ThemeMusicVolume(.infinity), .default)
     }
 
     func testLegacyLevelsKeepExactGain() throws {
@@ -75,13 +76,13 @@ final class ThemeMusicSettingsTests: XCTestCase {
             from: Data(#"{"isEnabled":true,"loops":true}"#.utf8)
         )
         XCTAssertTrue(missing.isEnabled)
-        XCTAssertEqual(missing.volume, .low)
+        XCTAssertEqual(missing.volume, .default)
 
         let unknown = try JSONDecoder().decode(
             ThemeMusicSettings.self,
             from: Data(#"{"isEnabled":true,"volume":"deafening"}"#.utf8)
         )
-        XCTAssertEqual(unknown.volume, .low)
+        XCTAssertEqual(unknown.volume, .default)
     }
 
     func testStoreRoundTripAndProfileIsolation() {
@@ -100,6 +101,8 @@ final class ThemeMusicSettingsTests: XCTestCase {
         primary.save(saved)
         XCTAssertEqual(primary.load(), saved)
         XCTAssertEqual(second.load(), .default)
+        primary.save(ThemeMusicSettings(volume: .low))
+        XCTAssertEqual(primary.load().volume.level, 0.15, "An existing saved low volume must not be raised to the new default.")
     }
 
     @MainActor
