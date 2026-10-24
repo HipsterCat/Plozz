@@ -172,12 +172,14 @@ compatibility and App Review risk. This system-preference bridge is tvOS-only.
 
 On iPhone and iPad, VOD and Live TV share adaptive native `PlayerMoreMenuButton`
 controls. Portrait uses one ellipsis; landscape exposes the available menus as
-separate controls, with Quality, Version and Multiview opening their existing
-destinations directly. Layout follows the actual player viewport, including
-iPad split windows, not the device's global orientation.
+separate controls, with Version and Multiview opening their existing destinations
+directly. Video combines zoom choices with Quality in both layouts; Quality opens
+its existing editor and never acts as a selectable zoom mode. Quality remains
+available in Video even when zoom is unsupported. Layout follows the actual player
+viewport, including iPad split windows, not the device's global orientation.
 Subtitles and Audio offer their existing tracks directly with real active-track
-checkmarks. Subtitle search/download stays outside Advanced; Advanced opens a
-touch sheet for supported appearance, timing and dual-track controls. Live TV
+checkmarks. Subtitle search/download is the last item, below Advanced; Advanced
+opens a touch sheet for supported appearance, timing and dual-track controls. Live TV
 does not offer search/download or dual subtitles. Native speed presets and Video
 modes apply immediately; Custom, Quality, Version and supported sync controls
 open their existing editors. Live multiview is another menu action; Go Live

@@ -19,7 +19,7 @@ public enum PlayerMenuLayout: Equatable {
 }
 
 public enum PlayerMenuSection: String, CaseIterable, Identifiable {
-    case subtitles, audio, speed = "playback-speed", video, quality, versions, multiview
+    case subtitles, audio, speed = "playback-speed", video, versions, multiview
     public var id: Self { self }
 
     var title: LocalizedStringResource {
@@ -28,7 +28,6 @@ public enum PlayerMenuSection: String, CaseIterable, Identifiable {
         case .audio: "Audio"
         case .speed: "Playback Speed"
         case .video: "Video"
-        case .quality: "Quality"
         case .versions: "Version"
         case .multiview: "Multiview"
         }
@@ -40,13 +39,12 @@ public enum PlayerMenuSection: String, CaseIterable, Identifiable {
         case .audio: .audio
         case .speed: .speed
         case .video: .video
-        case .quality, .versions, .multiview: nil
+        case .versions, .multiview: nil
         }
     }
 
     var destination: PlayerMenuDestination? {
         switch self {
-        case .quality: .quality
         case .versions: .versions
         case .multiview: .multiview
         default: nil
@@ -55,7 +53,6 @@ public enum PlayerMenuSection: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .quality: "slider.horizontal.3"
         case .versions: "rectangle.stack"
         case .multiview: "rectangle.split.2x2"
         default: kind?.symbol ?? "ellipsis"
@@ -154,8 +151,9 @@ public enum PlayerMoreMenu {
         if !model.audioOptions.isEmpty || model.engineCapabilities.contains(.dialogEnhance)
             || model.engineCapabilities.contains(.audioDelay) { sections.append(.audio) }
         if availability.maximumSpeed != nil, model.engineCapabilities.contains(.playbackSpeed) { sections.append(.speed) }
-        if availability.video, model.engineCapabilities.contains(.videoZoom) { sections.append(.video) }
-        if availability.quality { sections.append(.quality) }
+        if availability.quality || (availability.video && model.engineCapabilities.contains(.videoZoom)) {
+            sections.append(.video)
+        }
         if availability.versions { sections.append(.versions) }
         if availability.multiview { sections.append(.multiview) }
         return sections
@@ -185,12 +183,12 @@ public enum PlayerMoreMenu {
                 subtitles.append(UIMenu(options: [.displayInline, .singleSelection], children: tracks))
             }
             var more: [UIMenuElement] = []
-            if model.subtitleDownload.canSearch {
-                more.append(destination("Search & Download…", .subtitleSearch))
-            }
             if (model.subtitleStyleAdjustable && model.secondarySubtitleImagePrimaryFormat == nil)
                 || model.subtitleDelayAdjustable || !model.secondarySubtitleOptions.isEmpty {
                 more.append(destination("Advanced…", .subtitleAdvanced))
+            }
+            if model.subtitleDownload.canSearch {
+                more.append(destination("Search & Download…", .subtitleSearch))
             }
             if !more.isEmpty { subtitles.append(UIMenu(options: .displayInline, children: more)) }
             entries[.subtitles] = UIMenu(title: localized(PlayerMenuSection.subtitles.title), children: subtitles)
@@ -222,14 +220,19 @@ public enum PlayerMoreMenu {
                 UIMenu(options: .displayInline, children: [destination("Custom…", .speed)])
             ])
         }
+        var video: [UIMenuElement] = []
         if availability.video, model.engineCapabilities.contains(.videoZoom) {
             let zoom = PlayerZoomMenu.make(model: availability.videoModel ?? model.videoZoom, locale: locale, isCurrent: actions.isCurrent) {
                 actions.request(.zoom)
             }
-            entries[.video] = UIMenu(title: localized(PlayerMenuSection.video.title),
-                                    options: zoom.options, children: zoom.children)
+            video.append(UIMenu(title: zoom.title, options: [.displayInline, .singleSelection], children: zoom.children))
         }
-        if availability.quality { entries[.quality] = destination(PlayerMenuSection.quality.title, .quality) }
+        if availability.quality {
+            video.append(UIMenu(options: .displayInline, children: [destination("Quality", .quality)]))
+        }
+        if !video.isEmpty {
+            entries[.video] = UIMenu(title: localized(PlayerMenuSection.video.title), children: video)
+        }
         if availability.versions { entries[.versions] = destination(PlayerMenuSection.versions.title, .versions) }
         if availability.multiview { entries[.multiview] = destination(PlayerMenuSection.multiview.title, .multiview) }
         if let section {
@@ -237,7 +240,7 @@ public enum PlayerMoreMenu {
             return UIMenu(children: entries[section].map { [$0] } ?? [])
         }
         var items = [PlayerMenuSection.subtitles, .audio, .speed].compactMap { entries[$0] }
-        let secondary = [PlayerMenuSection.video, .quality, .versions, .multiview].compactMap { entries[$0] }
+        let secondary = [PlayerMenuSection.video, .versions, .multiview].compactMap { entries[$0] }
         if !secondary.isEmpty { items.append(UIMenu(options: .displayInline, children: secondary)) }
         return UIMenu(children: items)
     }
@@ -302,6 +305,8 @@ public struct PlayerMoreMenuButton: View {
         .fixedSize(horizontal: true, vertical: false)
         .onChange(of: layout) { presentation.reset() }
         .onChange(of: sections) { presentation.reset() }
+        .onChange(of: availability.quality) { presentation.reset() }
+        .onChange(of: availability.video && model.engineCapabilities.contains(.videoZoom)) { presentation.reset() }
     }
 
     private func identifier(_ section: PlayerMenuSection) -> String {
