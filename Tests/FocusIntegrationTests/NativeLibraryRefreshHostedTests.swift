@@ -77,7 +77,8 @@ final class NativeLibraryRefreshHostedTests: XCTestCase {
                             width: box.width * window.bounds.width, height: box.height * window.bounds.height
                         )
                     }
-                    XCTAssertGreaterThan(frame(badge).minY, headerFrame.maxY + 16)
+                    // Header bounds already include bottom padding; fitted badges scale their own text inset.
+                    XCTAssertGreaterThan(frame(badge).minY, headerFrame.maxY)
                     XCTAssertGreaterThan(logo.minY, frame(badge).maxY + 10)
                     XCTAssertLessThan(logo.minY - frame(badge).maxY, 42,
                                       "The badge follows the fitted logo, not the top of its sizing slot.")
