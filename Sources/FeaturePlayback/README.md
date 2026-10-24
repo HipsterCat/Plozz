@@ -170,7 +170,11 @@ the output/content; availability and preference acknowledgement are not proof of
 processing for every engine route. Undocumented integration carries OS
 compatibility and App Review risk. This system-preference bridge is tvOS-only.
 
-On iPhone and iPad, VOD and Live TV share one native ellipsis `PlayerMoreMenuButton`.
+On iPhone and iPad, VOD and Live TV share adaptive native `PlayerMoreMenuButton`
+controls. Portrait uses one ellipsis; landscape exposes the available menus as
+separate controls, with Quality, Version and Multiview opening their existing
+destinations directly. Layout follows the actual player viewport, including
+iPad split windows, not the device's global orientation.
 Subtitles and Audio offer their existing tracks directly with real active-track
 checkmarks. Subtitle search/download stays outside Advanced; Advanced opens a
 touch sheet for supported appearance, timing and dual-track controls. Live TV
@@ -182,6 +186,11 @@ Opening a menu pins transport controls; playback-clock updates do not rebuild
 its snapshot. `PlayerMenuPresentation` releases editor requests only after native
 menu dismissal completes. Context changes invalidate pending requests and old
 audio/subtitle/speed/zoom actions, and programme transitions release live controls.
+Each native popup has its own presentation owner, so overlapping dismissal and
+teardown callbacks cannot unpin a newer popup or release a sheet too early.
+Popup rows are text-only: checkmarks belong to real track/mode/rate choices.
+Custom Speed is an unselected, icon-free command outside the preset selection
+group rather than a pretend selectable option. Toolbar controls retain their symbols.
 An Enhance Dialogue submenu is offered only for an actual engine enhancement
 capability, never inferred from `moviePlayback` eligibility. Neither current
 iOS engine exposes that control, so no nonfunctional switch is displayed.

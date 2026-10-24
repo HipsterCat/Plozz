@@ -864,6 +864,7 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
                     quality: viewModel.streamingQualityAvailable, versions: hasVersions
                 ),
                 presentation: menuPresentation,
+                layout: .init(size: availableSize),
                 actions: menuActions(for: item)
             )
         }

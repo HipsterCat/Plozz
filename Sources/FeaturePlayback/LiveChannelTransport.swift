@@ -1594,6 +1594,7 @@ extension LiveChannelOverlay {
             if includesGoLive { touchGoLiveBadge }
             PlayerMoreMenuButton(
                 model: trackOptions, availability: mobileMenuAvailability, presentation: mobileMenu,
+                layout: .init(size: touchViewportSize),
                 accessibilityIdentifier: "live-channel-playback-options", actions: mobileMenuActions
             )
         }

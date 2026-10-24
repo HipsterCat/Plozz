@@ -9,6 +9,144 @@ import XCTest
 
 @MainActor
 final class PlayerMoreMenuPresentationTests: XCTestCase {
+    func testLayoutFollowsTheActualPlayerViewport() {
+        XCTAssertEqual(PlayerMenuLayout(size: .zero), .consolidated)
+        XCTAssertEqual(PlayerMenuLayout(size: CGSize(width: 390, height: 844)), .consolidated)
+        XCTAssertEqual(PlayerMenuLayout(size: CGSize(width: 844, height: 390)), .separate)
+        XCTAssertEqual(PlayerMenuLayout(size: CGSize(width: 1024, height: 768)), .separate)
+        XCTAssertEqual(PlayerMenuLayout(size: CGSize(width: 507, height: 768)), .consolidated)
+    }
+
+    func testCommandRowsHaveNeitherIconsNorSelectionAndCustomSpeedIsOutsidePresets() throws {
+        let model = controls()
+        model.playbackSpeed = 1.3
+        let menu = PlayerMoreMenu.make(
+            model: model, availability: .init(maximumSpeed: 2, quality: true, versions: true, multiview: true),
+            locale: .init(identifier: "en"), actions: .init()
+        )
+        let commands = Set(["Search & Download…", "Advanced…", "Custom…", "Quality", "Version", "Multiview"])
+        func verify(_ menu: UIMenu) {
+            XCTAssertNil(menu.image, "Navigation menus should not add decorative popup icons.")
+            for child in menu.children {
+                if let submenu = child as? UIMenu { verify(submenu) }
+                if let action = child as? UIAction, commands.contains(action.title) {
+                    XCTAssertNil(action.image)
+                    XCTAssertEqual(action.state, .off, "\(action.title) is a command, not a selected preset.")
+                    XCTAssertFalse(menu.options.contains(.singleSelection))
+                }
+            }
+        }
+        verify(menu)
+        let speed = try submenu("Playback Speed", in: menu)
+        XCTAssertFalse(speed.options.contains(.singleSelection))
+        let presets = try XCTUnwrap(speed.children.first as? UIMenu)
+        XCTAssertTrue(presets.options.contains(.singleSelection))
+        XCTAssertTrue(presets.children.compactMap { $0 as? UIAction }.allSatisfy { $0.state == .off })
+    }
+
+    func testOverlappingNativeOwnersDoNotReleaseRequestsUntilTheLastMenuCloses() {
+        let presentation = PlayerMenuPresentation()
+        let audio = UUID()
+        let subtitles = UUID()
+        presentation.setPresented(true, owner: audio)
+        presentation.setPresented(true, owner: subtitles)
+        presentation.request(.subtitleAdvanced, generation: presentation.generation)
+        presentation.setPresented(false, owner: audio)
+        presentation.setPresented(false, owner: audio)
+        XCTAssertTrue(presentation.isPresented)
+        XCTAssertNil(presentation.destination)
+        presentation.setPresented(false, owner: subtitles)
+        XCTAssertEqual(presentation.takeDestination(), .subtitleAdvanced)
+        presentation.reset()
+        let next = UUID()
+        presentation.setPresented(true, owner: next)
+        presentation.setPresented(false, owner: subtitles)
+        XCTAssertTrue(presentation.isPresented, "Late teardown from an old menu cannot close a new owner.")
+    }
+
+    func testAdaptiveControlsReplacePortraitEllipsisWithDirectLandscapeMenusAndBalanceRemoval() async throws {
+        let state = FixtureState(controls: controls())
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: Fixture(state: state))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            state.presentation.reset()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await waitUntil { self.buttons(in: host.view).count == 1 }
+        let more = try XCTUnwrap(buttons(in: host.view).first)
+        XCTAssertEqual(more.accessibilityIdentifier, "player-playback-options")
+        more.performPrimaryAction()
+        try await waitUntil { more.presentedMenu != nil }
+        state.layout = .separate
+        try await waitUntil {
+            self.buttons(in: host.view).count == 4 && !state.presentation.isBusy
+                && more.presentedMenu == nil
+        }
+        XCTAssertEqual(
+            Set(buttons(in: host.view).compactMap(\.accessibilityIdentifier)),
+            ["player-subtitles", "player-audio", "player-playback-speed", "player-video"]
+        )
+        let audio = try XCTUnwrap(buttons(in: host.view).first { $0.accessibilityIdentifier == "player-audio" })
+        audio.performPrimaryAction()
+        try await waitUntil { audio.presentedMenu != nil && state.presentation.isPresented }
+        let menu = try XCTUnwrap(audio.presentedMenu)
+        XCTAssertEqual(menu.title, "Audio")
+        XCTAssertEqual(visible(menu).map(\.title), ["English (Opus 5.1)", "French (AAC Stereo)"])
+        let stale = try XCTUnwrap(visible(menu).first as? UIAction)
+        state.controls.audioOptions = []
+        try await waitUntil { self.buttons(in: host.view).count == 3 && !state.presentation.isBusy }
+        perform(stale)
+        XCTAssertTrue(state.audioSelections.isEmpty)
+        state.layout = .consolidated
+        try await waitUntil {
+            self.buttons(in: host.view).count == 1
+                && self.buttons(in: host.view).first?.accessibilityIdentifier == "player-playback-options"
+        }
+    }
+
+    func testNativeButtonTeardownReleasesOnlyItsOwnOverlappingPresentation() async throws {
+        let state = FixtureState(controls: controls())
+        state.layout = .separate
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: Fixture(state: state))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            state.presentation.reset()
+            host.dismiss(animated: false)
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await waitUntil { self.buttons(in: host.view).count == 4 }
+        let audio = try XCTUnwrap(buttons(in: host.view).first { $0.accessibilityIdentifier == "player-audio" })
+        let subtitles = try XCTUnwrap(buttons(in: host.view).first { $0.accessibilityIdentifier == "player-subtitles" })
+        let audioInteraction = try XCTUnwrap(audio.contextMenuInteraction)
+        let subtitleInteraction = try XCTUnwrap(subtitles.contextMenuInteraction)
+        XCTAssertNotNil(audio.contextMenuInteraction(audioInteraction, configurationForMenuAtLocation: .zero))
+        XCTAssertNotNil(subtitles.contextMenuInteraction(subtitleInteraction, configurationForMenuAtLocation: .zero))
+        state.presentation.request(.subtitleAdvanced, generation: state.presentation.generation)
+        PlayerOptionsMenuButton.dismantleUIView(audio, coordinator: ())
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertTrue(state.presentation.isPresented)
+        XCTAssertNil(state.presentation.destination)
+        XCTAssertNil(state.sheet)
+        subtitles.onPresentationChange?(false)
+        try await waitUntil { state.sheet == .subtitleAdvanced && !state.presentation.isPresented }
+    }
+
     func testOneMenuOffersDirectTracksAndKeepsSearchOutsideAdvanced() throws {
         let model = controls()
         var selectedAudio: Int?
@@ -199,6 +337,11 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.button(in: $0) }.first
     }
 
+    private func buttons(in view: UIView) -> [PlayerOptionsMenuControl] {
+        if let button = view as? PlayerOptionsMenuControl { return [button] }
+        return view.subviews.flatMap { buttons(in: $0) }
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
@@ -211,6 +354,7 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
         let presentation = PlayerMenuPresentation()
         var sheet: PlayerMenuDestination?
         var audioSelections: [Int] = []
+        var layout = PlayerMenuLayout.consolidated
         init(controls: PlayerControlsModel) { self.controls = controls }
     }
 
@@ -222,7 +366,7 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
             actions.selectAudio = { state.audioSelections.append($0) }
             return PlayerMoreMenuButton(
                 model: state.controls, availability: .init(maximumSpeed: 2),
-                presentation: state.presentation, actions: actions
+                presentation: state.presentation, layout: state.layout, actions: actions
             )
             .environment(\.locale, .init(identifier: "en"))
             .task(id: state.presentation.destination) {

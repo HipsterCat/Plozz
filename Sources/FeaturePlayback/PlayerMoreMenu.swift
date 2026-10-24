@@ -1,5 +1,6 @@
 #if os(iOS)
 import CoreModels
+import CoreUI
 import Observation
 import SwiftUI
 import UIKit
@@ -9,6 +10,59 @@ public enum PlayerMenuDestination: String, Identifiable {
     public var id: Self { self }
 }
 
+public enum PlayerMenuLayout: Equatable {
+    case consolidated, separate
+
+    public init(size: CGSize) {
+        self = size.width > size.height ? .separate : .consolidated
+    }
+}
+
+public enum PlayerMenuSection: String, CaseIterable, Identifiable {
+    case subtitles, audio, speed = "playback-speed", video, quality, versions, multiview
+    public var id: Self { self }
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .subtitles: "Subtitles"
+        case .audio: "Audio"
+        case .speed: "Playback Speed"
+        case .video: "Video"
+        case .quality: "Quality"
+        case .versions: "Version"
+        case .multiview: "Multiview"
+        }
+    }
+
+    var kind: PlayerOptionsMenuButton.Kind? {
+        switch self {
+        case .subtitles: .subtitles
+        case .audio: .audio
+        case .speed: .speed
+        case .video: .video
+        case .quality, .versions, .multiview: nil
+        }
+    }
+
+    var destination: PlayerMenuDestination? {
+        switch self {
+        case .quality: .quality
+        case .versions: .versions
+        case .multiview: .multiview
+        default: nil
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .quality: "slider.horizontal.3"
+        case .versions: "rectangle.stack"
+        case .multiview: "rectangle.split.2x2"
+        default: kind?.symbol ?? "ellipsis"
+        }
+    }
+}
+
 /// A native menu's dismissal completion, not a timer, releases sheet requests.
 @MainActor @Observable
 public final class PlayerMenuPresentation {
@@ -16,13 +70,18 @@ public final class PlayerMenuPresentation {
     public private(set) var destination: PlayerMenuDestination?
     public private(set) var generation: UInt64 = 0
     private var pending: PlayerMenuDestination?
+    @ObservationIgnored private var owners = Set<UUID>()
+    private let defaultOwner = UUID()
     public var isBusy: Bool { isPresented || pending != nil || destination != nil }
 
     public init() {}
 
-    public func setPresented(_ presented: Bool) {
-        isPresented = presented
-        if !presented, let pending {
+    public func setPresented(_ presented: Bool, owner: UUID? = nil) {
+        let owner = owner ?? defaultOwner
+        if presented { owners.insert(owner) }
+        else if owners.remove(owner) == nil { return }
+        isPresented = !owners.isEmpty
+        if !isPresented, let pending {
             self.pending = nil
             destination = pending
         }
@@ -42,6 +101,7 @@ public final class PlayerMenuPresentation {
 
     public func reset() {
         generation &+= 1
+        owners.removeAll()
         pending = nil
         destination = nil
         isPresented = false
@@ -85,26 +145,35 @@ public enum PlayerMoreMenu {
     public static let speedPresets: [Double] = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
     public static func hasOptions(_ model: PlayerControlsModel, availability: PlayerMoreMenuAvailability) -> Bool {
-        !model.subtitleOptions.isEmpty || model.subtitleDownload.canSearch || !model.audioOptions.isEmpty
-            || model.engineCapabilities.contains(.dialogEnhance) || model.engineCapabilities.contains(.audioDelay)
-            || (availability.maximumSpeed != nil && model.engineCapabilities.contains(.playbackSpeed))
-            || (availability.video && model.engineCapabilities.contains(.videoZoom))
-            || availability.quality || availability.versions || availability.multiview
+        !sections(model, availability: availability).isEmpty
+    }
+
+    public static func sections(_ model: PlayerControlsModel, availability: PlayerMoreMenuAvailability) -> [PlayerMenuSection] {
+        var sections: [PlayerMenuSection] = []
+        if !model.subtitleOptions.isEmpty || model.subtitleDownload.canSearch { sections.append(.subtitles) }
+        if !model.audioOptions.isEmpty || model.engineCapabilities.contains(.dialogEnhance)
+            || model.engineCapabilities.contains(.audioDelay) { sections.append(.audio) }
+        if availability.maximumSpeed != nil, model.engineCapabilities.contains(.playbackSpeed) { sections.append(.speed) }
+        if availability.video, model.engineCapabilities.contains(.videoZoom) { sections.append(.video) }
+        if availability.quality { sections.append(.quality) }
+        if availability.versions { sections.append(.versions) }
+        if availability.multiview { sections.append(.multiview) }
+        return sections
     }
 
     public static func make(
         model: PlayerControlsModel, availability: PlayerMoreMenuAvailability,
-        locale: Locale = .current, actions: PlayerMoreMenuActions
+        locale: Locale = .current, section: PlayerMenuSection? = nil, actions: PlayerMoreMenuActions
     ) -> UIMenu {
         func localized(_ resource: LocalizedStringResource) -> String {
             var resource = resource
             resource.locale = locale
             return String(localized: resource) // l10n:content - native menu boundary.
         }
-        func destination(_ title: LocalizedStringResource, icon: String, _ value: PlayerMenuDestination) -> UIAction {
-            UIAction(title: localized(title), image: UIImage(systemName: icon)) { _ in actions.request(value) }
+        func destination(_ title: LocalizedStringResource, _ value: PlayerMenuDestination) -> UIAction {
+            UIAction(title: localized(title)) { _ in actions.request(value) }
         }
-        var items: [UIMenuElement] = []
+        var entries: [PlayerMenuSection: UIMenuElement] = [:]
         if !model.subtitleOptions.isEmpty || model.subtitleDownload.canSearch {
             let tracks = model.subtitleOptions.map { option in
                 UIAction(title: option.nativeTitle, state: option.isSelected ? .on : .off) { _ in
@@ -117,14 +186,14 @@ public enum PlayerMoreMenu {
             }
             var more: [UIMenuElement] = []
             if model.subtitleDownload.canSearch {
-                more.append(destination("Search & Download…", icon: "magnifyingglass", .subtitleSearch))
+                more.append(destination("Search & Download…", .subtitleSearch))
             }
             if (model.subtitleStyleAdjustable && model.secondarySubtitleImagePrimaryFormat == nil)
                 || model.subtitleDelayAdjustable || !model.secondarySubtitleOptions.isEmpty {
-                more.append(destination("Advanced…", icon: "slider.horizontal.3", .subtitleAdvanced))
+                more.append(destination("Advanced…", .subtitleAdvanced))
             }
             if !more.isEmpty { subtitles.append(UIMenu(options: .displayInline, children: more)) }
-            items.append(UIMenu(title: localized("Subtitles"), image: UIImage(systemName: "captions.bubble"), children: subtitles))
+            entries[.subtitles] = UIMenu(title: localized(PlayerMenuSection.subtitles.title), children: subtitles)
         }
         if !model.audioOptions.isEmpty || model.engineCapabilities.contains(.dialogEnhance)
             || model.engineCapabilities.contains(.audioDelay) {
@@ -136,35 +205,39 @@ public enum PlayerMoreMenu {
             var audio = menu.children
             if model.engineCapabilities.contains(.audioDelay) {
                 audio.append(UIMenu(options: .displayInline, children: [
-                    destination("Audio Sync…", icon: "arrow.left.and.right", .audioSync)
+                    destination("Audio Sync…", .audioSync)
                 ]))
             }
-            items.append(UIMenu(title: menu.title, image: UIImage(systemName: "speaker.wave.2"), children: audio))
+            entries[.audio] = UIMenu(title: menu.title, children: audio)
         }
         if let maximum = availability.maximumSpeed, model.engineCapabilities.contains(.playbackSpeed) {
-            var speeds: [UIMenuElement] = speedPresets.filter { $0 <= maximum }.map { speed in
+            let speeds = speedPresets.filter { $0 <= maximum }.map { speed in
                 let title = speed.formatted(.number.locale(locale).precision(.fractionLength(0...2))) + "×" // l10n:content - numeric rate.
                 return UIAction(title: title, state: abs(model.playbackSpeed - speed) < 0.001 ? .on : .off) { _ in
                     actions.setSpeed(speed)
                 }
             }
-            let custom = destination("Custom…", icon: "slider.horizontal.3", .speed)
-            custom.state = speedPresets.contains { $0 <= maximum && abs(model.playbackSpeed - $0) < 0.001 } ? .off : .on
-            speeds.append(custom)
-            items.append(UIMenu(title: localized("Playback Speed"), image: UIImage(systemName: "speedometer"),
-                                options: .singleSelection, children: speeds))
+            entries[.speed] = UIMenu(title: localized(PlayerMenuSection.speed.title), children: [
+                UIMenu(options: [.displayInline, .singleSelection], children: speeds),
+                UIMenu(options: .displayInline, children: [destination("Custom…", .speed)])
+            ])
         }
-        var secondary: [UIMenuElement] = []
         if availability.video, model.engineCapabilities.contains(.videoZoom) {
             let zoom = PlayerZoomMenu.make(model: availability.videoModel ?? model.videoZoom, locale: locale, isCurrent: actions.isCurrent) {
                 actions.request(.zoom)
             }
-            secondary.append(UIMenu(title: localized("Video"), image: zoom.image,
-                                    options: zoom.options, children: zoom.children))
+            entries[.video] = UIMenu(title: localized(PlayerMenuSection.video.title),
+                                    options: zoom.options, children: zoom.children)
         }
-        if availability.quality { secondary.append(destination("Quality", icon: "slider.horizontal.3", .quality)) }
-        if availability.versions { secondary.append(destination("Version", icon: "rectangle.stack", .versions)) }
-        if availability.multiview { secondary.append(destination("Multiview", icon: "rectangle.split.2x2", .multiview)) }
+        if availability.quality { entries[.quality] = destination(PlayerMenuSection.quality.title, .quality) }
+        if availability.versions { entries[.versions] = destination(PlayerMenuSection.versions.title, .versions) }
+        if availability.multiview { entries[.multiview] = destination(PlayerMenuSection.multiview.title, .multiview) }
+        if let section {
+            if let menu = entries[section] as? UIMenu { return menu }
+            return UIMenu(children: entries[section].map { [$0] } ?? [])
+        }
+        var items = [PlayerMenuSection.subtitles, .audio, .speed].compactMap { entries[$0] }
+        let secondary = [PlayerMenuSection.video, .quality, .versions, .multiview].compactMap { entries[$0] }
         if !secondary.isEmpty { items.append(UIMenu(options: .displayInline, children: secondary)) }
         return UIMenu(children: items)
     }
@@ -174,43 +247,104 @@ public struct PlayerMoreMenuButton: View {
     public let model: PlayerControlsModel
     public let availability: PlayerMoreMenuAvailability
     public let presentation: PlayerMenuPresentation
+    public let layout: PlayerMenuLayout
     public var accessibilityIdentifier: String
     public let actions: PlayerMoreMenuActions
-    @Environment(\.locale) private var locale
 
     public init(
         model: PlayerControlsModel, availability: PlayerMoreMenuAvailability,
-        presentation: PlayerMenuPresentation, accessibilityIdentifier: String = "player-playback-options",
+        presentation: PlayerMenuPresentation, layout: PlayerMenuLayout = .consolidated,
+        accessibilityIdentifier: String = "player-playback-options",
         actions: PlayerMoreMenuActions
     ) {
         self.model = model
         self.availability = availability
         self.presentation = presentation
+        self.layout = layout
         self.accessibilityIdentifier = accessibilityIdentifier
         self.actions = actions
     }
 
     public var body: some View {
-        if PlayerMoreMenu.hasOptions(model, availability: availability) {
-            PlayerOptionsMenuButton(
-                accessibilityIdentifier: accessibilityIdentifier,
-                makeMenu: {
-                    let generation = presentation.generation
-                    let isCurrent = { presentation.generation == generation && actions.isCurrent() }
-                    var guarded = PlayerMoreMenuActions()
-                    guarded.isCurrent = isCurrent
-                    guarded.selectAudio = { if isCurrent() { actions.selectAudio($0) } }
-                    guarded.selectSubtitle = { if isCurrent() { actions.selectSubtitle($0) } }
-                    guarded.setDialogueEnhancement = { if isCurrent() { actions.setDialogueEnhancement($0) } }
-                    guarded.setSpeed = { if isCurrent() { actions.setSpeed($0) } }
-                    guarded.request = { if isCurrent() { presentation.request($0, generation: generation) } }
-                    return PlayerMoreMenu.make(model: model, availability: availability, locale: locale, actions: guarded)
-                },
-                onPresentationChange: { presentation.setPresented($0) }
-            )
-            .frame(width: 44, height: 44)
-            .id(presentation.generation)
+        let sections = PlayerMoreMenu.sections(model, availability: availability)
+        HStack(spacing: 0) {
+            if !sections.isEmpty {
+                if layout == .consolidated {
+                    PlayerNativeSectionMenu(
+                        model: model, availability: availability, presentation: presentation, section: nil,
+                        identifier: accessibilityIdentifier, actions: actions
+                    )
+                } else {
+                    ForEach(sections) { section in
+                        if let destination = section.destination {
+                            Button {
+                                guard actions.isCurrent() else { return }
+                                presentation.request(destination, generation: presentation.generation)
+                            } label: {
+                                Image(systemName: section.symbol)
+                                    .font(.title3)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(PlayerGlassCircleButtonStyle(diameter: 44))
+                            .accessibilityLabel(Text(section.title))
+                            .accessibilityIdentifier(identifier(section))
+                        } else {
+                            PlayerNativeSectionMenu(
+                                model: model, availability: availability, presentation: presentation, section: section,
+                                identifier: identifier(section), actions: actions
+                            )
+                        }
+                    }
+                }
+            }
         }
+        .fixedSize(horizontal: true, vertical: false)
+        .onChange(of: layout) { presentation.reset() }
+        .onChange(of: sections) { presentation.reset() }
+    }
+
+    private func identifier(_ section: PlayerMenuSection) -> String {
+        let suffix = "playback-options"
+        if accessibilityIdentifier.hasSuffix(suffix) {
+            return String(accessibilityIdentifier.dropLast(suffix.count)) + section.rawValue
+        }
+        return accessibilityIdentifier + "-" + section.rawValue
+    }
+}
+
+private struct PlayerNativeSectionMenu: View {
+    let model: PlayerControlsModel
+    let availability: PlayerMoreMenuAvailability
+    let presentation: PlayerMenuPresentation
+    let section: PlayerMenuSection?
+    let identifier: String
+    let actions: PlayerMoreMenuActions
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        PlayerOptionsMenuButton(
+            kind: section?.kind ?? .playbackOptions,
+            accessibilityIdentifier: identifier,
+            makeMenu: {
+                let generation = presentation.generation
+                let isCurrent = { presentation.generation == generation && actions.isCurrent() }
+                guard isCurrent() else { return nil }
+                var guarded = PlayerMoreMenuActions()
+                guarded.isCurrent = isCurrent
+                guarded.selectAudio = { if isCurrent() { actions.selectAudio($0) } }
+                guarded.selectSubtitle = { if isCurrent() { actions.selectSubtitle($0) } }
+                guarded.setDialogueEnhancement = { if isCurrent() { actions.setDialogueEnhancement($0) } }
+                guarded.setSpeed = { if isCurrent() { actions.setSpeed($0) } }
+                guarded.request = { if isCurrent() { presentation.request($0, generation: generation) } }
+                return PlayerMoreMenu.make(
+                    model: model, availability: availability, locale: locale, section: section, actions: guarded
+                )
+            },
+            onPresentationChange: { owner, presented in presentation.setPresented(presented, owner: owner) }
+        )
+        .frame(width: 44, height: 44)
+        .id(presentation.generation)
     }
 }
 #endif
