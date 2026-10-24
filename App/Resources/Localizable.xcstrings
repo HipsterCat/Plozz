@@ -138604,6 +138604,7 @@
       }
     },
     "Anonymous crash, freeze, and IPTV setup failure reports. No servers, logins, credentials, or viewing activity." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -152717,6 +152718,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "自動頻道列表"
+          }
+        }
+      }
+    },
+    "Automatic reports exclude logins, server addresses, and media titles." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لا تتضمن التقارير التلقائية بيانات تسجيل الدخول أو عناوين الخوادم أو عناوين الوسائط."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматичните доклади не включват данни за вход, адреси на сървъри или заглавия на медийно съдържание."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Els informes automàtics no inclouen dades d'inici de sessió, adreces de servidors ni títols de contingut multimèdia."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatická hlášení neobsahují přihlašovací údaje, adresy serverů ani názvy médií."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatiske rapporter indeholder ikke loginoplysninger, serveradresser eller medietitler."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatische Berichte enthalten keine Anmeldedaten, Serveradressen oder Medientitel."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Οι αυτόματες αναφορές δεν περιλαμβάνουν στοιχεία σύνδεσης, διευθύνσεις διακομιστών ή τίτλους πολυμέσων."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Los informes automáticos no incluyen credenciales de acceso, direcciones de servidores ni títulos de contenido multimedia."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های خودکار شامل اطلاعات ورود، نشانی سرورها یا عنوان رسانه‌ها نیستند."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automaattiset raportit eivät sisällä kirjautumistietoja, palvelinosoitteita tai mediasisällön nimiä."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Les rapports automatiques ne contiennent ni identifiants de connexion, ni adresses de serveurs, ni titres des médias."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "דוחות אוטומטיים אינם כוללים פרטי התחברות, כתובות שרתים או שמות של תכני מדיה."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "स्वचालित रिपोर्ट में लॉगिन क्रेडेंशियल, सर्वर के पते और मीडिया के शीर्षक शामिल नहीं होते।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatska izvješća ne uključuju podatke za prijavu, adrese poslužitelja ni naslove medijskog sadržaja."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Az automatikus jelentések nem tartalmazzák a bejelentkezési adatokat, a szervercímeket vagy a médiatartalmak címét."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Laporan otomatis tidak menyertakan kredensial login, alamat server, atau judul media."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "I report automatici non includono credenziali di accesso, indirizzi dei server o titoli dei contenuti multimediali."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "自動レポートには、ログイン認証情報、サーバーアドレス、メディアのタイトルは含まれません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "자동 보고서에는 로그인 인증 정보, 서버 주소, 미디어 제목이 포함되지 않습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Laporan automatik tidak menyertakan maklumat kelayakan log masuk, alamat pelayan atau tajuk media."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatiske rapporter inneholder ikke påloggingsinformasjon, serveradresser eller medietitler."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatische rapporten bevatten geen inloggegevens, serveradressen of mediatitels."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatyczne raporty nie zawierają danych logowania, adresów serwerów ani tytułów materiałów multimedialnych."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Os relatórios automáticos não incluem credenciais de login, endereços de servidores nem títulos de mídia."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rapoartele automate nu includ date de autentificare, adrese de servere sau titluri de conținut media."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматические отчёты не содержат учётных данных для входа, адресов серверов и названий медиаматериалов."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatické hlásenia neobsahujú prihlasovacie údaje, adresy serverov ani názvy médií."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Samodejna poročila ne vključujejo prijavnih podatkov, naslovov strežnikov ali naslovov medijskih vsebin."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatski izveštaji ne sadrže podatke za prijavu, adrese servera ni nazive medijskih sadržaja."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatiska rapporter innehåller inte inloggningsuppgifter, serveradresser eller medietitlar."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "รายงานอัตโนมัติจะไม่รวมข้อมูลรับรองการเข้าสู่ระบบ ที่อยู่เซิร์ฟเวอร์ และชื่อสื่อ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otomatik raporlar oturum açma bilgilerini, sunucu adreslerini ve medya adlarını içermez."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматичні звіти не містять облікових даних для входу, адрес серверів і назв медіавмісту."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Báo cáo tự động không bao gồm thông tin đăng nhập, địa chỉ máy chủ và tên nội dung đa phương tiện."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "自动报告不包含登录凭据、服务器地址或媒体标题。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "自動報告不含登入憑證、伺服器位址或媒體標題。"
           }
         }
       }
@@ -182577,6 +182798,7 @@
       }
     },
     "Change anytime in Settings > Help & Diagnostics." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -203705,6 +203927,7 @@
       }
     },
     "Choose a source to start watching." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -226726,6 +226949,226 @@
         }
       }
     },
+    "Connect channels you are authorized to access. Plozz does not provide TV content or channel subscriptions." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "اربط القنوات التي يُسمح لك بالوصول إليها. لا يوفر Plozz محتوى تلفزيونيًا أو اشتراكات في القنوات التلفزيونية."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Свържете канали, до които имате право на достъп. Plozz не предоставя телевизионно съдържание или абонаменти за телевизионни канали."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Connecta canals als quals tinguis autorització per accedir. Plozz no proporciona contingut televisiu ni subscripcions a canals de televisió."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Připojte kanály, ke kterým máte oprávnění k přístupu. Plozz neposkytuje televizní obsah ani předplatné televizních kanálů."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tilslut kanaler, du har ret til at få adgang til. Plozz leverer ikke tv-indhold eller abonnementer på tv-kanaler."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Binde Sender ein, auf die du zugreifen darfst. Plozz stellt keine TV-Inhalte oder Abonnements für Fernsehsender bereit."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Συνδέστε κανάλια στα οποία έχετε δικαίωμα πρόσβασης. Το Plozz δεν παρέχει τηλεοπτικό περιεχόμενο ή συνδρομές σε τηλεοπτικά κανάλια."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Conecta canales a los que tengas autorización para acceder. Plozz no proporciona contenido de televisión ni suscripciones a canales de televisión."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "کانال‌هایی را متصل کنید که مجاز به دسترسی به آن‌ها هستید. Plozz محتوای تلویزیونی یا اشتراک کانال‌های تلویزیونی ارائه نمی‌کند."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Yhdistä kanavia, joiden käyttöön sinulla on oikeus. Plozz ei tarjoa TV-sisältöä eikä TV-kanavatilauksia."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Connectez des chaînes auxquelles vous avez le droit d’accéder. Plozz ne fournit ni contenu TV ni abonnements à des chaînes de télévision."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "יש לחבר ערוצים שיש לך הרשאה לגשת אליהם. Plozz אינו מספק תוכני טלוויזיה או מינויים לערוצי טלוויזיה."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "वे चैनल कनेक्ट करें जिन्हें देखने की आपको अनुमति है। Plozz टीवी सामग्री या टीवी चैनलों की सदस्यता उपलब्ध नहीं कराता।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Povežite kanale kojima imate pravo pristupa. Plozz ne nudi TV sadržaj ni pretplate na televizijske usluge."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Olyan csatornákat csatlakoztasson, amelyekhez jogosult hozzáférni. A Plozz nem biztosít tévétartalmakat vagy televíziós előfizetéseket."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hubungkan saluran yang berhak Anda akses. Plozz tidak menyediakan konten TV atau langganan layanan televisi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Collega i canali a cui hai diritto di accedere. Plozz non fornisce contenuti TV né abbonamenti a servizi televisivi."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "視聴する権限のあるチャンネルを接続してください。Plozzはテレビコンテンツやテレビサービスのサブスクリプションを提供しません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "접근 권한이 있는 채널을 연결하세요. Plozz는 TV 콘텐츠나 TV 서비스 구독을 제공하지 않습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sambungkan saluran yang anda dibenarkan akses. Plozz tidak menyediakan kandungan TV atau langganan perkhidmatan TV."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koble til kanaler du har rett til å se. Plozz tilbyr ikke TV-innhold eller abonnementer på TV-tjenester."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koppel kanalen waarvoor je toegangsrechten hebt. Plozz biedt geen tv-content of abonnementen op tv-diensten aan."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podłącz kanały, do których masz prawo dostępu. Plozz nie udostępnia treści telewizyjnych ani abonamentów na usługi telewizyjne."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Conecte canais que você tem autorização para acessar. O Plozz não fornece conteúdo de TV nem assinaturas de serviços de TV."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Conectează canale pe care ai dreptul să le accesezi. Plozz nu oferă conținut TV sau abonamente la servicii TV."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Подключайте каналы, к которым у вас есть право доступа. Plozz не предоставляет телеконтент или подписки на телевизионные сервисы."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pripojte kanály, ku ktorým máte oprávnený prístup. Plozz neposkytuje televízny obsah ani predplatné televíznych služieb."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Povežite kanale, do katerih imate pravico dostopati. Plozz ne zagotavlja televizijskih vsebin ali naročnin na televizijske storitve."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Povežite kanale kojima imate pravo da pristupate. Plozz ne obezbeđuje TV sadržaj niti pretplate na TV usluge."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Anslut kanaler som du har rätt att använda. Plozz tillhandahåller inte tv-innehåll eller abonnemang på tv-tjänster."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เชื่อมต่อช่องที่คุณมีสิทธิ์เข้าถึง Plozz ไม่ได้ให้บริการเนื้อหาทีวีหรือการสมัครสมาชิกช่องทีวี"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Erişim yetkiniz olan kanalları bağlayın. Plozz, TV içeriği veya TV kanalı abonelikleri sağlamaz."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Підключіть канали, до яких ви маєте право доступу. Plozz не надає телевізійного контенту чи передплат на телеканали."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kết nối các kênh mà bạn có quyền truy cập. Plozz không cung cấp nội dung TV hoặc gói thuê bao kênh truyền hình."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "请连接您有权访问的频道。Plozz 不提供电视内容或电视频道订阅服务。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "請連接您有權存取的頻道。Plozz 不提供電視內容或電視頻道訂閱服務。"
+          }
+        }
+      }
+    },
     "Connect one Overseerr or Jellyseerr server for the household. Each Plozz profile can make requests as a different user." : {
       "localizations" : {
         "ar" : {
@@ -242811,6 +243254,7 @@
       }
     },
     "Couldn't send — crash reporting isn't active. Turn on Share Crash Reports below and try again." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -243026,6 +243470,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "無法傳送 — 當機回報尚未啟用。請於下方開啟「分享當機報告」後再試一次。"
+          }
+        }
+      }
+    },
+    "Couldn't submit diagnostics. Check that crash reporting is enabled and try again." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تعذّر تقديم بيانات التشخيص. تأكد من تفعيل الإبلاغ عن الأعطال وحاول مجددًا."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Диагностичните данни не можаха да бъдат предадени. Проверете дали докладването на сривове е включено и опитайте отново."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No s'han pogut trametre les dades de diagnòstic. Comprova que els informes de fallades estiguin activats i torna-ho a provar."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostické údaje se nepodařilo předat. Zkontrolujte, zda je zapnuté hlášení pádů, a zkuste to znovu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostikdata kunne ikke indsendes. Kontrollér, at rapportering af nedbrud er slået til, og prøv igen."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnosedaten konnten nicht zum Versand übergeben werden. Prüfe, ob das Teilen von Absturzberichten aktiviert ist, und versuche es erneut."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Δεν ήταν δυνατή η υποβολή διαγνωστικών. Ελέγξτε ότι η αναφορά καταρρεύσεων είναι ενεργοποιημένη και δοκιμάστε ξανά."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No se pudieron enviar los datos de diagnóstico. Comprueba que los informes de errores estén activados e inténtalo de nuevo."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ثبت اطلاعات تشخیصی برای ارسال ممکن نشد. مطمئن شوید گزارش‌دهی خرابی فعال است و دوباره تلاش کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostiikkatietojen lähettäminen ei onnistunut. Tarkista, että kaatumisraportointi on käytössä, ja yritä uudelleen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Impossible de transmettre les diagnostics. Vérifiez que le partage des rapports de plantage est activé, puis réessayez."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "לא ניתן היה להעביר את נתוני האבחון לשליחה. יש לוודא שדיווח על קריסות מופעל ולנסות שוב."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "डायग्नोस्टिक्स सबमिट नहीं हो सके। जाँचें कि क्रैश रिपोर्टिंग चालू है और फिर से कोशिश करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slanje dijagnostičkih podataka nije uspjelo. Provjerite je li prijavljivanje rušenja omogućeno pa pokušajte ponovno."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nem sikerült beküldeni a diagnosztikai adatokat. Ellenőrizze, hogy engedélyezve van-e az összeomlási jelentések küldése, majd próbálja újra."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tidak dapat mengirim data diagnostik. Pastikan pelaporan kerusakan diaktifkan, lalu coba lagi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Impossibile inoltrare i dati diagnostici. Verifica che la segnalazione dei crash sia attiva e riprova."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "診断情報を送信できませんでした。クラッシュレポートの共有が有効になっていることを確認し、もう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "진단 정보를 제출하지 못했습니다. 충돌 보고가 켜져 있는지 확인한 후 다시 시도하세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostik tidak dapat diserahkan. Pastikan pelaporan ranap dihidupkan dan cuba lagi."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kunne ikke sende inn diagnostikk. Kontroller at krasjrapportering er slått på, og prøv igjen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Het indienen van diagnostische gegevens is mislukt. Controleer of crashrapportage is ingeschakeld en probeer het opnieuw."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nie udało się przekazać danych diagnostycznych. Sprawdź, czy raportowanie awarii jest włączone, i spróbuj ponownie."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Não foi possível encaminhar os dados de diagnóstico. Verifique se o envio de relatórios de falha está ativado e tente novamente."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nu s-au putut trimite datele de diagnosticare. Verifică dacă raportarea blocărilor este activată și încearcă din nou."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Не удалось передать диагностические данные для отправки. Убедитесь, что отправка отчётов о сбоях включена, и попробуйте снова."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostické údaje sa nepodarilo odovzdať na odoslanie. Skontrolujte, či je zapnuté hlásenie pádov, a skúste to znova."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostičnih podatkov ni bilo mogoče oddati za pošiljanje. Preverite, ali je poročanje o zrušitvah vklopljeno, in poskusite znova."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dijagnostički podaci nisu mogli da se predaju za slanje. Proverite da li je prijavljivanje rušenja uključeno i pokušajte ponovo."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Det gick inte att skicka diagnostikdata. Kontrollera att kraschrapportering är aktiverad och försök igen."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งข้อมูลการวินิจฉัยไม่สำเร็จ ตรวจสอบว่าเปิดการรายงานข้อขัดข้องไว้ แล้วลองอีกครั้ง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tanılama verileri gönderilemedi. Çökme raporlamasının açık olduğundan emin olun ve tekrar deneyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Не вдалося надіслати діагностичні дані. Переконайтеся, що звітування про збої ввімкнено, і спробуйте ще раз."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Không thể gửi dữ liệu chẩn đoán. Hãy kiểm tra xem tính năng báo cáo sự cố đã được bật chưa rồi thử lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "无法提交诊断信息。请确认已启用崩溃报告，然后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "無法提交診斷資訊。請確認已啟用當機報告，然後再試一次。"
           }
         }
       }
@@ -273016,6 +273680,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "診斷"
+          }
+        }
+      }
+    },
+    "Diagnostics submitted for delivery. Thank you." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "قُدِّمت بيانات التشخيص للإرسال. شكرًا لك."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Диагностичните данни са предадени за изпращане. Благодарим ви."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Les dades de diagnòstic s'han lliurat per enviar-les. Gràcies."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostické údaje byly předány k odeslání. Děkujeme."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostikdata er indsendt til videre afsendelse. Tak."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnosedaten wurden zum Versand übergeben. Vielen Dank."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Τα διαγνωστικά υποβλήθηκαν για αποστολή. Ευχαριστούμε."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Datos de diagnóstico remitidos para su envío. Gracias."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "اطلاعات تشخیصی برای ارسال ثبت شد. سپاسگزاریم."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostiikkatiedot on välitetty lähetettäviksi. Kiitos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostics transmis pour envoi. Merci."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "נתוני האבחון הועברו לשליחה. תודה."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "डायग्नोस्टिक्स भेजने के लिए स्वीकार कर लिए गए हैं। धन्यवाद।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dijagnostički podaci prihvaćeni su za slanje. Hvala."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A diagnosztikai adatokat a rendszer elfogadta továbbításra. Köszönjük."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Data diagnostik diterima untuk dikirim. Terima kasih."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "I dati diagnostici sono stati accettati per l'invio. Grazie."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "診断情報の送信を受け付けました。ありがとうございます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "진단 정보가 전송을 위해 접수되었습니다. 감사합니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostik telah diserahkan untuk dihantar. Terima kasih."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostikken er sendt inn for videre levering. Takk."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostische gegevens zijn ingediend voor verzending. Bedankt."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dane diagnostyczne przekazano do wysłania. Dziękujemy."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Os dados de diagnóstico foram encaminhados para envio. Obrigado."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Datele de diagnosticare au fost trimise spre livrare. Îți mulțumim."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Диагностические данные переданы для отправки. Спасибо."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostické údaje boli odovzdané na odoslanie. Ďakujeme."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostični podatki so bili oddani za pošiljanje. Hvala."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dijagnostički podaci su predati za slanje. Hvala."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostikdata har lämnats in för att skickas. Tack."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งต่อข้อมูลการวินิจฉัยเพื่อจัดส่งแล้ว ขอบคุณ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tanılama verileri iletilmek üzere gönderildi. Teşekkürler."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Діагностичні дані передано для доставки. Дякуємо."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dữ liệu chẩn đoán đã được gửi để chuyển tiếp. Cảm ơn bạn."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "诊断信息已提交，待发送。谢谢。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "診斷資訊已提交，待傳送。謝謝。"
           }
         }
       }
@@ -578697,6 +579581,446 @@
         }
       }
     },
+    "Privacy" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "الخصوصية"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Поверителност"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privadesa"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Soukromí"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privatliv"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Datenschutz"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Απόρρητο"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privacidad"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "حریم خصوصی"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tietosuoja"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Confidentialité"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "פרטיות"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "गोपनीयता"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privatnost"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Adatvédelem"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privasi"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privacy"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "プライバシー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "개인정보 보호"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privasi"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Personvern"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privacy"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prywatność"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privacidade"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Confidențialitate"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Конфиденциальность"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Súkromie"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zasebnost"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privatnost"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Integritet"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ความเป็นส่วนตัว"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gizlilik"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Конфіденційність"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Quyền riêng tư"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "隐私"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "隱私權"
+          }
+        }
+      }
+    },
+    "Privacy Policy" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "سياسة الخصوصية"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Политика за поверителност"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Política de privadesa"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zásady ochrany osobních údajů"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privatlivspolitik"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Datenschutzerklärung"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Πολιτική απορρήτου"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Política de privacidad"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "سیاست حفظ حریم خصوصی"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tietosuojakäytäntö"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Politique de confidentialité"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "מדיניות פרטיות"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "गोपनीयता नीति"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pravila privatnosti"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Adatvédelmi szabályzat"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kebijakan Privasi"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Informativa sulla privacy"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "プライバシーポリシー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "개인정보 처리방침"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dasar Privasi"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Personvernerklæring"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Privacybeleid"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Polityka prywatności"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Política de privacidade"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Politica de confidențialitate"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Политика конфиденциальности"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zásady ochrany osobných údajov"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pravilnik o zasebnosti"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Politika privatnosti"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Integritetspolicy"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "นโยบายความเป็นส่วนตัว"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gizlilik politikası"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Політика конфіденційності"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chính sách quyền riêng tư"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "隐私政策"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "隱私權政策"
+          }
+        }
+      }
+    },
     "Processing" : {
       "comment" : "Playback diagnostics label for the engine's actual audio conversion or stream-copy pipeline.",
       "localizations" : {
@@ -594128,6 +595452,446 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "最近活動"
+          }
+        }
+      }
+    },
+    "Recent app logs are stored on this Apple TV. You can choose to share them when reporting a problem." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تُخزَّن سجلات التطبيق الحديثة على جهاز Apple TV هذا. يمكنك اختيار مشاركتها عند الإبلاغ عن مشكلة."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Последните записи в журнала на приложението се съхраняват на това устройство Apple TV. Можете да изберете да ги споделите, когато докладвате проблем."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Els registres recents de l'app es desen en aquest Apple TV. Pots decidir compartir-los quan informis d'un problema."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedávné protokoly aplikace jsou uložené na tomto zařízení Apple TV. Při hlášení problému se můžete rozhodnout je sdílet."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De seneste applogfiler gemmes på dette Apple TV. Du kan vælge at dele dem, når du rapporterer et problem."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Die letzten App-Protokolle sind auf diesem Apple TV gespeichert. Du kannst sie teilen, wenn du ein Problem meldest."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Τα πρόσφατα αρχεία καταγραφής της εφαρμογής αποθηκεύονται σε αυτό το Apple TV. Μπορείτε να επιλέξετε να τα κοινοποιήσετε κατά την αναφορά ενός προβλήματος."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Los registros recientes de la app se guardan en este Apple TV. Puedes elegir compartirlos al informar de un problema."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های اخیر برنامه در این Apple TV ذخیره می‌شوند. هنگام گزارش مشکل می‌توانید به دلخواه آن‌ها را به اشتراک بگذارید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Viimeisimmät sovelluslokit tallennetaan tähän Apple TV:hen. Voit halutessasi jakaa ne ilmoittaessasi ongelmasta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Les journaux récents de l’app sont stockés sur cette Apple TV. Vous pouvez choisir de les partager lorsque vous signalez un problème."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "יומני האפליקציה האחרונים נשמרים ב-Apple TV זה. ניתן לבחור לשתף אותם בעת דיווח על בעיה."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "इस Apple TV पर ऐप के हाल के लॉग सहेजे गए हैं। समस्या की रिपोर्ट करते समय आप इन्हें शेयर करने का विकल्प चुन सकते हैं।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedavni zapisi aplikacije pohranjeni su na ovom uređaju Apple TV. Možete odabrati želite li ih podijeliti pri prijavi problema."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Az alkalmazás legutóbbi naplóit ez az Apple TV tárolja. Hibabejelentéskor eldöntheti, hogy megosztja-e őket."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Log aplikasi terbaru disimpan di Apple TV ini. Anda dapat memilih untuk membagikannya saat melaporkan masalah."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "I log recenti dell'app sono archiviati su questa Apple TV. Puoi scegliere di condividerli quando segnali un problema."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "最近のアプリログはこのApple TVに保存されています。問題を報告する際に、共有するかどうかを選べます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "최근 앱 로그가 이 Apple TV에 저장되어 있습니다. 문제를 신고할 때 공유 여부를 선택할 수 있습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Log aplikasi terkini disimpan pada Apple TV ini. Anda boleh memilih untuk berkongsinya semasa melaporkan masalah."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nylige applogger lagres på denne Apple TV-en. Du kan velge å dele dem når du rapporterer et problem."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Recente applogboeken worden op deze Apple TV opgeslagen. Je kunt ervoor kiezen ze te delen wanneer je een probleem meldt."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ostatnie dzienniki aplikacji są przechowywane na tym Apple TV. Możesz je udostępnić podczas zgłaszania problemu."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Os logs recentes do app são armazenados nesta Apple TV. Você pode optar por compartilhá-los ao relatar um problema."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jurnalele recente ale aplicației sunt stocate pe acest Apple TV. Poți alege să le trimiți când raportezi o problemă."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Последние журналы приложения хранятся на этом Apple TV. При сообщении о проблеме вы можете отправить их по желанию."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedávne denníky aplikácie sú uložené na tomto Apple TV. Pri hlásení problému sa môžete rozhodnúť, či ich budete zdieľať."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedavni dnevniki aplikacije so shranjeni na tej napravi Apple TV. Pri prijavi težave se lahko odločite, ali jih želite deliti."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedavni dnevnici aplikacije čuvaju se na ovom Apple TV uređaju. Možete da izaberete da li ćete ih podeliti prilikom prijavljivanja problema."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De senaste apploggarna lagras på denna Apple TV. Du kan välja att dela dem när du rapporterar ett problem."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "บันทึกล่าสุดของแอปจัดเก็บอยู่บน Apple TV เครื่องนี้ คุณเลือกแชร์บันทึกเหล่านี้ได้เมื่อรายงานปัญหา"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Son uygulama günlükleri bu Apple TV’de saklanır. Sorun bildirirken bunları paylaşmayı seçebilirsiniz."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Останні журнали роботи застосунку зберігаються на цьому Apple TV. Ви можете за бажанням поділитися ними, коли повідомляєте про проблему."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nhật ký hoạt động gần đây của ứng dụng được lưu trên Apple TV này. Bạn có thể chọn chia sẻ nhật ký khi báo cáo sự cố."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "近期的应用日志存储在这台 Apple TV 上。报告问题时，您可以选择分享这些日志。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "最近的應用程式記錄儲存在這台 Apple TV 上。回報問題時，您可以選擇分享這些記錄。"
+          }
+        }
+      }
+    },
+    "Recent app logs stored on this Apple TV, newest first. You can choose to share logs and additional technical diagnostics when reporting a problem." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "سجلات التطبيق الحديثة المخزَّنة على جهاز Apple TV هذا، من الأحدث إلى الأقدم. يمكنك اختيار مشاركة السجلات وبيانات تشخيص تقنية إضافية عند الإبلاغ عن مشكلة."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Последните записи в журнала на приложението, съхранени на това устройство Apple TV, подредени от най-новите към най-старите. Можете да изберете да споделите записите и допълнителни технически диагностични данни, когато докладвате проблем."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Registres recents de l'app desats en aquest Apple TV, amb els més nous primer. Pots decidir compartir els registres i dades de diagnòstic tècnic addicionals quan informis d'un problema."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedávné protokoly aplikace uložené na tomto zařízení Apple TV, od nejnovějších. Při hlášení problému se můžete rozhodnout sdílet protokoly a další technické diagnostické údaje."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De seneste applogfiler gemt på dette Apple TV, med de nyeste først. Du kan vælge at dele logfiler og yderligere tekniske diagnostikdata, når du rapporterer et problem."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Die letzten auf diesem Apple TV gespeicherten App-Protokolle, die neuesten zuerst. Wenn du ein Problem meldest, kannst du Protokolle und zusätzliche technische Diagnosedaten teilen."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Πρόσφατα αρχεία καταγραφής της εφαρμογής που είναι αποθηκευμένα σε αυτό το Apple TV, με τα νεότερα πρώτα. Μπορείτε να επιλέξετε να κοινοποιήσετε αρχεία καταγραφής και πρόσθετα τεχνικά διαγνωστικά κατά την αναφορά ενός προβλήματος."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Registros recientes de la app guardados en este Apple TV, del más reciente al más antiguo. Puedes elegir compartir los registros y datos de diagnóstico técnico adicionales al informar de un problema."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های اخیر برنامه که در این Apple TV ذخیره شده‌اند، از جدیدترین به قدیمی‌ترین. هنگام گزارش مشکل می‌توانید به دلخواه گزارش‌ها و اطلاعات تشخیصی فنی بیشتری را به اشتراک بگذارید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tähän Apple TV:hen tallennetut viimeisimmät sovelluslokit, uusimmat ensin. Voit halutessasi jakaa lokit ja muita teknisiä diagnostiikkatietoja ilmoittaessasi ongelmasta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Journaux récents de l’app stockés sur cette Apple TV, les plus récents en premier. Vous pouvez choisir de partager les journaux et des diagnostics techniques supplémentaires lorsque vous signalez un problème."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "יומני האפליקציה האחרונים שנשמרו ב-Apple TV זה, מהחדש לישן. ניתן לבחור לשתף יומנים ונתוני אבחון טכני נוספים בעת דיווח על בעיה."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "इस Apple TV पर सहेजे गए ऐप के हाल के लॉग, सबसे नए पहले। समस्या की रिपोर्ट करते समय आप लॉग और अतिरिक्त तकनीकी डायग्नोस्टिक्स शेयर करने का विकल्प चुन सकते हैं।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedavni zapisi aplikacije pohranjeni na ovom uređaju Apple TV, od najnovijih prema starijima. Pri prijavi problema možete odabrati želite li podijeliti zapise i dodatne tehničke dijagnostičke podatke."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ezen az Apple TV-n tárolt legutóbbi alkalmazásnaplók, a legújabbakkal kezdve. Hibabejelentéskor eldöntheti, hogy megosztja-e a naplókat és a további technikai diagnosztikai adatokat."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Log aplikasi terbaru yang disimpan di Apple TV ini, diurutkan dari yang terbaru. Anda dapat memilih untuk membagikan log dan data diagnostik teknis tambahan saat melaporkan masalah."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Log recenti dell'app archiviati su questa Apple TV, dai più recenti ai meno recenti. Quando segnali un problema, puoi scegliere di condividere i log e ulteriori dati diagnostici tecnici."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このApple TVに保存された最近のアプリログを、新しい順に表示します。問題を報告する際に、ログや追加の技術的な診断情報を共有するかどうかを選べます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "이 Apple TV에 저장된 최근 앱 로그이며, 최신 로그부터 표시됩니다. 문제를 신고할 때 로그와 추가 기술 진단 정보의 공유 여부를 선택할 수 있습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Log aplikasi terkini yang disimpan pada Apple TV ini, dengan yang terbaru dipaparkan dahulu. Anda boleh memilih untuk berkongsi log dan diagnostik teknikal tambahan semasa melaporkan masalah."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nylige applogger lagret på denne Apple TV-en, med de nyeste først. Du kan velge å dele logger og ytterligere teknisk diagnostikk når du rapporterer et problem."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Recente applogboeken die op deze Apple TV zijn opgeslagen, met de nieuwste eerst. Je kunt ervoor kiezen logboeken en aanvullende technische diagnostische gegevens te delen wanneer je een probleem meldt."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ostatnie dzienniki aplikacji przechowywane na tym Apple TV, od najnowszych. Podczas zgłaszania problemu możesz udostępnić dzienniki oraz dodatkowe techniczne dane diagnostyczne."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Logs recentes do app armazenados nesta Apple TV, dos mais novos para os mais antigos. Você pode optar por compartilhar logs e dados adicionais de diagnóstico técnico ao relatar um problema."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jurnalele recente ale aplicației stocate pe acest Apple TV, de la cele mai noi la cele mai vechi. Poți alege să trimiți jurnalele și date tehnice suplimentare de diagnosticare când raportezi o problemă."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Последние журналы приложения, хранящиеся на этом Apple TV, от новых к старым. При сообщении о проблеме вы можете по желанию отправить журналы и дополнительные технические диагностические данные."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedávne denníky aplikácie uložené na tomto Apple TV, od najnovších po najstaršie. Pri hlásení problému sa môžete rozhodnúť, či budete zdieľať denníky a ďalšie technické diagnostické údaje."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedavni dnevniki aplikacije, shranjeni na tej napravi Apple TV, od najnovejših do najstarejših. Pri prijavi težave se lahko odločite, ali želite deliti dnevnike in dodatne tehnične diagnostične podatke."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nedavni dnevnici aplikacije sačuvani na ovom Apple TV uređaju, od najnovijih ka najstarijim. Možete da izaberete da li ćete podeliti dnevnike i dodatne tehničke dijagnostičke podatke prilikom prijavljivanja problema."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De senaste apploggarna som lagras på denna Apple TV, med de nyaste först. Du kan välja att dela loggar och ytterligare teknisk diagnostik när du rapporterar ett problem."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "บันทึกล่าสุดของแอปที่จัดเก็บไว้บน Apple TV เครื่องนี้ เรียงจากใหม่ไปเก่า คุณเลือกแชร์บันทึกและข้อมูลการวินิจฉัยทางเทคนิคเพิ่มเติมได้เมื่อรายงานปัญหา"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bu Apple TV’de saklanan son uygulama günlükleri, en yenisinden en eskisine doğru sıralanır. Sorun bildirirken günlükleri ve ek teknik tanılama verilerini paylaşmayı seçebilirsiniz."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Останні журнали роботи застосунку, збережені на цьому Apple TV, від найновіших до найстаріших. Повідомляючи про проблему, ви можете за бажанням поділитися журналами й додатковими технічними діагностичними даними."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nhật ký hoạt động gần đây của ứng dụng được lưu trên Apple TV này, hiển thị mục mới nhất trước. Khi báo cáo sự cố, bạn có thể chọn chia sẻ nhật ký và dữ liệu chẩn đoán kỹ thuật bổ sung."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "这台 Apple TV 上存储的近期应用日志，按从新到旧的顺序排列。报告问题时，您可以选择分享日志和其他技术诊断信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "這台 Apple TV 上儲存的近期應用程式記錄，依時間由新到舊排列。回報問題時，您可以選擇分享記錄和其他技術診斷資訊。"
           }
         }
       }
@@ -622658,6 +624422,7 @@
       }
     },
     "Reports include technical error details, app and device information, and diagnostics such as timing and memory use. They are sent to the developer through Sentry only when reporting is enabled." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -668553,6 +670318,226 @@
         }
       }
     },
+    "Scan to read how Plozz and its connected services handle your data." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "امسح الرمز ضوئيًا لقراءة كيفية تعامل Plozz والخدمات المتصلة به مع بياناتك."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Сканирайте кода, за да прочетете как Plozz и свързаните с него услуги обработват данните ви."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Escaneja el codi per llegir com Plozz i els serveis que hi estan connectats tracten les teves dades."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Naskenujte kód a přečtěte si, jak Plozz a připojené služby nakládají s vašimi údaji."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Scan koden for at læse, hvordan Plozz og de tilknyttede tjenester håndterer dine data."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Scanne den Code, um zu lesen, wie Plozz und die damit verbundenen Dienste mit deinen Daten umgehen."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Σαρώστε τον κωδικό QR για να διαβάσετε πώς το Plozz και οι συνδεδεμένες υπηρεσίες του διαχειρίζονται τα δεδομένα σας."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Escanea el código QR para leer cómo Plozz y sus servicios conectados tratan tus datos."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "کد QR را اسکن کنید تا دربارهٔ نحوهٔ پردازش داده‌هایتان توسط Plozz و سرویس‌های متصل به آن بخوانید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skannaa QR-koodi ja lue, miten Plozz ja siihen yhdistetyt palvelut käsittelevät tietojasi."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Scannez le code QR pour découvrir comment Plozz et ses services connectés traitent vos données."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "יש לסרוק את קוד ה-QR כדי לקרוא כיצד Plozz והשירותים המחוברים אליו מטפלים בנתונים שלך."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Plozz और उससे जुड़ी सेवाएँ आपके डेटा को कैसे संभालती हैं, यह पढ़ने के लिए QR कोड स्कैन करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skenirajte QR kod da biste pročitali kako Plozz i povezane usluge postupaju s vašim podacima."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Olvassa be a QR-kódot, és tudja meg, hogyan kezelik adatait a Plozz és a hozzá kapcsolódó szolgáltatások."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pindai kode QR untuk membaca cara Plozz dan layanan yang terhubung dengannya menangani data Anda."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Scansiona il codice QR per leggere come Plozz e i servizi collegati gestiscono i tuoi dati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "QRコードを読み取って、Plozzとその連携サービスが利用者のデータをどのように取り扱うかを確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Plozz 및 연결된 서비스에서 데이터를 처리하는 방식을 알아보려면 QR 코드를 스캔하세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Imbas kod QR untuk membaca cara Plozz dan perkhidmatan yang disambungkan kepadanya mengendalikan data anda."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skann QR-koden for å lese om hvordan Plozz og tilknyttede tjenester behandler dataene dine."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Scan de QR-code om te lezen hoe Plozz en de gekoppelde diensten met je gegevens omgaan."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zeskanuj kod QR, aby dowiedzieć się, jak Plozz i połączone z nim usługi przetwarzają Twoje dane."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Escaneie o código QR para ler como o Plozz e os serviços conectados a ele tratam seus dados."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Scanează codul QR pentru a afla cum îți gestionează datele Plozz și serviciile conectate."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отсканируйте QR-код, чтобы узнать, как Plozz и подключённые сервисы обрабатывают ваши данные."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Naskenujte QR kód a prečítajte si, ako Plozz a pripojené služby spracúvajú vaše údaje."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skenirajte kodo QR in preberite, kako Plozz in povezane storitve obdelujejo vaše podatke."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skenirajte QR kod da biste pročitali kako Plozz i povezane usluge obrađuju vaše podatke."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skanna QR-koden för att läsa om hur Plozz och dess anslutna tjänster hanterar dina uppgifter."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "สแกนรหัส QR เพื่ออ่านวิธีที่ Plozz และบริการที่เชื่อมต่อจัดการข้อมูลของคุณ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Plozz ve bağlı hizmetlerinin verilerinizi nasıl işlediğini okumak için QR kodunu tarayın."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Відскануйте QR-код, щоб дізнатися, як Plozz і підключені до нього сервіси обробляють ваші дані."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Quét mã QR để tìm hiểu cách Plozz và các dịch vụ được kết nối xử lý dữ liệu của bạn."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "扫描二维码，了解 Plozz 及其连接的服务如何处理您的数据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "掃描 QR 碼，瞭解 Plozz 及其連接的服務如何處理您的資料。"
+          }
+        }
+      }
+    },
     "Scan to report\na bug" : {
       "localizations" : {
         "ar" : {
@@ -689244,6 +691229,7 @@
       }
     },
     "Send recent app logs to help diagnose a problem. Logins, servers, and media titles are excluded." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -689459,6 +691445,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "傳送最近的 App 記錄以協助診斷問題。不包含登入資訊、伺服器和媒體標題。"
+          }
+        }
+      }
+    },
+    "Send recent logs, technical playback and connection diagnostics, and your optional message to the developer through Sentry. Don't include passwords or personal information." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "أرسل السجلات الحديثة وبيانات التشخيص التقنية للتشغيل والاتصال ورسالتك الاختيارية إلى المطوّر عبر Sentry. لا تُضمّن كلمات مرور أو معلومات شخصية."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Изпратете на разработчика чрез Sentry последните записи в журнала, технически диагностични данни за възпроизвеждането и връзката и, по желание, свое съобщение. Не включвайте пароли или лична информация."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envia els registres recents, les dades de diagnòstic tècnic de reproducció i connexió i, si vols, un missatge al desenvolupador a través de Sentry. No hi incloguis contrasenyes ni informació personal."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odešlete vývojáři prostřednictvím Sentry nedávné protokoly, technické diagnostické údaje o přehrávání a připojení a případně i vlastní zprávu. Neuvádějte hesla ani osobní údaje."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send de seneste logfiler, tekniske diagnostikdata om afspilning og forbindelse og eventuelt din egen besked til udvikleren via Sentry. Medtag ikke adgangskoder eller personlige oplysninger."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sende die letzten Protokolle, technische Diagnosedaten zu Wiedergabe und Verbindung und optional eine eigene Nachricht über Sentry an den Entwickler. Gib keine Passwörter oder persönlichen Informationen an."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Στείλτε πρόσφατα αρχεία καταγραφής, τεχνικά διαγνωστικά αναπαραγωγής και σύνδεσης και το προαιρετικό μήνυμά σας στον προγραμματιστή μέσω του Sentry. Μην συμπεριλάβετε κωδικούς πρόσβασης ή προσωπικά στοιχεία."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envía los registros recientes, los datos de diagnóstico técnico de reproducción y conexión y tu mensaje opcional al desarrollador a través de Sentry. No incluyas contraseñas ni información personal."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های اخیر، اطلاعات تشخیصی فنی پخش و اتصال و پیام اختیاری خود را از طریق Sentry برای توسعه‌دهنده ارسال کنید. گذرواژه یا اطلاعات شخصی را درج نکنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lähetä viimeisimmät lokit, toiston ja yhteyksien tekniset diagnostiikkatiedot sekä halutessasi oma viestisi kehittäjälle Sentryn kautta. Älä sisällytä salasanoja tai henkilötietoja."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envoyez au développeur, via Sentry, les journaux récents, les diagnostics techniques de lecture et de connexion ainsi que votre message facultatif. N’incluez pas de mots de passe ni d’informations personnelles."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שליחת יומנים אחרונים, נתוני אבחון טכני של ניגון וחיבור, והודעה אישית לבחירתך למפתח דרך Sentry. אין לכלול סיסמאות או מידע אישי."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "हाल के लॉग, प्लेबैक और कनेक्शन के तकनीकी डायग्नोस्टिक्स और अपना वैकल्पिक संदेश Sentry के ज़रिए डेवलपर को भेजें। पासवर्ड या व्यक्तिगत जानकारी शामिल न करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošaljite nedavne zapise, tehničke dijagnostičke podatke o reprodukciji i povezivanju te svoju neobaveznu poruku razvojnom programeru putem usluge Sentry. Nemojte uključivati lozinke ni osobne podatke."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Küldje el a legutóbbi naplókat, a lejátszás és a kapcsolat technikai diagnosztikai adatait, valamint az opcionális üzenetét a fejlesztőnek a Sentry szolgáltatáson keresztül. Ne adjon meg jelszavakat vagy személyes adatokat."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kirim log terbaru, data diagnostik teknis pemutaran dan koneksi, serta pesan opsional Anda kepada pengembang melalui Sentry. Jangan sertakan kata sandi atau informasi pribadi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Invia allo sviluppatore tramite Sentry i log recenti, i dati diagnostici tecnici sulla riproduzione e sulla connessione e un eventuale messaggio. Non includere password o informazioni personali."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "最近のログ、再生や接続に関する技術的な診断情報、任意のメッセージを、Sentry経由で開発者に送信します。パスワードや個人情報を含めないでください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "최근 로그, 재생 및 연결 관련 기술 진단 정보와 선택적으로 작성한 메시지를 Sentry를 통해 개발자에게 보내세요. 비밀번호나 개인정보를 포함하지 마세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hantar log terkini serta diagnostik teknikal main balik dan sambungan kepada pembangun melalui Sentry, dengan mesej tambahan jika anda mahu. Jangan sertakan kata laluan atau maklumat peribadi."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send nylige logger, teknisk diagnostikk for avspilling og tilkobling og en valgfri melding til utvikleren via Sentry. Ikke ta med passord eller personopplysninger."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Stuur recente logboeken en technische diagnostische gegevens over het afspelen en de verbinding via Sentry naar de ontwikkelaar, eventueel met een bericht. Voeg geen wachtwoorden of persoonlijke informatie toe."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wyślij deweloperowi przez Sentry ostatnie dzienniki, techniczne dane diagnostyczne dotyczące odtwarzania i połączenia oraz opcjonalną wiadomość. Nie podawaj haseł ani danych osobowych."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envie ao desenvolvedor, pelo Sentry, os logs recentes, os dados de diagnóstico técnico de reprodução e conexão e, se quiser, uma mensagem. Não inclua senhas nem informações pessoais."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimite dezvoltatorului prin Sentry jurnalele recente, date tehnice de diagnosticare a redării și conexiunii și, dacă dorești, un mesaj. Nu include parole sau informații personale."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отправьте разработчику через Sentry последние журналы, технические данные диагностики воспроизведения и подключения, а также своё сообщение, если хотите его добавить. Не указывайте пароли или личную информацию."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odošlite vývojárovi cez Sentry nedávne denníky, technické diagnostické údaje o prehrávaní a pripojení a voliteľne aj svoju správu. Neuvádzajte heslá ani osobné údaje."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Razvijalcu prek storitve Sentry pošljite nedavne dnevnike, tehnične diagnostične podatke o predvajanju in povezavi ter po želji svoje sporočilo. Ne vključujte gesel ali osebnih podatkov."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošaljite programeru preko usluge Sentry nedavne dnevnike, tehničke dijagnostičke podatke o reprodukciji i povezivanju i, po želji, svoju poruku. Nemojte uključivati lozinke ili lične podatke."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skicka de senaste loggarna, teknisk diagnostik för uppspelning och anslutningar samt ett valfritt meddelande till utvecklaren via Sentry. Ta inte med lösenord eller personuppgifter."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งบันทึกล่าสุด ข้อมูลการวินิจฉัยทางเทคนิคเกี่ยวกับการเล่นและการเชื่อมต่อ รวมถึงข้อความที่คุณเลือกเพิ่ม ให้ผู้พัฒนาผ่าน Sentry อย่าใส่รหัสผ่านหรือข้อมูลส่วนบุคคล"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Son günlükleri, oynatma ve bağlantıyla ilgili teknik tanılama verilerini ve isteğe bağlı mesajınızı Sentry aracılığıyla geliştiriciye gönderin. Parola veya kişisel bilgi eklemeyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Надішліть розробнику через Sentry останні журнали, технічні діагностичні дані про відтворення та з’єднання, а також повідомлення, яке ви можете додати за бажанням. Не вказуйте паролів чи особистої інформації."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gửi nhật ký gần đây và dữ liệu chẩn đoán kỹ thuật về phát nội dung và kết nối cho nhà phát triển qua Sentry, kèm lời nhắn nếu muốn. Không cung cấp mật khẩu hoặc thông tin cá nhân."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "通过 Sentry 向开发者发送近期日志、有关播放和连接的技术诊断信息，以及您自愿填写的留言。请勿包含密码或个人信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "透過 Sentry 向開發者傳送最近的記錄、播放與連線的技術診斷資訊，以及您自願填寫的留言。請勿包含密碼或個人資訊。"
           }
         }
       }
@@ -689905,6 +692111,7 @@
     },
     "Sent" : {
       "comment" : "Button label state after recent activity or diagnostics have been sent to the developer successfully.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -690125,6 +692332,7 @@
       }
     },
     "Sent through Sentry. No logins, server addresses, or viewing history." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -702708,6 +704916,226 @@
         }
       }
     },
+    "Share technical errors, app and device information, screen categories, and performance diagnostics with the developer through Sentry." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "شارك الأخطاء التقنية ومعلومات التطبيق والجهاز وفئات شاشات التطبيق وبيانات تشخيص الأداء مع المطوّر عبر Sentry."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Споделяйте с разработчика чрез Sentry технически грешки, информация за приложението и устройството, категории екрани на приложението и диагностични данни за производителността."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Comparteix errors tècnics, informació de l'app i del dispositiu, categories de pantalles de l'app i dades de diagnòstic de rendiment amb el desenvolupador a través de Sentry."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sdílejte s vývojářem prostřednictvím Sentry technické chyby, informace o aplikaci a zařízení, kategorie obrazovek aplikace a diagnostické údaje o výkonu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Del tekniske fejl, oplysninger om app og enhed, kategorier af appskærme og diagnostikdata om ydeevne med udvikleren via Sentry."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Teile technische Fehler, App- und Geräteinformationen, Kategorien der App-Ansichten und Leistungsdiagnosedaten über Sentry mit dem Entwickler."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Κοινοποιήστε τεχνικά σφάλματα, πληροφορίες εφαρμογής και συσκευής, κατηγορίες οθονών της εφαρμογής και διαγνωστικά απόδοσης στον προγραμματιστή μέσω του Sentry."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Comparte errores técnicos, información de la app y del dispositivo, categorías de pantallas de la app y datos de diagnóstico de rendimiento con el desarrollador a través de Sentry."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "خطاهای فنی، اطلاعات برنامه و دستگاه، دسته‌بندی‌های صفحه‌های برنامه و اطلاعات تشخیصی عملکرد را از طریق Sentry با توسعه‌دهنده به اشتراک بگذارید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jaa tekniset virheet, sovelluksen ja laitteen tiedot, sovelluksen näkymien luokat sekä suorituskyvyn diagnostiikkatiedot kehittäjälle Sentryn kautta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Partagez avec le développeur, via Sentry, les erreurs techniques, les informations sur l’app et l’appareil, les catégories d’écrans de l’app et les diagnostics de performance."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שיתוף שגיאות טכניות, מידע על האפליקציה והמכשיר, קטגוריות של מסכי האפליקציה ונתוני אבחון ביצועים עם המפתח דרך Sentry."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "तकनीकी त्रुटियाँ, ऐप और डिवाइस की जानकारी, ऐप की स्क्रीन के प्रकार और परफ़ॉर्मेंस डायग्नोस्टिक्स Sentry के ज़रिए डेवलपर के साथ शेयर करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podijelite tehničke pogreške, podatke o aplikaciji i uređaju, vrste zaslona u aplikaciji i dijagnostičke podatke o performansama s razvojnim programerom putem usluge Sentry."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ossza meg a technikai hibákat, az alkalmazás és az eszköz adatait, az alkalmazás képernyőinek típusait és a teljesítménydiagnosztikai adatokat a fejlesztővel a Sentry szolgáltatáson keresztül."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bagikan kesalahan teknis, informasi aplikasi dan perangkat, kategori layar dalam aplikasi, serta data diagnostik performa kepada pengembang melalui Sentry."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Condividi con lo sviluppatore tramite Sentry gli errori tecnici, le informazioni sull'app e sul dispositivo, le categorie di schermate dell'app e i dati diagnostici sulle prestazioni."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "技術的なエラー、アプリとデバイスの情報、アプリ画面のカテゴリ、パフォーマンスの診断情報を、Sentry経由で開発者と共有します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "기술적 오류, 앱 및 기기 정보, 앱 화면 유형, 성능 진단 정보를 Sentry를 통해 개발자와 공유합니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kongsi ralat teknikal, maklumat aplikasi dan peranti, jenis skrin aplikasi serta diagnostik prestasi dengan pembangun melalui Sentry."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Del tekniske feil, app- og enhetsinformasjon, typer appskjermer og ytelsesdiagnostikk med utvikleren via Sentry."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deel technische fouten, app- en apparaatinformatie, typen appschermen en diagnostische prestatiegegevens via Sentry met de ontwikkelaar."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Udostępniaj deweloperowi przez Sentry błędy techniczne, informacje o aplikacji i urządzeniu, typy ekranów aplikacji oraz dane diagnostyczne dotyczące wydajności."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Compartilhe com o desenvolvedor, pelo Sentry, erros técnicos, informações do app e do dispositivo, tipos de tela do app e dados de diagnóstico de desempenho."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimite dezvoltatorului prin Sentry erori tehnice, informații despre aplicație și dispozitiv, categorii de ecrane ale aplicației și date de diagnosticare a performanței."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Передавайте разработчику через Sentry сведения о технических ошибках, приложении и устройстве, категории экранов приложения и данные диагностики производительности."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zdieľajte s vývojárom cez Sentry technické chyby, informácie o aplikácii a zariadení, kategórie obrazoviek aplikácie a diagnostické údaje o výkone."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Z razvijalcem prek storitve Sentry delite tehnične napake, podatke o aplikaciji in napravi, kategorije zaslonov aplikacije ter diagnostične podatke o zmogljivosti."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podelite sa programerom preko usluge Sentry tehničke greške, podatke o aplikaciji i uređaju, kategorije ekrana aplikacije i dijagnostičke podatke o performansama."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dela tekniska fel, information om appen och enheten, kategorier av appvyer och prestandadiagnostik med utvecklaren via Sentry."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "แชร์ข้อผิดพลาดทางเทคนิค ข้อมูลแอปและอุปกรณ์ ประเภทหน้าจอของแอป และข้อมูลการวินิจฉัยประสิทธิภาพกับผู้พัฒนาผ่าน Sentry"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Teknik hataları, uygulama ve cihaz bilgilerini, uygulama ekranı kategorilerini ve performans tanılama verilerini Sentry aracılığıyla geliştiriciyle paylaşın."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Поділіться з розробником через Sentry даними про технічні помилки, застосунок і пристрій, категоріями екранів застосунку та діагностичними даними про продуктивність."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chia sẻ lỗi kỹ thuật, thông tin ứng dụng và thiết bị, các loại màn hình trong ứng dụng và dữ liệu chẩn đoán hiệu suất với nhà phát triển qua Sentry."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "通过 Sentry 与开发者分享技术错误、应用和设备信息、应用页面类别以及性能诊断信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "透過 Sentry 與開發者分享技術錯誤、應用程式與裝置資訊、應用程式頁面類別，以及效能診斷資訊。"
+          }
+        }
+      }
+    },
     "Share/Folder" : {
       "localizations" : {
         "ar" : {
@@ -705132,6 +707560,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "是否傳送由你決定，不會改變任何應用程式功能。傳送近期活動記錄是「設定」中的另一項手動操作。"
+          }
+        }
+      }
+    },
+    "Sharing is optional. Change anytime in Settings > Help & Diagnostics." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "المشاركة اختيارية. يمكنك تغيير هذا الخيار في أي وقت من الإعدادات > المساعدة والتشخيص."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Споделянето е по желание. Можете да промените избора си по всяко време в Настройки > Помощ и диагностика."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Compartir és opcional. Pots canviar aquesta opció en qualsevol moment a Configuració > Ajuda i diagnòstics."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sdílení je volitelné. Svou volbu můžete kdykoli změnit v Nastavení > Nápověda a diagnostika."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Det er frivilligt at dele. Du kan til enhver tid ændre dit valg i Indstillinger > Hjælp og diagnostik."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Das Teilen ist freiwillig. Du kannst deine Auswahl jederzeit unter Einstellungen > Hilfe & Diagnose ändern."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η κοινοποίηση είναι προαιρετική. Αλλάξτε την επιλογή σας οποιαδήποτε στιγμή από τις Ρυθμίσεις > Βοήθεια και διαγνωστικά."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Compartir es opcional. Puedes cambiar tu elección cuando quieras en Ajustes > Ayuda y diagnóstico."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "اشتراک‌گذاری اختیاری است. هر زمان می‌توانید از بخش «کمک و تشخیص‌ها» در «تنظیمات» انتخاب خود را تغییر دهید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jakaminen on vapaaehtoista. Voit muuttaa valintaasi milloin tahansa kohdassa Asetukset > Ohjeet ja diagnostiikka."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Le partage est facultatif. Modifiez votre choix à tout moment dans Réglages > Aide et diagnostics."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "השיתוף הוא לבחירתך. ניתן לשנות את הבחירה בכל עת ב״הגדרות״, בסעיף ״עזרה ואבחון״."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "शेयर करना वैकल्पिक है। इसे सेटिंग्स > सहायता और डायग्नोस्टिक्स में कभी भी बदल सकते हैं।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dijeljenje je neobavezno. Postavku možete promijeniti u bilo kojem trenutku u odjeljku Postavke > Pomoć i dijagnostika."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A megosztás önkéntes. Bármikor módosíthatja a Beállítások > Súgó és diagnosztika menüpontban."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Berbagi bersifat opsional. Anda dapat mengubahnya kapan saja di Pengaturan > Bantuan & Diagnostik."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La condivisione è facoltativa. Puoi cambiare la scelta in qualsiasi momento in Impostazioni > Assistenza e diagnostica."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "共有は任意です。「設定」>「ヘルプと診断」でいつでも変更できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "공유는 선택 사항입니다. 설정 > 도움말 및 진단에서 언제든지 변경할 수 있습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Perkongsian adalah pilihan. Anda boleh menukar tetapan ini pada bila-bila masa dalam Tetapan > Bantuan & Diagnostik."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deling er valgfritt. Du kan endre dette når som helst under Innstillinger > Hjelp og diagnostikk."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Delen is optioneel. Je kunt dit op elk moment wijzigen via Instellingen > Hulp en diagnostiek."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Udostępnianie jest opcjonalne. Możesz to zmienić w dowolnej chwili w sekcji Ustawienia > Pomoc i diagnostyka."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "O compartilhamento é opcional. Altere a qualquer momento em Ajustes > Ajuda e diagnóstico."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimiterea este opțională. Poți schimba această opțiune oricând în Setări > Ajutor și diagnosticare."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отправка данных добровольна. Изменить выбор можно в любое время в разделе Настройки > Помощь и диагностика."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zdieľanie je dobrovoľné. Svoju voľbu môžete kedykoľvek zmeniť v časti Nastavenia > Pomoc a diagnostika."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deljenje je prostovoljno. Svojo izbiro lahko kadar koli spremenite v razdelku Nastavitve > Pomoč in diagnostika."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deljenje je dobrovoljno. Izbor možete promeniti u bilo kom trenutku u odeljku Podešavanja > Pomoć i dijagnostika."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Delning är frivillig. Du kan ändra ditt val när som helst under Inställningar > Hjälp och diagnostik."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "คุณเลือกได้ว่าจะแชร์หรือไม่ เปลี่ยนได้ทุกเมื่อใน การตั้งค่า > ความช่วยเหลือและการวินิจฉัย"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Paylaşım isteğe bağlıdır. Bu tercihi Ayarlar > Yardım ve tanılama bölümünden istediğiniz zaman değiştirebilirsiniz."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ви самі вирішуєте, чи ділитися даними. Це можна будь-коли змінити в розділі Налаштування > Допомога й діагностика."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Việc chia sẻ là tùy chọn. Bạn có thể thay đổi bất cứ lúc nào trong Cài đặt > Hỗ trợ & Chẩn đoán."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "分享完全自愿。您可以随时在“设置 > 帮助与诊断”中更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "分享完全自願。您可以隨時在「設定 > 說明與診斷」中變更。"
           }
         }
       }
@@ -761455,6 +764103,226 @@
         }
       }
     },
+    "Submitted" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "قُدِّم للإرسال"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Предадено за изпращане"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lliurat per enviar"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Předáno k odeslání"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indsendt"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zum Versand übergeben"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Υποβλήθηκε"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Remitido para su envío"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "برای ارسال ثبت شد"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Välitetty lähetettäväksi"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Transmis pour envoi"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "נמסר לשליחה"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "भेजने के लिए स्वीकार किया गया"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prihvaćeno za slanje"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Továbbításra elfogadva"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diterima untuk dikirim"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Accettato per l'invio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "送信受付済み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "제출됨"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diserahkan"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sendt inn"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ingediend"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Przekazano"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Encaminhado"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimis spre livrare"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Передано для отправки"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odovzdané na odoslanie"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Oddano za pošiljanje"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Predato za slanje"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Inlämnat"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งต่อแล้ว"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İletilmek üzere gönderildi"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Передано для доставки"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Đã gửi để chuyển tiếp"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已提交"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已提交"
+          }
+        }
+      }
+    },
     "Submitting Library Request…" : {
       "localizations" : {
         "ar" : {
@@ -778207,6 +781075,7 @@
       }
     },
     "Thanks! Your recent activity was sent to the developer." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -798702,6 +801571,7 @@
       }
     },
     "The most recent app log lines, kept only on this Apple TV and already stripped of tokens and secrets. Newest first — a maintainer may ask what Plozz was doing when a bug happened." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -798922,6 +801792,7 @@
       }
     },
     "The most recent app log lines, kept only on this Apple TV and already stripped of tokens and secrets. Shown so a maintainer can ask what Plozz was doing when a bug happened." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -879734,6 +882605,7 @@
       }
     },
     "Turn on Share Crash Reports in Help & Diagnostics to enable this. Your recent activity is then sent anonymously — no logins, tokens, servers, or titles." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -879949,6 +882821,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "請在「說明與診斷」中開啟「分享當機報告」以啟用此功能。你近期的活動會以匿名方式送出——不包含登入資訊、權杖、伺服器或觀看片名。"
+          }
+        }
+      }
+    },
+    "Turn on Share Crash Reports in Help & Diagnostics to send logs and technical diagnostics." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "فعّل «مشاركة تقارير الأعطال» في «المساعدة والتشخيص» لإرسال السجلات وبيانات التشخيص التقنية."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Включете „Споделяне на доклади за сривове“ в „Помощ и диагностика“, за да изпращате записи от журнала и технически диагностични данни."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activa «Comparteix els informes de fallades» a «Ajuda i diagnòstics» per enviar registres i dades de diagnòstic tècnic."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chcete-li odesílat protokoly a technické diagnostické údaje, zapněte možnost „Sdílet hlášení o pádech“ v části „Nápověda a diagnostika“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slå »Del fejlrapporter« til under »Hjælp og diagnostik« for at sende logfiler og tekniske diagnostikdata."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktiviere „Absturzberichte teilen“ unter „Hilfe & Diagnose“, um Protokolle und technische Diagnosedaten zu senden."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ενεργοποιήστε την επιλογή «Κοινή χρήση αναφορών κατάρρευσης» στην ενότητα «Βοήθεια και διαγνωστικά» για να στείλετε αρχεία καταγραφής και τεχνικά διαγνωστικά."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activa «Compartir informes de errores» en «Ayuda y diagnóstico» para enviar registros y datos de diagnóstico técnico."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "برای ارسال گزارش‌ها و اطلاعات تشخیصی فنی، «اشتراک‌گذاری گزارشات خرابی» را در «کمک و تشخیص‌ها» فعال کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ota Jaa kaatumisraportit käyttöön kohdassa Ohjeet ja diagnostiikka, jotta voit lähettää lokeja ja teknisiä diagnostiikkatietoja."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activez « Partager les rapports de plantage » dans « Aide et diagnostics » pour envoyer des journaux et des diagnostics techniques."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "כדי לשלוח יומנים ונתוני אבחון טכני, יש להפעיל את ״שתף דוחות קריסה״ ב״עזרה ואבחון״."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "लॉग और तकनीकी डायग्नोस्टिक्स भेजने के लिए “सहायता और डायग्नोस्टिक्स” में “क्रैश रिपोर्ट शेयर करें” चालू करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za slanje zapisa i tehničkih dijagnostičkih podataka uključite „Dijeli izvješća o rušenju” u odjeljku „Pomoć i dijagnostika”."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A naplók és technikai diagnosztikai adatok küldéséhez kapcsolja be a „Hibajelentések megosztása” beállítást a „Súgó és diagnosztika” menüpontban."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktifkan “Bagikan laporan kerusakan” di “Bantuan & Diagnostik” untuk mengirim log dan data diagnostik teknis."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Per inviare log e dati diagnostici tecnici, attiva «Condividi segnalazioni di crash» in «Assistenza e diagnostica»."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ログや技術的な診断情報を送信するには、「ヘルプと診断」で「クラッシュレポートを共有」をオンにしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "로그와 기술 진단 정보를 보내려면 도움말 및 진단에서 ‘충돌 보고서 공유’를 켜세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hidupkan “Kongsi Laporan Ranap” dalam Bantuan & Diagnostik untuk menghantar log dan diagnostik teknikal."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slå på «Del feilrapporter» under Hjelp og diagnostikk for å sende logger og teknisk diagnostikk."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Schakel ‘Crashrapporten delen’ in onder Hulp en diagnostiek om logboeken en technische diagnostische gegevens te versturen."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aby wysyłać dzienniki i techniczne dane diagnostyczne, włącz opcję „Udostępniaj raporty o awariach” w sekcji Pomoc i diagnostyka."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ative “Compartilhar relatórios de falha” em Ajuda e diagnóstico para enviar logs e dados de diagnóstico técnico."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activează „Trimite rapoarte de blocare” în „Ajutor și diagnosticare” pentru a trimite jurnale și date tehnice de diagnosticare."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Включите «Отправлять отчёты о сбоях» в разделе «Помощь и диагностика», чтобы отправлять журналы и технические диагностические данные."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ak chcete odosielať denníky a technické diagnostické údaje, zapnite možnosť „Zdieľať hlásenia o pádoch“ v časti „Pomoc a diagnostika“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za pošiljanje dnevnikov in tehničnih diagnostičnih podatkov v razdelku »Pomoč in diagnostika« vklopite možnost »Deli poročila o zrušitvah«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Uključite opciju „Deli izveštaje o rušenjima“ u odeljku „Pomoć i dijagnostika“ da biste slali dnevnike i tehničke dijagnostičke podatke."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktivera ”Dela kraschrapporter” under ”Hjälp och diagnostik” för att skicka loggar och teknisk diagnostik."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปิด “แชร์รายงานข้อขัดข้อง” ใน “ความช่วยเหลือและการวินิจฉัย” เพื่อส่งบันทึกและข้อมูลการวินิจฉัยทางเทคนิค"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Günlükleri ve teknik tanılama verilerini göndermek için Yardım ve tanılama bölümünde “Çökme raporlarını paylaş” seçeneğini açın."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Увімкніть «Поділитися звітами про збої» в розділі «Допомога й діагностика», щоб надсилати журнали й технічні діагностичні дані."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bật “Chia sẻ báo cáo sự cố” trong “Hỗ trợ & Chẩn đoán” để gửi nhật ký và dữ liệu chẩn đoán kỹ thuật."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "在“帮助与诊断”中开启“分享崩溃报告”，即可发送日志和技术诊断信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "在「說明與診斷」中開啟「分享當機報告」，即可傳送記錄和技術診斷資訊。"
           }
         }
       }
@@ -894261,6 +897353,7 @@
       }
     },
     "Uploads the full log below so it can be read on a computer instead of scrolling here. Sent anonymously — no logins, tokens, servers, or titles are included." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
