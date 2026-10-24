@@ -74,10 +74,6 @@ struct HelpDiagnosticsDetailView: View {
         crashReportingConfigured && crashReporting.isEnabled
     }
 
-    private var crashReportingFooter: LocalizedStringResource {
-        "Anonymous crash, freeze, and IPTV setup failure reports. No servers, logins, credentials, or viewing activity."
-    }
-
     // MARK: - Report a Problem
 
     private var reportPanel: some View {
@@ -122,7 +118,7 @@ struct HelpDiagnosticsDetailView: View {
     private var sendDiagnosticsPanel: some View {
         SendDiagnosticsCard(
             canSend: canSendDiagnostics,
-            idleDescription: "Send recent app logs to help diagnose a problem. Logins, servers, and media titles are excluded.",
+            idleDescription: SettingsCopy.manualDiagnostics,
             disabledDescription: "Turn on Share Crash Reports below to send recent app logs."
         )
     }
@@ -134,10 +130,12 @@ struct HelpDiagnosticsDetailView: View {
         if crashReportingConfigured {
             SettingsPanel(
                 title: "Crash Reports",
-                footer: crashReportingFooter
+                footer: SettingsCopy.automaticDiagnostics
             ) {
                 Toggle("Share Crash Reports", isOn: $crashReporting.isEnabled)
                     .toggleStyle(SettingsSwitchToggleStyle())
+                Text(SettingsCopy.automaticDiagnosticsExclusions)
+                    .settingsHelperText()
             }
         } else {
             // No DSN baked in ⇒ the toggle can't do anything, so it's disabled
@@ -184,7 +182,7 @@ struct HelpDiagnosticsDetailView: View {
     // MARK: - Recent activity (read-only, redacted) — opens its own page
     private var recentActivityPanel: some View {
         SettingsPanel(
-            footer: "The most recent app log lines, kept only on this Apple TV and already stripped of tokens and secrets. Shown so a maintainer can ask what Plozz was doing when a bug happened."
+            footer: "Recent app logs are stored on this Apple TV. You can choose to share them when reporting a problem."
         ) {
             SettingsRouteLink(value: SettingsRoute.recentActivity) {
                 SettingsRowLabel(icon: "list.bullet.rectangle", title: "Recent Activity") {
