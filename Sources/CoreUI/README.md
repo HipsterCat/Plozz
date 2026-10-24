@@ -71,6 +71,10 @@ Inactive placeholders remain unmodified; Reduce Motion retains the static dim.
 The simulator lab's `skeletons-idle` and `skeletons-static` scenarios isolate this
 cost from loaded cards and network/provider work.
 
+Loading jokes wait 11 seconds before appearing by default, then retain their
+5.5-second cadence. `LoadingMessagesView` and the model share the sequencer's
+default delay; individual callers can still supply an explicit grace period.
+
 Continue Watching's profile-scoped Playback details choice applies to Artwork + logo,
 Thumbnail, and Poster, on Home and library rows.
 Detailed keeps the existing play/progress/text overlay; Progress only uses the

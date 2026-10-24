@@ -12,7 +12,7 @@ struct PlozziOSDiagnosticsSettingsView: View {
     @Bindable var model: DiagnosticsSettingsModel
     @Bindable var crashReporting: CrashReportingSettingsModel
     @State private var diagnosticNote = ""
-    @State private var sendStatus: String?
+    @State private var sendStatus: LocalizedStringResource?
     @State private var isSending = false
 
     private var report: DiagnosticsReport {
@@ -28,10 +28,6 @@ struct PlozziOSDiagnosticsSettingsView: View {
             recentLogTail: PlozzLog.recentLogText(limit: 8),
             marketingVersion: version.marketingVersion
         )
-    }
-
-    private var crashReportingFooter: LocalizedStringResource {
-        "Anonymous crash, freeze, and IPTV setup failure reports. No servers, logins, credentials, or viewing activity."
     }
 
     var body: some View {
@@ -64,7 +60,8 @@ struct PlozziOSDiagnosticsSettingsView: View {
                 .disabled(!appModel.crashReportingController.isConfigured)
             } footer: {
                 if appModel.crashReportingController.isConfigured {
-                    Text(crashReportingFooter)
+                    Text(SettingsCopy.automaticDiagnostics)
+                    Text(SettingsCopy.automaticDiagnosticsExclusions)
                 } else {
                     Text("Crash reporting is unavailable in this build.")
                 }
@@ -82,8 +79,8 @@ struct PlozziOSDiagnosticsSettingsView: View {
                         defer { isSending = false }
                         let sent = await CrashDiagnostics.send(logText: log, note: note)
                         sendStatus = sent
-                            ? "Diagnostics sent. Thank you."
-                            : "Diagnostics could not be sent. Enable crash reports and try again."
+                            ? "Diagnostics submitted for delivery. Thank you."
+                            : "Couldn't submit diagnostics. Check that crash reporting is enabled and try again."
                     }
                 } label: {
                     Label("Send to Developer", systemImage: "paperplane")
@@ -98,6 +95,8 @@ struct PlozziOSDiagnosticsSettingsView: View {
                     Text(sendStatus)
                         .plozzForeground(.secondary)
                 }
+            } footer: {
+                Text(SettingsCopy.manualDiagnostics)
             }
 
             SettingsSectionGroup {

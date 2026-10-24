@@ -613,6 +613,10 @@ private struct PlozziOSSettingsSplitView: View {
                     PlozziOSCommunitySettingsSection()
                     PlozziOSMoreAppsSettingsSection()
 
+                    SettingsSectionGroup("Privacy") {
+                        PrivacyPolicyLink()
+                    }
+
                     SettingsSectionGroup("Support") {
                         settingsRow(.diagnostics, title: "Help & Diagnostics", systemImage: "ladybug")
                         settingsRow(.attributions, title: SettingsCopy.attributions, systemImage: "doc.text.magnifyingglass")
@@ -1193,6 +1197,10 @@ private struct PlozziOSSettingsCompactMenu: View {
                 }
                 PlozziOSCommunitySettingsSection()
                 PlozziOSMoreAppsSettingsSection()
+
+                SettingsSectionGroup("Privacy") {
+                    PrivacyPolicyLink()
+                }
 
                 SettingsSectionGroup("Support") {
                     NavigationLink {

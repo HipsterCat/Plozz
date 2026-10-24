@@ -84,7 +84,7 @@ struct RecentActivityDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             SettingsPageHeader("Recent Activity")
-            Text("The most recent app log lines, kept only on this Apple TV and already stripped of tokens and secrets. Newest first — a maintainer may ask what Plozz was doing when a bug happened.")
+            Text("Recent app logs stored on this Apple TV, newest first. You can choose to share logs and additional technical diagnostics when reporting a problem.")
                 .font(.callout)
                 .plozzForeground(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -98,7 +98,7 @@ struct RecentActivityDetailView: View {
     private var sendSection: some View {
         SendDiagnosticsCard(
             canSend: canSendDiagnostics,
-            idleDescription: "Uploads the full log below so it can be read on a computer instead of scrolling here. Sent anonymously — no logins, tokens, servers, or titles are included."
+            idleDescription: SettingsCopy.manualDiagnostics
         )
     }
 }

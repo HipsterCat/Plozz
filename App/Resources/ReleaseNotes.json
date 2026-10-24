@@ -493,7 +493,7 @@
             "IPTV playlists recognize more logo, channel-number and guide-ID fields.",
             "Software-played live streams start closer to the live broadcast.",
             {
-              "text": "Updated lossless spatial-audio detection and rendering on supported Apple TVs.",
+              "text": "Updated spatial-audio detection and lossy conversion for supported tracks on Apple TV.",
               "platforms": ["tvOS"]
             },
             {
@@ -668,7 +668,7 @@
               "platforms": ["tvOS"]
             },
             {
-              "text": "On tvOS 26+, one lossless spatial-audio path derives heights from the surround mix; unsupported spatial mixes play in 7.1.",
+              "text": "On tvOS 26+, one spatial-audio conversion path derives heights from the surround mix using lossy output; unsupported spatial mixes play in 7.1.",
               "platforms": ["tvOS"]
             }
           ]
@@ -748,7 +748,7 @@
               "platforms": ["iOS"]
             },
             {
-              "text": "Missed lossless spatial tracks and surround choices with unlabelled audio on tvOS 26+.",
+              "text": "Missed spatial-audio source tracks and surround choices with unlabelled audio on tvOS 26+.",
               "platforms": ["tvOS"]
             },
             "TrueHD playback failing after a seek or audio-track change.",

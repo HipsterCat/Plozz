@@ -54,6 +54,15 @@ use the shared Settings card above a separate bottom privacy footer, with
 Its GitHub-marked link opens the repository
 on mobile or a scannable QR sheet on Apple TV; opening it does not grant consent.
 
+Settings and the consent screen also expose **Privacy Policy**, opening the
+public policy on mobile or its URL and QR code on Apple TV. `SettingsCopy` keeps
+automatic and manual diagnostic disclosures consistent across platforms.
+Automatic reports describe technical errors, app/device information, screen
+categories and performance diagnostics, not a blanket anonymity guarantee.
+Manual uploads disclose additional playback/connection records and the user's
+optional message, which is sent as written. Submission copy does not promise
+confirmed server delivery. Privacy-policy content is maintained on the website.
+
 On tvOS, Video buffer and Live TV buffer use the shared `SettingsMenuRow`: one
 compact row showing the current value, with choices in the native menu and help
 text below. Opening, focusing, or cancelling the menu does not save a choice;
