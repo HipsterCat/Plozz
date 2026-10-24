@@ -273,6 +273,11 @@ The separate `declaredFileSizeBytes` extractor reads unambiguous, explicitly
 byte-unit quantities from descriptions. Providers decide whether that declaration
 is authoritative; bitrate units and filename/locator text never become byte sizes.
 
+`MediaProvider.item` supplies passive presentation metadata; `playbackItem` is an
+explicit playback/version-discovery operation that may cause server probing.
+`MediaVersionInventoryLoader` gives an open picker an owner/source/target identity
+and that explicit action, rather than treating a sparse cached list as complete.
+
 Playback version prompting and series memory are independent profile settings.
 `versionSelectionMode` stays unanswered until first multi-version playback or a
 Settings choice; `rememberVersionPerSeries` defaults on. Legacy `rememberChoice`

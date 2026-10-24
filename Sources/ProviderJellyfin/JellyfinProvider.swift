@@ -43,6 +43,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         hybridEngineEnabled: Bool = false,
         authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)? = nil,
         addressProbe: any HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
+        playbackRequests: PlaybackInfoRequestCoordinator = .shared,
         themeArchiveResolver: @escaping @Sendable (String?) async -> URL? = {
             await ThemeMusicArchive.resolvedURL(tvdbID: $0)
         }
@@ -67,7 +68,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             capabilityProfile: .detected(hybridEngineEnabled: hybridEngineEnabled),
             serverID: session.server.id,
             alternateURLs: session.server.alternateConnectionURLs ?? [],
-            addressProbe: addressProbe
+            addressProbe: addressProbe,
+            playbackRequests: playbackRequests
         )
     }
 
@@ -675,69 +677,51 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     public func item(id: String) async throws -> MediaItem {
-        try await item(id: id, requiresSourceInventory: false)
+        let dto = try await client.item(userID: session.userID, id: id)
+        await probeDescriptors.remember(itemID: id, sources: dto.MediaSources)
+        return map(item: dto)
     }
 
     public func playbackItem(id: String) async throws -> MediaItem {
-        try await item(id: id, requiresSourceInventory: true)
-    }
-
-    private func item(id: String, requiresSourceInventory: Bool) async throws -> MediaItem {
-        let dto = try await client.item(userID: session.userID, id: id)
-        await probeDescriptors.remember(itemID: id, sources: dto.MediaSources)
-        var item = map(item: dto)
-        let remotePlaceholder = dto.MediaSources?.count == 1 && dto.MediaSources?.first?.IsRemote == true
-        // Compatible servers may resolve streams only through PlaybackInfo, even
-        // when item detail already contains sources or omits IsRemote.
-        if (item.kind == .movie || item.kind == .episode),
-           requiresSourceInventory || remotePlaceholder {
+        var item = try await item(id: id)
+        if item.kind == .movie || item.kind == .episode {
+            let inventory = try await client.playbackSourceInventory(userID: session.userID, itemID: id)
+            try Task.checkCancellation()
             do {
-                let inventory = try await client.playbackSourceInventory(userID: session.userID, itemID: id)
-                try Task.checkCancellation()
-                do {
-                    try validateStreamingDecision(inventory)
-                } catch {
-                    HTTPResponseDiagnostics.recordValidationFailure(
-                        .serverRejected, route: .playbackInventory, sourceCount: inventory.MediaSources.count
-                    )
-                    throw error
-                }
-                let ids = inventory.MediaSources.compactMap(\.Id)
-                guard !ids.isEmpty, ids.count == inventory.MediaSources.count,
-                      ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-                      Set(ids).count == ids.count else {
-                    let reason: ResponseValidationDiagnostic.Reason
-                    if inventory.MediaSources.isEmpty { reason = .emptySources }
-                    else if ids.count != inventory.MediaSources.count { reason = .missingSourceID }
-                    else if ids.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-                        reason = .blankSourceID
-                    } else { reason = .duplicateSourceID }
-                    HTTPResponseDiagnostics.recordValidationFailure(
-                        reason, route: .playbackInventory, sourceCount: inventory.MediaSources.count
-                    )
-                    throw AppError.invalidResponse
-                }
-                // Placeholder item streams must not overwrite the real first
-                // source's language, codec, or quality facts.
-                let sources = inventory.MediaSources.filter { !Self.isUnavailablePlaceholder($0, itemID: id) }
-                guard !sources.isEmpty else {
-                    HTTPResponseDiagnostics.recordValidationFailure(
-                        .unavailablePlaceholder, route: .playbackInventory, sourceCount: inventory.MediaSources.count
-                    )
-                    PlozzLog.playback.error("The server returned an unavailable-source placeholder.")
-                    throw StreamingQualityError.noStreams
-                }
-                item.versions = Self.versions(from: sources)
-                await probeDescriptors.remember(itemID: id, sources: sources)
+                try validateStreamingDecision(inventory)
             } catch {
-                try Task.checkCancellation()
-                if requiresSourceInventory || (error as? AppError) == .cancelled || error is CancellationError {
-                    throw error
-                }
-                PlozzLog.networking.error(
-                    "Remote source inventory unavailable; retaining item metadata: \(String(describing: error))"
+                HTTPResponseDiagnostics.recordValidationFailure(
+                    .serverRejected, route: .playbackInventory, sourceCount: inventory.MediaSources.count
                 )
+                throw error
             }
+            let ids = inventory.MediaSources.compactMap(\.Id)
+            guard !ids.isEmpty, ids.count == inventory.MediaSources.count,
+                  ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                  Set(ids).count == ids.count else {
+                let reason: ResponseValidationDiagnostic.Reason
+                if inventory.MediaSources.isEmpty { reason = .emptySources }
+                else if ids.count != inventory.MediaSources.count { reason = .missingSourceID }
+                else if ids.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                    reason = .blankSourceID
+                } else { reason = .duplicateSourceID }
+                HTTPResponseDiagnostics.recordValidationFailure(
+                    reason, route: .playbackInventory, sourceCount: inventory.MediaSources.count
+                )
+                throw AppError.invalidResponse
+            }
+            // Placeholder item streams must not overwrite the real first
+            // source's language, codec, or quality facts.
+            let sources = inventory.MediaSources.filter { !Self.isUnavailablePlaceholder($0, itemID: id) }
+            guard !sources.isEmpty else {
+                HTTPResponseDiagnostics.recordValidationFailure(
+                    .unavailablePlaceholder, route: .playbackInventory, sourceCount: inventory.MediaSources.count
+                )
+                PlozzLog.playback.error("The server returned an unavailable-source placeholder.")
+                throw StreamingQualityError.noStreams
+            }
+            item.versions = Self.versions(from: sources)
+            await probeDescriptors.remember(itemID: id, sources: sources)
         }
         return item
     }

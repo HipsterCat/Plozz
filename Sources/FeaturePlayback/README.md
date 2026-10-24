@@ -754,6 +754,15 @@ presentation state and detaches the old player.
 Plozzigen's Audio **Processing** row samples Aether's active audio pipeline
 label, independently of source-video probe availability. `TRUEHD → FLAC
 bridge` or `TRUEHD → EAC3 bridge` identifies ordinary channel processing.
+Both TV and mobile also show **Encoding**: **Lossless encoding** for an active
+FLAC bridge, **Lossy encoding** for EAC3 or APAC, **No re-encoding** for stream-copy,
+and **Decoded to PCM** for the software decoder. These display-only descriptions
+recognize the active engine's pipeline labels; unknown labels keep their raw
+Processing detail without an encoding claim. They describe the local encoding
+step, not the original recording's fidelity, resampling/downmixing, or the
+receiver's final output. In particular, stream-copy of a lossy source is not
+labelled lossless. The same shared rows follow live pipeline changes on both
+platforms, without changing audio selection or conversion behavior.
 On tvOS 26+, the profile's default-on **Spatial audio** choice requests a 7.1.4
 APAC intermediate bed for supported on-demand playback. This is lossy conversion,
 not a speaker inventory or bitstream passthrough. Saved Off choices survive.
@@ -1299,9 +1308,14 @@ and playback journal; raw server messages and authenticated URLs do not.
 Transport failures and explicit authorization errors are not treated as codec incompatibility.
 Ordinary original-quality playback retains the same structured failure evidence
 as quality-limited playback on both platforms. Plozzigen uses the pinned engine's
-typed `errorInfo`, never message parsing. Expired/missing streams, rate limits,
-certificate failures, and exhausted device storage do not trigger engine swaps
-or server conversion. Retry negotiates again while retaining the selected file,
+typed `errorInfo`, never message parsing. Confirmed expired/missing streams, rate
+limits, certificate failures, and exhausted device storage do not trigger engine
+swaps or server conversion. A native `URL -1008` without an HTTP error, provider
+refusal, stronger typed engine failure, or underlying transport/file-system failure
+is not confirmation that media is missing. It retains its unavailable diagnostic
+while allowing the existing bounded compatibility recovery, including after an
+alternate-engine attempt; the once-only engine, transcode, and codec limits remain
+unchanged. Retry negotiates again while retaining the selected file,
 quality, playback position, and account. Full-screen TV/mobile and Live TV
 interruptions use CoreUI's shared `PlaybackFailureView`: a short factual summary,
 Details, Retry and Back/Close actions. Quality and version controls remain in the
@@ -1321,7 +1335,7 @@ Automatic recovery uses the observed/negotiated codec: a failed H.264
 conversion can request HEVC on a capable device; HEVC can fall back to H.264.
 There is one compatibility retry, not a loop through the same codec.
 The Plex H.264 fallback requests MPEG-TS at the unchanged budget.
-Missing or ended resources require a fresh user retry, not a codec change; retry
+Confirmed missing or ended resources require a fresh user retry, not a codec change; retry
 never falls back to the uncapped original. Decision status and numeric codes are retained without
 copying raw server descriptions into the player.
 

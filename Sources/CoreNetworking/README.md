@@ -57,7 +57,9 @@ and every provider/feature that talks to a remote server.
   Ordinary successful traffic confirms reachability without extending the
   selection's lifetime indefinitely; returning to LAN remains discoverable.
   `ServerAddressHTTPClient` blocks cross-origin redirects and retries a failed
-  GET once on another approved route, never an uncertain mutation. Authentication
+  GET once on another approved route, never an uncertain mutation. Probe-capable
+  GETs opt out with `Endpoint.allowsAutomaticAddressRetry = false`: a timeout
+  cannot establish that the first server operation stopped. Authentication
   failures are not connection failures. A preflight resolution failure preserves
   proof that a one-time exchange was not transmitted.
   `AlternateAddressHTTPIntegrationTests` uses loopback TCP listeners and the

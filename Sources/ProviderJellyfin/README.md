@@ -220,17 +220,20 @@ Description languages never create selectable audio tracks, change playback
 preferences, override codecs, or leak into other versions.
 
 Remote movie/episode detail responses sometimes expose one generic source while
-`GET /Items/{id}/PlaybackInfo?UserId=...` contains the actual inventory. During
-browsing, only that explicitly remote single-source case requests the inventory. Each
-version retains its original source ID and its own technical/audio-language
-facts; generic item streams must not overwrite the real default source.
-The playback gate uses `playbackItem(id:)`, which always requests this inventory
-for movies and episodes and requires it to succeed. Compatible servers can resolve
+`GET /Items/{id}/PlaybackInfo?UserId=...` contains the actual inventory.
+`item(id:)` is strictly presentation metadata: Home rows, focused heroes, detail
+pages and episode badges never request PlaybackInfo as background enrichment.
+GET is not proof of a cheap read: Jellyfin can refresh STRM metadata and run
+media probes while producing its playback inventory.
+
+Play and explicitly opening Version use `playbackItem(id:)`, which requests this
+inventory for movies and episodes and requires it to succeed. Each version retains
+its original source ID and its own technical/audio-language facts; generic item
+streams must not overwrite the real default source. Compatible servers can resolve
 their streams lazily at this endpoint; item-detail source counts and `IsRemote`
 flags do not establish completeness, even after an earlier playback.
-Browsing can retain lightweight metadata after a failed inventory request, but
-playback cannot mistake that fallback for a confirmed single-version title.
-Both paths use GETs without selecting or starting a source. Missing or duplicate
+Browsing remains available without an inventory request, but playback cannot
+mistake lightweight metadata for a confirmed single-version title. Missing or duplicate
 IDs and unsupported/failed inventory requests block playback through its error
 presentation while leaving browsing available. Cancellation still propagates.
 An explicitly remote source whose ID is the item ID and whose description starts
@@ -242,16 +245,35 @@ An all-placeholder inventory throws `StreamingQualityError.noStreams`, distinct
 from a missing item, malformed response or connection failure. Detail pages can
 therefore offer a truthful, retryable `No streams found` action without treating
 a temporary error as proof that a title has no streams.
-Both backends advertise deferred inventory enrichment so detail menus can refresh
-through the same authoritative endpoint after their hero has painted.
+Both backends expose Version even when the cached list has zero or one source.
+Opening the overflow menu alone does not load it. The version page owns loading,
+failure and explicit Retry, and shares alternate-file resolution with the Play gate.
+
+`PlaybackInfoRequestCoordinator` admits one VOD inventory GET or negotiation POST
+per server in this app process, with at most 16 queued requests. Concurrent inventory
+readers for the same client, user and item share in-flight work; changed credentials
+do not share results. Queued work retains its caller's task-local diagnostics and
+authorization context. Cancelling a queued caller removes its work. Cancelling a
+started inventory reader does not free admission before the transport finishes;
+started negotiation responses still reach playback-session cleanup.
+An ambiguous timeout, connection failure, invalid response (including HTTP 5xx),
+or decoding failure stops queued requests and rejects new ones for at least
+30 seconds; longer numeric Retry-After values are safely bounded and honored.
+Nothing retries automatically when that pause expires. Inventory GET also disables address-failover
+replay, so a lost response cannot trigger a second probe through the same server's
+other address.
+
+This is client-side containment, not a server FFprobe limit: a single request can
+still probe multiple files, and other clients, plugins and scans remain independent.
+It does not establish the cause or resolution of a reported server OOM.
 
 Version-preparation diagnostics distinguish the item-detail GET from the inventory
 GET, transport timeouts from HTTP failures, and decoding from source validation.
 Validation identifies an empty inventory, missing/blank/duplicate source IDs,
 an explicit unavailable placeholder, or server refusal without retaining source
-IDs or payloads. The shared version gate and deferred detail/episode enrichment
-capture these facts through `PlaybackPreparationDiagnostics`; existing playback
-errors and browsing fallbacks are unchanged.
+IDs or payloads. The shared version gate and explicit detail/episode discovery
+capture these facts through `PlaybackPreparationDiagnostics`; failures remain
+visible without converting an unavailable inventory into a playable fallback.
 
 Inventory GET does not send a device profile, open a stream, or report playback.
 Its generated `PlaySessionId` is not an owned encoding session and needs no stop

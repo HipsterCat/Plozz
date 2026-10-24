@@ -147,18 +147,20 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   family succeeds, including an authoritative empty result. Cancellation never
   publishes a partial success or replaces the last completed diagnostic.
 
-- **Deferred version inventory** — providers that advertise lazy file discovery
-  refresh movie/episode choices after detail first paint and the existing dwell
-  gate. Inventory publication is fenced by the current source and cancellation;
-  later cross-server discovery cannot overwrite it with the original sparse
-  seed. Leaving cancels the work and returning resumes an unfinished attempt.
+- **Explicit version inventory** — providers that advertise lazy file discovery
+  expose Version regardless of the cached source count, but load it only after
+  that action is opened. Home, detail dwell, returning to a page and passive
+  episode badge enrichment use presentation metadata, never playback inventory.
+  Publication is fenced by the current source and the picker task's cancellation;
+  later sparse metadata cannot erase authoritative file choices. Same-account
+  alternate files use the same sequential discovery as the Play gate.
   Failure keeps browsing available but never authorizes playback: Play runs its
   own strict gate. Providers with complete detail inventories incur no extra fetch.
-  Series heroes resolve the episode that Play would start through the same
-  inventory contract. Mobile source/version actions use that episode even while
+  Series heroes enrich the playable episode's ordinary metadata. Explicit
+  mobile source/version actions use that episode even while
   the hero shows the series' artwork and description, matching tvOS. Choosing a
   version therefore remembers the episode/series preference, not a container file.
-  An explicit no-stream result from the provider replaces the detail Play action with
+  A confirmed no-stream result from explicit detail discovery replaces Play with
   `No streams found` on both platforms. It rechecks the selected source without
   starting playback; successful recovery restores Play. This page-local result is
   scoped to the active server and episode, not inferred from timeouts, missing

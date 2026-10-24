@@ -435,6 +435,7 @@ struct PlozziOSDetailHeroSection: View {
     let selectedVersionID: String?
     let onSelectSource: (String) -> Void
     let onSelectVersion: (String) -> Void
+    var loadVersions: MediaVersionInventoryLoader? = nil
     let actionHandler: any MediaItemActionHandling
     let onPlay: (MediaItem, Bool) -> Void
     var trailerItem: MediaItem?
@@ -489,6 +490,7 @@ struct PlozziOSDetailHeroSection: View {
                 selectedVersionID: selectedVersionID,
                 onSelectSource: onSelectSource,
                 onSelectVersion: onSelectVersion,
+                loadVersions: loadVersions,
                 presentation: presentation,
                 fallbackPresentation: backdropPresentation,
                 style: style,
@@ -1888,6 +1890,7 @@ struct PlozziOSDetailHeroForeground: View {
     let selectedVersionID: String?
     let onSelectSource: (String) -> Void
     let onSelectVersion: (String) -> Void
+    var loadVersions: MediaVersionInventoryLoader? = nil
     let presentation: HeroPresentation
     let fallbackPresentation: HeroPresentation
     let style: HeroArtworkStyle
@@ -1970,7 +1973,7 @@ struct PlozziOSDetailHeroForeground: View {
     }
 
     private var hasSourceVersionOptions: Bool {
-        sources.count > 1 || versions.count > 1
+        sources.count > 1 || versions.count > 1 || loadVersions != nil
     }
 
     /// The episode's own 16:9 still, shown above its details on an episode page.
@@ -2101,6 +2104,7 @@ struct PlozziOSDetailHeroForeground: View {
         .playbackSourceMenu(
             state: sourceMenu, sources: sources, selectedSourceID: selectedSourceAccountID,
             versions: versions, selectedVersionID: selectedVersionID,
+            loadVersions: loadVersions,
             onSelectSource: onSelectSource, onSelectVersion: onSelectVersion,
             onPerformAction: performCompactPanelAction
         )
@@ -2108,6 +2112,7 @@ struct PlozziOSDetailHeroForeground: View {
             MediaVersionPicker(
                 versions: versions,
                 selectedVersionID: selectedVersion?.id,
+                loadVersions: loadVersions,
                 onSelect: onSelectVersion
             )
         }
@@ -2476,7 +2481,7 @@ struct PlozziOSDetailHeroForeground: View {
             }
             .pickerStyle(.menu)
         }
-        if versions.count > 1 {
+        if versions.count > 1 || loadVersions != nil {
             Button("Version", systemImage: "film.stack") {
                 isVersionPickerPresented = true
             }
