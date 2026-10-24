@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 import UIKit
 import XCTest

@@ -1,6 +1,6 @@
 #if os(iOS)
 @testable import AppShelliOS
-import CoreUI
+import PlozzCoreUI
 import FeaturePlayback
 import SwiftUI
 import UIKit

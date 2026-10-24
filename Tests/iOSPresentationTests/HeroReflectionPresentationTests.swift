@@ -1,5 +1,5 @@
 #if os(iOS)
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 import SwiftUI
 import UIKit

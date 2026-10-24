@@ -2,7 +2,7 @@ import CoreModels
 import TVUIKit
 import UIKit
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import PlozzFocusHost
 
 @MainActor

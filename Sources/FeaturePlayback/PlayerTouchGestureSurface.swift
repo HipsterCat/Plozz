@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 
 /// Lives behind the native controls, so their touches never become playback shortcuts.
 public struct PlayerTouchGestureSurface: UIViewRepresentable {

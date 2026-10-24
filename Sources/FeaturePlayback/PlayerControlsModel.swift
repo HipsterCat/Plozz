@@ -4,7 +4,7 @@ import CoreGraphics
 import Observation
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 @MainActor
 @Observable

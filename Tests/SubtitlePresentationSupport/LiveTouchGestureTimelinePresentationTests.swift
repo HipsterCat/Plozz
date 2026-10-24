@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import EnginePlozzigen
 import Observation
 import SwiftUI

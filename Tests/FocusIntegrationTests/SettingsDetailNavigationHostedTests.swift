@@ -1,6 +1,6 @@
 @testable import FeatureSettings
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 @testable import AppShell
 import FeatureProfiles
 import Observation

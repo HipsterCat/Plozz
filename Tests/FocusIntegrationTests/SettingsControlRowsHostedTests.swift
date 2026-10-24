@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 @testable import FeatureSettings
 import SwiftUI
 import UIKit

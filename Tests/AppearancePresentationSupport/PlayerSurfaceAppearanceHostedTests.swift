@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 @testable import FeaturePlayback
 import SwiftUI
 import UIKit

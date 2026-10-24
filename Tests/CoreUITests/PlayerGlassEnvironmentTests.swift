@@ -1,7 +1,7 @@
 import CoreModels
 import SwiftUI
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class PlayerGlassEnvironmentTests: XCTestCase {

@@ -1,6 +1,6 @@
 import XCTest
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 #if canImport(UIKit)
 import UIKit

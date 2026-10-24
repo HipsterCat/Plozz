@@ -1,7 +1,7 @@
 #if os(iOS)
 import CoreModels
 import CoreText
-@testable import CoreUI
+@testable import PlozzCoreUI
 import FeatureLiveTVCore
 import FeatureHomeCore
 @testable import FeatureSettings

@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 import Observation
 import SwiftUI
 import UIKit

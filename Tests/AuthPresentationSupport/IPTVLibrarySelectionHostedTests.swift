@@ -1,7 +1,7 @@
 import CoreModels
 import AppRuntime
 import CoreSecureStore
-import CoreUI
+import PlozzCoreUI
 import FeatureAuthCore
 import FeatureLiveTV
 import FeatureLiveTVCore

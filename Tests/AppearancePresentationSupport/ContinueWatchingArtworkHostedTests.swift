@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 import Vision
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import MetadataKit
 #if os(tvOS)
 import TVUIKit

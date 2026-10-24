@@ -152,7 +152,7 @@ public enum HomeLiveTVRuntime {
 }
 
 #if canImport(SwiftUI)
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 private struct HomeLiveTVScope: ViewModifier {

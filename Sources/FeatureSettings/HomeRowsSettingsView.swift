@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The shared section editor adapts existing row feeds without changing their identities.
 public struct HomeRowsSettingsView: View {

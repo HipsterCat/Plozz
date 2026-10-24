@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import Foundation
 import MediaDownloads
 import MetadataKit

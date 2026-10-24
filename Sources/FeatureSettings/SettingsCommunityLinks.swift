@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 public struct SettingsCommunityLinks: View {
     private let repoURL: String

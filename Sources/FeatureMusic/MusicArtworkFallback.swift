@@ -1,6 +1,6 @@
 import Foundation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import MetadataKit
 
 /// Bridges the music UI to MetadataKit's keyless artwork providers via

@@ -1,5 +1,5 @@
 #if os(tvOS) && DEBUG
-@testable import CoreUI
+@testable import PlozzCoreUI
 import SwiftUI
 import UIKit
 import XCTest

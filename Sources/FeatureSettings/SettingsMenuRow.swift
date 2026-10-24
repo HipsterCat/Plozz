@@ -1,5 +1,5 @@
 #if canImport(SwiftUI)
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// A settings choice is one focusable row; the system still owns its menu.

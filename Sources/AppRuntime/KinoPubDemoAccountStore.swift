@@ -64,6 +64,12 @@ public final class KinoPubDemoAccountStore: AccountPersisting, @unchecked Sendab
     }
 
     public func add(_ account: Account, token: String) throws {}
+
+    public func registerAuthenticatedSession(_ session: UserSession) throws -> AccountRegistration {
+        // Demo is already signed in; live auth registration is out of scope.
+        throw AccountStoreError.metadataUpdatesUnavailable
+    }
+
     public func addMediaShare(
         _ account: Account,
         credential: MediaShareCredentialEnvelope,

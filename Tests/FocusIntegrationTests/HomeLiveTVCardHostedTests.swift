@@ -1,6 +1,6 @@
 import CoreModels
 @testable import AppShell
-@testable import CoreUI
+@testable import PlozzCoreUI
 import SwiftUI
 import TVUIKit
 import UIKit

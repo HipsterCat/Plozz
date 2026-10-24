@@ -1,7 +1,7 @@
 @testable import AppRuntime
 import CoreModels
 import CoreSecureStore
-import CoreUI
+import PlozzCoreUI
 import FeatureAuthCore
 import FeatureLiveTV
 import FeatureLiveTVCore

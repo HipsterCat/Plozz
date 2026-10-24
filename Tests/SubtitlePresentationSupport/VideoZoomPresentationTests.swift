@@ -4,7 +4,7 @@ import EnginePlozzigen
 import SwiftUI
 import UIKit
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import FeaturePlayback
 
 @MainActor

@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 import FeatureShareOnboarding
 import SwiftUI
 import UIKit

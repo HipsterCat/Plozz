@@ -1,7 +1,7 @@
 #if os(tvOS)
 import XCTest
 import UIKit
-import CoreUI
+import PlozzCoreUI
 @testable import AppShell
 
 @MainActor

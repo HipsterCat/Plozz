@@ -1,6 +1,6 @@
 #if os(tvOS)
 @testable import AppShell
-import CoreUI
+import PlozzCoreUI
 import FeatureShareOnboarding
 import MediaTransportHTTP
 import MediaTransportWebDAV

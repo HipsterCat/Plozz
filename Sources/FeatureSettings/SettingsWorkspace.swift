@@ -1,5 +1,5 @@
 #if os(tvOS)
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 import FeatureProfiles
 import SwiftUI

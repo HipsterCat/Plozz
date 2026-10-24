@@ -1,6 +1,6 @@
 #if os(iOS)
 import AVKit
-import CoreUI
+import PlozzCoreUI
 import FeaturePlayback
 import SwiftUI
 

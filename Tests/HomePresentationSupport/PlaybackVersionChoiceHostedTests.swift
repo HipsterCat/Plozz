@@ -1,6 +1,6 @@
 import CoreModels
 import CoreImage
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 import Observation
 import SwiftUI

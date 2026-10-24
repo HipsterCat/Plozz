@@ -1,5 +1,5 @@
 import CoreImage
-import CoreUI
+import PlozzCoreUI
 import FeatureAuth
 import Observation
 import SwiftUI

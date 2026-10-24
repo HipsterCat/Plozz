@@ -1,6 +1,6 @@
 import Combine
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureAuth
 import FeatureHomeCore
 import Foundation

@@ -1,6 +1,6 @@
 #if os(tvOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 struct TopShelfSettingsView: View {

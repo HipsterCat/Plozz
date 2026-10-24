@@ -4,7 +4,7 @@ import SwiftUI
 import QuartzCore
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 
 /// Callbacks the input controller invokes on the owning view model. Kept as a
 /// plain value of closures so the UIKit layer never imports the view model.

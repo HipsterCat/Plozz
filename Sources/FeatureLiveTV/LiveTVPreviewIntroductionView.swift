@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 struct LiveTVPreviewIntroductionPresentation: ViewModifier {

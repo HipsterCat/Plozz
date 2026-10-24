@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import XCTest
 @testable import FeatureMusic
 

@@ -1,6 +1,6 @@
 #if os(tvOS) && DEBUG
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import FeatureHome
 @testable import HeroUI
 import Observation

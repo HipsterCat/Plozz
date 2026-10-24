@@ -1,7 +1,7 @@
 #if os(iOS)
 @testable import AppShelliOS
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import EnginePlozzigen
 @testable import FeaturePlayback
 import Observation

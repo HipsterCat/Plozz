@@ -1,5 +1,5 @@
 #if os(tvOS)
-import CoreUI
+import PlozzCoreUI
 
 typealias PlayerOptionsFocusScope = SettingsAdjustmentFocusScope
 typealias PlayerOptionsRemoteInput = SettingsAdjustmentRemoteInput

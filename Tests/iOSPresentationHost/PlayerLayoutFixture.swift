@@ -1,6 +1,6 @@
 import AVKit
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import EnginePlozzigen
 import FeatureLiveTVCore
 import SwiftUI

@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// The request-only season manager shared by Home and detail heroes.

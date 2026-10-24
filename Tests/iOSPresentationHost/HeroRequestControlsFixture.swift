@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 @testable import AppShelliOS
 

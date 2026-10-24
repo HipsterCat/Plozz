@@ -147,9 +147,12 @@ public struct RootView: View {
             let session = account.session(token: "demo")
             Task { await KinoPubDemo.runSelfCheckIfRequested(session: session) }
         }
+        let profiles = KinoPubDemoProfileSelection.makeProfilesModel()
+        KinoPubDemoProfileSelection.ensureDemoAccountSelected(profiles)
         return AppState(
             accountStore: KinoPubDemoAccountStore(),
-            registry: KinoPubDemo.makeRegistry()
+            registry: KinoPubDemo.makeRegistry(),
+            profilesModel: profiles
         )
     }
 

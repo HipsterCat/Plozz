@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import TestSupportPerformance
 
 final class PosterPreviewAdmissionTests: XCTestCase {

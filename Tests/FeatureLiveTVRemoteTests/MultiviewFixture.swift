@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeaturePlayback
 import SwiftUI
 import UIKit

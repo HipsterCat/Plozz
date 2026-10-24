@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureAuth
 import FeatureHomeCore
 @testable import FeatureLiveTV

@@ -2145,6 +2145,7 @@ private struct DetailHeroPreviewHost: View {
             ExternalRating(source: .rottenTomatoes, value: 90, scale: .percent),
             ExternalRating(source: .tmdb, value: 8.4, scale: .outOfTen)
         ],
+        familyGuidanceAge: nil,
         featureBadges: [
             MediaBadge("PG", style: .rating),
             MediaBadge("SD", style: .prominent),

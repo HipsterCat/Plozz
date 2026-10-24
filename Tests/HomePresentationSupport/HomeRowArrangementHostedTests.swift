@@ -1,6 +1,6 @@
 import CoreImage
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 #if os(tvOS)
 @testable import FeatureHome
 #elseif os(iOS)

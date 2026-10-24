@@ -1,5 +1,5 @@
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class ArtworkMemoryBudgetTests: XCTestCase {
     func testSmallDevicesKeepTheOriginalLimits() {

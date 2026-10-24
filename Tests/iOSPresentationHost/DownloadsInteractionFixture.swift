@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import MediaDownloads
 import MediaTransportCore
 import SwiftUI

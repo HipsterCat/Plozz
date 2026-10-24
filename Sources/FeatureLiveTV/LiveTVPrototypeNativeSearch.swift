@@ -1,7 +1,7 @@
 #if os(tvOS)
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 import UIKit
 

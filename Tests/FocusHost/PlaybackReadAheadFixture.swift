@@ -1,6 +1,6 @@
 import AppShell
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 @testable import FeatureSettings
 import SwiftUI
 

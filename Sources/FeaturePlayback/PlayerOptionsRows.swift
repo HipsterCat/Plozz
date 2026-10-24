@@ -1,5 +1,5 @@
 #if canImport(SwiftUI) && canImport(UIKit)
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 struct PlayerOptionsRowSpec: Identifiable {

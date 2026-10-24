@@ -7,7 +7,7 @@ enum MobilePlaybackDisplaySleepPolicy {
 }
 
 #if os(iOS)
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 @MainActor

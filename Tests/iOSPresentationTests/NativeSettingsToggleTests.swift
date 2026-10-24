@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureProfiles
 @testable import FeaturePlayback
 @testable import FeatureSettings

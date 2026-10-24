@@ -1,7 +1,7 @@
 #if os(iOS)
 import XCTest
 import UIKit
-@testable import CoreUI
+@testable import PlozzCoreUI
 import CoreModels
 import FeatureLiveTVCore
 @testable import FeatureLiveTV

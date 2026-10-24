@@ -2,7 +2,7 @@
 import XCTest
 import UIKit
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 @testable import FeatureHome
 @testable import HeroUI
 @testable import MetadataKit

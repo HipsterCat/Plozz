@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 @testable import FeatureSettings
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 import XCTest
 

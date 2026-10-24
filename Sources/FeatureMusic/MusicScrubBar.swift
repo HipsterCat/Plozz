@@ -1,7 +1,7 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
 import UIKit
-import CoreUI
+import PlozzCoreUI
 
 /// Observable scrub state shared between the UIKit gesture surface (which writes
 /// it) and the SwiftUI bar (which only reads it). Keeping the gesture handling in

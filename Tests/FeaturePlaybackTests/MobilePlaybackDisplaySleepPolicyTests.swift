@@ -1,5 +1,5 @@
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 #if os(iOS)
 import Observation
 import SwiftUI

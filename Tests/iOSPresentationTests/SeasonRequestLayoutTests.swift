@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 import Observation
 import FeatureHomeCore
 import SwiftUI

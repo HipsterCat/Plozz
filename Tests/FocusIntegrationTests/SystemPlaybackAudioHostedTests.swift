@@ -1,5 +1,5 @@
 import AVFoundation
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import FeaturePlayback
 import Observation
 import SwiftUI

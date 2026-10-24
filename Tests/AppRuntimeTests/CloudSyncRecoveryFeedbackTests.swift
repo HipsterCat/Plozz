@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 import FeatureSyncCloud
 import XCTest
 @testable import AppRuntime

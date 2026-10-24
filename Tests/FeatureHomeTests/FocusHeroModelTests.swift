@@ -3,7 +3,7 @@ import XCTest
 import UIKit
 import Observation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 @testable import FeatureHome
 
 /// Locks the Immersive Home's pin and hero rules: which row is pinned, which

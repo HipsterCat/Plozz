@@ -1,6 +1,6 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import XCTest
 @testable import FeaturePlayback
 @testable import MetadataKit

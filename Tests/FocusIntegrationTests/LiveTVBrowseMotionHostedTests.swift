@@ -5,7 +5,7 @@ import XCTest
 import FeatureLiveTVCore
 @testable import AppShell
 @testable import FeatureLiveTV
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import FeaturePlayback
 
 @MainActor

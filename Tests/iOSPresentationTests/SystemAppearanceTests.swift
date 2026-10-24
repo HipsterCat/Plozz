@@ -1,7 +1,7 @@
 #if os(iOS)
 @testable import AppShelliOS
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import Observation
 import SwiftUI
 import UIKit

@@ -4,7 +4,7 @@ import SwiftUI
 import TVUIKit
 import UIKit
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class GradientBackgroundHostedTests: XCTestCase {

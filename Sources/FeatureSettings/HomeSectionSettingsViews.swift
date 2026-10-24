@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 struct HomeEditorPage<Content: View>: View {
     let title: Text

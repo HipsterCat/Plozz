@@ -2,7 +2,7 @@ import CoreModels
 import SwiftUI
 import TVUIKit
 import UIKit
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 struct NativeArtworkFocusComparisonScreen: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> NativeArtworkFocusComparisonController {

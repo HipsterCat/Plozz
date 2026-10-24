@@ -1,7 +1,7 @@
 #if os(iOS)
 import CoreModels
 import CoreImage
-@testable import CoreUI
+@testable import PlozzCoreUI
 import SwiftUI
 import UIKit
 import Vision

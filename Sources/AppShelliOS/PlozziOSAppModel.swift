@@ -622,6 +622,9 @@ final class PlozziOSAppModel {
             ),
             defaultActiveAccountIDs: hubAccountStore.activeAccountIDs()
         )
+        if KinoPubDemo.isEnabled {
+            KinoPubDemoProfileSelection.ensureDemoAccountSelected(profiles)
+        }
         // Forced when the profile we'd restore is locked, so its content never
         // renders behind the PIN prompt — the unlock then runs through the
         // ordinary `selectProfile(_:)` gate with the picker behind it.

@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureAuth
 import XCTest
 @testable import AppRuntime

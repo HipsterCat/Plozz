@@ -2,7 +2,7 @@ import CoreGraphics
 import CoreImage
 import SwiftUI
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class QRCodeRenderingTests: XCTestCase {
     @MainActor

@@ -1,6 +1,6 @@
 #if os(tvOS)
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 import SwiftUI
 import TVUIKit
 import UIKit

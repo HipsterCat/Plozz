@@ -5,7 +5,7 @@ import CoreModels
 import FeatureHomeCore
 import FeaturePlayback
 @testable import AppShelliOS
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 struct TouchFeedbackFixture: View {
     @State private var position: TimeInterval = 30

@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureAuthCore
 #if os(iOS)
 import UIKit

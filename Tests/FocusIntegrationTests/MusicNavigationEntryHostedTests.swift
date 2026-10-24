@@ -1,6 +1,6 @@
 @testable import AppShell
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 @testable import FeatureMusic
 import Observation
 import SwiftUI
