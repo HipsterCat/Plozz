@@ -47,6 +47,11 @@ which puts the shared minimum height and padding inside the TV focus fill.
 control geometry. Standalone and inline actions use `plozzActionButton`; do not
 use a text-height focus strip as a smaller action-button variant.
 
+`SettingsStepper` retains every adjustment stop while limiting dense range tracks
+to 21 visual ticks. `ThemeMusicPreviewControlling` is the Settings-to-runtime
+preview seam; it carries ownership, availability, and errors without coupling
+Settings to the Home feature or a concrete audio player.
+
 `ChannelLogoArtwork` renders generated Plozz channels with the shared Byline
 layout: a name-first title and inset pixel-mascot signature. Its optional
 `LibraryChannelArtworkMood` comes from channel rules, not display-name guessing.

@@ -5,6 +5,7 @@ import MetadataKit
 import RatingsService
 import Observation
 @testable import FeatureHome
+@testable import FeatureHomeCore
 
 @MainActor
 final class ItemDetailViewModelTests: XCTestCase {

@@ -33,28 +33,40 @@ final class ThemeMusicSettingsTests: XCTestCase {
         XCTAssertTrue(ThemeMusicSettings(isEnabled: true, volume: .high).shouldPlay)
     }
 
-    func testVolumeGainIsSoftAndMonotonic() {
+    func testVolumeGainCoversSilenceToFullDeviceVolume() {
         XCTAssertEqual(ThemeMusicVolume.off.gain, 0)
         XCTAssertLessThan(ThemeMusicVolume.low.gain, ThemeMusicVolume.medium.gain)
         XCTAssertLessThan(ThemeMusicVolume.medium.gain, ThemeMusicVolume.high.gain)
-        XCTAssertLessThanOrEqual(ThemeMusicVolume.high.gain, 0.7)
+        XCTAssertEqual(ThemeMusicVolume(1).gain, 1)
+        XCTAssertEqual(ThemeMusicVolume(0.01).gain, 0.01)
+        XCTAssertEqual(ThemeMusicVolume(0.73).gain, 0.73)
+        XCTAssertEqual(ThemeMusicVolume(-1).gain, 0)
+        XCTAssertEqual(ThemeMusicVolume(2).gain, 1)
+        XCTAssertEqual(ThemeMusicVolume(.nan), .low)
+        XCTAssertEqual(ThemeMusicVolume(.infinity), .low)
     }
 
-    func testSelectableVolumeLevelsAreAllAudible() {
-        XCTAssertEqual(ThemeMusicVolume.playbackLevels, [.low, .medium, .high])
-        XCTAssertTrue(ThemeMusicVolume.playbackLevels.allSatisfy { $0.gain > 0 })
+    func testLegacyLevelsKeepExactGain() throws {
+        for (token, gain): (String, Float) in [("off", 0), ("low", 0.15), ("medium", 0.35), ("high", 0.6)] {
+            let settings = try JSONDecoder().decode(
+                ThemeMusicSettings.self, from: Data(#"{"isEnabled":true,"volume":"\#(token)"}"#.utf8)
+            )
+            XCTAssertEqual(settings.volume.gain, gain)
+        }
     }
 
     func testCodableRoundTrip() throws {
         let settings = ThemeMusicSettings(
             isEnabled: true,
-            volume: .medium
+            volume: ThemeMusicVolume(0.73)
         )
         let data = try JSONEncoder().encode(settings)
         XCTAssertEqual(
             try JSONDecoder().decode(ThemeMusicSettings.self, from: data),
             settings
         )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["volume"] as? Double, 0.73)
     }
 
     func testLenientDecodeUsesDefaultsForMissingAndUnknownFields() throws {

@@ -98,9 +98,18 @@ while Home and detail previews use edge-to-edge artwork.
 Mobile Home keeps native sliders beside their labels and one stacked preview.
 No artwork lookup is needed for these fictional previews.
 
-Detail Page theme music offers Low, Medium, and High volume; the Background mode
-owns Off. Older silent theme-music preferences migrate to Background Off without
-changing Home or trailer settings, with Low ready for the next explicit opt-in.
+Detail Page theme music uses the shared `ThemeMusicVolumeControl` on TV and mobile:
+0–100%, with native touch sliders and the shared remote-adjustable Settings track.
+The player uses the selected gain directly, up to the device's full volume;
+old Low/Medium/High preferences keep their exact 15/35/60% gains.
+Adjusting starts a preview, with an explicit Play/Stop preview action too.
+It samples up to eight recent/resume titles already admitted to the active
+profile's Home content, through `MediaProvider`; without an available theme,
+it loops an original locally generated instrumental sample. Errors are reported,
+not presented as a successful preview. Leaving the control or app stops previews.
+The Background mode owns Off. Only old string-valued silent preferences migrate
+to Background Off; a new slider value of 0% remains selected and persists.
+Migration does not change Home or trailer settings, with 15% ready for the next explicit opt-in.
 On tvOS, the selected Background option supplies its own explanation rather than
 repeating it in a section footer.
 

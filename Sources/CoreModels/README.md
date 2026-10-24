@@ -10,6 +10,9 @@ language every other module speaks.
 - The dual-provider abstraction: `MediaProvider` protocol, `ProviderKind`,
   `ProviderRegistry` / `ProviderResolving`, `ResolvedAccount`.
 - Cross-cutting UI state: `LoadState`, `AppError`.
+- `ThemeMusicVolume` persists a bounded 0–1 gain per profile. Legacy named levels
+  decode to their original gain; only the old `"off"` token triggers the paired
+  background-mode migration, not a new numeric zero.
 - `PlaybackReadAhead` and `LivePlaybackBuffer` are independent device-local
   network/storage preferences, not profile settings. Both default to Automatic
   and are excluded from profile transfer. `EngineSessionCache` carries active

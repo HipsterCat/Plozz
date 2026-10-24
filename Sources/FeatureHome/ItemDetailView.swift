@@ -387,6 +387,7 @@ public struct ItemDetailView: View {
         #if canImport(AVFoundation)
         .themeMusicPlayback(
             playbackID: viewModel.themeMusicPlaybackID,
+            isActive: isTrailerOwner,
             resolve: { await viewModel.resolveThemeMusic() }
         )
         #endif

@@ -1,0 +1,211 @@
+#if canImport(AVFoundation)
+import AVFoundation
+import CoreModels
+import XCTest
+@testable import FeatureHomeCore
+
+@MainActor
+final class ThemeMusicControllerTests: XCTestCase {
+    func testGeneratedSampleIsBoundedAudiblePCMWithoutClipping() throws {
+        let data = ThemeMusicPreviewSample.data()
+        XCTAssertEqual(String(data: data.prefix(4), encoding: .utf8), "RIFF")
+        XCTAssertEqual(String(data: data[8..<12], encoding: .utf8), "WAVE")
+        XCTAssertEqual(data.count, 44 + 22_050 * 8 * 2)
+        var peak = 0
+        for offset in stride(from: 44, to: data.count, by: 2) {
+            let bits = UInt16(data[offset]) | UInt16(data[offset + 1]) << 8
+            peak = max(peak, abs(Int(Int16(bitPattern: bits))))
+        }
+        XCTAssertGreaterThan(peak, 10_000)
+        XCTAssertLessThan(peak, Int(Int16.max))
+    }
+
+    func testPreviewUsesFullSelectedGainAndCleansUpItsSample() async throws {
+        let controller = ThemeMusicController()
+        controller.player.isMuted = true
+        defer { controller.stop() }
+        let owner = UUID()
+        await controller.preview(
+            owner: owner, volume: ThemeMusicVolume(1), resolve: { nil },
+            authenticatedHTTPResolver: nil
+        )
+        XCTAssertEqual(controller.previewOwner, owner)
+        XCTAssertEqual(controller.player.volume, 1)
+        let asset = try XCTUnwrap(controller.player.currentItem?.asset as? AVURLAsset)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset.url.path))
+        controller.updateVolume(ThemeMusicVolume(0.01))
+        XCTAssertEqual(controller.player.volume, 0.01)
+        XCTAssertTrue(controller.player.currentItem?.asset === asset)
+        controller.stopPreview(owner: owner)
+        XCTAssertNil(controller.player.currentItem)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: asset.url.path))
+    }
+
+    func testInactiveAppStopsPreviewAndDoesNotAutoResumeIt() async {
+        let controller = ThemeMusicController()
+        controller.player.isMuted = true
+        await controller.preview(
+            owner: UUID(), volume: .low, resolve: { nil }, authenticatedHTTPResolver: nil
+        )
+        controller.setAppActive(false)
+        XCTAssertFalse(controller.isPlaying)
+        XCTAssertFalse(controller.isPreviewing)
+        XCTAssertNil(controller.player.currentItem)
+        controller.setAppActive(true)
+        XCTAssertNil(controller.currentPlaybackID)
+        XCTAssertNil(controller.player.currentItem)
+    }
+
+    func testDetailRetainsItemAndPositionWhenAppBecomesInactive() async throws {
+        let controller = ThemeMusicController()
+        controller.player.isMuted = true
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("theme-lifecycle-\(UUID().uuidString).wav")
+        try ThemeMusicPreviewSample.data().write(to: url)
+        defer {
+            controller.stop()
+            try? FileManager.default.removeItem(at: url)
+        }
+        let source = try SecretFreeURLSource(url: URL(string: "https://example.test/theme.mp3")!)
+        let theme = ThemeMusic(itemID: "movie", playbackSource: .publicURL(source))
+        controller.play(theme, resolvedURL: url, playbackID: "account:movie",
+                        settings: ThemeMusicSettings(isEnabled: true))
+        try await waitUntil { controller.player.currentTime().seconds > 0.1 }
+        let item = try XCTUnwrap(controller.player.currentItem)
+        controller.setAppActive(false)
+        let pausedTime = controller.player.currentTime().seconds
+        XCTAssertFalse(controller.isPlaying)
+        XCTAssertEqual(controller.player.rate, 0)
+        XCTAssertEqual(controller.currentPlaybackID, "account:movie")
+        XCTAssertTrue(controller.player.currentItem === item)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(controller.player.currentTime().seconds, pausedTime, accuracy: 0.05)
+        controller.setAppActive(true)
+        try await waitUntil { controller.player.currentTime().seconds > pausedTime + 0.05 }
+        XCTAssertTrue(controller.player.currentItem === item)
+        controller.updateVolume(ThemeMusicVolume(1))
+        XCTAssertTrue(controller.player.currentItem === item)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(condition())
+    }
+
+    func testBlockedOrInactivePreviewDoesNotResolveAnything() async {
+        let controller = ThemeMusicController()
+        controller.setBlocked(true)
+        await controller.preview(
+            owner: UUID(), volume: .high,
+            resolve: { XCTFail("Blocked preview cannot access a provider"); return nil },
+            authenticatedHTTPResolver: nil
+        )
+        controller.setBlocked(false)
+        controller.setAppActive(false)
+        await controller.preview(
+            owner: UUID(), volume: .high,
+            resolve: { XCTFail("Background preview cannot access a provider"); return nil },
+            authenticatedHTTPResolver: nil
+        )
+        XCTAssertNil(controller.player.currentItem)
+    }
+
+    func testPendingResolutionCannotRevivePreviewAfterLeavingApp() async {
+        let controller = ThemeMusicController()
+        let gate = ThemePreviewGate()
+        let task = Task {
+            await controller.preview(
+                owner: UUID(), volume: .low, resolve: { await gate.resolve() },
+                authenticatedHTTPResolver: nil
+            )
+        }
+        await gate.waitUntilStarted()
+        controller.setAppActive(false)
+        controller.setAppActive(true)
+        await gate.finish()
+        await task.value
+        XCTAssertNil(controller.previewOwner)
+        XCTAssertNil(controller.player.currentItem)
+    }
+
+    func testVolumeChangedDuringLookupIsUsedWhenPreviewStarts() async {
+        let controller = ThemeMusicController()
+        controller.player.isMuted = true
+        defer { controller.stop() }
+        let gate = ThemePreviewGate()
+        let task = Task {
+            await controller.preview(
+                owner: UUID(), volume: .low, resolve: { await gate.resolve() },
+                authenticatedHTTPResolver: nil
+            )
+        }
+        await gate.waitUntilStarted()
+        controller.updateVolume(ThemeMusicVolume(0.82))
+        await gate.finish()
+        await task.value
+        XCTAssertEqual(controller.player.volume, 0.82)
+    }
+
+    func testOldOwnerAndCancelledLookupCannotStopReplacementPreview() async {
+        let controller = ThemeMusicController()
+        controller.player.isMuted = true
+        defer { controller.stop() }
+        let oldOwner = UUID()
+        let newOwner = UUID()
+        let gate = ThemePreviewGate()
+        let oldTask = Task {
+            await controller.preview(
+                owner: oldOwner, volume: .low, resolve: { await gate.resolve() },
+                authenticatedHTTPResolver: nil
+            )
+        }
+        await gate.waitUntilStarted()
+        oldTask.cancel()
+        await controller.preview(
+            owner: newOwner, volume: .high, resolve: { nil }, authenticatedHTTPResolver: nil
+        )
+        let item = controller.player.currentItem
+        controller.stopPreview(owner: oldOwner)
+        await gate.finish()
+        await oldTask.value
+        XCTAssertEqual(controller.previewOwner, newOwner)
+        XCTAssertTrue(controller.player.currentItem === item)
+    }
+
+    func testPreviewLookupErrorIsVisibleAndDoesNotGenerateSuccessFallback() async {
+        let controller = ThemeMusicController()
+        await controller.preview(
+            owner: UUID(), volume: .low, resolve: { throw AppError.serverUnreachable },
+            authenticatedHTTPResolver: nil
+        )
+        XCTAssertNotNil(controller.failure)
+        XCTAssertNil(controller.previewOwner)
+        XCTAssertNil(controller.player.currentItem)
+    }
+}
+
+private actor ThemePreviewGate {
+    private var continuation: CheckedContinuation<ThemeMusic?, Never>?
+    private var started: CheckedContinuation<Void, Never>?
+
+    func resolve() async -> ThemeMusic? {
+        await withCheckedContinuation {
+            continuation = $0
+            started?.resume()
+            started = nil
+        }
+    }
+
+    func waitUntilStarted() async {
+        if continuation != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+
+    func finish() {
+        continuation?.resume(returning: nil)
+        continuation = nil
+    }
+}
+#endif

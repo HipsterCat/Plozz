@@ -8,6 +8,54 @@ import XCTest
 
 @MainActor
 final class SettingsStepperHostedTests: XCTestCase {
+    func testSharedThemeVolumeControlPreviewsOnceUpdatesGainAndStopsOnExit() async throws {
+        try await waitUntil {
+            UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let suite = "ThemeVolumeControl.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = ThemeMusicSettingsModel(store: ThemeMusicSettingsStore(defaults: defaults))
+        let preview = PreviewController()
+        var resolutionCount = 0
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView:
+            ThemeMusicVolumeControl(model: model)
+                .environment(\.themeMusicPreviewController, preview)
+                .environment(\.themeMusicPreviewResolver, { resolutionCount += 1; return nil })
+                .frame(width: 900)
+        )
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await waitUntil { self.inputController(in: host) != nil }
+        let input = try XCTUnwrap(inputController(in: host))
+        let system = try XCTUnwrap(UIFocusSystem(for: window))
+        system.requestFocusUpdate(to: input)
+        system.updateFocusIfNeeded()
+        try await waitUntil { input.ownsHorizontalNavigationInput }
+        press(.right, input)
+        try await waitUntil { preview.previewOwner != nil }
+        XCTAssertEqual(resolutionCount, 1)
+        XCTAssertEqual(model.settings.volume.level, 0.16)
+        XCTAssertEqual(preview.volume.level, 0.16)
+        let owner = try XCTUnwrap(preview.previewOwner)
+        model.settings.volume = ThemeMusicVolume(0.48)
+        try await waitUntil { preview.volume.level == 0.48 }
+        XCTAssertEqual(preview.previewOwner, owner)
+        XCTAssertEqual(resolutionCount, 1, "Scrubbing must not repeatedly look up library themes.")
+        window.isHidden = true
+        window.rootViewController = nil
+        try await waitUntil { preview.previewOwner == nil }
+    }
+
     func testHeroSizeControlsStayCompactAndAdjustIndependentlyWithNativeFocus() async throws {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
@@ -111,6 +159,25 @@ final class SettingsStepperHostedTests: XCTestCase {
         }
     }
 
+    func testHundredStepVolumeRangeKeepsTrackAndNativeFocusBounded() async throws {
+        var baselineWidth: CGFloat = 0
+        try await withStepper(showsTrack: true) { _, _, window in
+            baselineWidth = try XCTUnwrap(UIFocusSystem(for: window)?.focusedItem).frame.width
+        }
+        try await withStepper(showsTrack: true, denseRange: true) { model, input, window in
+            let system = try XCTUnwrap(UIFocusSystem(for: window))
+            let focused = try XCTUnwrap(system.focusedItem)
+            let frame = focused.frame
+            self.press(.right, input)
+            try await self.waitUntil { model.selection == 16 }
+            self.press(.left, input)
+            try await self.waitUntil { model.selection == 15 }
+            XCTAssertTrue(system.focusedItem === focused)
+            XCTAssertEqual(system.focusedItem?.frame, frame)
+            XCTAssertEqual(frame.width, baselineWidth, accuracy: 1)
+        }
+    }
+
     func testDirectionalAdjustmentClampsAndKeepsNativeFocusAndWidth() async throws {
         for direction in [LayoutDirection.leftToRight, .rightToLeft] {
             try await withStepper(direction: direction) { model, input, window in
@@ -175,6 +242,7 @@ final class SettingsStepperHostedTests: XCTestCase {
         direction: LayoutDirection = .leftToRight,
         showsTrack: Bool = false,
         connectedGroups: Bool = false,
+        denseRange: Bool = false,
         body: (Model, any SettingsAdjustmentRemoteInput, UIWindow) async throws -> Void
     ) async throws {
         try await waitUntil {
@@ -184,6 +252,7 @@ final class SettingsStepperHostedTests: XCTestCase {
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first(where: \.isKeyWindow)
         let model = Model()
+        if denseRange { model.options = Array(0...100) }
         let window = UIWindow(windowScene: scene)
         let host = UIHostingController(rootView: Fixture(
             model: model, wraps: wraps, showsTrack: showsTrack, connectedGroups: connectedGroups
@@ -261,6 +330,27 @@ final class SettingsStepperHostedTests: XCTestCase {
         var selection = 15
         var focused = false
         var focusOther = false
+    }
+
+    @Observable final class PreviewController: ThemeMusicPreviewControlling {
+        var previewOwner: UUID?
+        var isBlocked = false
+        var isAppActive = true
+        var failure: LocalizedStringResource?
+        var volume = ThemeMusicVolume.low
+
+        func updateVolume(_ volume: ThemeMusicVolume) { self.volume = volume }
+        func stopPreview(owner: UUID) {
+            if previewOwner == owner { previewOwner = nil }
+        }
+        func preview(
+            owner: UUID, volume: ThemeMusicVolume, resolve: ThemeMusicPreviewResolving,
+            authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
+        ) async {
+            self.volume = volume
+            _ = try? await resolve()
+            previewOwner = owner
+        }
     }
 
     @Observable final class SizingModel {

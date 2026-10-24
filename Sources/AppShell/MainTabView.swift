@@ -1953,61 +1953,46 @@ struct MainTabView: View {
         let _ = PlozzBodyRate.tick("MainTabView")
         return playbackShell
         .detailNavigationZoom(isEnabled: navigationStyleModel.detailZoomEnabled)
-        .environment(\.themeMusicController, themeMusicController)
+        .themeMusicScope(
+            controller: themeMusicController,
+            model: themeMusicModel,
+            background: heroBackgroundModel.settings,
+            isBlocked: audioController.hasActivePlayback || heroTrailerController.isPlaying
+                || heroTrailerController.isPlaybackSuppressed || playRequest != nil
+                || isLiveTVDestinationActive,
+            authenticatedHTTPResolver: authenticatedHTTPResolver
+        )
+        .environment(\.themeMusicPreviewResolver, {
+            try await ThemeMusicPreviewResolver.resolve(
+                content: homeRuntime.homeViewModel.existingValue(forKey: homeRuntime.scopeKey)?.state.value,
+                accounts: currentAccounts()
+            )
+        })
         .environment(
             \.seasonRequestContextID,
             "\(seer.connectionRevision)|\(activeProfile.id)|\(activeProfile.seerrUserID.map(String.init) ?? "admin")|\(activeProfile.seerrServerIdentity?.canonicalURL ?? "")"
         )
-        .environment(\.themeMusicSettings, themeMusicModel.settings)
         .environment(heroTrailerController)
         .environment(heroBackgroundModel)
-        .environment(
-            \.themeMusicAuthenticatedHTTPResolver,
-            authenticatedHTTPResolver
-        )
         .onChange(of: artworkPolicy.forArea(.music), initial: true) { _, policy in
             audioController.updateArtworkPolicy(policy)
         }
-        .onChange(of: audioController.hasActivePlayback, initial: true) { _, active in
-            themeMusicController.setBlocked(
-                active || heroTrailerController.isPlaying || isLiveTVDestinationActive
-            )
-        }
         .onChange(of: playRequest != nil) { _, videoStarting in
-            if videoStarting {
-                themeMusicController.stop()
-            }
             // Full-screen playback suspends the ambient hero in place; dismissing
             // the player resumes the same trailer/timeline instead of restarting.
             heroTrailerController.setPaused(videoStarting)
         }
         .onChange(of: heroBackgroundModel.settings, initial: true) { _, settings in
-            // Theme music is a DETAIL-page concern; keep the legacy theme-music
-            // controller's enabled state mirrored from the detail mode.
-            themeMusicModel.settings.isEnabled = settings.themeMusicEnabled
             // Stop the shared trailer player only when NEITHER surface wants a
             // trailer; otherwise leave it to the active hero view. Mute is a live
             // session state on the controller, so it isn't touched here.
             if !settings.homeTrailerEnabled && !settings.detailTrailerEnabled {
                 heroTrailerController.stop()
             }
-            themeMusicController.setBlocked(
-                audioController.hasActivePlayback
-                    || heroTrailerController.isPlaying
-                    || isLiveTVDestinationActive
-            )
-        }
-        .onChange(of: heroTrailerController.isPlaying) { _, playing in
-            themeMusicController.setBlocked(
-                audioController.hasActivePlayback || playing || isLiveTVDestinationActive
-            )
         }
         .onChange(of: activeDestinationKey) {
             themeMusicController.stop()
             heroTrailerController.stop()
-            themeMusicController.setBlocked(
-                audioController.hasActivePlayback || isLiveTVDestinationActive
-            )
         }
         .environment(musicPlayerModel)
         .environment(uiDensityModel)

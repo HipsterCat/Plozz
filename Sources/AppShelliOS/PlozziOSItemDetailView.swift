@@ -353,6 +353,11 @@ private struct PlozziOSCanonicalItemDetailView: View {
         .background(palette.backgroundBase.ignoresSafeArea())
         .onAppear { isPageVisible = true }
         .onDisappear { isPageVisible = false }
+        .themeMusicPlayback(
+            playbackID: viewModel.themeMusicPlaybackID,
+            isActive: isPageVisible && playbackRequest == nil,
+            resolve: { await viewModel.resolveThemeMusic() }
+        )
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
