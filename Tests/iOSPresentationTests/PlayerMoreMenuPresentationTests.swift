@@ -273,6 +273,8 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
             model: model, availability: availability, locale: .init(identifier: "en"), section: .video, actions: actions
         )
         let zoom = PlayerZoomMenu.make(model: model.videoZoom, locale: .init(identifier: "en"), onCustomZoom: {})
+        XCTAssertTrue(video.title.isEmpty, "The standalone Video popup needs no category heading.")
+        XCTAssertEqual(try XCTUnwrap(video.children.first as? UIMenu).title, "Zoom Mode")
         let choices = visible(video).compactMap { $0 as? UIAction }
         XCTAssertEqual(choices.map(\.title), zoom.children.map(\.title) + ["Quality"])
         XCTAssertFalse(video.options.contains(.singleSelection))
@@ -301,6 +303,11 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
         )
         let video = try submenu("Video", in: root)
         XCTAssertEqual(visible(video).map(\.title), ["Quality"])
+        let standalone = PlayerMoreMenu.make(
+            model: model, availability: availability, locale: .init(identifier: "en"), section: .video, actions: actions
+        )
+        XCTAssertTrue(standalone.title.isEmpty)
+        XCTAssertEqual(visible(standalone).map(\.title), ["Quality"])
         perform(try XCTUnwrap(visible(video).first as? UIAction))
         XCTAssertEqual(requested, .quality)
         XCTAssertFalse(PlayerMoreMenu.sections(model, availability: .init(video: false)).contains(.video))
@@ -332,6 +339,9 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
             try await waitUntil { button.presentedMenu != nil }
             let menu = try XCTUnwrap(button.presentedMenu)
             let video = try (layout == .consolidated ? submenu("Video", in: menu) : menu)
+            XCTAssertEqual(video.title, layout == .consolidated ? "Video" : "")
+            XCTAssertEqual(try XCTUnwrap(video.children.first as? UIMenu).title, "Zoom Mode")
+            if layout == .separate { XCTAssertEqual(button.accessibilityLabel, "Video") }
             perform(try XCTUnwrap(visible(video).first { $0.title == "Quality" } as? UIAction))
             XCTAssertTrue(state.presentation.isPresented)
             XCTAssertNil(state.sheet)

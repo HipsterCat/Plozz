@@ -231,7 +231,7 @@ public enum PlayerMoreMenu {
             video.append(UIMenu(options: .displayInline, children: [destination("Quality", .quality)]))
         }
         if !video.isEmpty {
-            entries[.video] = UIMenu(title: localized(PlayerMenuSection.video.title), children: video)
+            entries[.video] = UIMenu(title: section == .video ? "" : localized(PlayerMenuSection.video.title), children: video)
         }
         if availability.versions { entries[.versions] = destination(PlayerMenuSection.versions.title, .versions) }
         if availability.multiview { entries[.multiview] = destination(PlayerMenuSection.multiview.title, .multiview) }

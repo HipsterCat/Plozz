@@ -176,7 +176,8 @@ separate controls, with Version and Multiview opening their existing destination
 directly. Audio, Subtitles and Video reuse the existing player-category icons
 (waveform, captions and adjustment sliders) in both VOD and Live TV. Video combines
 zoom choices with Quality in both layouts; Quality opens its existing editor and
-never acts as a selectable zoom mode. Quality remains
+never acts as a selectable zoom mode. The standalone Video popup omits its redundant
+category heading; portrait retains the named Video entry. Quality remains
 available in Video even when zoom is unsupported. Layout follows the actual player
 viewport, including iPad split windows, not the device's global orientation.
 Subtitles and Audio offer their existing tracks directly with real active-track
