@@ -93,6 +93,18 @@ public struct PlozziOSRootView: View {
         }
     }
 
+    private var themeMusicAuthorization: ThemeMusicPlaybackAuthorization {
+        let scope = appModel.accountsProviders.liveTVAuthorizationID
+        return ThemeMusicPlaybackAuthorization(
+            id: appModel.isActiveProfileAuthorized ? scope : nil,
+            provider: { accountID in
+                guard appModel.isActiveProfileAuthorized,
+                      appModel.accountsProviders.liveTVAuthorizationID == scope else { return nil }
+                return appModel.accountsProviders.homeAccounts.first { $0.account.id == accountID }?.provider
+            }
+        )
+    }
+
     private var needsDiagnosticConsent: Bool {
         appModel.crashReportingController.isConfigured && appModel.crashReporting.needsConsent
     }
@@ -331,6 +343,7 @@ public struct PlozziOSRootView: View {
                 || isLiveTVSelected,
             detailAllowed: !appModel.isSettingsPresented && !showingProfileSwitcher
                 && appModel.isActiveProfileAuthorized,
+            authorization: themeMusicAuthorization,
             authenticatedHTTPResolver: appModel.authenticatedHTTPResolver
         )
         .environment(sidebarGeometry)

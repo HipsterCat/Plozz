@@ -16,7 +16,33 @@ private struct ThemeMusicDetailAllowedKey: EnvironmentKey {
     static let defaultValue = true
 }
 
+/// A render-time scope paired with a live provider resolver. The resolver must
+/// reject a changed profile, excluded account, or effective credential identity.
+public struct ThemeMusicPlaybackAuthorization {
+    public let id: String?
+    let provider: @MainActor (String) -> (any MediaProvider)?
+
+    public init(
+        id: String?,
+        provider: @escaping @MainActor (String) -> (any MediaProvider)?
+    ) {
+        self.id = id
+        self.provider = provider
+    }
+
+    public static let denied = Self(id: nil, provider: { _ in nil })
+}
+
+private struct ThemeMusicAuthorizationKey: EnvironmentKey {
+    static let defaultValue = ThemeMusicPlaybackAuthorization.denied
+}
+
 public extension EnvironmentValues {
+    var themeMusicAuthorization: ThemeMusicPlaybackAuthorization {
+        get { self[ThemeMusicAuthorizationKey.self] }
+        set { self[ThemeMusicAuthorizationKey.self] = newValue }
+    }
+
     var themeMusicDetailAllowed: Bool {
         get { self[ThemeMusicDetailAllowedKey.self] }
         set { self[ThemeMusicDetailAllowedKey.self] = newValue }
@@ -41,18 +67,22 @@ private struct ThemeMusicPlaybackTaskID: Equatable {
     let isPreviewing: Bool
     let isAllowed: Bool
     let isAppActive: Bool
+    let isInterrupted: Bool
+    let authorizationID: String?
 }
 
 private struct ThemeMusicPlaybackModifier: ViewModifier {
     let playbackID: String?
-    let resolve: () async -> ThemeMusic?
+    let source: MediaSourceRef?
     let isActive: Bool
 
     @Environment(\.themeMusicController) private var controller
     @Environment(\.themeMusicSettings) private var settings
     @Environment(\.themeMusicAuthenticatedHTTPResolver) private var authenticatedHTTPResolver
     @Environment(\.themeMusicDetailAllowed) private var detailAllowed
+    @Environment(\.themeMusicAuthorization) private var authorization
     @State private var resolutionGeneration: UInt64 = 0
+    @State private var owner = UUID()
 
     private var taskID: ThemeMusicPlaybackTaskID {
         ThemeMusicPlaybackTaskID(
@@ -61,7 +91,9 @@ private struct ThemeMusicPlaybackModifier: ViewModifier {
             isBlocked: controller?.isBlocked ?? true,
             isPreviewing: controller?.isPreviewing ?? false,
             isAllowed: detailAllowed && isActive,
-            isAppActive: controller?.isAppActive ?? false
+            isAppActive: controller?.isAppActive ?? false,
+            isInterrupted: controller?.isInterrupted ?? false,
+            authorizationID: authorization.id
         )
     }
 
@@ -73,37 +105,44 @@ private struct ThemeMusicPlaybackModifier: ViewModifier {
                 guard let controller else { return }
                 guard !controller.isPreviewing else { return }
                 guard isActive, detailAllowed else {
-                    if let playbackID { controller.stop(ifPlaying: playbackID) }
+                    controller.stopDetail(owner: owner)
                     return
                 }
-                guard let playbackID else {
-                    controller.stop()
+                guard let playbackID, let source, let authorizationID = authorization.id,
+                      let provider = authorization.provider(source.accountID) else {
+                    controller.stopDetail(owner: owner)
                     return
                 }
                 guard settings.shouldPlay, !controller.isBlocked, detailAllowed, isActive else {
-                    controller.stop(ifPlaying: playbackID)
+                    controller.stopDetail(owner: owner)
                     return
                 }
-                guard controller.isAppActive else { return }
-                if controller.currentPlaybackID != playbackID {
-                    controller.stop()
+                guard controller.isAppActive, !controller.isInterrupted else { return }
+                controller.setAuthorization(authorizationID)
+                guard controller.claimDetail(
+                    owner: owner, playbackID: playbackID, authorizationID: authorizationID
+                ) else { return }
+                defer {
+                    if !Task.isCancelled, generation == resolutionGeneration,
+                       controller.currentPlaybackID == nil {
+                        controller.stopDetail(owner: owner)
+                    }
                 }
                 if controller.currentPlaybackID == playbackID {
                     controller.updateVolume(settings.volume)
                     return
                 }
-                guard let theme = await resolve(),
-                      !Task.isCancelled,
-                      generation == resolutionGeneration else {
-                    return
-                }
                 do {
+                    guard let theme = try await provider.themeMusic(for: source.itemID),
+                          !Task.isCancelled, generation == resolutionGeneration,
+                          authorization.provider(source.accountID) != nil else { return }
                     let resolvedURL = try await resolveThemeMusicURL(
                         theme,
                         authenticatedHTTPResolver: authenticatedHTTPResolver
                     )
                     guard !Task.isCancelled,
                           generation == resolutionGeneration,
+                          authorization.provider(source.accountID) != nil,
                           !controller.isBlocked else {
                         return
                     }
@@ -111,6 +150,8 @@ private struct ThemeMusicPlaybackModifier: ViewModifier {
                         theme,
                         resolvedURL: resolvedURL,
                         playbackID: playbackID,
+                        owner: owner,
+                        authorizationID: authorizationID,
                         settings: settings
                     )
                 } catch {
@@ -118,16 +159,16 @@ private struct ThemeMusicPlaybackModifier: ViewModifier {
                           generation == resolutionGeneration else {
                         return
                     }
-                    controller.stop(ifPlaying: playbackID)
+                    controller.stopDetail(owner: owner)
+                    guard !(error is CancellationError) else { return }
                     PlozzLog.app.error(
-                        "Theme music: source resolution failed item=\(theme.itemID) error=\(String(describing: error))"
+                        "Theme music: resolution failed type=\(String(describing: type(of: error)))"
                     )
                 }
             }
             .onDisappear {
                 resolutionGeneration &+= 1
-                guard let playbackID else { return }
-                controller?.stop(ifPlaying: playbackID)
+                controller?.stopDetail(owner: owner)
             }
     }
 }
@@ -139,6 +180,7 @@ private struct ThemeMusicScope: ViewModifier {
     let isBlocked: Bool
     let detailAllowed: Bool
     let authenticatedHTTPResolver: any AuthenticatedHTTPResourceResolving
+    let authorization: ThemeMusicPlaybackAuthorization
     @Environment(\.scenePhase) private var scenePhase
 
     func body(content: Content) -> some View {
@@ -148,6 +190,10 @@ private struct ThemeMusicScope: ViewModifier {
             .environment(\.themeMusicSettings, model.settings)
             .environment(\.themeMusicAuthenticatedHTTPResolver, authenticatedHTTPResolver)
             .environment(\.themeMusicDetailAllowed, detailAllowed)
+            .environment(\.themeMusicAuthorization, authorization)
+            .onChange(of: authorization.id, initial: true) { _, id in
+                controller.setAuthorization(id)
+            }
             .onChange(of: background.themeMusicEnabled, initial: true) { _, enabled in
                 if model.settings.isEnabled != enabled { model.settings.isEnabled = enabled }
                 if !enabled { controller.stop() }
@@ -196,24 +242,26 @@ public extension View {
         background: HeroBackgroundSettings,
         isBlocked: Bool,
         detailAllowed: Bool = true,
+        authorization: ThemeMusicPlaybackAuthorization,
         authenticatedHTTPResolver: any AuthenticatedHTTPResourceResolving
     ) -> some View {
         modifier(ThemeMusicScope(
             controller: controller, model: model, background: background,
             isBlocked: isBlocked, detailAllowed: detailAllowed,
-            authenticatedHTTPResolver: authenticatedHTTPResolver
+            authenticatedHTTPResolver: authenticatedHTTPResolver,
+            authorization: authorization
         ))
     }
 
     func themeMusicPlayback(
         playbackID: String?,
-        isActive: Bool = true,
-        resolve: @escaping () async -> ThemeMusic?
+        source: MediaSourceRef?,
+        isActive: Bool = true
     ) -> some View {
         modifier(
             ThemeMusicPlaybackModifier(
                 playbackID: playbackID,
-                resolve: resolve,
+                source: source,
                 isActive: isActive
             )
         )

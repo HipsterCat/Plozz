@@ -1065,6 +1065,18 @@ struct MainTabView: View {
         ThemePalette.palette(for: themeModel.theme, systemColorScheme: systemColorScheme)
     }
 
+    private var themeMusicAuthorization: ThemeMusicPlaybackAuthorization {
+        let scope = accountsProviders.liveTVAuthorizationID
+        return ThemeMusicPlaybackAuthorization(
+            id: isLiveTVProfileAuthorized() ? scope : nil,
+            provider: { accountID in
+                guard isLiveTVProfileAuthorized(),
+                      accountsProviders.liveTVAuthorizationID == scope else { return nil }
+                return accountsProviders.homeAccounts.first { $0.account.id == accountID }?.provider
+            }
+        )
+    }
+
     /// The identity of both tab subtrees. Includes the active profile, so
     /// switching profiles rebuilds Home/Search even when the two profiles share
     /// the same servers — otherwise the cached view model keeps serving the
@@ -1960,6 +1972,7 @@ struct MainTabView: View {
             isBlocked: audioController.hasActivePlayback || heroTrailerController.isPlaying
                 || heroTrailerController.isPlaybackSuppressed || playRequest != nil
                 || isLiveTVDestinationActive,
+            authorization: themeMusicAuthorization,
             authenticatedHTTPResolver: authenticatedHTTPResolver
         )
         .environment(\.themeMusicPreviewResolver, {

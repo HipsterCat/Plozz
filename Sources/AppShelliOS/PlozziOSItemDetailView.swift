@@ -355,8 +355,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
         .onDisappear { isPageVisible = false }
         .themeMusicPlayback(
             playbackID: viewModel.themeMusicPlaybackID,
-            isActive: isPageVisible && playbackRequest == nil,
-            resolve: { await viewModel.resolveThemeMusic() }
+            source: viewModel.currentSourceForDisplay,
+            isActive: isPageVisible && playbackRequest == nil
         )
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

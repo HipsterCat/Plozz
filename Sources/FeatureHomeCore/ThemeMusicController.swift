@@ -16,6 +16,7 @@ import UIKit
 public final class ThemeMusicController: ThemeMusicPreviewControlling {
     public private(set) var isPlaying = false
     public private(set) var currentPlaybackID: String?
+    public private(set) var detailOwner: UUID?
     public private(set) var isBlocked = false
     public private(set) var isAppActive = true
     public private(set) var isInterrupted = false
@@ -33,6 +34,8 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     private let fadeInDuration: Double = 5
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var sampleURL: URL?
+    private var authorizationID: String?
+    private var detailPlaybackID: String?
 
     public init() {
         #if canImport(UIKit)
@@ -91,16 +94,34 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
         }
     }
 
+    public func setAuthorization(_ id: String?) {
+        guard authorizationID != id else { return }
+        stop()
+        authorizationID = id
+    }
+
+    @discardableResult
+    func claimDetail(owner: UUID, playbackID: String, authorizationID: String) -> Bool {
+        guard canPlay, !isPreviewing, self.authorizationID == authorizationID else { return false }
+        if detailOwner != owner || detailPlaybackID != playbackID {
+            stop()
+            detailOwner = owner
+            detailPlaybackID = playbackID
+        }
+        return true
+    }
+
     public func play(
         _ theme: ThemeMusic,
         resolvedURL: URL,
         playbackID: String,
+        owner: UUID,
+        authorizationID: String,
         settings: ThemeMusicSettings
     ) {
-        guard settings.shouldPlay, canPlay, !isPreviewing else {
-            stop(ifPlaying: playbackID)
-            return
-        }
+        guard detailOwner == owner, detailPlaybackID == playbackID,
+              self.authorizationID == authorizationID else { return }
+        guard settings.shouldPlay, canPlay, !isPreviewing else { return }
 
         if currentPlaybackID == playbackID {
             updateVolume(settings.volume)
@@ -127,9 +148,11 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     }
 
     public func stop() {
-        guard isPlaying || currentPlaybackID != nil || previewOwner != nil else { return }
+        guard isPlaying || currentPlaybackID != nil || previewOwner != nil || detailOwner != nil else { return }
         stopPlayback(resetItem: true)
         previewOwner = nil
+        detailOwner = nil
+        detailPlaybackID = nil
         if let sampleURL {
             do {
                 try FileManager.default.removeItem(at: sampleURL)
@@ -141,8 +164,8 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
         PlozzLog.app.info("Theme music: stopped")
     }
 
-    public func stop(ifPlaying playbackID: String) {
-        guard currentPlaybackID == playbackID else { return }
+    public func stopDetail(owner: UUID) {
+        guard detailOwner == owner else { return }
         stop()
     }
 

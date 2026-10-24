@@ -67,7 +67,12 @@ final class ThemeMusicControllerTests: XCTestCase {
         }
         let source = try SecretFreeURLSource(url: URL(string: "https://example.test/theme.mp3")!)
         let theme = ThemeMusic(itemID: "movie", playbackSource: .publicURL(source))
+        let owner = UUID()
+        controller.setAuthorization("profile:account:revision")
+        XCTAssertTrue(controller.claimDetail(owner: owner, playbackID: "account:movie",
+                                            authorizationID: "profile:account:revision"))
         controller.play(theme, resolvedURL: url, playbackID: "account:movie",
+                        owner: owner, authorizationID: "profile:account:revision",
                         settings: ThemeMusicSettings(isEnabled: true))
         try await waitUntil { controller.player.currentTime().seconds > 0.1 }
         let item = try XCTUnwrap(controller.player.currentItem)
@@ -84,6 +89,45 @@ final class ThemeMusicControllerTests: XCTestCase {
         XCTAssertTrue(controller.player.currentItem === item)
         controller.updateVolume(ThemeMusicVolume(1))
         XCTAssertTrue(controller.player.currentItem === item)
+    }
+
+    func testCoveredPageWithSameMediaIDCannotReleaseForegroundOwner() throws {
+        let controller = ThemeMusicController()
+        defer { controller.stop() }
+        let ancestor = UUID()
+        let foreground = UUID()
+        let url = URL(fileURLWithPath: "/unused-same-title-theme.wav")
+        let source = try SecretFreeURLSource(url: URL(string: "https://example.test/theme.mp3")!)
+        let theme = ThemeMusic(itemID: "series", playbackSource: .publicURL(source))
+        controller.setAuthorization("scope")
+        XCTAssertTrue(controller.claimDetail(owner: ancestor, playbackID: "account:series", authorizationID: "scope"))
+        XCTAssertTrue(controller.claimDetail(owner: foreground, playbackID: "account:series", authorizationID: "scope"))
+        controller.play(theme, resolvedURL: url, playbackID: "account:series", owner: foreground,
+                        authorizationID: "scope", settings: ThemeMusicSettings(isEnabled: true))
+        let item = try XCTUnwrap(controller.player.currentItem)
+        controller.setAppActive(false)
+        controller.stopDetail(owner: ancestor)
+        XCTAssertEqual(controller.detailOwner, foreground)
+        XCTAssertEqual(controller.currentPlaybackID, "account:series")
+        XCTAssertTrue(controller.player.currentItem === item)
+    }
+
+    func testOldOwnerAndOldAuthorizationCannotPublishDelayedTheme() throws {
+        let controller = ThemeMusicController()
+        defer { controller.stop() }
+        let owner = UUID()
+        let url = URL(fileURLWithPath: "/unused-stale-theme.wav")
+        let source = try SecretFreeURLSource(url: URL(string: "https://example.test/theme.mp3")!)
+        let theme = ThemeMusic(itemID: "movie", playbackSource: .publicURL(source))
+        controller.setAuthorization("old-scope")
+        XCTAssertTrue(controller.claimDetail(owner: owner, playbackID: "account:movie", authorizationID: "old-scope"))
+        controller.setAuthorization("new-scope")
+        controller.play(theme, resolvedURL: url, playbackID: "account:movie", owner: owner,
+                        authorizationID: "old-scope", settings: ThemeMusicSettings(isEnabled: true))
+        XCTAssertNil(controller.currentPlaybackID)
+        XCTAssertNil(controller.player.currentItem)
+        XCTAssertNil(controller.detailOwner)
+        XCTAssertFalse(controller.claimDetail(owner: owner, playbackID: "account:movie", authorizationID: "old-scope"))
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {

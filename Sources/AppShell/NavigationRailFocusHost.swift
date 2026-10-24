@@ -38,6 +38,7 @@ struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
             target.themeMusicPreviewResolver = source.themeMusicPreviewResolver
             target.themeMusicPreviewController = source.themeMusicPreviewController
             target.themeMusicDetailAllowed = source.themeMusicDetailAllowed
+            target.themeMusicAuthorization = source.themeMusicAuthorization
             target.seasonRequestContextID = source.seasonRequestContextID
             target.libraryPresentationLoader = source.libraryPresentationLoader
             target[NavigationChromeModel.self] = source[NavigationChromeModel.self]
