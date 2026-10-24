@@ -36,8 +36,6 @@ public struct ThemeMusicVolumeControl: View {
                 ),
                 compact: true,
                 label: "Theme music volume",
-                rangeLabels: ("Silent", "Full"),
-                inlineRange: true,
                 textTitle: { Text(Double($0) / 100, format: .percent.precision(.fractionLength(0))) }
             )
             .accessibilityIdentifier("theme-music-volume")

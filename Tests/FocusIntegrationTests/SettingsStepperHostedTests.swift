@@ -47,8 +47,31 @@ final class SettingsStepperHostedTests: XCTestCase {
         XCTAssertEqual(model.settings.volume.level, 0.16)
         XCTAssertEqual(preview.volume.level, 0.16)
         let owner = try XCTUnwrap(preview.previewOwner)
+        for expected in [0.17, 0.18, 0.19] {
+            press(.right, input)
+            try await waitUntil { model.settings.volume.level == expected }
+        }
+        press(.left, input)
+        try await waitUntil { model.settings.volume.level == 0.18 }
         model.settings.volume = ThemeMusicVolume(0.48)
         try await waitUntil { preview.volume.level == 0.48 }
+        XCTAssertEqual(model.settings.volume.level, 0.48, "Presenting a saved value must not rewrite it.")
+        press(.right, input)
+        try await waitUntil { model.settings.volume.level == 0.49 }
+        model.settings.volume = ThemeMusicVolume(0.01)
+        try await waitUntil { preview.volume.level == 0.01 }
+        press(.left, input)
+        try await waitUntil { model.settings.volume.level == 0 }
+        model.settings.volume = ThemeMusicVolume(0.99)
+        try await waitUntil { preview.volume.level == 0.99 }
+        press(.right, input)
+        try await waitUntil { model.settings.volume.level == 1 }
+        for step in (0..<100).reversed() {
+            press(.left, input)
+            try await waitUntil { model.settings.volume.level == Double(step) / 100 }
+        }
+        press(.left, input)
+        XCTAssertEqual(model.settings.volume.level, 0)
         XCTAssertEqual(preview.previewOwner, owner)
         XCTAssertEqual(resolutionCount, 1, "Scrubbing must not repeatedly look up library themes.")
         window.isHidden = true

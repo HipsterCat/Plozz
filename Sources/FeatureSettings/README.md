@@ -99,7 +99,11 @@ Mobile Home keeps native sliders beside their labels and one stacked preview.
 No artwork lookup is needed for these fictional previews.
 
 Detail Page theme music uses the shared `ThemeMusicVolumeControl` on TV and mobile:
-0–100%, with native touch sliders and the shared remote-adjustable Settings track.
+0–100%, with native touch sliders and the shared remote-adjustable Settings stepper.
+TV shows the current percentage instead of notches, so each 1% Left/Right press
+has visible numeric feedback; holding retains the shared repeat behavior.
+Mobile keeps its native slider and 1% precision. Saved values are not changed
+merely by opening the control.
 The player uses the selected gain directly, up to the device's full volume;
 old Low/Medium/High preferences keep their exact 15/35/60% gains.
 Adjusting starts a preview, with an explicit Play/Stop preview action too.
