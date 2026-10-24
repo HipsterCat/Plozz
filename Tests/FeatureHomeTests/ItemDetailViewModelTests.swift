@@ -25,8 +25,9 @@ final class ItemDetailViewModelTests: XCTestCase {
                 trailerCache: TrailerResolutionCache()
             )
             await vm.load()
-            if isEpisode { _ = await vm.enrichEpisodeBadgesIfNeeded(target) }
-            await waitUntil { vm.hasNoPlaybackStreams(for: target) }
+            XCTAssertFalse(vm.hasNoPlaybackStreams(for: target), "Browsing must not discover playback sources.")
+            do { _ = try await vm.loadPlaybackVersions(for: target); XCTFail("Expected no streams.") }
+            catch { XCTAssertEqual(error as? StreamingQualityError, .noStreams) }
             XCTAssertFalse(vm.hasNoPlaybackStreams(for: target.taggingSource("other")))
             XCTAssertTrue(vm.episodeWithEnrichedBadges(available).versions.isEmpty)
             provider.playbackItemHandler = { _ in throw URLError(.timedOut) }
@@ -70,8 +71,8 @@ final class ItemDetailViewModelTests: XCTestCase {
             provider.playbackItemHandler = { _ in throw error }
             let vm = ItemDetailViewModel(provider: provider, itemID: root.id)
             await vm.load()
-            let result = await vm.enrichEpisodeBadgesIfNeeded(target)
-            XCTAssertNil(result)
+            do { _ = try await vm.loadPlaybackVersions(for: target); XCTFail("Expected inventory failure.") }
+            catch { }
             XCTAssertFalse(vm.hasNoPlaybackStreams(for: target))
             vm.suspendEnrichment()
         }
@@ -91,7 +92,8 @@ final class ItemDetailViewModelTests: XCTestCase {
             alternateProviderResolver: { _ in other }
         )
         await vm.load()
-        await waitUntil { vm.hasNoPlaybackStreams(for: item) }
+        do { _ = try await vm.loadPlaybackVersions(for: item); XCTFail("Expected no streams.") }
+        catch { XCTAssertEqual(error as? StreamingQualityError, .noStreams) }
         let entered = AsyncGate()
         let release = AsyncGate()
         provider.playbackItemHandler = { _ in
@@ -110,7 +112,7 @@ final class ItemDetailViewModelTests: XCTestCase {
         vm.suspendEnrichment()
     }
 
-    func testDeferredInventoryUpdatesDetailMenuWithoutBlockingHeroOrLosingToDiscovery() async throws {
+    func testExplicitInventoryUpdatesDetailMenuWithoutBlockingHeroOrLosingToDiscovery() async throws {
         let item = MediaItem(id: "movie", title: "Movie", kind: .movie, sourceAccountID: "account")
         var resolved = item
         resolved.versions = [.init(id: "hd"), .init(id: "4k")]
@@ -145,10 +147,13 @@ final class ItemDetailViewModelTests: XCTestCase {
             vm.suspendEnrichment()
         }
         await vm.load()
+        XCTAssertNotNil(vm.playbackVersionsLoader(for: item), "Unknown inventory must leave version selection discoverable.")
+        let lookup = Task { try await vm.loadPlaybackVersions(for: item) }
         await entered.wait()
         XCTAssertEqual(vm.state.value?.item.title, "Movie")
         XCTAssertEqual(vm.state.value?.item.versions, [])
         release.open()
+        _ = try await lookup.value
         await waitUntil { vm.state.value?.item.versions.count == 2 }
         discoveryRelease.open()
         await waitUntil { vm.sources.count == 2 }
@@ -157,7 +162,7 @@ final class ItemDetailViewModelTests: XCTestCase {
         XCTAssertEqual(Set(versions.compactMap(\.playbackMediaSourceID)), ["hd", "4k", "alternate-file"])
     }
 
-    func testSuspendedDetailCannotPublishLateVersionInventoryAndRetriesOnReturn() async {
+    func testSuspendedDetailCannotPublishLateInventoryOrAutomaticallyRetryOnReturn() async throws {
         let item = MediaItem(id: "movie", title: "Movie", kind: .movie, sourceAccountID: "account")
         var resolved = item
         resolved.versions = [.init(id: "hd"), .init(id: "4k")]
@@ -181,14 +186,109 @@ final class ItemDetailViewModelTests: XCTestCase {
             trailerCache: TrailerResolutionCache()
         )
         await vm.load()
+        XCTAssertEqual(calls.value, 0)
+        let lookup = Task { try await vm.loadPlaybackVersions(for: item) }
         await entered.wait()
         vm.suspendEnrichment()
+        lookup.cancel()
         release.open()
         await returned.wait()
+        do { _ = try await lookup.value; XCTFail("Suspended detail must reject a late response.") }
+        catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(vm.state.value?.item.versions, [])
         vm.resumeEnrichmentIfNeeded()
-        await waitUntil { vm.state.value?.item.versions.count == 2 }
+        XCTAssertEqual(calls.value, 1, "Returning to a detail must not repeat source discovery.")
+        _ = try await vm.loadPlaybackVersions(for: item)
         XCTAssertEqual(calls.value, 2)
+        vm.suspendEnrichment()
+    }
+
+    func testExplicitVersionPickerDiscoversLazySameAccountAlternateFiles() async throws {
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie, sourceAccountID: "account")
+        let source = MediaSourceRef(accountID: "account", itemID: item.id, kind: .movie)
+        let alternate = MediaSourceRef(accountID: "account", itemID: "alternate", kind: .movie)
+        let provider = FakeMediaProvider(allItems: [item])
+        let calls = LockedCounter()
+        provider.playbackInventoryRequiresEnrichment = true
+        provider.playbackItemHandler = { id in
+            _ = calls.increment()
+            return MediaItem(
+                id: id, title: "Movie", kind: .movie, sourceAccountID: "account",
+                versions: [.init(id: "\(id)-hd"), .init(id: "\(id)-4k")]
+            )
+        }
+        let vm = ItemDetailViewModel(
+            provider: provider, itemID: item.id, sourceAccountID: "account",
+            initialSources: [source, alternate]
+        )
+        await vm.load()
+        XCTAssertEqual(calls.value, 0)
+        let loader = try XCTUnwrap(vm.playbackVersionsLoader(for: item))
+        let versions = try await loader.load()
+        XCTAssertEqual(calls.value, 2)
+        XCTAssertEqual(Set(versions.compactMap(\.playbackMediaSourceID)),
+                       ["movie-hd", "movie-4k", "alternate-hd", "alternate-4k"])
+        XCTAssertEqual(Set(versions.compactMap(\.sourceItemID)), ["movie", "alternate"])
+        vm.suspendEnrichment()
+    }
+
+    func testLateAlternateMetadataKeepsDiscoveredFilesWhileUpdatingWatchState() async throws {
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie, sourceAccountID: "account")
+        var alternateItem = MediaItem(id: "alternate", title: "Movie", kind: .movie, sourceAccountID: "account")
+        alternateItem.resumePosition = 91
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        let metadata = FakeMediaProvider(allItems: [alternateItem])
+        metadata.itemGate = ["alternate": { entered.open(); await release.wait() }]
+        let provider = FakeMediaProvider(allItems: [item])
+        provider.playbackInventoryRequiresEnrichment = true
+        provider.playbackItemHandler = { id in
+            MediaItem(
+                id: id, title: "Movie", kind: .movie, sourceAccountID: "account",
+                versions: [.init(id: "\(id)-hd"), .init(id: "\(id)-4k")]
+            )
+        }
+        let vm = ItemDetailViewModel(
+            provider: provider, itemID: item.id, sourceAccountID: "account",
+            initialSources: [.init(accountID: "account", itemID: item.id, kind: .movie),
+                             .init(accountID: "account", itemID: "alternate", kind: .movie)],
+            alternateProviderResolver: { _ in metadata }
+        )
+        await vm.load()
+        await entered.wait()
+        _ = try await vm.loadPlaybackVersions(for: item)
+        release.open()
+        await waitUntil { vm.sources.first { $0.itemID == "alternate" }?.resumePosition == 91 }
+        XCTAssertEqual(vm.sources.first { $0.itemID == "alternate" }?.versions.map(\.id),
+                       ["alternate-hd", "alternate-4k"])
+        vm.suspendEnrichment()
+    }
+
+    func testLatePassiveEpisodeMetadataCannotEraseExplicitInventory() async throws {
+        let root = series("show")
+        let item = MediaItem(id: "episode", title: "Episode", kind: .episode, sourceAccountID: "account")
+        let provider = FakeMediaProvider(allItems: [root, item])
+        provider.childrenByParent = ["show": []]
+        provider.playbackInventoryRequiresEnrichment = true
+        let vm = ItemDetailViewModel(provider: provider, itemID: root.id, sourceAccountID: "account")
+        await vm.load()
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        provider.itemGate = ["episode": {
+            entered.open()
+            await release.wait()
+        }]
+        provider.playbackItemHandler = { _ in
+            var resolved = item
+            resolved.versions = [.init(id: "hd"), .init(id: "4k")]
+            return resolved
+        }
+        let passive = Task { await vm.enrichEpisodeBadgesIfNeeded(item) }
+        await entered.wait()
+        _ = try await vm.loadPlaybackVersions(for: item)
+        release.open()
+        _ = await passive.value
+        XCTAssertEqual(vm.episodeWithEnrichedBadges(item).versions.map(\.id), ["hd", "4k"])
         vm.suspendEnrichment()
     }
 
@@ -3434,8 +3534,10 @@ final class ItemDetailViewModelTests: XCTestCase {
             }
             let vm = ItemDetailViewModel(provider: provider, itemID: "show", sourceAccountID: "server")
             await vm.load()
-            let result = await vm.enrichEpisodeBadgesIfNeeded(sparse)
-            let target = try XCTUnwrap(result)
+            let passive = await vm.enrichEpisodeBadgesIfNeeded(sparse)
+            XCTAssertEqual(passive?.versions, sparse.versions, "Hero enrichment uses only presentation metadata.")
+            _ = try await vm.loadPlaybackVersions(for: sparse)
+            let target = vm.episodeWithEnrichedBadges(sparse)
             XCTAssertEqual(target.versions, versions)
             XCTAssertEqual(target.resumePosition, 600)
             XCTAssertEqual(target.sourceAccountID, "server")
@@ -3447,7 +3549,7 @@ final class ItemDetailViewModelTests: XCTestCase {
                 activeAccountID: "server"
             )
             XCTAssertEqual(Set(menuVersions.map(\.id)), Set(versions.map(\.id)))
-            XCTAssertEqual(provider.itemCallCount(for: "e1"), 0)
+            XCTAssertEqual(provider.itemCallCount(for: "e1"), 1)
             vm.suspendEnrichment()
         }
     }
@@ -3463,8 +3565,8 @@ final class ItemDetailViewModelTests: XCTestCase {
         let vm = ItemDetailViewModel(provider: provider, itemID: "show", sourceAccountID: "server")
         await vm.load()
         provider.playbackItemHandler = { _ in throw StreamingQualityError.sourceUnavailable }
-        let failed = await vm.enrichEpisodeBadgesIfNeeded(sparse)
-        XCTAssertNil(failed)
+        do { _ = try await vm.loadPlaybackVersions(for: sparse); XCTFail("Expected failure.") }
+        catch { XCTAssertEqual(error as? StreamingQualityError, .sourceUnavailable) }
         for mismatch in ["kind", "account", "id"] {
             var wrong = full
             if mismatch == "kind" { wrong.kind = .series }
@@ -3472,13 +3574,14 @@ final class ItemDetailViewModelTests: XCTestCase {
             if mismatch == "id" { wrong.id = "another-episode" }
             let response = wrong
             provider.playbackItemHandler = { _ in response }
-            let rejected = await vm.enrichEpisodeBadgesIfNeeded(sparse)
-            XCTAssertNil(rejected)
+            do { _ = try await vm.loadPlaybackVersions(for: sparse); XCTFail("Reject mismatched inventory.") }
+            catch { XCTAssertEqual(error as? StreamingQualityError, .sourceUnavailable) }
         }
         let response = full
         provider.playbackItemHandler = { _ in response }
-        let recovered = await vm.enrichEpisodeBadgesIfNeeded(sparse)
-        XCTAssertEqual(recovered?.versions, full.versions)
+        do { _ = try await vm.loadPlaybackVersions(for: sparse) }
+        catch { XCTFail("Expected inventory recovery: \(error)") }
+        XCTAssertEqual(vm.episodeWithEnrichedBadges(sparse).versions, full.versions)
         vm.suspendEnrichment()
     }
 

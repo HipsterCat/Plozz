@@ -701,6 +701,7 @@ public struct ItemDetailView: View {
                         versions: usesExternalDetail ? [] : effectiveVersions,
                         selectedVersionID: effectiveVersionID,
                         onSelectVersion: { id in selectVersion(id, for: detail.item) },
+                        loadVersions: viewModel.playbackVersionsLoader(for: detail.item),
                         sources: usesExternalDetail ? [] : serverChoices,
                         offlineSourceAccountIDs: viewModel.unreachableSourceAccountIDs,
                         selectedSourceAccountID: effectiveSource?.accountID,

@@ -402,7 +402,13 @@ struct SeriesDetailView: View {
                         scheduleLine: upcomingHeroLine,
                         spoilerSettings: spoilerSettings,
                         playTitle: playTarget.map { viewModel.playButtonTitle(for: $0) },
-                        onPlay: playTarget.map { target in { onPlay(target.selectingVersion(effectivePlayVersionID)) } },
+                        onPlay: playTarget.map { target in {
+                            onPlay(DetailPlaybackSelection.playItem(
+                                for: target, sources: target.sources, activeAccountID: target.sourceAccountID,
+                                versionID: effectivePlayVersionID,
+                                explicit: versionOverride != nil || target.explicitSourceSelection
+                            ))
+                        } },
                         showsPlayPlaceholder: DetailPlaybackSelection.showsPlayPlaceholder(
                             for: series,
                             hasPlayTarget: playTarget != nil,
@@ -426,7 +432,8 @@ struct SeriesDetailView: View {
                         onPlayTrailer: trailerButtonAction,
                         versions: playVersions,
                         selectedVersionID: effectivePlayVersionID,
-                        onSelectVersion: playVersions.count > 1 ? { selectVersion($0) } : nil,
+                        onSelectVersion: { selectVersion($0) },
+                        loadVersions: playTarget.flatMap { viewModel.playbackVersionsLoader(for: $0) },
                         sources: distinctServerChoices,
                         offlineSourceAccountIDs: viewModel.unreachableSourceAccountIDs,
                         selectedSourceAccountID: series.sourceAccountID,
@@ -1418,7 +1425,10 @@ struct SeriesDetailView: View {
     /// only appears when an episode genuinely has more than one file — matching the
     /// movie behaviour.
     private var playVersions: [MediaVersion] {
-        playTarget?.versions ?? []
+        guard let target = playTarget else { return [] }
+        return DetailPlaybackSelection.versions(
+            for: target, sources: target.sources, activeAccountID: target.sourceAccountID
+        )
     }
 
     /// Applies to the WHOLE SHOW, not just this episode.

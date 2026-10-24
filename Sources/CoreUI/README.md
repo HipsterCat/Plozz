@@ -171,6 +171,12 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   Adaptive hero rows own `PlaybackSourceMenuState` and its presentation above
   `ViewThatFits`; candidate rows contain only triggers. Late trailer, action or
   inventory updates can rearrange the row without destroying an open version page.
+  An optional `MediaVersionInventoryLoader` keeps lazy sources discoverable even
+  with no cached alternatives. Only a mounted version page/sheet starts discovery,
+  not the overflow root or focus changes. Shared loading/error/Retry content
+  never starts playback or retries automatically. Loader identity fences retained
+  choices across owner, account and playable-target changes; dismissal cancels
+  the reader, not any server work already admitted by its provider.
   `NoStreamsButtonLabel` reserves its single-line width before actions overflow.
   Only the final stacked layout can scale it to fit; the retry spinner occupies
   the same 20-point icon slot and uses explicit contrast for the button surface.

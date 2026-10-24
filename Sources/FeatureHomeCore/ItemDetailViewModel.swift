@@ -228,10 +228,12 @@ public final class ItemDetailViewModel {
         defer {
             if sourceGeneration == generation { playbackInventoryState.retryingItemIDs.remove(item.id) }
         }
-        if item.id == activeItemID {
-            _ = await refreshPlaybackInventory(for: item, token: nil)
-        } else if item.kind == .episode {
-            _ = await enrichEpisodeBadgesIfNeeded(item)
+        do {
+            _ = try await loadPlaybackVersions(for: item)
+        } catch {
+            guard sourceGeneration == generation, !Task.isCancelled,
+                  !(error is CancellationError), (error as? AppError) != .cancelled else { return }
+            playbackInventoryRetryError = PlaybackVersionChoiceModel.reportFailure(error, stage: "inventory-retry")
         }
     }
     /// When this detail is a series, context propagated onto its episodes so each
@@ -1239,45 +1241,46 @@ public final class ItemDetailViewModel {
             self.enrichmentGeneration = token
             self.startAlternateSourceEnrichment(primaryID: item.id)
             self.startCrossServerDiscovery(for: taggedItem)
-            let completed = await self.refreshPlaybackInventory(for: taggedItem, token: token)
-            guard !Task.isCancelled, self.enrichmentGeneration == token else { return }
-            self.enrichmentComplete = completed
+            self.enrichmentComplete = true
         }
     }
 
-    private func refreshPlaybackInventory(for item: MediaItem, token: UInt64?) async -> Bool {
-        guard let provider = activeProvider, provider.playbackInventoryRequiresEnrichment,
-              item.kind == .movie || item.kind == .episode else { return true }
+    @ObservationIgnored private let inventoryOwnerID = UUID()
+
+    public func playbackVersionsLoader(for item: MediaItem) -> MediaVersionInventoryLoader? {
+        guard activeProvider?.playbackInventoryRequiresEnrichment == true,
+              item.kind == .movie || item.kind == .episode,
+              item.sourceAccountID == nil || item.sourceAccountID == activeSourceAccountID else { return nil }
         let generation = sourceGeneration
+        let id = "\(inventoryOwnerID):\(generation):\(item.id)"
+        return MediaVersionInventoryLoader(id: id) { [weak self] in
+            guard let self, self.sourceGeneration == generation else { throw CancellationError() }
+            return try await self.loadPlaybackVersions(for: item)
+        }
+    }
+
+    /// Called only by explicit version selection or inventory retry, never by
+    /// detail/episode presentation or its speculative enrichment.
+    public func loadPlaybackVersions(for item: MediaItem) async throws -> [MediaVersion] {
+        guard let provider = activeProvider,
+              item.kind == .movie || item.kind == .episode,
+              item.sourceAccountID == nil || item.sourceAccountID == activeSourceAccountID else {
+            throw CancellationError()
+        }
+        let generation = sourceGeneration
+        let rootID = activeItemID
         let accountID = activeSourceAccountID
+        func isCurrent() -> Bool {
+            !Task.isCancelled && isCurrentSource(generation: generation, itemID: rootID, accountID: accountID)
+        }
         do {
-            let resolved: MediaItem
-            if let token {
-                guard let result = await EnrichmentScheduler.shared.run(token: token, {
-                    () async -> Result<MediaItem, Error> in
-                    do {
-                        try Task.checkCancellation()
-                        return .success(try await PlaybackPreparationDiagnostics.capture(
-                            provider: provider.kind, operation: .detailVersions
-                        ) {
-                            try await provider.playbackItem(id: item.id)
-                        })
-                    } catch {
-                        return .failure(error)
-                    }
-                }) else { return false }
-                resolved = try result.get()
-            } else {
-                try Task.checkCancellation()
-                resolved = try await PlaybackPreparationDiagnostics.capture(
-                    provider: provider.kind, operation: .detailVersions
-                ) {
-                    try await provider.playbackItem(id: item.id)
-                }
+            try Task.checkCancellation()
+            let resolved = try await PlaybackPreparationDiagnostics.capture(
+                provider: provider.kind, operation: .detailVersions
+            ) {
+                try await provider.playbackItem(id: item.id)
             }
-            guard !Task.isCancelled, token == nil || enrichmentGeneration == token,
-                  isCurrentSource(generation: generation, itemID: item.id, accountID: accountID),
-                  var detail = state.value else { return false }
+            guard isCurrent(), state.value != nil else { throw CancellationError() }
             guard resolved.id == item.id, resolved.kind == item.kind,
                   resolved.sourceAccountID == nil || resolved.sourceAccountID == accountID else {
                 PlaybackPreparationDiagnostics.identityFailure(
@@ -1285,32 +1288,56 @@ public final class ItemDetailViewModel {
                     expectedKind: item.kind, expectedAccountID: accountID, resolved: resolved
                 )
                 PlozzLog.playback.error("Detail version inventory did not match the requested source.")
-                if playbackInventoryState.retryingItemIDs.contains(item.id) {
-                    playbackInventoryRetryError = StreamingQualityError.sourceUnavailable.userMessage
+                throw StreamingQualityError.sourceUnavailable
+            }
+            var inventory = resolved
+            inventory.sourceAccountID = accountID
+            inventory.sources = item.id == rootID ? sources : item.sources
+            let discoveredSourceIDs = Set(inventory.sources.map(\.id))
+            inventory = try await PlaybackVersionChoiceModel.resolvingAlternateInventories(
+                in: inventory, provider: provider, isCurrent: isCurrent
+            )
+            guard isCurrent(), var detail = state.value else { throw CancellationError() }
+            func updatingInventories(in references: [MediaSourceRef]) -> [MediaSourceRef] {
+                references.compactMap { reference in
+                    guard discoveredSourceIDs.contains(reference.id) else { return reference }
+                    guard let updated = inventory.sources.first(where: { $0.id == reference.id }) else { return nil }
+                    var reference = reference
+                    reference.versions = updated.versions
+                    reference.edition = updated.edition
+                    return reference
                 }
-                return false
             }
             playbackInventoryState.noStreamItemIDs.remove(item.id)
-            detail.item.versions = resolved.versions
-            detail.item.sources = detail.item.sources.map {
-                stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
+            playbackInventoryState.authoritativeSourceIDs.subtract(discoveredSourceIDs)
+            playbackInventoryState.authoritativeSourceIDs.formUnion(
+                inventory.sources.filter {
+                    $0.accountID == accountID && ($0.kind == nil || $0.kind == item.kind)
+                }.map(\.id)
+            )
+            if item.id == rootID {
+                detail.item.versions = resolved.versions
+                detail.item.sources = updatingInventories(in: detail.item.sources).map {
+                    stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
+                }
+                state = .loaded(detail)
+                sources = updatingInventories(in: sources).map {
+                    stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
+                }
+                persistSnapshot()
+                return DetailPlaybackSelection.versions(
+                    for: detail.item, sources: sources, activeAccountID: accountID
+                )
             }
-            state = .loaded(detail)
-            sources = sources.map {
-                stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
-            }
-            persistSnapshot()
-            return true
+            episodeBadgeEnrichment.store(inventory, authoritativeVersions: true)
+            return DetailPlaybackSelection.versions(
+                for: episodeWithEnrichedBadges(item), sources: inventory.sources, activeAccountID: accountID
+            )
         } catch {
-            guard !Task.isCancelled, (error as? AppError) != .cancelled,
-                  !(error is CancellationError), token == nil || enrichmentGeneration == token,
-                  isCurrentSource(generation: generation, itemID: item.id, accountID: accountID) else { return false }
-            // Browsing remains available; Play still requires its own successful
-            // inventory and presents the typed error instead of trusting this fallback.
-            let message = PlaybackVersionChoiceModel.reportFailure(error, stage: "detail")
+            guard isCurrent() else { throw CancellationError() }
             if (error as? StreamingQualityError) == .noStreams {
                 playbackInventoryState.noStreamItemIDs.insert(item.id)
-                if var detail = state.value {
+                if item.id == rootID, var detail = state.value {
                     detail.item.versions = []
                     detail.item.sources = detail.item.sources.map {
                         stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
@@ -1320,10 +1347,8 @@ public final class ItemDetailViewModel {
                         stampedPrimarySource($0, from: detail.item, preservingWatchState: true)
                     }
                 }
-                return true
             }
-            if playbackInventoryState.retryingItemIDs.contains(item.id) { playbackInventoryRetryError = message }
-            return false
+            throw error
         }
     }
 
@@ -2325,13 +2350,16 @@ public final class ItemDetailViewModel {
               let full = episodeBadgeEnrichment[episode.id] else { return episode }
         var enriched = episode
         enriched.mediaInfo = full.mediaInfo ?? enriched.mediaInfo
-        if activeProvider?.playbackInventoryRequiresEnrichment == true || !full.versions.isEmpty {
+        if episodeBadgeEnrichment.hasAuthoritativeInventory(for: episode.id) || !full.versions.isEmpty {
             enriched.versions = full.versions
+        }
+        if episodeBadgeEnrichment.hasAuthoritativeInventory(for: episode.id) {
+            enriched.sources = full.sources
         }
         return enriched
     }
 
-    /// Fetches full file facts and deferred versions once per episode/source
+    /// Fetches presentation metadata once per episode/source, without probing,
     /// without rewriting the rail or replacing the series' editorial hero.
     public func enrichEpisodeBadgesIfNeeded(_ episode: MediaItem) async -> MediaItem? {
         guard let activeProvider, episode.kind == .episode,
@@ -2345,16 +2373,7 @@ public final class ItemDetailViewModel {
         let accountID = activeSourceAccountID
         let provider = activeProvider
         do {
-            let full: MediaItem
-            if provider.playbackInventoryRequiresEnrichment {
-                full = try await PlaybackPreparationDiagnostics.capture(
-                    provider: provider.kind, operation: .episodeVersions
-                ) {
-                    try await provider.playbackItem(id: episode.id)
-                }
-            } else {
-                full = try await provider.item(id: episode.id)
-            }
+            let full = try await provider.item(id: episode.id)
             guard !Task.isCancelled,
                   isCurrentSource(generation: generation, itemID: itemID, accountID: accountID) else { return nil }
             guard full.id == episode.id, full.kind == .episode,
@@ -2363,25 +2382,16 @@ public final class ItemDetailViewModel {
                     provider: provider.kind, operation: .episodeVersions, expectedID: episode.id,
                     expectedKind: .episode, expectedAccountID: accountID, resolved: full
                 )
-                PlozzLog.playback.error("Episode version inventory did not match the requested source.")
-                if playbackInventoryState.retryingItemIDs.contains(episode.id) {
-                    playbackInventoryRetryError = StreamingQualityError.sourceUnavailable.userMessage
-                }
+                PlozzLog.playback.error("Episode metadata did not match the requested source.")
                 return nil
             }
-            playbackInventoryState.noStreamItemIDs.remove(episode.id)
             episodeBadgeEnrichment.store(full)
             HandoffDiagnostics.emit("detail episode metadata versions=\(full.versions.count) badges=\(full.technicalBadges.count)")
             return episodeWithEnrichedBadges(episode)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError), (error as? AppError) != .cancelled,
                   isCurrentSource(generation: generation, itemID: itemID, accountID: accountID) else { return nil }
-            let message = PlaybackVersionChoiceModel.reportFailure(error, stage: "episode-detail")
-            if (error as? StreamingQualityError) == .noStreams {
-                playbackInventoryState.noStreamItemIDs.insert(episode.id)
-            } else if playbackInventoryState.retryingItemIDs.contains(episode.id) {
-                playbackInventoryRetryError = message
-            }
+            _ = PlaybackVersionChoiceModel.reportFailure(error, stage: "episode-detail")
             return nil
         }
     }
@@ -3177,8 +3187,10 @@ public final class ItemDetailViewModel {
             }
             evidence.append(update.identity)
             var source = updatedSources[index]
-            source.versions = update.versions
-            source.edition = update.edition
+            if !playbackInventoryState.authoritativeSourceIDs.contains(source.id) {
+                source.versions = update.versions
+                source.edition = update.edition
+            }
             source.resumePosition = update.resumePosition
             source.playedPercentage = update.playedPercentage
             source.unwatchedEpisodeCount = update.unwatchedEpisodeCount

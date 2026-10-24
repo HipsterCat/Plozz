@@ -25,6 +25,8 @@ public struct Endpoint: Sendable {
     public var headers: [String: String]
     public var body: Data?
     public var redirectPolicy: RedirectPolicy
+    /// A GET that can initiate server work must not be replayed on another address.
+    public var allowsAutomaticAddressRetry: Bool
     /// Preserve proof that a one-time mutation never reached HTTP transmission.
     public var reportsUndeliveredRequests: Bool = false
 
@@ -34,7 +36,8 @@ public struct Endpoint: Sendable {
         queryItems: [URLQueryItem] = [],
         headers: [String: String] = [:],
         body: Data? = nil,
-        redirectPolicy: RedirectPolicy = .follow
+        redirectPolicy: RedirectPolicy = .follow,
+        allowsAutomaticAddressRetry: Bool = true
     ) {
         self.method = method
         self.path = path
@@ -42,6 +45,7 @@ public struct Endpoint: Sendable {
         self.headers = headers
         self.body = body
         self.redirectPolicy = redirectPolicy
+        self.allowsAutomaticAddressRetry = allowsAutomaticAddressRetry
     }
 
     /// Convenience for a JSON `POST`/`GET` carrying an `Encodable` body.

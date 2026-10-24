@@ -72,6 +72,7 @@ struct DetailHeroView: View, Equatable {
             && (lhs.onPlay == nil) == (rhs.onPlay == nil)
             && (lhs.onPlayTrailer == nil) == (rhs.onPlayTrailer == nil)
             && (lhs.onSelectVersion == nil) == (rhs.onSelectVersion == nil)
+            && lhs.loadVersions?.id == rhs.loadVersions?.id
             && (lhs.onSelectSource == nil) == (rhs.onSelectSource == nil)
             && (lhs.onRequest == nil) == (rhs.onRequest == nil)
             && (lhs.onRequestSeasons == nil) == (rhs.onRequestSeasons == nil)
@@ -176,6 +177,7 @@ struct DetailHeroView: View, Equatable {
     var selectedVersionID: String? = nil
     /// Invoked with the chosen `MediaVersion.id` when the user picks a version.
     var onSelectVersion: ((String) -> Void)? = nil
+    var loadVersions: MediaVersionInventoryLoader? = nil
     /// The cross-server sources for this (possibly merged) title. When more than
     /// one *distinct server* holds the title and `onSelectSource` is set, a
     /// "Server" picker button is shown next to Play (in the same style as the
@@ -1152,7 +1154,7 @@ struct DetailHeroView: View, Equatable {
             heroContextMenu
         }
         .plozzSheet(isPresented: $isVersionPickerPresented) {
-            MediaVersionPicker(versions: versions, selectedVersionID: selectedVersionID) {
+            MediaVersionPicker(versions: versions, selectedVersionID: selectedVersionID, loadVersions: loadVersions) {
                 cancelPendingPrimaryAction()
                 onSelectVersion?($0)
             }
@@ -1616,6 +1618,7 @@ struct DetailHeroView: View, Equatable {
     private var showsMoreMenu: Bool {
         (serverChoices.count > 1 && onSelectSource != nil)
             || (versions.count > 1 && onSelectVersion != nil)
+            || loadVersions != nil
             || heroMenuActions.contains(.browseFiles)
     }
 
@@ -1645,6 +1648,7 @@ struct DetailHeroView: View, Equatable {
             offlineSourceAccountIDs: offlineSourceAccountIDs,
             versions: versions,
             selectedVersionID: selectedVersionID,
+            loadVersions: loadVersions,
             actions: heroMenuActions.filter { $0 == .browseFiles }.map {
                 PlaybackSourceMenuAction(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
             },
@@ -1709,7 +1713,7 @@ struct DetailHeroView: View, Equatable {
                 .pickerStyle(.menu)
             }
         }
-        if versions.count > 1, onSelectVersion != nil {
+        if (versions.count > 1 || loadVersions != nil), onSelectVersion != nil {
             Button("Version", systemImage: "film.stack") {
                 cancelPendingPrimaryAction()
                 isVersionPickerPresented = true
