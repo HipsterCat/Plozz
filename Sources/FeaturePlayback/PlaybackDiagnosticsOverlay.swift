@@ -242,6 +242,8 @@ struct PlaybackDiagnosticsOverlay: View {
                 optionalRow("Bitrate", d.audioBitrateText)
             }
             if d.mode == .plozzigen {
+                optionalRow(LocalizedStringResource("Encoding", comment: "Playback diagnostics: the active engine's audio encoding step, not the original recording's quality or the receiver's output."),
+                            d.audioEncodingDescription)
                 row(LocalizedStringResource("Processing", comment: "Playback diagnostics label for the engine's actual audio conversion or stream-copy pipeline."),
                     d.audioPipelineDescription ?? PlaybackDiagnostics.placeholder)
             }

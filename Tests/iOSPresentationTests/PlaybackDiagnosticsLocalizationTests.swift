@@ -231,7 +231,16 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
     }
 
     func testAudioProcessingShowsActualPipelineWithoutClaimingReceiverOutput() throws {
-        for pipeline in ["TRUEHD Atmos → APAC 7.1.4", "TRUEHD → FLAC bridge", "TRUEHD → EAC3 bridge"] {
+        let cases = [
+            ("TRUEHD Atmos → APAC 7.1.4", "Lossy encoding", "APAC"),
+            ("TRUEHD → FLAC bridge", "Lossless encoding", "FLAC"),
+            ("TRUEHD → EAC3 bridge", "Lossy encoding", "EAC3"),
+            ("DTS → FLAC bridge", "Lossless encoding", "FLAC"),
+            ("DTS → EAC3 bridge", "Lossy encoding", "EAC3"),
+            ("Stream-copy (EAC3)", "No re-encoding", "EAC3"),
+            ("libavcodec DTS → CoreAudio", "Decoded to PCM", "CoreAudio")
+        ]
+        for (pipeline, encoding, format) in cases {
             var diagnostics = fixture(mode: .plozzigen)
             diagnostics.audioPipelineDescription = pipeline
             for width in [390.0, 844.0] {
@@ -241,27 +250,52 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
                         .fixedSize(horizontal: false, vertical: true),
                     locale: "en"
                 )
-                assertAudioProcessing(in: text, pipeline: pipeline)
+                assertAudioProcessing(in: text, encoding: encoding, format: format)
             }
             let panel = PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: .television)
             let text = try renderedText(
                 panel.televisionPanel(width: 1280), locale: "en"
             )
-            assertAudioProcessing(in: text, pipeline: pipeline, compact: true)
+            assertAudioProcessing(in: text, encoding: encoding, format: format, compact: true)
         }
     }
 
-    private func assertAudioProcessing(in text: String, pipeline: String, compact: Bool = false) {
-        let tokens = ["Processing", "System output", "Dolby Atmos", "HDMI", "TRUEHD"] + (compact ? [] : ["Connection"])
+    private func assertAudioProcessing(in text: String, encoding: String, format: String, compact: Bool = false) {
+        let tokens = ["Encoding", encoding, "Processing", "System output", "Dolby Atmos", "HDMI"] + (compact ? [] : ["Connection"])
         for token in tokens {
             XCTAssertTrue(normalized(text).contains(normalized(token)), text)
         }
-        let format = pipeline.contains("APAC") ? "APAC" : (pipeline.contains("FLAC") ? "FLAC" : "EAC3")
         XCTAssertTrue(text.contains(format), text)
         XCTAssertFalse(text.contains("Bridged on-device"), text)
         XCTAssertFalse(normalized(text).contains("not verified"), text)
         XCTAssertFalse(normalized(text).contains("managed by"), text)
         if format == "APAC" { XCTAssertTrue(text.contains("7.1.4"), text) }
+    }
+
+    func testUnknownAudioPipelineDoesNotGuessItsEncodingInEitherPresentation() throws {
+        var diagnostics = fixture(mode: .plozzigen)
+        diagnostics.audioCodec = "FLAC"
+        diagnostics.audioChannels = 8
+        for pipeline in [nil, "Unreported pipeline"] {
+            diagnostics.audioPipelineDescription = pipeline
+            for presentation in [PlaybackDiagnosticsOverlay.Presentation.mobile, .television] {
+                let panel = PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: presentation)
+                let text: String
+                if presentation == .mobile {
+                    text = try renderedText(
+                        panel.mobileContent(width: 390).frame(width: 390)
+                            .fixedSize(horizontal: false, vertical: true), locale: "en"
+                    )
+                } else {
+                    text = try renderedText(panel.televisionPanel(width: 1280), locale: "en")
+                }
+                XCTAssertTrue(text.contains("Processing"), text)
+                for absent in ["Lossless", "Lossy", "No re-encoding", "Decoded to PCM"] {
+                    XCTAssertFalse(text.contains(absent), text)
+                }
+                if let pipeline { XCTAssertTrue(text.contains(pipeline), text) }
+            }
+        }
     }
 
     func testUnreportedSystemOutputIsOmittedInsteadOfReplacingItWithAnExpectation() throws {

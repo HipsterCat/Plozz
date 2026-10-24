@@ -868,6 +868,28 @@ public extension PlaybackDiagnostics {
     var hdrText: String { hdr == .unknown ? Self.placeholder : hdr.displayName }
     var videoCodecText: String { videoCodec ?? Self.placeholder }
     var audioCodecText: String { audioCodec ?? Self.placeholder }
+    /// Display-only interpretation of the active engine label, not source fidelity or receiver output.
+    var audioEncodingDescription: LocalizedStringResource? {
+        guard mode == .plozzigen, let pipeline = audioPipelineDescription else { return nil }
+        if pipeline.hasPrefix("Stream-copy ("), pipeline.hasSuffix(")"),
+           pipeline.count > "Stream-copy ()".count {
+            return "No re-encoding"
+        }
+        let parts = pipeline.components(separatedBy: " → ")
+        guard parts.count == 2, !parts[0].isEmpty else { return nil }
+        switch parts[1] {
+        case "FLAC bridge", "FLAC bridge (timestamp correction)":
+            return "Lossless encoding"
+        case "EAC3 bridge", "EAC3 bridge (timestamp correction)":
+            return "Lossy encoding"
+        case let output where output.hasPrefix("APAC "):
+            return "Lossy encoding"
+        case "CoreAudio" where parts[0].hasPrefix("libavcodec "):
+            return "Decoded to PCM"
+        default:
+            return nil
+        }
+    }
     var droppedFramesText: String { droppedVideoFrames.map(String.init) ?? Self.placeholder }
     var observedFpsText: String { observedFps.map { String(format: "%.0f fps", $0) } ?? Self.placeholder }
 
