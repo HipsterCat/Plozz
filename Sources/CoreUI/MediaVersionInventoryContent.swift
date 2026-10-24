@@ -22,7 +22,7 @@ struct MediaVersionInventoryContent<Content: View>: View {
                 ProgressView("Loading…")
             } else if let loaded {
                 if loaded.isEmpty {
-                    Text("Original")
+                    Text("Version")
                 } else {
                     content(loaded)
                 }
