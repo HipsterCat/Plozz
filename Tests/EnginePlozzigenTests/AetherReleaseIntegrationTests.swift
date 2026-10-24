@@ -5,6 +5,22 @@ import XCTest
 @testable import EnginePlozzigen
 
 final class AetherReleaseIntegrationTests: XCTestCase {
+    func testNativeAudioMenuTrackKeepsObservedCodecChannelsAndSelectionIdentity() {
+        let id = PlozzigenVideoEngine.bypassAudioIDBase + 2
+        let track = PlozzigenVideoEngine.bypassAudioTrack(
+            id: id, title: "English", language: "en", isDefault: true, codec: "opus", channels: 6
+        )
+        XCTAssertEqual(track.id, id)
+        XCTAssertEqual(track.codec, "opus")
+        XCTAssertEqual(track.channels, 6)
+        XCTAssertTrue(track.isDefault)
+        XCTAssertEqual(
+            TrackLabeling.audioLabel(displayTitle: track.displayTitle, language: track.language, codec: track.codec,
+                                    channels: track.channels, trackID: track.id, locale: Locale(identifier: "en")),
+            TrackLabel(base: .content("English"), qualifiers: [.format("Opus 5.1")])
+        )
+    }
+
     func testResolvedEngineAndSourceCreditIdentifyPinnedReleaseIntegration() throws {
         XCTAssertEqual(AetherEngine.version, "7.47.0")
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "AetherEngine" })

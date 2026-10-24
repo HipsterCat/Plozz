@@ -27,6 +27,7 @@ struct PlozziOSPlayerControlsOverlay: View {
     @State private var scrubPreviewCoordinator: ScrubPreviewCoordinator?
     @State private var presentedSheet: PlozziOSPlayerSheet?
     @State private var optionsMenuPresented = false
+    @State private var audioMenuPresented = false
     /// Whether the Info / Cast card is expanded. Owned here rather than inside
     /// the strip because dismissing it is this view's job: the tap that closes
     /// it lands on the video, above the card, which the strip does not cover.
@@ -43,6 +44,7 @@ struct PlozziOSPlayerControlsOverlay: View {
     @StateObject private var pictureInPicture = PlozziOSPictureInPictureController()
 
     private var isScrubbing: Bool { viewModel.controls.isScrubbing }
+    private var nativeMenuPresented: Bool { optionsMenuPresented || audioMenuPresented }
     private var scrubSeconds: TimeInterval { viewModel.controls.scrubSeconds }
 
     var body: some View {
@@ -174,6 +176,10 @@ struct PlozziOSPlayerControlsOverlay: View {
                             optionsMenuPresented = presented
                             if presented { cancelAutoHide() } else { scheduleAutoHide() }
                         },
+                        onAudioMenuPresentationChange: { presented in
+                            audioMenuPresented = presented
+                            if presented { cancelAutoHide() } else { scheduleAutoHide() }
+                        },
                         isCardOpen: $isCardOpen,
                         onInteraction: noteInteraction,
                         availableSize: availableSize
@@ -222,6 +228,14 @@ struct PlozziOSPlayerControlsOverlay: View {
             if !visible { viewModel.controls.timelineClock.isEnabled = false }
         }
         .onChange(of: isCardOpen) { _, _ in cardOpenChanged() }
+        .onChange(of: viewModel.currentPlaybackItem?.stablePresentationID) {
+            audioMenuPresented = false
+        }
+        .onChange(of: viewModel.controls.audioOptions.isEmpty) { _, empty in
+            if empty && !viewModel.controls.engineCapabilities.contains(.dialogEnhance) {
+                audioMenuPresented = false
+            }
+        }
         .onAppear { scheduleAutoHide() }
         .onAppear { configureScrubPreview() }
         .onAppear { attachPictureInPicture() }
@@ -340,12 +354,12 @@ struct PlozziOSPlayerControlsOverlay: View {
 
     private var showsUpNext: Bool {
         viewModel.controls.upNextCard.isPresenting && viewModel.controls.upNextCard.info != nil
-            && !isCardOpen && !optionsMenuPresented && presentedSheet == nil
+            && !isCardOpen && !nativeMenuPresented && presentedSheet == nil
             && !versionsPresented && !isScrubbing && !isPlayingElsewhere
     }
 
     private func toggleControls() {
-        guard !optionsMenuPresented else { return }
+        guard !nativeMenuPresented else { return }
         controlsVisible.toggle()
         if controlsVisible {
             scheduleAutoHide()
@@ -356,7 +370,7 @@ struct PlozziOSPlayerControlsOverlay: View {
     }
 
     private var keyboardShortcutsEnabled: Bool {
-        !isPlayingElsewhere && presentedSheet == nil && !optionsMenuPresented
+        !isPlayingElsewhere && presentedSheet == nil && !nativeMenuPresented
             && !versionsPresented && !isCardOpen && !isScrubbing
             && scenePhase == .active
     }
@@ -485,7 +499,7 @@ struct PlozziOSPlayerControlsOverlay: View {
         guard !viewModel.controls.intendsPause,
               presentedSheet == nil,
               !versionsPresented,
-              !optionsMenuPresented,
+              !nativeMenuPresented,
               !viewModel.controls.diagnosticsEnabled,
               !isScrubbing,
               !isCardOpen,
@@ -672,16 +686,10 @@ private extension View {
 
 private struct PlozziOSPlaybackOptionsMenu: View {
     @Environment(\.locale) private var locale
-    let audioOptions: [PlayerTrackOption]
-    let hasAudioControls: Bool
     let supportsPlaybackSpeed: Bool
     let videoZoom: PlayerVideoZoomModel?
-    let supportsDialogEnhance: Bool
-    let dialogEnhanceEnabled: Bool
     let supportsQuality: Bool
     let supportsVersions: Bool
-    let onSelectAudio: (PlayerTrackOption.ID) -> Void
-    let onSetDialogEnhance: (Bool) -> Void
     let onShowSpeed: () -> Void
     let onShowCustomZoom: () -> Void
     let onShowQuality: () -> Void
@@ -689,7 +697,7 @@ private struct PlozziOSPlaybackOptionsMenu: View {
     let onPresentationChange: (Bool) -> Void
 
     var body: some View {
-        if hasAudioControls || supportsPlaybackSpeed || videoZoom != nil || supportsQuality || supportsVersions {
+        if supportsPlaybackSpeed || videoZoom != nil || supportsQuality || supportsVersions {
             PlayerOptionsMenuButton(makeMenu: makeMenu, onPresentationChange: onPresentationChange)
                 .frame(width: 44, height: 44)
         }
@@ -705,22 +713,6 @@ private struct PlozziOSPlaybackOptionsMenu: View {
         }
         if supportsQuality {
             items.append(action("Quality", icon: "slider.horizontal.3", perform: onShowQuality))
-        }
-        if hasAudioControls {
-            var audio: [UIMenuElement] = audioOptions.map { option in
-                UIAction(title: option.nativeTitle, state: option.isSelected ? .on : .off) { _ in
-                    onSelectAudio(option.id)
-                }
-            }
-            if supportsDialogEnhance {
-                let enhance = action("Dialog Enhance", icon: "waveform") {
-                    onSetDialogEnhance(!dialogEnhanceEnabled)
-                }
-                enhance.state = dialogEnhanceEnabled ? .on : .off
-                audio.append(UIMenu(options: .displayInline, children: [enhance]))
-            }
-            items.append(UIMenu(title: localized("Audio"), image: UIImage(systemName: "speaker.wave.2"),
-                                children: audio))
         }
         if supportsPlaybackSpeed {
             items.append(action("Playback Speed", icon: "speedometer", perform: onShowSpeed))
@@ -766,6 +758,7 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
     let hasVersions: Bool
     let onShowVersions: () -> Void
     let onOptionsMenuPresentationChange: (Bool) -> Void
+    let onAudioMenuPresentationChange: (Bool) -> Void
     @Binding var isCardOpen: Bool
     let onInteraction: () -> Void
     /// The full player bounds, not this bottom cluster's intrinsic size.
@@ -907,7 +900,28 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
     }
 
     private var trackControlGroup: some View {
-        PlayerGlassControlGroup {
+        let item = viewModel.currentPlaybackItem
+        return PlayerGlassControlGroup {
+            PlayerAudioMenuButton(
+                options: viewModel.controls.audioOptions,
+                dialogueEnhancement: supportsDialogEnhance ? viewModel.controls.dialogEnhanceEnabled : nil,
+                onSelect: { id in
+                    guard viewModel.currentPlaybackItem?.id == item?.id,
+                          viewModel.currentPlaybackItem?.sourceAccountID == item?.sourceAccountID,
+                          viewModel.currentPlaybackItem?.selectedVersionID == item?.selectedVersionID else { return }
+                    viewModel.selectAudioOption(id: id)
+                    onInteraction()
+                },
+                onSetDialogueEnhancement: { enabled in
+                    guard viewModel.currentPlaybackItem?.id == item?.id,
+                          viewModel.currentPlaybackItem?.sourceAccountID == item?.sourceAccountID,
+                          viewModel.currentPlaybackItem?.selectedVersionID == item?.selectedVersionID else { return }
+                    viewModel.setDialogEnhanceEnabled(enabled)
+                    onInteraction()
+                },
+                onPresentationChange: onAudioMenuPresentationChange
+            )
+            .id(item?.stablePresentationID)
             Button(action: onShowSubtitles) {
                 Image(systemName: "captions.bubble")
                     .font(.title3)
@@ -921,22 +935,10 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
 
     private var playbackOptions: some View {
         PlozziOSPlaybackOptionsMenu(
-            audioOptions: viewModel.controls.hasSelectableAudio ? viewModel.controls.audioOptions : [],
-            hasAudioControls: viewModel.controls.hasAudioControls,
             supportsPlaybackSpeed: viewModel.controls.engineCapabilities.contains(.playbackSpeed),
             videoZoom: supportsVideoZoom ? viewModel.controls.videoZoom : nil,
-            supportsDialogEnhance: supportsDialogEnhance,
-            dialogEnhanceEnabled: viewModel.controls.dialogEnhanceEnabled,
             supportsQuality: viewModel.streamingQualityAvailable,
             supportsVersions: hasVersions,
-            onSelectAudio: { id in
-                viewModel.selectAudioOption(id: id)
-                onInteraction()
-            },
-            onSetDialogEnhance: { enabled in
-                viewModel.setDialogEnhanceEnabled(enabled)
-                onInteraction()
-            },
             onShowSpeed: onShowSpeed,
             onShowCustomZoom: onShowCustomZoom,
             onShowQuality: onShowQuality,

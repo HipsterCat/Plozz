@@ -149,6 +149,18 @@ final class TrackMenuBuilderTests: XCTestCase {
         XCTAssertEqual(options.first?.isSelected, true)
     }
 
+    func testBareLanguageProducesSameRichLabelForNativeAndTVMenus() {
+        let options = TrackMenuBuilder.audioOptions(
+            tracks: [.init(id: 4, kind: .audio, displayTitle: "English", language: "en", codec: "opus", channels: 6)],
+            selectedID: 4, preferred: [], locale: .init(identifier: "en")
+        )
+        XCTAssertEqual(options.first?.nativeTitle, "English (Opus 5.1)")
+        XCTAssertEqual(options.first?.title,
+                       Text(verbatim: "English") + Text(verbatim: " (") + Text(verbatim: "Opus 5.1") + Text(verbatim: ")"))
+        XCTAssertEqual(options.first?.id, 4)
+        XCTAssertEqual(options.first?.isSelected, true)
+    }
+
     func testNativeAudioTitlesRespectAppLocaleAndProviderContent() {
         let tracks = [audio(1, lang: "ja"), MediaTrack(id: 2, kind: .audio, displayTitle: "Director's mix")]
         let options = TrackMenuBuilder.audioOptions(tracks: tracks, selectedID: 1, preferred: [], locale: .init(identifier: "es"))

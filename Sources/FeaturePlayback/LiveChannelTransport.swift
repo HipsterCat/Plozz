@@ -117,6 +117,7 @@ struct LiveChannelOverlay: View {
     @State private var playbackScreen: PlayerControls.PlaybackScreen = .options
     @State private var audioScreen: PlayerControls.AudioScreen = .options
     @State private var nativePlaybackMenuPresented = false
+    @State private var nativeAudioMenuPresented = false
     @State private var showsCustomZoom = false
     @State private var panelHeights: [PlayerControls.Category: CGFloat] = [:]
     @State private var panelBackRequest = 0
@@ -199,9 +200,13 @@ struct LiveChannelOverlay: View {
         .animation(.easeInOut(duration: 0.2), value: openMenu)
         .animation(.easeInOut(duration: 0.3), value: styleEditing)
         .onChange(of: trackOptionsSource, initial: true) { _, source in syncTrackOptions(source) }
+        .onChange(of: locale.identifier) { syncTrackOptions(trackOptionsSource) }
         .onChange(of: focus) { _, control in focusChanged(control) }
-        .onChange(of: openMenu != nil || cardOpen || nativePlaybackMenuPresented || showsCustomZoom) { _, pinned in
+        .onChange(of: openMenu != nil || cardOpen || nativePlaybackMenuPresented || nativeAudioMenuPresented || showsCustomZoom) { _, pinned in
             onTracksPresentationChange(pinned)
+        }
+        .onChange(of: showsAudio) { _, available in
+            if !available { nativeAudioMenuPresented = false }
         }
         .onChange(of: cardOpen && cardTab == .guide) { _, showing in onGuideCardChange(showing) }
         .onChange(of: pendingGuideOpen, initial: true) { _, pending in
@@ -221,8 +226,14 @@ struct LiveChannelOverlay: View {
             case .playback: toggleMenu(.playback)
             }
         }
-        .onChange(of: channelID) { _, _ in resetScrub() }
-        .onChange(of: input) { _, _ in resetScrub() }
+        .onChange(of: channelID) { _, _ in
+            resetScrub()
+            nativeAudioMenuPresented = false
+        }
+        .onChange(of: input) { _, _ in
+            resetScrub()
+            nativeAudioMenuPresented = false
+        }
         .onChange(of: seekWindowSeconds == nil) { _, unavailable in
             if unavailable { resetScrub() }
         }
@@ -516,10 +527,10 @@ struct LiveChannelOverlay: View {
     /// same labels, and an Off row for subtitles), with the live style.
     private func syncTrackOptions(_ source: TrackOptionsSource) {
         trackOptions.audioOptions = TrackMenuBuilder.audioOptions(
-            tracks: source.audio, selectedID: source.selectedAudio, preferred: []
+            tracks: source.audio, selectedID: source.selectedAudio, preferred: [], locale: locale
         )
         trackOptions.subtitleOptions = TrackMenuBuilder.subtitleOptions(
-            tracks: source.subtitles, selectedID: source.selectedSubtitle, preferred: [], detectedLanguages: [:]
+            tracks: source.subtitles, selectedID: source.selectedSubtitle, preferred: [], detectedLanguages: [:], locale: locale
         )
         trackOptions.subtitleStyle = source.style
         trackOptions.subtitlesRenderHDR = source.isHDR
@@ -579,7 +590,7 @@ struct LiveChannelOverlay: View {
         #if os(tvOS)
         Self.showsAudio(trackCount: tracks.audioTracks.count, systemAudio: trackOptions.systemAudio)
         #else
-        tracks.audioTracks.count > 1
+        !tracks.audioTracks.isEmpty
         #endif
     }
 
@@ -1554,11 +1565,18 @@ extension LiveChannelOverlay {
                 .frame(width: 44, height: 44)
             }
             if showsAudio {
-                touchBadge(
-                    LiveChannelTrackMenuKind.audio.title, systemImage: LiveChannelTrackMenuKind.audio.icon,
-                    selected: openMenu == .audio
-                ) { toggleMenu(.audio) }
-                    .accessibilityIdentifier("live-channel-audio")
+                PlayerAudioMenuButton(
+                    options: trackOptions.audioOptions,
+                    accessibilityIdentifier: "live-channel-audio",
+                    onSelect: { id in
+                        guard tracks.matchesSource(channelID: channelID, input: input),
+                              let track = tracks.audioTracks.first(where: { $0.id == id }) else { return }
+                        tracks.selectAudio(track)
+                        onControlActivity()
+                    },
+                    onPresentationChange: { nativeAudioMenuPresented = $0 }
+                )
+                .id(channelID)
             }
             if showsSubtitles {
                 touchBadge(

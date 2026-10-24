@@ -168,7 +168,28 @@ This does not configure audio sessions, decoding, channel layouts, Atmos, Spatia
 Audio or head tracking. System processing and its audible effect still depend on
 the output/content; availability and preference acknowledgement are not proof of
 processing for every engine route. Undocumented integration carries OS
-compatibility and App Review risk. iOS/iPadOS controls are unchanged.
+compatibility and App Review risk. This system-preference bridge is tvOS-only.
+
+On iPhone and iPad, VOD and Live TV share the native `PlayerAudioMenuButton`.
+Its speaker button opens an Audio menu with a Tracks submenu and the real active
+track checkmark. A sole track stays visible as disabled metadata. Opening a menu
+pins transport controls; playback-clock updates do not rebuild its snapshot.
+The separate playback-options menu retains zoom, versions, quality, and speed.
+An Enhance Dialogue submenu is offered only for an actual engine enhancement
+capability, never inferred from `moviePlayback` eligibility. Neither current
+iOS engine exposes that control, so no nonfunctional switch is displayed.
+The OS may still process eligible content/routes; this is distinct from proving
+that a custom in-app menu can read or change its system setting.
+
+Native and tvOS track menus share `TrackLabeling` and `TrackMenuBuilder`.
+Bare language titles no longer suppress known codec/channel facts, for example
+`English (Opus 5.1)`. Custom names and commentary are retained, existing format
+facts are not duplicated, and unknown formats are not invented.
+The Aether adapter's native-bypass track list also retains observed media subtype
+and channel information from the already-playing asset, rather than manufacturing
+language-only tracks. Single tracks are exposed as metadata without offering a
+redundant switch. Synthetic native-selection IDs remain separate from provider
+IDs and still route through AVPlayer's own selection group or muxed tracks.
 
 Mobile transport buttons, timelines, and tabs use native **clear** Liquid Glass,
 without tint or a colored backing. Like AVKit video chrome, their symbols and
