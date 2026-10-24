@@ -127,6 +127,17 @@ final class AudioMenuAvailabilityTests: XCTestCase {
 /// exclusion, engine-dual vs sidecar sourcing) that used to be buried in
 /// `PlayerViewModel.loadTrackOptions`.
 final class TrackMenuBuilderTests: XCTestCase {
+    func testNativeSubtitleLabelsIncludeOffLanguageAndAccessibilityFacts() {
+        let options = TrackMenuBuilder.subtitleOptions(
+            tracks: [.init(id: 9, kind: .subtitle, displayTitle: "English", language: "en",
+                           codec: "subrip", isHearingImpaired: true)],
+            selectedID: 9, preferred: [], detectedLanguages: [:], locale: Locale(identifier: "en")
+        )
+        XCTAssertEqual(options.map(\.nativeTitle), ["Off", "English (SDH)"])
+        XCTAssertEqual(options.map(\.id), [-1, 9])
+        XCTAssertEqual(options.map(\.isSelected), [false, true])
+    }
+
     func testBothPresentationsUseNormalizedSourceTrackAndActualSelection() {
         let options = TrackMenuBuilder.audioOptions(tracks: [
             MediaTrack(id: 1, kind: .audio, displayTitle: "AC3 5.1 (Default)", codec: "ac3", isDefault: true, channels: 6),

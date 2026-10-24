@@ -1,6 +1,7 @@
 #if os(iOS)
 import CoreGraphics
 import CoreModels
+import CoreNetworking
 import FeaturePlayback
 import AVKit
 import SwiftUI
@@ -9,7 +10,9 @@ import CoreUI
 private enum PlozziOSPlayerSheet: String, Identifiable {
     case speed
     case zoom
-    case subtitles
+    case subtitleAdvanced
+    case subtitleSearch
+    case audioSync
     case quality
 
     var id: Self { self }
@@ -26,8 +29,7 @@ struct PlozziOSPlayerControlsOverlay: View {
     @State private var controlsVisible = true
     @State private var scrubPreviewCoordinator: ScrubPreviewCoordinator?
     @State private var presentedSheet: PlozziOSPlayerSheet?
-    @State private var optionsMenuPresented = false
-    @State private var audioMenuPresented = false
+    @State private var menuPresentation = PlayerMenuPresentation()
     /// Whether the Info / Cast card is expanded. Owned here rather than inside
     /// the strip because dismissing it is this view's job: the tap that closes
     /// it lands on the video, above the card, which the strip does not cover.
@@ -44,7 +46,11 @@ struct PlozziOSPlayerControlsOverlay: View {
     @StateObject private var pictureInPicture = PlozziOSPictureInPictureController()
 
     private var isScrubbing: Bool { viewModel.controls.isScrubbing }
-    private var nativeMenuPresented: Bool { optionsMenuPresented || audioMenuPresented }
+    private var nativeMenuPresented: Bool { menuPresentation.isBusy }
+    private var menuSourceID: [String?] {
+        let item = viewModel.currentPlaybackItem
+        return [item?.sourceAccountID, item?.id, item?.selectedVersionID]
+    }
     private var scrubSeconds: TimeInterval { viewModel.controls.scrubSeconds }
 
     var body: some View {
@@ -149,37 +155,10 @@ struct PlozziOSPlayerControlsOverlay: View {
                         onSkipForward: {
                             seek(by: viewModel.controls.skipGesture.forwardInterval.seconds)
                         },
-                        onShowSpeed: {
-                            presentedSheet = .speed
-                            cancelAutoHide()
-                        },
                         supportsVideoZoom: !isPlayingElsewhere
                             && viewModel.controls.engineCapabilities.contains(.videoZoom),
-                        onShowCustomZoom: {
-                            presentedSheet = .zoom
-                            cancelAutoHide()
-                        },
-                        onShowSubtitles: {
-                            presentedSheet = .subtitles
-                            cancelAutoHide()
-                        },
-                        onShowQuality: {
-                            presentedSheet = .quality
-                            cancelAutoHide()
-                        },
                         hasVersions: hasVersions,
-                        onShowVersions: {
-                            cancelAutoHide()
-                            onShowVersions()
-                        },
-                        onOptionsMenuPresentationChange: { presented in
-                            optionsMenuPresented = presented
-                            if presented { cancelAutoHide() } else { scheduleAutoHide() }
-                        },
-                        onAudioMenuPresentationChange: { presented in
-                            audioMenuPresented = presented
-                            if presented { cancelAutoHide() } else { scheduleAutoHide() }
-                        },
+                        menuPresentation: menuPresentation,
                         isCardOpen: $isCardOpen,
                         onInteraction: noteInteraction,
                         availableSize: availableSize
@@ -228,21 +207,27 @@ struct PlozziOSPlayerControlsOverlay: View {
             if !visible { viewModel.controls.timelineClock.isEnabled = false }
         }
         .onChange(of: isCardOpen) { _, _ in cardOpenChanged() }
-        .onChange(of: viewModel.currentPlaybackItem?.stablePresentationID) {
-            audioMenuPresented = false
+        .onChange(of: menuSourceID) {
+            menuPresentation.reset()
+            presentedSheet = nil
         }
-        .onChange(of: viewModel.controls.audioOptions.isEmpty) { _, empty in
-            if empty && !viewModel.controls.engineCapabilities.contains(.dialogEnhance) {
-                audioMenuPresented = false
-            }
+        .onChange(of: menuPresentation.isBusy) { _, busy in
+            if busy { cancelAutoHide() } else { scheduleAutoHide() }
         }
+        .task(id: menuPresentation.destination) { presentMenuDestination() }
         .onAppear { scheduleAutoHide() }
         .onAppear { configureScrubPreview() }
         .onAppear { attachPictureInPicture() }
         // The presenting layer does not exist until the native path has loaded,
         // and an engine hand-off can replace it mid-session, so re-read it
         // whenever playback becomes ready rather than once at appear.
-        .onChange(of: viewModel.phase) { _, _ in attachPictureInPicture() }
+        .onChange(of: viewModel.phase) { _, phase in
+            attachPictureInPicture()
+            if phase != .ready {
+                menuPresentation.reset()
+                presentedSheet = nil
+            }
+        }
         // No AirPlay equivalent yet, and not for want of trying: the engine
         // declares its native subtitle renditions in the master playlist, but the
         // wireless AirPlay path serves the media playlist so AVPlayer will not
@@ -251,6 +236,7 @@ struct PlozziOSPlayerControlsOverlay: View {
         // changes nothing. Tracked upstream as AetherEngine#227.
         .onDisappear { pictureInPicture.detach() }
         .onDisappear {
+            menuPresentation.reset()
             keyboardActions.clear()
             cancelAutoHide()
             cancelTouchInteraction()
@@ -260,6 +246,7 @@ struct PlozziOSPlayerControlsOverlay: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
+                menuPresentation.reset()
                 cancelAutoHide()
                 cancelTouchInteraction()
                 viewModel.controls.isScrubbing = false
@@ -300,13 +287,37 @@ struct PlozziOSPlayerControlsOverlay: View {
                 PlozziOSPlaybackSpeedSheet(viewModel: viewModel)
             case .zoom:
                 PlayerZoomSettingsSheet(model: viewModel.controls.videoZoom)
-            case .subtitles:
-                PlozziOSSubtitleOptionsSheet(viewModel: viewModel)
+            case .subtitleAdvanced:
+                PlozziOSSubtitleOptionsSheet(viewModel: viewModel, mode: .advanced)
+            case .subtitleSearch:
+                PlozziOSSubtitleOptionsSheet(viewModel: viewModel, mode: .search)
+            case .audioSync:
+                PlozziOSAudioSyncSheet(viewModel: viewModel)
             case .quality:
                 PlozziOSStreamingQualitySheet(viewModel: viewModel)
             }
         }
         .ignoresSafeArea()
+    }
+
+    private func presentMenuDestination() {
+        guard let destination = menuPresentation.takeDestination() else { return }
+        guard scenePhase == .active else {
+            menuPresentation.reset()
+            return
+        }
+        cancelAutoHide()
+        switch destination {
+        case .subtitleAdvanced: presentedSheet = .subtitleAdvanced
+        case .subtitleSearch: presentedSheet = .subtitleSearch
+        case .audioSync: presentedSheet = .audioSync
+        case .speed: presentedSheet = .speed
+        case .zoom: presentedSheet = .zoom
+        case .quality: presentedSheet = .quality
+        case .versions: onShowVersions()
+        case .multiview:
+            PlozzLog.playback.error("VOD menu requested unavailable multiview destination.")
+        }
     }
 
     private func primaryPlaybackControls(compact: Bool) -> some View {
@@ -684,55 +695,6 @@ private extension View {
     }
 }
 
-private struct PlozziOSPlaybackOptionsMenu: View {
-    @Environment(\.locale) private var locale
-    let supportsPlaybackSpeed: Bool
-    let videoZoom: PlayerVideoZoomModel?
-    let supportsQuality: Bool
-    let supportsVersions: Bool
-    let onShowSpeed: () -> Void
-    let onShowCustomZoom: () -> Void
-    let onShowQuality: () -> Void
-    let onShowVersions: () -> Void
-    let onPresentationChange: (Bool) -> Void
-
-    var body: some View {
-        if supportsPlaybackSpeed || videoZoom != nil || supportsQuality || supportsVersions {
-            PlayerOptionsMenuButton(makeMenu: makeMenu, onPresentationChange: onPresentationChange)
-                .frame(width: 44, height: 44)
-        }
-    }
-
-    private func makeMenu() -> UIMenu {
-        var items: [UIMenuElement] = []
-        if let videoZoom {
-            items.append(PlayerZoomMenu.make(model: videoZoom, locale: locale, onCustomZoom: onShowCustomZoom))
-        }
-        if supportsVersions {
-            items.append(action("Version", icon: "rectangle.stack", perform: onShowVersions))
-        }
-        if supportsQuality {
-            items.append(action("Quality", icon: "slider.horizontal.3", perform: onShowQuality))
-        }
-        if supportsPlaybackSpeed {
-            items.append(action("Playback Speed", icon: "speedometer", perform: onShowSpeed))
-        }
-        return UIMenu(children: items)
-    }
-
-    private func action(
-        _ title: LocalizedStringResource, icon: String, perform: @escaping () -> Void
-    ) -> UIAction {
-        UIAction(title: localized(title), image: UIImage(systemName: icon)) { _ in perform() }
-    }
-
-    private func localized(_ resource: LocalizedStringResource) -> String {
-        var resource = resource
-        resource.locale = locale
-        return String(localized: resource) // l10n:content - UIKit menu boundary; resolved with the current locale on each opening.
-    }
-}
-
 struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
     let viewModel: PlayerViewModel
     let showsTransport: Bool
@@ -750,15 +712,9 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
     let onSkipBackward: () -> Void
     let onPlayPause: () -> Void
     let onSkipForward: () -> Void
-    let onShowSpeed: () -> Void
     let supportsVideoZoom: Bool
-    let onShowCustomZoom: () -> Void
-    let onShowSubtitles: () -> Void
-    let onShowQuality: () -> Void
     let hasVersions: Bool
-    let onShowVersions: () -> Void
-    let onOptionsMenuPresentationChange: (Bool) -> Void
-    let onAudioMenuPresentationChange: (Bool) -> Void
+    let menuPresentation: PlayerMenuPresentation
     @Binding var isCardOpen: Bool
     let onInteraction: () -> Void
     /// The full player bounds, not this bottom cluster's intrinsic size.
@@ -828,7 +784,6 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
 
                 Spacer(minLength: 12)
 
-                // Keep captions one tap away; secondary choices share one menu.
                 trackControls
                     .reportSubtitleControlsFrame(
                         in: viewModel.controls.subtitleLayout, region: .trackControls,
@@ -888,7 +843,7 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
         )
     }
 
-    /// Two stable controls leave the title room in portrait.
+    /// One named-options menu leaves the title room in portrait.
     @ViewBuilder
     private var trackControls: some View {
         // Opacity alone leaves native glass children exposed to accessibility.
@@ -902,53 +857,31 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
     private var trackControlGroup: some View {
         let item = viewModel.currentPlaybackItem
         return PlayerGlassControlGroup {
-            PlayerAudioMenuButton(
-                options: viewModel.controls.audioOptions,
-                dialogueEnhancement: supportsDialogEnhance ? viewModel.controls.dialogEnhanceEnabled : nil,
-                onSelect: { id in
-                    guard viewModel.currentPlaybackItem?.id == item?.id,
-                          viewModel.currentPlaybackItem?.sourceAccountID == item?.sourceAccountID,
-                          viewModel.currentPlaybackItem?.selectedVersionID == item?.selectedVersionID else { return }
-                    viewModel.selectAudioOption(id: id)
-                    onInteraction()
-                },
-                onSetDialogueEnhancement: { enabled in
-                    guard viewModel.currentPlaybackItem?.id == item?.id,
-                          viewModel.currentPlaybackItem?.sourceAccountID == item?.sourceAccountID,
-                          viewModel.currentPlaybackItem?.selectedVersionID == item?.selectedVersionID else { return }
-                    viewModel.setDialogEnhanceEnabled(enabled)
-                    onInteraction()
-                },
-                onPresentationChange: onAudioMenuPresentationChange
+            PlayerMoreMenuButton(
+                model: viewModel.controls,
+                availability: .init(
+                    maximumSpeed: viewModel.maximumPlaybackSpeed, video: supportsVideoZoom,
+                    quality: viewModel.streamingQualityAvailable, versions: hasVersions
+                ),
+                presentation: menuPresentation,
+                actions: menuActions(for: item)
             )
-            .id(item?.stablePresentationID)
-            Button(action: onShowSubtitles) {
-                Image(systemName: "captions.bubble")
-                    .font(.title3)
-            }
-            .buttonStyle(PlayerGlassCircleButtonStyle(diameter: 44))
-            .accessibilityLabel("Subtitles")
-            playbackOptions
         }
         .accessibilityIdentifier("player-track-controls")
     }
 
-    private var playbackOptions: some View {
-        PlozziOSPlaybackOptionsMenu(
-            supportsPlaybackSpeed: viewModel.controls.engineCapabilities.contains(.playbackSpeed),
-            videoZoom: supportsVideoZoom ? viewModel.controls.videoZoom : nil,
-            supportsQuality: viewModel.streamingQualityAvailable,
-            supportsVersions: hasVersions,
-            onShowSpeed: onShowSpeed,
-            onShowCustomZoom: onShowCustomZoom,
-            onShowQuality: onShowQuality,
-            onShowVersions: onShowVersions,
-            onPresentationChange: onOptionsMenuPresentationChange
-        )
-    }
-
-    private var supportsDialogEnhance: Bool {
-        viewModel.controls.engineCapabilities.contains(.dialogEnhance)
+    private func menuActions(for item: MediaItem?) -> PlayerMoreMenuActions {
+        var actions = PlayerMoreMenuActions()
+        actions.isCurrent = {
+            viewModel.currentPlaybackItem?.id == item?.id
+                && viewModel.currentPlaybackItem?.sourceAccountID == item?.sourceAccountID
+                && viewModel.currentPlaybackItem?.selectedVersionID == item?.selectedVersionID
+        }
+        actions.selectAudio = { viewModel.selectAudioOption(id: $0); onInteraction() }
+        actions.selectSubtitle = { viewModel.selectSubtitleOption(id: $0); onInteraction() }
+        actions.setDialogueEnhancement = { viewModel.setDialogEnhanceEnabled($0); onInteraction() }
+        actions.setSpeed = { viewModel.setPlaybackSpeed($0); onInteraction() }
+        return actions
     }
 
 }
@@ -1115,19 +1048,23 @@ private struct PlozziOSSkipGlyph: View {
 }
 
 private struct PlozziOSSubtitleOptionsSheet: View {
+    enum Mode { case advanced, search }
     @Environment(\.dismiss) private var dismiss
     let viewModel: PlayerViewModel
+    let mode: Mode
 
     var body: some View {
         NavigationStack {
             Form {
-                primaryTracks
-                secondaryTracks
-                PlozziOSPlaybackSyncControls(viewModel: viewModel)
-                appearance
-                remoteSearch
+                if mode == .advanced {
+                    secondaryTracks
+                    PlozziOSPlaybackSyncControls(viewModel: viewModel, includesAudio: false)
+                    appearance
+                } else {
+                    remoteSearch
+                }
             }
-            .navigationTitle("Subtitles")
+            .navigationTitle(Text(mode == .search ? LocalizedStringResource("Search for Subtitles") : "Subtitles"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -1136,25 +1073,11 @@ private struct PlozziOSSubtitleOptionsSheet: View {
             }
         }
         .presentationDetents([.large])
-    }
-
-    @ViewBuilder
-    private var primaryTracks: some View {
-        if !viewModel.controls.subtitleOptions.isEmpty {
-            Section("Primary Track") {
-                ForEach(viewModel.controls.subtitleOptions) { option in
-                    Button {
-                        viewModel.selectSubtitleOption(id: option.id)
-                    } label: {
-                        HStack {
-                            option.title
-                            Spacer()
-                            if option.isSelected {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
+        .accessibilityIdentifier(mode == .search ? "player-subtitle-search-sheet" : "player-subtitle-advanced-sheet")
+        .task {
+            if mode == .search, viewModel.controls.subtitleDownload.canSearch,
+               case .idle = viewModel.controls.subtitleDownload.state {
+                viewModel.searchRemoteSubtitles()
             }
         }
     }
@@ -1308,8 +1231,6 @@ private struct PlozziOSPlaybackSpeedSheet: View {
     @Environment(\.dismiss) private var dismiss
     let viewModel: PlayerViewModel
 
-    private let presets: [Double] = [0.5, 0.75, 1, 1.25, 1.5, 2]
-
     var body: some View {
         NavigationStack {
             Form {
@@ -1319,7 +1240,7 @@ private struct PlozziOSPlaybackSpeedSheet: View {
                             get: { viewModel.controls.playbackSpeed },
                             set: { viewModel.setPlaybackSpeed($0) }
                         ),
-                        in: 0.25...2,
+                        in: 0.25...max(0.25, viewModel.maximumPlaybackSpeed),
                         step: 0.05
                     )
                     Text(
@@ -1331,7 +1252,7 @@ private struct PlozziOSPlaybackSpeedSheet: View {
                 }
 
                 Section("Presets") {
-                    ForEach(presets, id: \.self) { rate in
+                    ForEach(PlayerMoreMenu.speedPresets.filter { $0 <= viewModel.maximumPlaybackSpeed }, id: \.self) { rate in
                         Button {
                             viewModel.setPlaybackSpeed(rate)
                         } label: {
@@ -1360,10 +1281,12 @@ private struct PlozziOSPlaybackSpeedSheet: View {
 
 private struct PlozziOSPlaybackSyncControls: View {
     let viewModel: PlayerViewModel
+    var includesAudio = true
+    var includesSubtitles = true
 
     var body: some View {
         Group {
-            if viewModel.controls.engineCapabilities.contains(.audioDelay) {
+            if includesAudio, viewModel.controls.engineCapabilities.contains(.audioDelay) {
                 Section("Audio Delay") {
                     Slider(
                         value: Binding(
@@ -1383,7 +1306,7 @@ private struct PlozziOSPlaybackSyncControls: View {
                 }
             }
 
-            if viewModel.controls.subtitleDelayAdjustable {
+            if includesSubtitles, viewModel.controls.subtitleDelayAdjustable {
                 Section("Subtitle Delay") {
                     Slider(
                         value: Binding(
@@ -1403,6 +1326,27 @@ private struct PlozziOSPlaybackSyncControls: View {
                 }
             }
         }
+    }
+}
+
+private struct PlozziOSAudioSyncSheet: View {
+    let viewModel: PlayerViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                PlozziOSPlaybackSyncControls(viewModel: viewModel, includesSubtitles: false)
+            }
+            .navigationTitle("Audio Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 

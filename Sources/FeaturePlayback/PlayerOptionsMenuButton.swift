@@ -10,7 +10,7 @@ public struct PlayerOptionsMenuButton: UIViewRepresentable {
 
         var symbol: String {
             switch self {
-            case .playbackOptions: "slider.horizontal.3"
+            case .playbackOptions: "ellipsis"
             case .audio: "speaker.wave.2"
             }
         }

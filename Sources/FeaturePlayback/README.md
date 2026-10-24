@@ -170,11 +170,18 @@ the output/content; availability and preference acknowledgement are not proof of
 processing for every engine route. Undocumented integration carries OS
 compatibility and App Review risk. This system-preference bridge is tvOS-only.
 
-On iPhone and iPad, VOD and Live TV share the native `PlayerAudioMenuButton`.
-Its speaker button opens an Audio menu with a Tracks submenu and the real active
-track checkmark. A sole track stays visible as disabled metadata. Opening a menu
-pins transport controls; playback-clock updates do not rebuild its snapshot.
-The separate playback-options menu retains zoom, versions, quality, and speed.
+On iPhone and iPad, VOD and Live TV share one native ellipsis `PlayerMoreMenuButton`.
+Subtitles and Audio offer their existing tracks directly with real active-track
+checkmarks. Subtitle search/download stays outside Advanced; Advanced opens a
+touch sheet for supported appearance, timing and dual-track controls. Live TV
+does not offer search/download or dual subtitles. Native speed presets and Video
+modes apply immediately; Custom, Quality, Version and supported sync controls
+open their existing editors. Live multiview is another menu action; Go Live
+remains a transport action. A sole audio track stays visible as disabled metadata.
+Opening a menu pins transport controls; playback-clock updates do not rebuild
+its snapshot. `PlayerMenuPresentation` releases editor requests only after native
+menu dismissal completes. Context changes invalidate pending requests and old
+audio/subtitle/speed/zoom actions, and programme transitions release live controls.
 An Enhance Dialogue submenu is offered only for an actual engine enhancement
 capability, never inferred from `moviePlayback` eligibility. Neither current
 iOS engine exposes that control, so no nonfunctional switch is displayed.

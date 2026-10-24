@@ -21,7 +21,8 @@ final class PlayerAudioMenuPresentationTests: XCTestCase {
         XCTAssertEqual(menu.title, "Audio")
         XCTAssertEqual(menu.children.count, 1, "Unavailable enhancement must not produce a nonfunctional submenu.")
         let tracks = try XCTUnwrap(menu.children.first as? UIMenu)
-        XCTAssertEqual(tracks.title, "Tracks")
+        XCTAssertEqual(tracks.title, "Audio Track")
+        XCTAssertTrue(tracks.options.contains(.displayInline), "Audio tracks should not need another submenu tap.")
         XCTAssertTrue(tracks.options.contains(.singleSelection))
         let choices = tracks.children.compactMap { $0 as? UIAction }
         XCTAssertEqual(choices.map(\.title), ["English (Opus 5.1)", "French (AAC Stereo)"])
@@ -135,7 +136,7 @@ final class PlayerAudioMenuPresentationTests: XCTestCase {
         }
         try await waitUntil { self.button(in: host.view) != nil }
         let button = try XCTUnwrap(button(in: host.view))
-        XCTAssertEqual(button.accessibilityIdentifier, "live-channel-audio")
+        XCTAssertEqual(button.accessibilityIdentifier, "live-channel-playback-options")
         button.performPrimaryAction()
         try await waitUntil { button.presentedMenu != nil && state.presentations.last == true }
         engine.audioTracks = []
