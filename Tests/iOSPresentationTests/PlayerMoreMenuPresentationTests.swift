@@ -93,11 +93,22 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
             Set(buttons(in: host.view).compactMap(\.accessibilityIdentifier)),
             ["player-subtitles", "player-audio", "player-playback-speed", "player-video"]
         )
+        let video = try XCTUnwrap(buttons(in: host.view).first { $0.accessibilityIdentifier == "player-video" })
+        XCTAssertEqual(video.accessibilityLabel, "Video")
+        XCTAssertEqual(PlayerOptionsMenuButton.Kind.video.symbol, "slider.horizontal.3")
+        XCTAssertEqual(PlayerOptionsMenuButton.Kind.video.symbol, LiveChannelTrackMenuKind.playback.icon)
+        XCTAssertEqual(PlayerOptionsMenuButton.Kind.subtitles.symbol, LiveChannelTrackMenuKind.subtitles.icon)
+        let videoImage = try XCTUnwrap(video.image(for: .normal))
+        let adjustmentsImage = try XCTUnwrap(UIImage(
+            systemName: "slider.horizontal.3", withConfiguration: UIImage.SymbolConfiguration(textStyle: .title3)
+        ))
+        XCTAssertTrue(videoImage.isEqual(adjustmentsImage), "Video options must not look like a fullscreen action.")
         let audio = try XCTUnwrap(buttons(in: host.view).first { $0.accessibilityIdentifier == "player-audio" })
         audio.performPrimaryAction()
         try await waitUntil { audio.presentedMenu != nil && state.presentation.isPresented }
         let menu = try XCTUnwrap(audio.presentedMenu)
         XCTAssertEqual(menu.title, "Audio")
+        XCTAssertTrue(try XCTUnwrap(menu.children.first as? UIMenu).title.isEmpty)
         XCTAssertEqual(visible(menu).map(\.title), ["English (Opus 5.1)", "French (AAC Stereo)"])
         let stale = try XCTUnwrap(visible(menu).first as? UIAction)
         state.controls.audioOptions = []
@@ -147,7 +158,7 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
         try await waitUntil { state.sheet == .subtitleAdvanced && !state.presentation.isPresented }
     }
 
-    func testOneMenuOffersDirectTracksAndKeepsDownloadLast() throws {
+    func testOneMenuOffersDirectTracksThenDownloadAndAdvanced() throws {
         let model = controls()
         var selectedAudio: Int?
         var selectedSubtitle: Int?
@@ -163,20 +174,62 @@ final class PlayerMoreMenuPresentationTests: XCTestCase {
         XCTAssertEqual(visible(menu).map(\.title), ["Subtitles", "Audio", "Playback Speed", "Video", "Version"])
         let subtitles = try submenu("Subtitles", in: menu)
         let subtitleRows = visible(subtitles).compactMap { $0 as? UIAction }
-        XCTAssertEqual(subtitleRows.map(\.title), ["Off", "English (SDH)", "Advanced…", "Search & Download…"])
+        XCTAssertEqual(subtitleRows.map(\.title), ["Off", "English (SDH)", "Search & Download…", "Advanced…"])
         XCTAssertEqual(subtitleRows[0].state, .on)
         perform(subtitleRows[1])
         XCTAssertEqual(selectedSubtitle, 9)
         perform(subtitleRows[2])
-        XCTAssertEqual(requested, .subtitleAdvanced)
-        perform(subtitleRows[3])
         XCTAssertEqual(requested, .subtitleSearch)
+        perform(subtitleRows[3])
+        XCTAssertEqual(requested, .subtitleAdvanced)
         let audio = try submenu("Audio", in: menu)
+        XCTAssertTrue(try XCTUnwrap(audio.children.first as? UIMenu).title.isEmpty)
         XCTAssertFalse(visible(audio).contains { $0 is UIMenu }, "Tracks must not need a second nested menu.")
         let audioRows = visible(audio).compactMap { $0 as? UIAction }
         XCTAssertEqual(audioRows.map(\.title), ["English (Opus 5.1)", "French (AAC Stereo)"])
         perform(audioRows[1])
         XCTAssertEqual(selectedAudio, 42)
+    }
+
+    func testUpwardNativeSubtitleMenuRendersTracksBeforeDownloadAndAdvanced() async throws {
+        let state = FixtureState(controls: controls())
+        state.layout = .separate
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: VStack { Spacer(); Fixture(state: state) })
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            state.presentation.reset()
+            host.dismiss(animated: false)
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let expected = ["Off", "English (SDH)", "Search & Download…", "Advanced…"]
+        func rowLabels(in view: UIView) -> [UILabel] {
+            guard !view.isHidden, view.alpha > 0 else { return [] }
+            if let label = view as? UILabel, let text = label.text, expected.contains(text) { return [label] }
+            return view.subviews.flatMap { rowLabels(in: $0) }
+        }
+        func displayedRows() -> [UILabel] {
+            scene.windows.flatMap { rowLabels(in: $0) }
+                .sorted { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }
+        }
+        try await waitUntil { self.buttons(in: host.view).contains { $0.accessibilityIdentifier == "player-subtitles" } }
+        let button = try XCTUnwrap(buttons(in: host.view).first { $0.accessibilityIdentifier == "player-subtitles" })
+        button.performPrimaryAction()
+        try await waitUntil { button.presentedMenu != nil && displayedRows().count == expected.count }
+        XCTAssertEqual(displayedRows().compactMap(\.text), expected)
+        let bottomRow = try XCTUnwrap(displayedRows().last)
+        XCTAssertLessThan(bottomRow.convert(bottomRow.bounds, to: nil).midY, button.convert(button.bounds, to: nil).midY)
+        let interaction = try XCTUnwrap(button.contextMenuInteraction)
+        let configuration = try XCTUnwrap(button.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
+        XCTAssertEqual(configuration.preferredMenuElementOrder, .fixed, "Snapshot reuse must preserve fixed ordering too.")
+        interaction.dismissMenu()
+        try await waitUntil { button.presentedMenu == nil && !state.presentation.isPresented }
     }
 
     func testUnavailableFeaturesAreOmittedAndSpeedPresetsRespectEngineMaximum() throws {

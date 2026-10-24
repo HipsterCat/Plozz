@@ -26,7 +26,7 @@ public enum PlayerAudioMenu {
                     state: option.isSelected ? .on : .off
                 ) { _ in onSelect(option.id) }
             }
-            children.append(UIMenu(title: localized("Audio Track"), options: [.displayInline, .singleSelection], children: tracks))
+            children.append(UIMenu(options: [.displayInline, .singleSelection], children: tracks))
         }
         if let dialogueEnhancement {
             let choices = [false, true].map { enabled in

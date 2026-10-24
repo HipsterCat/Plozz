@@ -21,7 +21,7 @@ final class PlayerAudioMenuPresentationTests: XCTestCase {
         XCTAssertEqual(menu.title, "Audio")
         XCTAssertEqual(menu.children.count, 1, "Unavailable enhancement must not produce a nonfunctional submenu.")
         let tracks = try XCTUnwrap(menu.children.first as? UIMenu)
-        XCTAssertEqual(tracks.title, "Audio Track")
+        XCTAssertTrue(tracks.title.isEmpty, "The Audio menu already labels these tracks.")
         XCTAssertTrue(tracks.options.contains(.displayInline), "Audio tracks should not need another submenu tap.")
         XCTAssertTrue(tracks.options.contains(.singleSelection))
         let choices = tracks.children.compactMap { $0 as? UIAction }
@@ -38,6 +38,7 @@ final class PlayerAudioMenuPresentationTests: XCTestCase {
             .init(id: 7, title: Text(verbatim: "English (Opus Stereo)"), isSelected: true, nativeTitle: "English (Opus Stereo)")
         ], onSelect: { _ in XCTFail("A sole track must not initiate a switch.") })
         let tracks = try XCTUnwrap(menu.children.first as? UIMenu)
+        XCTAssertTrue(tracks.title.isEmpty)
         let track = try XCTUnwrap(tracks.children.first as? UIAction)
         XCTAssertEqual(track.title, "English (Opus Stereo)")
         XCTAssertEqual(track.state, .on)
@@ -85,13 +86,22 @@ final class PlayerAudioMenuPresentationTests: XCTestCase {
         let button = try XCTUnwrap(button(in: host.view))
         XCTAssertEqual(button.accessibilityIdentifier, "player-audio")
         XCTAssertEqual(button.accessibilityLabel, "Audio")
+        XCTAssertEqual(PlayerOptionsMenuButton.Kind.audio.symbol, "waveform")
+        XCTAssertEqual(PlayerOptionsMenuButton.Kind.audio.symbol, LiveChannelTrackMenuKind.audio.icon)
+        let audioImage = try XCTUnwrap(button.image(for: .normal))
+        let waveformImage = try XCTUnwrap(UIImage(
+            systemName: "waveform", withConfiguration: UIImage.SymbolConfiguration(textStyle: .title3)
+        ))
+        XCTAssertTrue(audioImage.isEqual(waveformImage))
         XCTAssertTrue(button.showsMenuAsPrimaryAction)
         let interaction = try XCTUnwrap(button.contextMenuInteraction)
         defer { interaction.dismissMenu() }
         button.performPrimaryAction()
         try await waitUntil { button.presentedMenu != nil }
         let original = try XCTUnwrap(button.presentedMenu)
+        XCTAssertEqual(original.title, "Audio")
         let tracks = try XCTUnwrap(original.children.first as? UIMenu)
+        XCTAssertTrue(tracks.title.isEmpty, "The native popup must not repeat Audio as a section heading.")
         XCTAssertEqual(tracks.children.compactMap { ($0 as? UIAction)?.state }, [.on, .off])
         for tick in 1...10 {
             state.seconds = tick
@@ -139,6 +149,10 @@ final class PlayerAudioMenuPresentationTests: XCTestCase {
         XCTAssertEqual(button.accessibilityIdentifier, "live-channel-playback-options")
         button.performPrimaryAction()
         try await waitUntil { button.presentedMenu != nil && state.presentations.last == true }
+        let audio = try XCTUnwrap(button.presentedMenu?.children.first as? UIMenu)
+        XCTAssertEqual(audio.title, "Audio")
+        let audioTracks = try XCTUnwrap(audio.children.first as? UIMenu)
+        XCTAssertTrue(audioTracks.title.isEmpty, "Live TV must use the same unlabelled track group as VOD.")
         engine.audioTracks = []
         engine.liveSnapshot = .init(phase: .loading)
         engine.onProgrammeChanged?()

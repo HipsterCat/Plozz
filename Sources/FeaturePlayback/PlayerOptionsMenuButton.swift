@@ -11,10 +11,10 @@ public struct PlayerOptionsMenuButton: UIViewRepresentable {
         var symbol: String {
             switch self {
             case .playbackOptions: "ellipsis"
-            case .audio: "speaker.wave.2"
-            case .subtitles: "captions.bubble"
+            case .audio: PlayerControls.Category.audio.icon
+            case .subtitles: PlayerControls.Category.subtitles.icon
             case .speed: "speedometer"
-            case .video: "arrow.up.left.and.arrow.down.right"
+            case .video: PlayerControls.Category.playback.icon
             }
         }
 
@@ -116,13 +116,19 @@ final class PlayerOptionsMenuControl: UIButton {
     override func contextMenuInteraction(
         _ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
-        if let menu = presentedMenu {
-            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in menu }
+        let menu: UIMenu
+        if let presentedMenu {
+            menu = presentedMenu
+        } else {
+            guard let provided = menuProvider?(), !provided.children.isEmpty else { return nil }
+            menu = provided
+            presentedMenu = menu
+            onPresentationChange?(true)
         }
-        guard let menu = menuProvider?(), !menu.children.isEmpty else { return nil }
-        presentedMenu = menu
-        onPresentationChange?(true)
-        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in menu }
+        let configuration = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in menu }
+        // This custom configuration must also preserve top-to-bottom order when opening upward.
+        configuration.preferredMenuElementOrder = .fixed
+        return configuration
     }
 
     override func contextMenuInteraction(

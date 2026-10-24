@@ -183,12 +183,12 @@ public enum PlayerMoreMenu {
                 subtitles.append(UIMenu(options: [.displayInline, .singleSelection], children: tracks))
             }
             var more: [UIMenuElement] = []
+            if model.subtitleDownload.canSearch {
+                more.append(destination("Search & Download…", .subtitleSearch))
+            }
             if (model.subtitleStyleAdjustable && model.secondarySubtitleImagePrimaryFormat == nil)
                 || model.subtitleDelayAdjustable || !model.secondarySubtitleOptions.isEmpty {
                 more.append(destination("Advanced…", .subtitleAdvanced))
-            }
-            if model.subtitleDownload.canSearch {
-                more.append(destination("Search & Download…", .subtitleSearch))
             }
             if !more.isEmpty { subtitles.append(UIMenu(options: .displayInline, children: more)) }
             entries[.subtitles] = UIMenu(title: localized(PlayerMenuSection.subtitles.title), children: subtitles)
