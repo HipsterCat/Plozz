@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct ProfileNameLabelTests {
     @Test
-    func onlyPlozzProfileLocksRenderAnIndicator() throws {
+    func configuredPlozzAndPlexProtectionRenderAnIndicator() throws {
         let profile = Profile(name: "Viewer", avatarSymbol: "person.fill", colorIndex: 0)
         let unlocked = try render(profile)
         var locked = profile
@@ -23,7 +23,13 @@ struct ProfileNameLabelTests {
             .init(homeUserID: "protected", name: "Viewer", requiresPIN: true),
             forPlexAccount: "plex"
         )
-        #expect(try render(plex).data == unlocked.data)
+        #expect(try render(plex).data == protected.data)
+
+        let unprotectedPlex = plex.settingHomeUserBinding(
+            .init(homeUserID: "unprotected", name: "Viewer", requiresPIN: false),
+            forPlexAccount: "plex"
+        )
+        #expect(try render(unprotectedPlex).data == unlocked.data)
 
         locked.lock = nil
         #expect(try render(locked).data == unlocked.data)

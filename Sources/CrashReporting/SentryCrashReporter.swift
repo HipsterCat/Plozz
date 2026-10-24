@@ -16,6 +16,7 @@ import Sentry
 ///   • Bounded IPTV transport and live-engine failure categories and numeric codes.
 ///   • A bounded in-memory operation timeline attached to existing events, including active operations.
 ///   • Numerical memory-pressure evidence when supplied by the SDK.
+///   • Original foreground/active booleans when supplied by the SDK.
 /// What is NOT sent: user identity, IP, server URLs/hostnames, media titles,
 /// profile names, automatic network/UI breadcrumbs, or performance traces.
 @MainActor
@@ -149,7 +150,10 @@ public final class SentryCrashReporter: CrashReporter {
         _ event: Event, diagnostics: PerformanceDiagnostics = .shared
     ) -> Event? {
         event.context?[CrashPerformanceContext.key] = nil
-        let snapshot = diagnostics.snapshot()
+        // Fatal reports are recovered on relaunch. The SDK can fall back to a new
+        // timestamp when the original crash time or watchdog breadcrumbs are absent.
+        let snapshot = event.level == .fatal ? nil
+            : event.timestamp.flatMap { diagnostics.snapshot(forEventAt: $0) }
         if let snapshot,
            let bytes = try? JSONEncoder().encode(snapshot),
            let data = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] {

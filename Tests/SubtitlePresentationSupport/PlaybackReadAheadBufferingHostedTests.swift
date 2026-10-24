@@ -17,7 +17,11 @@ final class PlaybackReadAheadBufferingHostedTests: XCTestCase {
         XCTAssertGreaterThan(automatic.longestFreeze, 8, "The baseline must actually exhaust its buffer.")
         XCTAssertLessThan(larger.longestFreeze, 3, "The larger buffer must cover the same source outage.")
         XCTAssertGreaterThan(larger.changedFrames, automatic.changedFrames + 80)
-        XCTAssertGreaterThan(larger.sourceBytes, automatic.sourceBytes + 80 * 1_024 * 1_024)
+        // tvOS software buffering keeps its independent 96 MiB forward cap.
+        // Require enough source data for the 90 media-second outage (half this
+        // uniform fixture), not an extra 80 MiB beyond the automatic buffer.
+        XCTAssertGreaterThan(larger.sourceBytes, size / 2)
+        XCTAssertGreaterThan(larger.sourceBytes, automatic.sourceBytes)
         XCTAssertLessThan(larger.startupSeconds, 15, "A larger target must not become a startup fill requirement.")
     }
 
@@ -77,6 +81,16 @@ final class PlaybackReadAheadBufferingHostedTests: XCTestCase {
         defer { frames.close() }
         // Both runs get the same opportunity to fill while playback continues.
         try await Task.sleep(for: .seconds(10))
+        switch engine.liveSnapshot.route {
+        case .localHLS:
+            let cache = try XCTUnwrap(engine.liveTelemetry?.sessionCache)
+            XCTAssertGreaterThan(cache.residentBytes, 0)
+            XCTAssertGreaterThan(cache.effectiveBudgetBytes, 0)
+        case .software:
+            XCTAssertNil(engine.liveTelemetry?.sessionCache, "The packet store is not the loopback segment cache.")
+        default:
+            XCTFail("This fixture must exercise an engine-owned buffer.")
+        }
         let headroom = engine.bufferedPosition - engine.currentTime
         await gate.pause()
         try await Task.sleep(for: .milliseconds(250))
@@ -114,6 +128,7 @@ final class PlaybackReadAheadBufferingHostedTests: XCTestCase {
         await gate.pause()
         engine.stop()
         await engine.drainTransport()
+        XCTAssertNil(engine.liveTelemetry?.sessionCache, "Stopped sessions must not retain active cache usage.")
         let stopDeadline = ContinuousClock.now + .seconds(5)
         while await server.activeRequestCount > 0, ContinuousClock.now < stopDeadline {
             try await Task.sleep(for: .milliseconds(50))

@@ -16,13 +16,28 @@ public struct EngineLiveTelemetry: Equatable, Sendable {
     /// Engine-owned label for the active audio pipeline, not a receiver-output
     /// measurement. Display verbatim; never parse it to make playback decisions.
     public var audioPipelineDescription: String?
+    public var sessionCache: EngineSessionCache?
 
     public init(droppedFrameCount: Int? = nil, observedFps: Double? = nil, observedBitrate: Double? = nil,
-                bufferedSecondsAhead: Double? = nil, audioPipelineDescription: String? = nil) {
+                bufferedSecondsAhead: Double? = nil, audioPipelineDescription: String? = nil,
+                sessionCache: EngineSessionCache? = nil) {
         self.droppedFrameCount = droppedFrameCount
         self.observedFps = observedFps
         self.observedBitrate = observedBitrate
         self.bufferedSecondsAhead = bufferedSecondsAhead
         self.audioPipelineDescription = audioPipelineDescription
+        self.sessionCache = sessionCache
+    }
+}
+
+/// The engine's active temporary cache, including its protected playback-window floor.
+/// The effective budget is not a promise of a fixed buffered duration.
+public struct EngineSessionCache: Equatable, Sendable {
+    public let residentBytes: Int64
+    public let effectiveBudgetBytes: Int64
+
+    public init(residentBytes: Int64, effectiveBudgetBytes: Int64) {
+        self.residentBytes = residentBytes
+        self.effectiveBudgetBytes = effectiveBudgetBytes
     }
 }

@@ -30,9 +30,11 @@ runs:
       run: |
         python3 tools/ci-cache.py configure "$CI_LANE" >> "$GITHUB_ENV"
 
-    - name: Select Xcode
+    - name: Show Xcode toolchain
       shell: bash
-      run: sudo xcode-select -s /Applications/Xcode_26.2.app
+      run: |
+        xcodebuild -version
+        xcrun swift --version
 
     - name: Select matching tvOS simulator
       if: ${{ inputs.lane != 'app-build' }}

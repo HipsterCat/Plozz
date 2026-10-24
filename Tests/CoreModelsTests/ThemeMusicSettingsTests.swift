@@ -40,6 +40,11 @@ final class ThemeMusicSettingsTests: XCTestCase {
         XCTAssertLessThanOrEqual(ThemeMusicVolume.high.gain, 0.7)
     }
 
+    func testSelectableVolumeLevelsAreAllAudible() {
+        XCTAssertEqual(ThemeMusicVolume.playbackLevels, [.low, .medium, .high])
+        XCTAssertTrue(ThemeMusicVolume.playbackLevels.allSatisfy { $0.gain > 0 })
+    }
+
     func testCodableRoundTrip() throws {
         let settings = ThemeMusicSettings(
             isEnabled: true,

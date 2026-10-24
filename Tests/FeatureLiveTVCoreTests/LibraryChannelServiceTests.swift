@@ -710,6 +710,7 @@ actor LibraryCatalogFixture: LibraryChannelCatalogProviding {
     private(set) var details = 0
     var accessibleLibraries = [MediaLibrary(id: "library", title: "Library", kind: .unknown)]
     private var pageHook: (@Sendable () async throws -> Void)?
+    private var pageTransform: (@Sendable (MediaPage) -> MediaPage)?
     init(items: [MediaItem], session: UserSession? = nil, kind: ProviderKind = .jellyfin) {
         self.items = items
         self.kind = kind
@@ -721,6 +722,7 @@ actor LibraryCatalogFixture: LibraryChannelCatalogProviding {
     func replaceItems(_ items: [MediaItem]) { self.items = items }
     func replaceLibraries(_ libraries: [MediaLibrary]) { accessibleLibraries = libraries }
     func beforeNextPage(_ hook: @escaping @Sendable () async throws -> Void) { pageHook = hook }
+    func transformPages(_ transform: @escaping @Sendable (MediaPage) -> MediaPage) { pageTransform = transform }
     func libraryChannelItems(in libraryID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         pages.append(page)
         queries.append((libraryID, kind, page))
@@ -728,8 +730,9 @@ actor LibraryCatalogFixture: LibraryChannelCatalogProviding {
         pageHook = nil
         try await hook?()
         let selected = items.filter { $0.kind == kind && $0.libraryID == libraryID }
-        return MediaPage(items: Array(selected.dropFirst(page.startIndex).prefix(page.limit)),
-                         startIndex: page.startIndex, totalCount: selected.count)
+        let result = MediaPage(items: Array(selected.dropFirst(page.startIndex).prefix(page.limit)),
+                               startIndex: page.startIndex, totalCount: selected.count)
+        return pageTransform?(result) ?? result
     }
     func libraries() async throws -> [MediaLibrary] { accessibleLibraries }
     func continueWatching(limit: Int) async throws -> [MediaItem] { [] }

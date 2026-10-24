@@ -7,6 +7,40 @@ import os
 
 @MainActor
 final class PlaybackDiagnosticsSamplerTests: XCTestCase {
+    func testCacheTelemetryClearsWhenMissingUnsupportedStoppedOrRestarted() {
+        let sampler = PlaybackDiagnosticsSampler()
+        defer { sampler.stop() }
+        let cache = EngineSessionCache(residentBytes: 0, effectiveBudgetBytes: 2_147_483_648)
+        var telemetry: EngineLiveTelemetry? = .init(sessionCache: cache)
+        var route = LiveChannelEngineRoute.localHLS
+        sampler.start(
+            player: nil, mode: .plozzigen, engineTelemetry: { telemetry },
+            liveRoute: { route }, includesSystemMetrics: false
+        )
+        sampler.sampleTick()
+        XCTAssertEqual(sampler.latest?.sessionCache, cache)
+        telemetry = nil
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.sessionCache)
+        telemetry = .init(sessionCache: cache)
+        route = .nativeHLS
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.sessionCache)
+        route = .localHLS
+        sampler.sampleTick()
+        XCTAssertEqual(sampler.latest?.sessionCache, cache)
+        telemetry = .init()
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.sessionCache)
+        telemetry = .init(sessionCache: cache)
+        sampler.sampleTick()
+        sampler.stop()
+        XCTAssertNil(sampler.latest?.sessionCache)
+        sampler.start(player: nil, mode: .plozzigen, includesSystemMetrics: false)
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.sessionCache)
+    }
+
     func testActualAudioPipelineTracksConversionFallbackTrackChangesAndUnknownWithoutAProbe() {
         let sampler = PlaybackDiagnosticsSampler()
         defer { sampler.stop() }

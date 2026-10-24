@@ -69,7 +69,7 @@ struct HomeContentNoticeView: View {
                 ),
                 action: onReload
             )
-                .buttonStyle(SettingsFocusButtonStyle())
+                .plozzActionButton(role: .secondary)
         }
         .frame(maxWidth: 900)
         .frame(maxWidth: .infinity, alignment: .center)

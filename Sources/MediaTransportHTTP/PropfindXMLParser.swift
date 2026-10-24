@@ -256,17 +256,13 @@ private final class MultistatusParserDelegate: NSObject, XMLParserDelegate {
         elementStack.append(local)
         textBuffer = ""
 
-        switch local {
-        case "response":
+        switch elementStack {
+        case ["multistatus", "response"]:
             resetResponseState()
-        case "propstat":
+        case ["multistatus", "response", "propstat"]:
             resetPendingPropstatState()
-        case "collection":
-            // Only meaningful inside <resourcetype>; a bare <collection>
-            // elsewhere (unlikely, but be tolerant) is ignored by context.
-            if elementStack.dropLast().last == "resourcetype" {
-                pendingIsCollection = true
-            }
+        case ["multistatus", "response", "propstat", "prop", "resourcetype", "collection"]:
+            pendingIsCollection = true
         default:
             break
         }
@@ -276,22 +272,25 @@ private final class MultistatusParserDelegate: NSObject, XMLParserDelegate {
         textBuffer += string
     }
 
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        textBuffer += String(decoding: CDATABlock, as: UTF8.self)
+    }
+
     func parser(
         _ parser: XMLParser,
         didEndElement elementName: String,
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        let local = elementName.lowercased()
         let text = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         textBuffer = ""
 
-        switch local {
-        case "href":
-            if elementStack.dropLast().last == "response" {
-                currentHref = text
-            }
-        case "status":
+        // Extension properties can contain DAV-named descendants. Only the
+        // protocol's exact structural positions may change response metadata.
+        switch elementStack {
+        case ["multistatus", "response", "href"]:
+            currentHref = text
+        case ["multistatus", "response", "propstat", "status"]:
             // "HTTP/1.1 200 OK" — only a 2xx propstat's properties are
             // trusted; a 404 propstat (common for "prop not found" filler
             // some servers emit) must not poison the entry with absent
@@ -299,27 +298,24 @@ private final class MultistatusParserDelegate: NSObject, XMLParserDelegate {
             // <propstat>, so this fires *after* the properties below have
             // already been staged into `pending*` — the actual commit into
             // `current*` happens at </propstat>, gated on this flag.
-            let parent = elementStack.dropLast().last
-            if parent == "propstat" {
-                pendingPropstatStatusIsSuccess = Self.statusLineIsSuccess(text)
-            } else if parent == "response" {
-                currentResponseStatusIsSuccess = Self.statusLineIsSuccess(text)
-            }
-        case "getcontentlength":
+            pendingPropstatStatusIsSuccess = Self.statusLineIsSuccess(text)
+        case ["multistatus", "response", "status"]:
+            currentResponseStatusIsSuccess = Self.statusLineIsSuccess(text)
+        case ["multistatus", "response", "propstat", "prop", "getcontentlength"]:
             if let length = Int64(text), length >= 0 {
                 pendingContentLength = length
             } else {
                 pendingContentLength = nil
             }
-        case "getlastmodified":
+        case ["multistatus", "response", "propstat", "prop", "getlastmodified"]:
             pendingLastModified = HTTPDate.parse(text)
-        case "getetag":
+        case ["multistatus", "response", "propstat", "prop", "getetag"]:
             pendingETag = ETag(headerValue: text)
-        case "getcontenttype":
+        case ["multistatus", "response", "propstat", "prop", "getcontenttype"]:
             pendingContentType = text.isEmpty ? nil : text
-        case "propstat":
+        case ["multistatus", "response", "propstat"]:
             commitPendingPropstatIfSuccessful()
-        case "response":
+        case ["multistatus", "response"]:
             finishCurrentResponse(parser: parser)
         default:
             break

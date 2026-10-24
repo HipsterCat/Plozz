@@ -288,6 +288,11 @@ struct ServerDetailView: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
+            if account.server.provider.supportsAccountReauthentication, let providerSetupRouter {
+                Button("Sign In Again", systemImage: "arrow.clockwise") {
+                    providerSetupRouter.reauthenticationAccount = account
+                }
+            }
             if account.server.provider == .iptv, let providerSetupRouter {
                 Button("Edit connection", systemImage: "pencil") {
                     providerSetupRouter.connectIPTV(account: account)

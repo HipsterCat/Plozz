@@ -8,14 +8,7 @@
   A completely free, open-source media player for <b>Jellyfin</b>, <b>Plex</b>, <b>Emby</b>, and <b>Silo</b> —
   native on Apple TV, iPhone, and iPad.
   <br />
-  It also plays straight from network shares, so a folder of files works too.
-</p>
-
-<p align="center">
-  <b>Dolby TrueHD Atmos &amp; DTS:X — with height channels on Apple TV.</b>
-  <br />
-  Overhead sound from your own movie library, on tvOS 26 or later
-  with compatible audio equipment.
+  It also supports <b>WebDAV, SMB, SFTP, FTP, and NFS</b>
 </p>
 
 <p align="center">
@@ -127,10 +120,11 @@ available when you want them.
   other clients hand back to you, powered by
   [AetherEngine](https://github.com/superuser404notfound/AetherEngine).
   ([The full format list](https://github.com/superuser404notfound/AetherEngine/blob/main/docs/formats.md).)
-- **Dolby TrueHD Atmos and DTS:X with height channels on Apple TV** — hear
-  sound all around you and above you. Enabled by default for supported movie
-  and episode soundtracks on tvOS 26 or later with compatible audio equipment.
-  [Compatibility details](docs/playback-engines.md#dependency-version).
+- **Spatial audio** — optional lossy conversion adds overhead sound from
+  supported tracks on tvOS 26 and compatible equipment. Other paths retain
+  compatible channel playback. Dolby Digital Plus streams keep their native
+  playback path.
+  [Compatibility details](docs/playback-engines.md#spatial-audio).
 - **Change versions without leaving the player** — switch between files or
   editions on the active server on Apple TV, iPhone, and iPad. Keep your
   playback position, pause state, speed, quality limit, and matching audio and
@@ -177,6 +171,8 @@ limits and refuses an incompatible plan rather than quietly using Maximum.
 
 - **Downloads on iPhone and iPad** — save movies and episodes for playback
   without a server connection, with local artwork and metadata for browsing.
+  Playback prefers an available download over streaming, even when another
+  server or version is selected.
   Native Silo downloads are supported too; they use the server's download
   permissions and preparation options, not a temporary playback link.
   Missing artwork is repaired when the source is reachable on an allowed network,
@@ -201,6 +197,8 @@ limits and refuses an incompatible plan rather than quietly using Maximum.
 - **Choose download quality separately** — streaming preferences don't change
   your saved download settings. Available renditions and background-transfer
   behavior depend on the provider. Apple TV does not offer offline downloads.
+  User-requested downloads check the same usable device capacity shown in
+  Downloads, including space iOS can reclaim, before starting the transfer.
 - **Follow downloads outside Plozz** — on iOS/iPadOS 26 or later, user-started
   downloads request the system's continued-processing Live Activity, including
   Dynamic Island on supported iPhones. One activity tracks the active queue

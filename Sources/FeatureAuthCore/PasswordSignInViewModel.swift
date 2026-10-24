@@ -22,12 +22,12 @@ public final class PasswordSignInViewModel {
     public private(set) var phase: Phase = .idle
 
     private let service: PasswordSignInService
-    private let onAuthenticated: (UserSession) -> Void
+    private let onAuthenticated: (UserSession) throws -> Void
     private var task: Task<Void, Never>?
 
     public init(
         service: PasswordSignInService,
-        onAuthenticated: @escaping (UserSession) -> Void
+        onAuthenticated: @escaping (UserSession) throws -> Void
     ) {
         self.service = service
         self.onAuthenticated = onAuthenticated
@@ -50,14 +50,15 @@ public final class PasswordSignInViewModel {
             do {
                 let session = try await service.signIn(username: username, password: password)
                 if Task.isCancelled { return }
+                try self.onAuthenticated(session)
                 self.phase = .success
-                self.onAuthenticated(session)
             } catch is CancellationError {
                 // Cancelled (view dismissed); leave phase untouched.
             } catch let error as AppError {
-                if error == .cancelled { return }
+                if Task.isCancelled || error == .cancelled { return }
                 self.phase = .error(error.userMessage)
             } catch {
+                guard !Task.isCancelled else { return }
                 self.phase = .error(AppError.unknown("").userMessage)
             }
         }

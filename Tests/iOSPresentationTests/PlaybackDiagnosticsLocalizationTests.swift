@@ -66,7 +66,7 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
 
     private let commonLabelKeys = [
         "File", "Size", "Delivery", "Stream", "Codec", "Resolution", "Frame Rate",
-        "Color", "Codec Tag", "Channels", "Sample Rate", "Bitrate", "System output", "Connection", "Track",
+        "Codec Tag", "Channels", "Sample Rate", "Bitrate", "System output", "Connection", "Track",
         "State", "Buffer", "Engine buffer", "Stalls", "Dropped",
         "Declared stream bitrate", "Network throughput", "Disk", "Memory", "Thermal", "Instances"
     ]
@@ -98,6 +98,61 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         XCTAssertFalse(text.contains("Plozzigen"), text)
     }
 
+    func testPlaybackCacheShowsZeroUsageAndFormatsCountsInTheAppLocale() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 900)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for (locale, language) in [("en_US", "en"), ("de_DE", "de")] {
+            let bundleURL = try XCTUnwrap(Bundle.main.url(forResource: language, withExtension: "lproj"))
+            let bundle = try XCTUnwrap(Bundle(url: bundleURL))
+            let cacheLabel = bundle.localizedString(forKey: "Playback cache", value: nil, table: "Localizable")
+            if language != "en" {
+                XCTAssertNotEqual(cacheLabel, "Playback cache", "The cache label must be translated.")
+            }
+            for hasCache in [true, false] {
+                var diagnostics = fixture(mode: .plozzigen)
+                diagnostics.sessionCache = hasCache
+                    ? .init(residentBytes: 0, effectiveBudgetBytes: 1_610_612_736) : nil
+                window.rootViewController = UIHostingController(rootView:
+                    PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: .mobile)
+                        .environment(\.themePalette, .dark)
+                        .environment(\.locale, Locale(identifier: locale))
+                )
+                window.makeKeyAndVisible()
+                try await Task.sleep(for: .milliseconds(300))
+                window.layoutIfNeeded()
+                let scroll = try XCTUnwrap(scrollView(in: window))
+                scroll.setContentOffset(CGPoint(
+                    x: 0, y: max(0, scroll.contentSize.height - scroll.bounds.height)
+                ), animated: false)
+                try await Task.sleep(for: .milliseconds(200))
+                window.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+                }
+                let text = try renderedText(XCTUnwrap(image.cgImage), locale: locale)
+                XCTAssertFalse(text.isEmpty, "Require the actual hosted diagnostics, not an empty snapshot.")
+                XCTAssertEqual(normalized(text).contains(normalized(cacheLabel)), hasCache, text)
+                if hasCache {
+                    XCTAssertTrue(text.contains(locale == "en_US" ? "1.5" : "1,5"), text)
+                    XCTAssertTrue(text.contains("0"), text)
+                }
+            }
+        }
+    }
+
+    private func scrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView { return scroll }
+        return view.subviews.lazy.compactMap { self.scrollView(in: $0) }.first
+    }
+
     func testTelevisionDiagnosticsUseTheSameLocalizedLabels() throws {
         let panel = PlaybackDiagnosticsOverlay(diagnostics: fixture(mode: .transcode), presentation: .television)
         let text = try renderedText(
@@ -108,6 +163,28 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         assertMediaContent(in: text)
         for value in ["720", "300", "24.00", "Stereo", "48", "128", "HDMI", "628", "8.0"] {
             XCTAssertTrue(text.contains(value), "Combining rows must preserve their measurements: \(text)")
+        }
+    }
+
+    func testBothLayoutsUseTheSameConciseSourceFormatWithoutClaimingFELIsActive() throws {
+        for mode in [PlaybackDiagnostics.PlaybackMode.directPlay, .remux, .plozzigen, .transcode] {
+            let diagnostics = PlaybackDiagnostics(
+                mode: mode, hdr: .dolbyVision, videoBitDepth: 10, dolbyVisionProfile: 7
+            )
+            for presentation in [PlaybackDiagnosticsOverlay.Presentation.mobile, .television] {
+                let panel = PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: presentation)
+                let text = try renderedText(
+                    panel.videoSection(diagnostics).frame(width: 360)
+                        .fixedSize(horizontal: false, vertical: true),
+                    locale: "en"
+                )
+                for token in [mode == .transcode ? "Stream" : "Source", "Dolby Vision", "P7", "10-bit"] {
+                    XCTAssertTrue(normalized(text).contains(normalized(token)), text)
+                }
+                for absent in [mode == .transcode ? "Source" : "Stream", "hybrid", "dual-layer", "FEL", "Color", "output"] {
+                    XCTAssertFalse(normalized(text).contains(normalized(absent)), text)
+                }
+            }
         }
     }
 
@@ -233,6 +310,7 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         }
         labels += mode == .plozzigen ? ["AVPlayer time", "AVPlayer window"] : ["Position", "Seekable"]
         labels += mode == .transcode ? ["Estimated bitrate", "Video", "Audio", "Container"] : ["Container"]
+        if mode != .transcode { labels.append("Source") }
         let bundleURL = try XCTUnwrap(Bundle.main.url(forResource: "cs", withExtension: "lproj"))
         let bundle = try XCTUnwrap(Bundle(url: bundleURL))
         for key in labels + ["playback.diagnostics.device"] {
@@ -305,6 +383,10 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         )
         renderer.scale = 3
         let image = try XCTUnwrap(renderer.cgImage)
+        return try renderedText(image, locale: locale)
+    }
+
+    private func renderedText(_ image: CGImage, locale: String) throws -> String {
         let attachment = XCTAttachment(image: UIImage(cgImage: image))
         attachment.name = "Diagnostics \(locale)"
         attachment.lifetime = .keepAlways

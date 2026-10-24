@@ -11,7 +11,7 @@ import UIKit
 /// The top "hero" section of a detail page: a full-bleed backdrop with the
 /// item's title, subtitle, ratings, overview, and an optional Play button.
 ///
-/// It is intentionally stateless and driven entirely by `item`, so a parent can
+/// Its media presentation is driven by `item`, so a parent can
 /// swap which item it shows (series → focused season → focused episode) and the
 /// whole hero animates to reflect the newly focused context.
 struct DetailHeroView: View, Equatable {
@@ -49,6 +49,8 @@ struct DetailHeroView: View, Equatable {
             && lhs.playTitle == rhs.playTitle
             && lhs.showsPlayPlaceholder == rhs.showsPlayPlaceholder
             && lhs.isRetryingPlaybackInventory == rhs.isRetryingPlaybackInventory
+            && lhs.allowsDeferredActivation == rhs.allowsDeferredActivation
+            && lhs.deferredActionOwner == rhs.deferredActionOwner
             && (lhs.onRetryPlaybackInventory == nil) == (rhs.onRetryPlaybackInventory == nil)
             && lhs.playProgress == rhs.playProgress
             && lhs.playRemainingText == rhs.playRemainingText
@@ -70,6 +72,7 @@ struct DetailHeroView: View, Equatable {
             && (lhs.onPlay == nil) == (rhs.onPlay == nil)
             && (lhs.onPlayTrailer == nil) == (rhs.onPlayTrailer == nil)
             && (lhs.onSelectVersion == nil) == (rhs.onSelectVersion == nil)
+            && lhs.loadVersions?.id == rhs.loadVersions?.id
             && (lhs.onSelectSource == nil) == (rhs.onSelectSource == nil)
             && (lhs.onRequest == nil) == (rhs.onRequest == nil)
             && (lhs.onRequestSeasons == nil) == (rhs.onRequestSeasons == nil)
@@ -83,7 +86,11 @@ struct DetailHeroView: View, Equatable {
     @Environment(HeroTrailerController.self) private var heroTrailerController
     @Environment(HeroBackgroundSettingsModel.self) private var heroBackground
     @Environment(\.detailHeaderSettings) private var detailHeaderSettings
+    @Environment(\.plozzAppTextScale) private var appTextScale
     @Environment(\.plozzArtworkPolicy) private var artworkPolicy
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.seasonRequestContextID) private var seasonRequestContextID
+    @Environment(ProfilesModel.self) private var profiles: ProfilesModel?
     #if os(tvOS)
     @Environment(\.detailEntranceSession) private var detailEntrance
     #endif
@@ -138,13 +145,17 @@ struct DetailHeroView: View, Equatable {
     /// Fridays" or "New season Aug 5". `nil` when nothing is known.
     var scheduleLine: LocalizedStringResource? = nil
     let spoilerSettings: SpoilerSettings
+    @Environment(\.plozzShowsContentRatings) private var showsContentRatings
     /// Title for the ready Play/Resume button. Pending library details can keep
-    /// its disabled placeholder visible before a target has resolved.
+    /// its focusable placeholder visible before a target has resolved.
     let playTitle: LocalizedStringResource?
     let onPlay: (() -> Void)?
     var showsPlayPlaceholder: Bool = false
     var onRetryPlaybackInventory: (() -> Void)?
     var isRetryingPlaybackInventory = false
+    /// The parent cancels deferred input when covered or when episode browsing changes the target.
+    var allowsDeferredActivation = true
+    var deferredActionOwner: ObjectIdentifier? = nil
     /// When provided (`0..<1`), a thin watched-progress bar is shown inside the
     /// Play button, between the play icon and the remaining-time line.
     var playProgress: Double? = nil
@@ -166,6 +177,7 @@ struct DetailHeroView: View, Equatable {
     var selectedVersionID: String? = nil
     /// Invoked with the chosen `MediaVersion.id` when the user picks a version.
     var onSelectVersion: ((String) -> Void)? = nil
+    var loadVersions: MediaVersionInventoryLoader? = nil
     /// The cross-server sources for this (possibly merged) title. When more than
     /// one *distinct server* holds the title and `onSelectSource` is set, a
     /// "Server" picker button is shown next to Play (in the same style as the
@@ -283,6 +295,23 @@ struct DetailHeroView: View, Equatable {
     /// movies and series).
     @State private var userInitiatedSourceSwitch = false
     @State private var isVersionPickerPresented = false
+    @State private var isPresentingSeasonChooser = false
+    @State private var isVisible = false
+    @State private var pendingPrimaryAction: PendingPrimaryAction?
+
+    private struct PendingPrimaryAction {
+        enum Kind { case play, request, seasons }
+        let kind: Kind
+        let scope: PrimaryActionScope
+    }
+
+    private struct PrimaryActionScope: Equatable {
+        let owner: ObjectIdentifier?
+        let itemID: String
+        let accountID: String?
+        let profileID: String?
+        let requestContext: String
+    }
 
     /// Drives the hero's first-appearance fade-in. Starts hidden and eases to
     /// visible `.onAppear`, so the backdrop + title/metadata dissolve in rather
@@ -396,10 +425,15 @@ struct DetailHeroView: View, Equatable {
 
     /// The nominal box handed to `HeroLogoArtwork`.
     ///
-    /// Shared with Home rather than derived from this page's own 620pt text
-    /// column, so the same show's wordmark is drawn at the same size on both
-    /// screens — see ``HeroLogoLayout``.
-    private var heroLogoBox: CGSize { HeroLogoLayout.box }
+    /// Shares Home's baseline without tying the independent detail preference
+    /// to this page's wider text column.
+    private var heroLogoBox: CGSize {
+        HeroLogoLayout.box(size: detailHeaderSettings?.settings.logoSize ?? .default)
+    }
+
+    private var textScale: CGFloat {
+        PlozzTypography.scale(local: headerRatingPreferences.textSize.scale, app: appTextScale)
+    }
 
     // MARK: - Visible item actions (discoverability)
 
@@ -505,12 +539,12 @@ struct DetailHeroView: View, Equatable {
     /// button: there is nothing to press.
     @ViewBuilder
     private func scheduleBadge(_ text: LocalizedStringResource) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 14 * textScale, style: .continuous)
         Text(text)
-            .font(.system(size: 24, weight: .semibold))
+            .font(.system(size: PlozzTypography.heroSchedule.scaled(by: textScale).pointSize, weight: .semibold))
             .foregroundStyle(Color.primary)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 18 * textScale)
+            .padding(.vertical, 10 * textScale)
             .background {
                 if #available(tvOS 26.0, *) {
                     shape.fill(.regularMaterial)
@@ -519,7 +553,7 @@ struct DetailHeroView: View, Equatable {
                 }
             }
             .overlay {
-                shape.stroke(Color.primary.opacity(0.16), lineWidth: 1)
+                shape.stroke(Color.primary.opacity(0.16), lineWidth: textScale)
             }
             .padding(.bottom, 6)
             .contentTransition(.opacity)
@@ -613,7 +647,7 @@ struct DetailHeroView: View, Equatable {
     private var showsRequestPill: Bool {
         guard isDiscoveryItem else { return false }
         switch requestCTA {
-        case .request, .requested, .downloading: return true
+        case .request, .requested, .awaitingRelease, .downloading: return true
         case .play, .unavailable: return false
         }
     }
@@ -690,7 +724,8 @@ struct DetailHeroView: View, Equatable {
     /// backdrop item (the series), so a show's TV rating still shows while
     /// scrubbing episodes — matching Apple TV.
     private var heroRatingBadge: MediaBadge? {
-        HeroContentPolicy.ratingBadge(
+        guard showsContentRatings else { return nil }
+        return HeroContentPolicy.ratingBadge(
             focused: focusedPresentation,
             root: rootPresentation
         )
@@ -758,6 +793,12 @@ struct DetailHeroView: View, Equatable {
             return []
         }
         return rootPresentation.directorNames
+    }
+
+    private static let creditColumnWidth: CGFloat = 440
+    private var showsCreditColumn: Bool {
+        !presentsEpisodeStill
+            && (!starringCastValues.isEmpty || !directorValues.isEmpty || !animeStudioValues.isEmpty)
     }
 
     var body: some View {
@@ -863,7 +904,7 @@ struct DetailHeroView: View, Equatable {
                !isYearOnlySubtitle(subtitle),
                item.kind != .episode {
                 Text(subtitle)
-                    .font(.system(size: 26, weight: .medium))
+                    .font(.system(size: 26 * textScale, weight: .medium))
                     .plozzForeground(.secondary)
                     .lineLimit(1)
                     .contentTransition(.opacity)
@@ -886,59 +927,56 @@ struct DetailHeroView: View, Equatable {
             // subtitle above — an always-present container costs a spacing gap even
             // with nothing in it.
             if heroRatingBadge != nil || !genreParts.isEmpty {
-                HStack(alignment: .center, spacing: 16) {
+                HStack(alignment: .center, spacing: 16 * textScale) {
                     if let badge = heroRatingBadge {
                         MediaBadgeChip(badge: badge)
                     }
                     if !genreParts.isEmpty {
                         Text(genreParts.joined(separator: "  ·  "))
-                            .font(.system(size: 23, weight: .medium))
+                            .font(.system(size: PlozzTypography.heroMetadata.scaled(by: textScale).pointSize, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .contentTransition(.opacity)
                     }
                 }
+                .environment(\.metadataTextScale, textScale)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .detailEntranceStage(.metadata)
             }
-            // Description directly beneath the genres line.
-            SpoilerSafeOverviewText(
-                overview: HeroContentPolicy.detailDescription(
-                    focused: focusedPresentation,
-                    root: rootPresentation
-                ),
-                hidesSpoilers: hideText,
-                mode: spoilerSettings.mode,
-                lineCount: 3,
-                maxWidth: 800,
-                reservesSpace: false
-            )
-            // Refuse to be squeezed below the line limit.
-            //
-            // A series hero is a FIXED-height frame, and the browser transition
-            // pushes the content column up with a large bottom inset
-            // (`heroContentBottomLift`) so the action row's layout sits above the
-            // season bar. That leaves little slack, and the overview is the only
-            // flexible element in the column — so SwiftUI compressed it, silently,
-            // to a single line. `fixedSize` makes it claim its natural height for
-            // however many lines it actually has, up to `lineCount`.
-            .fixedSize(horizontal: false, vertical: true)
-            .detailEntranceStage(.metadata)
-            // Bottom facts region just above the action buttons: year · runtime,
-            // ratings, then capability badges (4K / Atmos / HDR …). One wrapping
-            // layout owns every item so an unusually rich title can add a real
-            // second line that reserves space instead of drawing behind the buttons.
-            ZStack(alignment: .leading) {
-                if !factParts.isEmpty || showRatings || !featureBadges.isEmpty {
-                    DetailHeroFactsRow(
-                        facts: factParts,
-                        ratings: showRatings ? heroRatings : [],
-                        familyGuidanceAge: heroFamilyGuidanceAge,
-                        featureBadges: featureBadges
-                    )
+            HeroDescriptionFactsLayout {
+                SpoilerSafeOverviewText(
+                    overview: HeroContentPolicy.detailDescription(
+                        focused: focusedPresentation,
+                        root: rootPresentation
+                    ),
+                    hidesSpoilers: hideText,
+                    mode: spoilerSettings.mode,
+                    lineCount: PlozzTypography.detailDescriptionLines,
+                    fontSize: PlozzTypography.heroDescription.scaled(by: textScale).pointSize,
+                    lineSpacing: PlozzTypography.heroDescription.scaled(by: textScale).lineSpacing,
+                    maxWidth: .infinity,
+                    reservesSpace: false
+                )
+                // The fixed-height series hero must not compress this below its
+                // natural height (up to the line cap) when lifted above seasons.
+                .fixedSize(horizontal: false, vertical: true)
+                .detailEntranceStage(.metadata)
+                // One wrapping row reserves real height when rich facts need
+                // another line, rather than drawing behind the action buttons.
+                ZStack(alignment: .leading) {
+                    if !factParts.isEmpty || showRatings || !featureBadges.isEmpty {
+                        DetailHeroFactsRow(
+                            facts: factParts,
+                            ratings: showRatings ? heroRatings : [],
+                            familyGuidanceAge: heroFamilyGuidanceAge,
+                            featureBadges: featureBadges
+                        )
+                        .environment(\.metadataTextScale, textScale)
+                    }
                 }
+                .detailEntranceStage(.metadata)
             }
-            .detailEntranceStage(.metadata)
+            .padding(.trailing, showsCreditColumn ? Self.creditColumnWidth + 60 : 0)
             if isDiscoveryItem
                 ? (showsRequestPill
                     || onPlayTrailer != nil
@@ -1042,7 +1080,7 @@ struct DetailHeroView: View, Equatable {
             alignment: .bottomLeading
         )
         .modifier(SeriesHeroContentLiftModifier(model: seriesRecedeModel))
-        .modifier(DetailHeroContentReveal(isVisible: heroVisible || hasCinematicEntrance, reduceMotion: reduceMotion))
+        .modifier(DetailHeroContentReveal(isVisible: heroVisible || hasStagedEntrance, reduceMotion: reduceMotion))
         // The full-bleed backdrop lives in a `.background`, which by definition is
         // sized to the host and does NOT contribute to the host's measured size.
         // That is the fix: previously the backdrop was a ZStack *sibling* whose
@@ -1073,11 +1111,8 @@ struct DetailHeroView: View, Equatable {
         // `bottomInset` so the two sit on the same baseline and follows the same
         // compositor lift as the left-side hero content.
         .overlay(alignment: .bottomTrailing) {
-            if !presentsEpisodeStill,
-               !starringCastValues.isEmpty
-                || !directorValues.isEmpty
-                || !animeStudioValues.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+            if showsCreditColumn {
+                VStack(alignment: .leading, spacing: 8 * textScale) {
                     if !animeStudioValues.isEmpty {
                         DetailHeroCreditLine(
                             label: "Studio",
@@ -1102,16 +1137,16 @@ struct DetailHeroView: View, Equatable {
                         )
                     }
                 }
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: PlozzTypography.heroCredit.scaled(by: textScale).pointSize, weight: .semibold))
                 .multilineTextAlignment(.leading)
-                .frame(maxWidth: 440, alignment: .trailing)
+                .frame(maxWidth: Self.creditColumnWidth, alignment: .trailing)
                 .shadow(color: .black.opacity(colorScheme == .light ? 0.22 : 0.55), radius: 5, y: 1)
                 .padding(.trailing, PlozzTheme.Metrics.screenPadding)
                 .padding(.bottom, bottomInset)
                 .contentTransition(.opacity)
                 .allowsHitTesting(false)
                 .modifier(SeriesHeroContentLiftModifier(model: seriesRecedeModel))
-                .modifier(DetailHeroContentReveal(isVisible: heroVisible || hasCinematicEntrance, reduceMotion: reduceMotion))
+                .modifier(DetailHeroContentReveal(isVisible: heroVisible || hasStagedEntrance, reduceMotion: reduceMotion))
                 .detailEntranceStage(.metadata)
             }
         }
@@ -1119,16 +1154,63 @@ struct DetailHeroView: View, Equatable {
             heroContextMenu
         }
         .plozzSheet(isPresented: $isVersionPickerPresented) {
-            MediaVersionPicker(versions: versions, selectedVersionID: selectedVersionID) {
+            MediaVersionPicker(versions: versions, selectedVersionID: selectedVersionID, loadVersions: loadVersions) {
+                cancelPendingPrimaryAction()
                 onSelectVersion?($0)
             }
+        }
+        .confirmationDialog("Request Seasons", isPresented: $isPresentingSeasonChooser, titleVisibility: .visible) {
+            if let seasonRequestAvailability {
+                SeasonRequestMenuContent(
+                    availability: seasonRequestAvailability,
+                    requestAllTitle: "Request All Seasons",
+                    isSubmitting: isRequestingSeasons,
+                    refreshFailed: seasonRequestAvailabilityFailed,
+                    onRefresh: onRetrySeasonRequestAvailability,
+                    onRequest: { seasons in
+                        isPresentingSeasonChooser = false
+                        onRequestSeasons?(seasons)
+                    }
+                )
+            }
+            Button("Cancel", role: .cancel) { isPresentingSeasonChooser = false }
         }
         // Artwork (including an inherited trailer) is visible immediately. Only
         // the foreground fades, keeping its focus targets and geometry stable.
         .onAppear {
+            isVisible = true
             guard !heroVisible else { return }
             heroVisible = true
         }
+        .onDisappear {
+            isVisible = false
+            cancelPendingPrimaryAction()
+        }
+        .onChange(of: primaryActionScope) { _, _ in cancelPendingPrimaryAction() }
+        .onChange(of: canActivateDeferredAction) { _, allowed in
+            if !allowed { cancelPendingPrimaryAction() }
+        }
+        .onChange(of: onPlay != nil) { _, _ in activatePendingPrimaryAction() }
+        .onChange(of: onRequest != nil) { _, _ in activatePendingPrimaryAction() }
+        .onChange(of: showsPlayPlaceholder) { _, _ in activatePendingPrimaryAction() }
+        .onChange(of: isRetryingPlaybackInventory) { _, _ in activatePendingPrimaryAction() }
+        .onChange(of: seasonRequestAvailability) { _, _ in activatePendingPrimaryAction() }
+        .onChange(of: seasonRequestAvailabilityResolved) { _, _ in activatePendingPrimaryAction() }
+        .onChange(of: seasonRequestAvailabilityFailed) { _, _ in activatePendingPrimaryAction() }
+        #if os(tvOS)
+        .onChange(of: detailEntrance?.primaryActionPressGeneration) { _, _ in
+            if playButtonHasFocus || playButtonFocus?.wrappedValue == true || heroActionRowFocus == .play {
+                queuePrimaryAction(.play)
+            } else if heroActionRowFocus == .request {
+                if item.kind == .series, onRequestSeasons != nil {
+                    queuePrimaryAction(.seasons)
+                } else if onRequest != nil {
+                    queuePrimaryAction(.request)
+                }
+            }
+        }
+        .onChange(of: detailEntrance?.blocksNavigation) { _, _ in activatePendingPrimaryAction() }
+        #endif
         // Cross-fade the hero text as the focused context changes, while the
         // backdrop swaps underneath it.
         .onReceive(
@@ -1155,7 +1237,74 @@ struct DetailHeroView: View, Equatable {
 
     }
 
-    private var hasCinematicEntrance: Bool {
+    private var primaryActionScope: PrimaryActionScope {
+        let root = backdropItem ?? item
+        return PrimaryActionScope(
+            owner: deferredActionOwner, itemID: root.id,
+            accountID: selectedSourceAccountID ?? root.sourceAccountID,
+            profileID: profiles?.activeProfile.id, requestContext: seasonRequestContextID
+        )
+    }
+
+    private var canActivateDeferredAction: Bool {
+        #if os(tvOS)
+        isVisible && allowsDeferredActivation && scenePhase == .active && detailEntrance?.isClosing != true
+        #else
+        isVisible && allowsDeferredActivation && scenePhase == .active
+        #endif
+    }
+
+    private func queuePrimaryAction(_ kind: PendingPrimaryAction.Kind) {
+        guard canActivateDeferredAction, pendingPrimaryAction == nil else { return }
+        pendingPrimaryAction = PendingPrimaryAction(kind: kind, scope: primaryActionScope)
+        activatePendingPrimaryAction()
+    }
+
+    private func cancelPendingPrimaryAction() {
+        pendingPrimaryAction = nil
+        isPresentingSeasonChooser = false
+    }
+
+    private func preparePrimaryAction() {
+        if pendingPrimaryAction != nil { pendingPrimaryAction = nil }
+        #if os(tvOS)
+        detailEntrance?.finishOpeningForPrimaryAction()
+        #endif
+    }
+
+    private func activatePendingPrimaryAction() {
+        guard let pending = pendingPrimaryAction else { return }
+        guard canActivateDeferredAction, pending.scope == primaryActionScope else {
+            cancelPendingPrimaryAction()
+            return
+        }
+        switch pending.kind {
+        case .play:
+            if let onRetryPlaybackInventory, !isRetryingPlaybackInventory {
+                preparePrimaryAction()
+                onRetryPlaybackInventory()
+            } else if let onPlay, !isRetryingPlaybackInventory {
+                preparePrimaryAction()
+                heroTrailerController.stop()
+                onPlay()
+            } else if !showsPlayPlaceholder {
+                pendingPrimaryAction = nil
+            }
+        case .request:
+            preparePrimaryAction()
+            if requestCTA == .request { onRequest?() }
+        case .seasons:
+            if let seasonRequestAvailability, !seasonRequestAvailability.seasons.isEmpty,
+               onRequestSeasons != nil {
+                preparePrimaryAction()
+                isPresentingSeasonChooser = true
+            } else if seasonRequestAvailabilityFailed || seasonRequestAvailabilityResolved {
+                pendingPrimaryAction = nil
+            }
+        }
+    }
+
+    private var hasStagedEntrance: Bool {
         #if os(tvOS)
         detailEntrance != nil
         #else
@@ -1231,6 +1380,13 @@ struct DetailHeroView: View, Equatable {
                 && heroTrailerController.isShowing((backdropItem ?? item).id)
                 && heroTrailerController.isPlaying
         )
+        .environment(
+            \.heroScrimHeightScale,
+            PlozzTypography.heroScrimScale(
+                textScale: textScale, logoSize: headerRatingPreferences.logoSize,
+                lines: PlozzTypography.detailDescriptionLines
+            )
+        )
     }
 
     /// The hero Play button. Extracted so the optional initial-focus binding can
@@ -1250,11 +1406,16 @@ struct DetailHeroView: View, Equatable {
         let liveResumeText = resumeText
         let sizingText = reservedResumeText ?? liveResumeText
         let button = Button {
+            guard !isRetryingPlaybackInventory, pendingPrimaryAction == nil else { return }
             if let onRetryPlaybackInventory {
+                preparePrimaryAction()
                 onRetryPlaybackInventory()
             } else if let action {
+                preparePrimaryAction()
                 heroTrailerController.stop()
                 action()
+            } else if showsPlayPlaceholder {
+                queuePrimaryAction(.play)
             }
         } label: {
             ZStack {
@@ -1274,16 +1435,18 @@ struct DetailHeroView: View, Equatable {
                         seasonEpisodeText: playSeasonEpisodeText,
                         onLight: playButtonHasFocus || colorScheme == .light,
                         isPlaceholder: action == nil,
+                        isLoading: pendingPrimaryAction?.kind == .play,
                         separatesEpisodeText: (actionItem ?? item).startsWatching
                     )
                 }
             }
         }
         .modifier(HeroActionButtonStyle(prominent: true))
-        .disabled((action == nil && onRetryPlaybackInventory == nil) || isRetryingPlaybackInventory)
+        // Keep the real primary slot in the focus tree while its action loads.
         .focused($playButtonHasFocus)
         .focused($heroActionRowFocus, equals: .play)
         .accessibilityIdentifier("detail-hero-play")
+        .accessibilityValue(pendingPrimaryAction?.kind == .play ? Text("Loading") : Text(verbatim: ""))
         .onChange(of: liveResumeText) { _, new in
             if let new { reservedResumeText = new }
         }
@@ -1294,10 +1457,10 @@ struct DetailHeroView: View, Equatable {
         if let playButtonFocus {
             button
                 .focused(playButtonFocus, equals: true)
-                .prefersDefaultFocus(action != nil, in: heroActionsScope)
+                .prefersDefaultFocus(true, in: heroActionsScope)
         } else {
             button
-                .prefersDefaultFocus(action != nil, in: heroActionsScope)
+                .prefersDefaultFocus(true, in: heroActionsScope)
         }
     }
 
@@ -1316,57 +1479,55 @@ struct DetailHeroView: View, Equatable {
         }
     }
 
-    @ViewBuilder
     private func seriesRequestPill() -> some View {
-        if let seasonRequestAvailability, !seasonRequestAvailability.seasons.isEmpty {
-            let hasRequestable = !seasonRequestAvailability.requestableMissingSeasonNumbers.isEmpty
-            let presentation = SeasonRequestPresentation(
-                availability: seasonRequestAvailability,
-                isSubmitting: isRequestingSeasons
-            )
-            SeasonRequestMenu(
-                availability: seasonRequestAvailability,
-                requestAllTitle: "Request All Seasons",
-                isSubmitting: isRequestingSeasons,
-                refreshFailed: seasonRequestAvailabilityFailed,
-                onRefresh: onRetrySeasonRequestAvailability,
-                onRequest: { onRequestSeasons?($0) }
-            ) {
-                Label(presentation.title, systemImage: presentation.systemImage)
-            }
-            .menuStyle(.button)
-            .modifier(HeroActionButtonStyle(prominent: hasRequestable))
-            .prefersDefaultFocus(true, in: heroActionsScope)
-            .focused($heroActionRowFocus, equals: .request)
-            .disabled(onRequestSeasons == nil)
-            .accessibilityLabel(
-                requestActingName.map { Text("\(Text(presentation.title)) as \($0)") }
-                    ?? Text(presentation.title)
-            )
-            .accessibilityValue(presentation.detail.map { Text($0) } ?? Text(verbatim: ""))
-            .accessibilityHint("View season statuses or request missing seasons")
-        } else if seasonRequestAvailabilityFailed {
-            Button { onRetrySeasonRequestAvailability?() } label: {
-                Label("Retry Seasons", systemImage: "arrow.clockwise")
-            }
-            .modifier(HeroActionButtonStyle(prominent: true))
-            .prefersDefaultFocus(true, in: heroActionsScope)
-            .focused($heroActionRowFocus, equals: .request)
-            .disabled(onRetrySeasonRequestAvailability == nil)
-            .accessibilityLabel("Retry loading seasons")
-        } else {
-            let label = SeasonRequestHeroPresentation.inactiveTitle(
+        let availability = seasonRequestAvailability.flatMap { $0.seasons.isEmpty ? nil : $0 }
+        let presentation = availability.map {
+            SeasonRequestPresentation(availability: $0, isSubmitting: isRequestingSeasons)
+        }
+        let title: LocalizedStringResource = presentation?.title
+            ?? (seasonRequestAvailabilityFailed ? "Retry Seasons" : SeasonRequestHeroPresentation.inactiveTitle(
                 availabilityLoaded: seasonRequestAvailability != nil,
                 resolved: seasonRequestAvailabilityResolved
-            )
-            Button {} label: {
-                Label(label, systemImage: seasonRequestAvailabilityResolved ? "exclamationmark.circle" : "clock")
+            ))
+        let symbol = presentation?.systemImage
+            ?? (seasonRequestAvailabilityFailed ? "arrow.clockwise"
+                : (seasonRequestAvailabilityResolved ? "exclamationmark.circle" : "clock"))
+        return Button {
+            guard pendingPrimaryAction == nil else { return }
+            if availability != nil {
+                preparePrimaryAction()
+                isPresentingSeasonChooser = true
+            } else if seasonRequestAvailabilityFailed {
+                preparePrimaryAction()
+                onRetrySeasonRequestAvailability?()
+            } else if !seasonRequestAvailabilityResolved, onRequestSeasons != nil {
+                queuePrimaryAction(.seasons)
             }
-            .modifier(HeroActionButtonStyle(prominent: false))
-            .prefersDefaultFocus(true, in: heroActionsScope)
-            .focused($heroActionRowFocus, equals: .request)
-            .accessibilityLabel(label)
+        } label: {
+            Label {
+                Text(title)
+            } icon: {
+                ActionProgressIcon(
+                    systemName: symbol, isLoading: pendingPrimaryAction?.kind == .seasons,
+                    onLight: requestPillHasFocus || colorScheme == .light
+                )
+            }
         }
+        .modifier(HeroActionButtonStyle(
+            prominent: availability?.requestableMissingSeasonNumbers.isEmpty == false || seasonRequestAvailabilityFailed
+        ))
+        .prefersDefaultFocus(true, in: heroActionsScope)
+        .focused($requestPillHasFocus)
+        .focused($heroActionRowFocus, equals: .request)
+        .disabled(
+            (availability != nil && onRequestSeasons == nil)
+                || (seasonRequestAvailabilityFailed && onRetrySeasonRequestAvailability == nil)
+        )
+        .accessibilityIdentifier("detail-hero-request")
+        .accessibilityLabel(requestActingName.map { Text("\(Text(title)) as \($0)") } ?? Text(title))
+        .accessibilityValue(pendingPrimaryAction?.kind == .seasons
+            ? Text("Loading") : (presentation?.detail.map { Text($0) } ?? Text(verbatim: "")))
+        .accessibilityHint("View season statuses or request missing seasons")
     }
 
     @ViewBuilder
@@ -1374,13 +1535,25 @@ struct DetailHeroView: View, Equatable {
         switch requestCTA {
         case .request:
             let label = requestActingName.map { "Request as \($0)" } ?? "Request"
-            Button { onRequest?() } label: {
-                Label(label, systemImage: "plus.circle")
+            Button {
+                guard pendingPrimaryAction == nil else { return }
+                preparePrimaryAction()
+                onRequest?()
+            } label: {
+                Label {
+                    Text(label)
+                } icon: {
+                    ActionProgressIcon(
+                        systemName: "plus.circle", isLoading: pendingPrimaryAction?.kind == .request,
+                        onLight: heroActionRowFocus == .request || colorScheme == .light
+                    )
+                }
             }
             .modifier(HeroActionButtonStyle(prominent: true))
             .prefersDefaultFocus(true, in: heroActionsScope)
             .focused($heroActionRowFocus, equals: .request)
             .accessibilityLabel(label)
+            .accessibilityValue(pendingPrimaryAction?.kind == .request ? Text("Loading") : Text(verbatim: ""))
         case let .downloading(progress):
             let percent = Int((progress * 100).rounded())
             Button {} label: {
@@ -1395,14 +1568,14 @@ struct DetailHeroView: View, Equatable {
             .prefersDefaultFocus(true, in: heroActionsScope)
             .focused($heroActionRowFocus, equals: .request)
             .accessibilityLabel("Downloading \(percent) percent")
-        case .requested:
+        case .requested, .awaitingRelease:
             Button {} label: {
-                Label("Requested", systemImage: "clock")
+                Label(requestCTA.requestStatusTitle, systemImage: requestCTA.requestStatusSystemImage)
             }
             .modifier(HeroActionButtonStyle(prominent: false))
             .prefersDefaultFocus(true, in: heroActionsScope)
             .focused($heroActionRowFocus, equals: .request)
-            .accessibilityLabel("Requested")
+            .accessibilityLabel(Text(requestCTA.requestStatusTitle))
         case .play, .unavailable:
             EmptyView()
         }
@@ -1445,6 +1618,7 @@ struct DetailHeroView: View, Equatable {
     private var showsMoreMenu: Bool {
         (serverChoices.count > 1 && onSelectSource != nil)
             || (versions.count > 1 && onSelectVersion != nil)
+            || loadVersions != nil
             || heroMenuActions.contains(.browseFiles)
     }
 
@@ -1474,14 +1648,17 @@ struct DetailHeroView: View, Equatable {
             offlineSourceAccountIDs: offlineSourceAccountIDs,
             versions: versions,
             selectedVersionID: selectedVersionID,
+            loadVersions: loadVersions,
             actions: heroMenuActions.filter { $0 == .browseFiles }.map {
                 PlaybackSourceMenuAction(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
             },
             onSelectSource: { accountID in
+                cancelPendingPrimaryAction()
                 userInitiatedSourceSwitch = true
                 onSelectSource?(accountID)
             },
             onSelectVersion: { versionID in
+                cancelPendingPrimaryAction()
                 onSelectVersion?(versionID)
             },
             onPerformAction: { id in
@@ -1520,6 +1697,7 @@ struct DetailHeroView: View, Equatable {
                     selection: Binding(
                         get: { currentServer.accountID },
                         set: { accountID in
+                            cancelPendingPrimaryAction()
                             userInitiatedSourceSwitch = true
                             onSelectSource(accountID)
                         }
@@ -1535,8 +1713,9 @@ struct DetailHeroView: View, Equatable {
                 .pickerStyle(.menu)
             }
         }
-        if versions.count > 1, onSelectVersion != nil {
+        if (versions.count > 1 || loadVersions != nil), onSelectVersion != nil {
             Button("Version", systemImage: "film.stack") {
+                cancelPendingPrimaryAction()
                 isVersionPickerPresented = true
             }
         }
@@ -1726,17 +1905,17 @@ struct DetailHeroView: View, Equatable {
                     seriesBreadcrumb(show, action: action)
                 } else {
                     Text(show)
-                        .font(.system(size: 30, weight: .semibold))
+                        .font(.system(size: 30 * textScale, weight: .semibold))
                         .plozzForeground(.secondary)
                         .lineLimit(1)
                 }
             }
             title
-                .font(.system(size: 64, weight: .bold))
+                .font(.system(size: PlozzTypography.heroFallbackTitle.scaled(by: textScale).pointSize, weight: .bold))
                 .lineLimit(2)
                 .minimumScaleFactor(0.5)
                 .multilineTextAlignment(.leading)
-                .frame(maxWidth: 1200, alignment: .leading)
+                .frame(maxWidth: HeroDescriptionFactsLayout.maximumWidth, alignment: .leading)
                 .contentTransition(.opacity)
         }
     }
@@ -1889,19 +2068,20 @@ private struct DetailHeroFactsRow: View {
     let ratings: [ExternalRating]
     let familyGuidanceAge: Double?
     let featureBadges: [MediaBadge]
+    @Environment(\.metadataTextScale) private var textScale
 
     var body: some View {
         WrappingHStackLayout(
             alignment: .leading,
-            spacing: 16,
-            lineSpacing: 8
+            spacing: 16 * textScale,
+            lineSpacing: 8 * textScale
         ) {
             if !facts.isEmpty {
                 // Year and runtime sit with the ratings and capability badges,
                 // which are all full-strength, so holding these at `.secondary`
                 // made the one text item in the row look faded next to them.
                 Text(facts.joined(separator: "  ·  "))
-                    .font(.system(size: 23, weight: .medium))
+                    .font(.system(size: PlozzTypography.heroMetadata.scaled(by: textScale).pointSize, weight: .medium))
                     .plozzForeground(.primary)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)

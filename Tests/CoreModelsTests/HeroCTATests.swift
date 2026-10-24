@@ -5,6 +5,84 @@ import CoreModels
 /// no-button for featured (Seerr) titles, and Play/Resume for ordinary library
 /// items. Kept exhaustive so the UI's button choice can never drift.
 final class HeroCTATests: XCTestCase {
+    func testApprovedFutureMovieMatchesUnreleasedSeasonWording() throws {
+        let release = try XCTUnwrap(MediaItem.calendarDayReleaseDate(from: "2099-10-20"))
+        var movie = item(.processing)
+        movie.releaseDate = release
+        let now = release.addingTimeInterval(-7 * 86_400)
+        let cta = movie.heroCTA(seerConnected: true, now: now)
+        XCTAssertEqual(cta, .awaitingRelease)
+        var title = cta.requestStatusTitle
+        title.locale = Locale(identifier: "en")
+        XCTAssertEqual(String(localized: title), "Requested · Unreleased")
+        XCTAssertEqual(cta.requestStatusSystemImage, "calendar")
+        let season = MediaSeasonRequestState(
+            number: 1, title: "Season 1", status: .processing, premiereDate: release
+        )
+        var seasonTitle = season.statusTitle(now: now)
+        seasonTitle.locale = title.locale
+        XCTAssertEqual(String(localized: title), String(localized: seasonTitle))
+    }
+
+    func testFutureMovieDoesNotOverrideApprovalOwnershipOrDownloadEvidence() throws {
+        let release = try XCTUnwrap(MediaItem.calendarDayReleaseDate(from: "2099-10-20"))
+        let now = release.addingTimeInterval(-7 * 86_400)
+        for (availability, expected) in [
+            (MediaAvailabilityStatus.pending, HeroCTA.requested),
+            (.unknown, .request), (.deleted, .request),
+            (.available, .play), (.partiallyAvailable, .play)
+        ] {
+            var movie = item(availability)
+            movie.releaseDate = release
+            XCTAssertEqual(movie.heroCTA(seerConnected: true, now: now), expected)
+        }
+        var movie = item(.processing)
+        movie.releaseDate = release
+        XCTAssertEqual(movie.heroCTA(seerConnected: false, now: now), .unavailable)
+        movie.hasRequestDownloadActivity = true
+        XCTAssertEqual(movie.heroCTA(seerConnected: true, now: now), .requested)
+        movie.downloadProgress = 0.42
+        XCTAssertEqual(movie.heroCTA(seerConnected: true, now: now), .downloading(progress: 0.42))
+        movie.hasRequestDownloadActivity = false
+        XCTAssertEqual(movie.heroCTA(seerConnected: true, now: now), .downloading(progress: 0.42))
+        movie.locallyValidatedPlayableSource = true
+        XCTAssertEqual(movie.heroCTA(seerConnected: true, now: now), .play)
+    }
+
+    func testMovieReleaseWaitEndsOnLocalReleaseDayAndNeverGuessesMissingDates() throws {
+        var movie = item(.processing)
+        XCTAssertEqual(movie.heroCTA(seerConnected: true), .requested)
+        movie.releaseDate = try XCTUnwrap(MediaItem.calendarDayReleaseDate(from: "2099-10-20"))
+        var calendar = Calendar(identifier: .gregorian)
+        for offset in [-8 * 3_600, 14 * 3_600] {
+            calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: offset))
+            let releaseDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2099, month: 10, day: 20)))
+            XCTAssertEqual(movie.heroCTA(
+                seerConnected: true, now: releaseDay.addingTimeInterval(-1), calendar: calendar
+            ), .awaitingRelease)
+            for now in [releaseDay, releaseDay.addingTimeInterval(86_400)] {
+                XCTAssertEqual(movie.heroCTA(seerConnected: true, now: now, calendar: calendar), .requested)
+            }
+        }
+    }
+
+    func testRequestQueueEvidenceSurvivesCodingAndLegacyItemsRemainReadable() throws {
+        var movie = item(.processing)
+        movie.hasRequestDownloadActivity = true
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        XCTAssertEqual(
+            try decoder.decode(MediaItem.self, from: encoder.encode(movie)).hasRequestDownloadActivity, true
+        )
+        movie.hasRequestDownloadActivity = nil
+        XCTAssertNil(try decoder.decode(MediaItem.self, from: encoder.encode(movie)).hasRequestDownloadActivity)
+        movie.hasRequestDownloadActivity = true
+        var current = item(.processing)
+        current.hasRequestDownloadActivity = false
+        current.fillingMissingPresentation(from: movie)
+        XCTAssertEqual(current.hasRequestDownloadActivity, false)
+    }
+
     func testFreshFirstEpisodesUseStartWatching() {
         for season in [1, 4] {
             let episode = MediaItem(

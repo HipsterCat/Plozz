@@ -66,6 +66,15 @@ final class NativeTVMediaCoordinator {
     }
 
     private func applyFocus(to view: UIControl, in window: UIWindow, using system: UIFocusSystem) {
+        let restoring = DetailTransitionNavigation.isRestoringSourcePage
+        if restoring {
+            HandoffDiagnostics.emit("detail RETURN_NATIVE_REQUEST target=\(HandoffDiagnostics.correlationID(view.accessibilityLabel)) focused=\(view.isFocused)")
+        }
+        defer {
+            if restoring {
+                HandoffDiagnostics.emit("detail RETURN_NATIVE_RESULT target=\(HandoffDiagnostics.correlationID(view.accessibilityLabel)) accepted=\(view.isFocused)")
+            }
+        }
         focus.focusState.wrappedValue = true
         window.layoutIfNeeded()
         guard hasPendingRequest, view.window === window, view.isEnabled, view.canBecomeFocused else { return }
@@ -74,7 +83,7 @@ final class NativeTVMediaCoordinator {
         request.wantsFocus = false
         focus.request.wrappedValue = request
         guard !view.isFocused else { return }
-        system.requestFocusUpdate(to: window)
+        system.requestFocusUpdate(to: view)
         system.updateFocusIfNeeded()
         if !view.isFocused {
             PlozzLog.app.debug("Native media focus request was not accepted by the current focus scope")
@@ -258,6 +267,11 @@ struct NativeTVCard<Content: View>: UIViewRepresentable {
             super.didUpdateFocus(in: context, with: coordinator)
             onFocus?(isFocused)
         }
+
+        override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+            DetailTransitionNavigation.allowsFocusUpdate(heading: context.focusHeading, in: self)
+                && super.shouldUpdateFocus(in: context)
+        }
     }
 }
 
@@ -297,19 +311,25 @@ final class NativePosterImageView: UIImageView {
     let indicatorView = UIImageView()
     private var indicatorPlacement: NativePosterOverlayPlacement?
     private var indicatorLayoutDirection = LayoutDirection.leftToRight
+    private var focusTransition: UInt64 = 0
     private var artworkFocused = false {
         didSet {
-            // Alpha-masked artwork can mount at its lifted size if armed
-            // before real focus, consuming the episode rail's gaps.
-            if artworkFocused { adjustsImageWhenAncestorFocused = true }
+            // Artwork can mount at its lifted size if armed before real focus,
+            // including opaque portrait cards in a lazy rail.
+            if artworkFocused {
+                clipsToBounds = false
+                adjustsImageWhenAncestorFocused = true
+            }
         }
     }
 
     init(masksFocusEffectToContents: Bool) {
         super.init(frame: .zero)
         self.masksFocusEffectToContents = masksFocusEffectToContents
-        adjustsImageWhenAncestorFocused = !masksFocusEffectToContents
-        clipsToBounds = false
+        adjustsImageWhenAncestorFocused = false
+        layer.cornerRadius = PlozzTheme.Metrics.nativePosterArtworkCornerRadius
+        layer.cornerCurve = .circular
+        clipsToBounds = true
         isUserInteractionEnabled = false
         indicatorView.isUserInteractionEnabled = false
         overlayContentView.addSubview(indicatorView)
@@ -323,11 +343,14 @@ final class NativePosterImageView: UIImageView {
     }
 
     func updateFocus(_ focused: Bool, coordinator: UIFocusAnimationCoordinator) {
+        focusTransition &+= 1
+        let transition = focusTransition
         artworkFocused = focused
         coordinator.addCoordinatedAnimations { [weak self] in
             self?.layoutIndicator()
         } completion: { [weak self] in
-            guard let self, !artworkFocused, masksFocusEffectToContents else { return }
+            guard let self, focusTransition == transition, !artworkFocused else { return }
+            clipsToBounds = true
             adjustsImageWhenAncestorFocused = false
         }
     }
@@ -427,6 +450,11 @@ final class NativePosterButton: UIButton {
         onFocus?(isFocused)
     }
 
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        DetailTransitionNavigation.allowsFocusUpdate(heading: context.focusHeading, in: self)
+            && super.shouldUpdateFocus(in: context)
+    }
+
     private func refreshArtwork() {
         guard window != nil, bounds.width > 0, bounds.height > 0 else { return }
         autoreleasepool {
@@ -482,6 +510,8 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
     let title: NativePosterText?
     let subtitle: String? // l10n:content — provider metadata and preformatted runtime
     let overlay: Overlay
+    var rasterizesOverlay = true
+    var clipsOverlayToArtwork = true
     var indicators: NativePosterIndicators? = nil
     var artworkBackground: NativePosterArtworkBackground = .init()
     let focus: PlozzCardFocus.Binding
@@ -657,6 +687,8 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
                     image: image, size: size, scale: scale,
                     artworkAspectRatio: portraitBlur != nil ? 2.0 / 3.0 : 16.0 / 9.0,
                     sideCrop: portraitBlur != nil ? 0 : PlozzTheme.Metrics.continueWatchingArtworkSideCrop,
+                    minimumReflectionShare: portraitBlur != nil
+                        ? PlozzTheme.Metrics.continueWatchingPortraitReflectionShare : 0,
                     progressivelyBlursReflection: portraitBlur ?? false
                 )
                 if prepared == nil { original = nil }
@@ -701,7 +733,7 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
         if let overlay = view.hostedOverlay {
             // Edge backgrounds stay baked; the separately aligned indicator
             // foreground and async logos use UIKit's live overlay surface.
-            overlay.layer.shouldRasterize = true
+            overlay.layer.shouldRasterize = rasterizesOverlay
             overlay.layer.rasterizationScale = context.environment.displayScale
             let container = view.overlayView
             container.addSubview(overlay)
@@ -752,11 +784,12 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
         view.accessibilityValue = subtitle
         view.accessibilityTraits.insert(.button)
         view.hostedOverlay?.configuration = overlayConfiguration(in: context)
+        view.hostedOverlay?.layer.shouldRasterize = rasterizesOverlay
         view.hostedOverlay?.layer.rasterizationScale = context.environment.displayScale
         container.aspectRatio = aspectRatio
         if view.artworkView.masksFocusEffectToContents != (aspectRatio >= 1) {
             view.artworkView.masksFocusEffectToContents = aspectRatio >= 1
-            view.artworkView.adjustsImageWhenAncestorFocused = view.isFocused || aspectRatio < 1
+            view.artworkView.adjustsImageWhenAncestorFocused = view.isFocused
         }
         configureArtwork(view, context: context)
         view.isEnabled = context.environment.isEnabled
@@ -787,9 +820,14 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
 
     private func overlayConfiguration(in context: Context) -> any UIContentConfiguration {
         UIHostingConfiguration {
-            overlay
-                .clipShape(RoundedRectangle(
-                    cornerRadius: PlozzTheme.Metrics.nativePosterArtworkCornerRadius, style: .circular))
+            Group {
+                if clipsOverlayToArtwork {
+                    overlay.clipShape(RoundedRectangle(
+                        cornerRadius: PlozzTheme.Metrics.nativePosterArtworkCornerRadius, style: .circular))
+                } else {
+                    overlay
+                }
+            }
                 .environment(\.plozzNativeArtworkSurface, true)
                 .environment(\.plozzNativeFocusSurface, true)
                 .environment(\.self, context.environment)

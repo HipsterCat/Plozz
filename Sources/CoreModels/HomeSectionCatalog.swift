@@ -30,7 +30,14 @@ public struct HomeSectionCatalog: Equatable, Sendable {
     }
 
     public func availableChoices(in visibility: HomeLibraryVisibility) -> [HomeRowChoice] {
-        choices.filter { choice in
+        let collectionChoices = visibility.collectionSections.map { section in
+            HomeRowChoice(
+                collectionSection: section,
+                library: choices.compactMap(\.library).first { $0.key == section.source.libraryKey }
+            )
+        }
+        return (choices + collectionChoices).filter { choice in
+            if let key = choice.collectionSection?.source.libraryKey, !visibility.isEnabled(key) { return false }
             if let key = choice.library?.key, !visibility.isEnabled(key) { return false }
             if let source = choice.serverRow, let libraryID = source.section.libraryID,
                !visibility.isEnabled("\(source.accountID):\(libraryID)") { return false }

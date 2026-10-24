@@ -18,6 +18,14 @@ public struct CardAppearanceControls: View {
     }
 
     public var body: some View {
+        controls
+            .environment(\.plozzWatchIndicatorColor, watchIndicator.color)
+            .environment(\.plozzShowsUnwatchedEpisodeCount, watchIndicator.showsUnwatchedEpisodeCount)
+            .environment(\.plozzEpisodeCountBadgeStyle, watchIndicator.episodeCountStyle)
+    }
+
+    @ViewBuilder
+    private var controls: some View {
         #if os(tvOS)
         VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
             SettingsDetailGroup(title: "Labels", illustrated: true) {
@@ -25,7 +33,9 @@ public struct CardAppearanceControls: View {
             }
             SettingsDetailGroup(title: "Watched Indicator", illustrated: true) {
                 CompactWatchIndicatorPicker(selection: $watchIndicator.indicator, swatchHeight: 150)
+                WatchIndicatorColorPicker(selection: $watchIndicator.color)
                 episodeCountToggle
+                if watchIndicator.showsUnwatchedEpisodeCount { episodeCountStyleMenu }
             }
             SettingsDetailGroup(
                 title: LocalizedStringResource(
@@ -54,7 +64,9 @@ public struct CardAppearanceControls: View {
             }
             SettingsSectionGroup("Watched Indicator") {
                 CompactWatchIndicatorPicker(selection: $watchIndicator.indicator, swatchHeight: 112)
+                WatchIndicatorColorPicker(selection: $watchIndicator.color)
                 episodeCountToggle
+                if watchIndicator.showsUnwatchedEpisodeCount { episodeCountStyleMenu }
             }
             SettingsSectionGroup("Style") {
                 CompactCardStylePicker(selection: $cards.style, swatchHeight: 112)
@@ -83,6 +95,24 @@ public struct CardAppearanceControls: View {
     private var episodeCountToggle: some View {
         Toggle("Show unwatched episode count", isOn: $watchIndicator.showsUnwatchedEpisodeCount)
             .accessibilityIdentifier("unwatched-episode-count-toggle")
+    }
+
+    private var episodeCountStyleMenu: some View {
+        let title = LocalizedStringResource(
+            "episodeCountStyle.label", defaultValue: "Episode count style",
+            comment: "Settings control for choosing an attached or floating unwatched episode-count badge."
+        )
+        return SettingsMenuRow(title: title, value: Text(watchIndicator.episodeCountStyle.displayName)) {
+            Picker(selection: $watchIndicator.episodeCountStyle) {
+                ForEach(EpisodeCountBadgeStyle.allCases) { style in
+                    Text(style.displayName)
+                        .tag(style)
+                        .accessibilityIdentifier("episode-count-style-\(style.rawValue)")
+                }
+            } label: { Text(title) }
+            .pickerStyle(.inline)
+        }
+        .accessibilityIdentifier("episode-count-style")
     }
 }
 
@@ -152,6 +182,34 @@ private struct CardCaptionPicker: View {
         #else
         112
         #endif
+    }
+}
+
+public enum CardCaptionSettingsScope: CaseIterable, Sendable {
+    case home, libraries, detail
+
+    public var views: [CardCaptionView] {
+        switch self {
+        case .home: [.home, .continueWatching]
+        case .libraries: [.recommended, .browse, .collections, .playlists, .continueWatching]
+        case .detail: [.episodes, .related, .extras]
+        }
+    }
+}
+
+public struct CardCaptionSettingsControls: View {
+    @Bindable private var cards: CardStyleSettingsModel
+    private let scope: CardCaptionSettingsScope
+
+    public init(cards: CardStyleSettingsModel, scope: CardCaptionSettingsScope) {
+        self.cards = cards
+        self.scope = scope
+    }
+
+    public var body: some View {
+        ForEach(scope.views, id: \.self) { view in
+            CardCaptionViewChoices(view: view, settings: $cards.captions)
+        }
     }
 }
 

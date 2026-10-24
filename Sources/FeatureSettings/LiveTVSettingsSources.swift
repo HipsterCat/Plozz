@@ -5,12 +5,12 @@ import SwiftUI
 @MainActor
 @Observable
 public final class LiveTVSettingsSources {
-    @ObservationIgnored private let makeContent: () -> AnyView
+    @ObservationIgnored private let makeContent: (AnyView) -> AnyView
 
-    public init(content: @escaping () -> AnyView) {
+    public init(content: @escaping (AnyView) -> AnyView) {
         makeContent = content
     }
 
-    public func content() -> AnyView { makeContent() }
+    public func content(preferences: AnyView) -> AnyView { makeContent(preferences) }
 }
 #endif

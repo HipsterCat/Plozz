@@ -33,17 +33,25 @@ struct PlozziOSMediaSection<Content: View>: View {
     let title: Text
     var horizontalInset: CGFloat?
     var artworkInset: CGFloat = 0
+    var onSeeAll: (() -> Void)? = nil
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: PlozziOSMediaRailLayout.headingSpacing) {
-            title
-                .font(.title3.weight(.semibold))
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                title
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                if let onSeeAll {
+                    Spacer()
+                    Button("See all", action: onSeeAll)
+                        .font(.subheadline)
+                }
+            }
                 .padding(.horizontal, horizontalInset ?? PlozziOSPageLayout.horizontalInset(for: sizeClass))
-                .accessibilityAddTraits(.isHeader)
             content
                 .padding(.vertical, -artworkInset)
         }

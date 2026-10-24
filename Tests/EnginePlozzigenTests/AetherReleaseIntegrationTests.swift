@@ -5,11 +5,11 @@ import XCTest
 @testable import EnginePlozzigen
 
 final class AetherReleaseIntegrationTests: XCTestCase {
-    func testResolvedEngineAndSourceCreditIdentifyPinnedMainIntegration() throws {
-        XCTAssertEqual(AetherEngine.version, "7.44.0")
+    func testResolvedEngineAndSourceCreditIdentifyPinnedReleaseIntegration() throws {
+        XCTAssertEqual(AetherEngine.version, "7.47.0")
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "AetherEngine" })
         XCTAssertTrue(credit.detail.contains(
-            "https://github.com/brandomoore/AetherEngine/tree/86af70ddfe7bcde27e06356dc7aa81e8997d43c4"
+            "https://github.com/brandomoore/AetherEngine/tree/5fe2d42d68524dcfbcfacf07cbefe5b28b618155"
         ))
     }
 
@@ -20,10 +20,14 @@ final class AetherReleaseIntegrationTests: XCTestCase {
         XCTAssertEqual(engine.displayName, "AetherEngine v\(AetherEngine.version)")
     }
 
-    func testPreviouslyIncludedOptionalComponentsRemainBuiltIn() {
+    func testProductionSpatialConversionComponentsAreBuiltIn() {
+        XCTAssertTrue(AetherEngine.OptionalComponent.trueHDObjectAudio.isBuiltIn)
+        XCTAssertTrue(AetherEngine.OptionalComponent.dtsxObjectAudio.isBuiltIn)
+    }
+
+    func testDolbyVisionComponentsRemainBuiltIn() {
         for component in [
-            AetherEngine.OptionalComponent.trueHDObjectAudio,
-            .dtsxObjectAudio, .dualLayerDolbyVision, .dolbyVisionStillReshaping
+            AetherEngine.OptionalComponent.dualLayerDolbyVision, .dolbyVisionStillReshaping
         ] {
             XCTAssertTrue(component.isBuiltIn, "\(component.traitName) must not silently become a no-op")
         }
@@ -37,6 +41,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
 
     func testUpstreamDefaultsRemainOptIn() {
         let options = LoadOptions()
+        XCTAssertEqual(options.stereoPresentation, .automatic)
         XCTAssertEqual(options.objectAudioRendering, .off)
         XCTAssertFalse(options.progressiveSegmentDelivery)
         XCTAssertFalse(options.preferDualLayerDolbyVision)
@@ -53,18 +58,12 @@ final class AetherReleaseIntegrationTests: XCTestCase {
             XCTAssertFalse(options.isLive)
             XCTAssertTrue(options.matchContentEnabled)
             XCTAssertEqual(options.audioBridgeMode, .lossless)
-            #if os(tvOS)
-            if #available(tvOS 26.0, *) {
-                XCTAssertEqual(options.objectAudioRendering, .apac(.l714))
-            }
-            #else
-            XCTAssertEqual(options.objectAudioRendering, .off)
-            #endif
+            assertSpatialRendering(options, enabled: true)
         }
     }
 
     @MainActor
-    func testResolvedRequestCarriesFELPreferenceIntoActualAdapterOptions() throws {
+    func testResolvedRequestCarriesSpatialAndFELPreferencesIntoActualAdapterOptions() throws {
         let engine = try PlozzigenVideoEngine()
         defer { engine.stop() }
         for provider in [ProviderKind.plex, .jellyfin, .emby, .mediaShare, .silo] {
@@ -74,8 +73,11 @@ final class AetherReleaseIntegrationTests: XCTestCase {
                     streamURL: URL(string: "https://media.example/movie.mkv")!
                 )
                 request.sourceProvider = provider
+                request.trueHDAtmosEnabled = enabled
                 request.dolbyVisionFELEnabled = enabled
-                XCTAssertEqual(engine.onDemandLoadOptions(for: request).preferDualLayerDolbyVision, enabled)
+                let options = engine.onDemandLoadOptions(for: request)
+                XCTAssertEqual(options.preferDualLayerDolbyVision, enabled)
+                assertSpatialRendering(options, enabled: enabled)
             }
         }
     }
@@ -87,25 +89,25 @@ final class AetherReleaseIntegrationTests: XCTestCase {
             )
             XCTAssertTrue(options.isLive)
             XCTAssertFalse(options.preferDualLayerDolbyVision)
+            XCTAssertEqual(options.objectAudioRendering, .off)
         }
     }
 
-    func testPlozzAutomaticallyRequestsSpatialAudioOnSupportedTVOS() {
+    func testOnDemandSpatialChoicePreservesChannelFallbackAndBuffering() {
         for channels in [0, 2, 6, 8] {
-            let options = PlozzigenVideoEngine.onDemandLoadOptions(audioChannels: channels)
-            #if os(tvOS)
-            if #available(tvOS 26.0, *) {
-                XCTAssertEqual(options.objectAudioRendering, .apac(.l714))
-            } else {
-                XCTAssertEqual(options.objectAudioRendering, .off)
+            for enabled in [false, true] {
+                for buffer in PlaybackReadAhead.allCases {
+                    let options = PlozzigenVideoEngine.onDemandLoadOptions(
+                        audioChannels: channels, trueHDAtmosEnabled: enabled, readAhead: buffer
+                    )
+                    assertSpatialRendering(options, enabled: enabled)
+                    XCTAssertEqual(options.audioBridgeMode, channels > 6 ? .lossless : .surroundCompat)
+                    XCTAssertEqual(options.sessionCacheByteBudget, buffer == .automatic ? nil : Int.max)
+                    XCTAssertTrue(options.matchContentEnabled)
+                    XCTAssertFalse(options.isLive)
+                    XCTAssertFalse(options.progressiveSegmentDelivery)
+                }
             }
-            #else
-            XCTAssertEqual(options.objectAudioRendering, .off)
-            #endif
-            XCTAssertEqual(options.audioBridgeMode, channels > 6 ? .lossless : .surroundCompat)
-            XCTAssertTrue(options.matchContentEnabled)
-            XCTAssertFalse(options.isLive)
-            XCTAssertFalse(options.progressiveSegmentDelivery)
         }
     }
 
@@ -134,20 +136,9 @@ final class AetherReleaseIntegrationTests: XCTestCase {
         XCTAssertFalse(options.preferDualLayerDolbyVision)
     }
 
-    func testDisablingSpatialAudioKeepsTheExistingChannelBridge() {
-        for channels in [0, 2, 6, 8] {
-            let options = PlozzigenVideoEngine.onDemandLoadOptions(
-                audioChannels: channels, trueHDAtmosEnabled: false
-            )
-            XCTAssertEqual(options.objectAudioRendering, .off)
-            XCTAssertEqual(options.audioBridgeMode, channels > 6 ? .lossless : .surroundCompat)
-            XCTAssertTrue(options.matchContentEnabled)
-            XCTAssertFalse(options.isLive)
-        }
-    }
-
     func testTrueHDLegalCreditIncludesSourceAndBothLicenses() throws {
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "LibTrueHD" })
+        XCTAssertFalse(credit.detail.contains("not linked in this build"))
         XCTAssertTrue(credit.detail.contains(
             "https://github.com/superuser404notfound/LibTrueHD/tree/3.0.0"
         ))
@@ -157,8 +148,19 @@ final class AetherReleaseIntegrationTests: XCTestCase {
         XCTAssertEqual(Set(credit.licenses.map(\.label)), ["MIT", "Apache-2.0"])
     }
 
-    func testDTSXRemainsBuiltInWithoutTheRetiredLibDTSXCredit() {
-        XCTAssertTrue(AetherEngine.OptionalComponent.dtsxObjectAudio.isBuiltIn)
+    private func assertSpatialRendering(
+        _ options: LoadOptions, enabled: Bool, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        #if os(tvOS)
+        if #available(tvOS 26.0, *), enabled {
+            XCTAssertEqual(options.objectAudioRendering, .apac(.l714), file: file, line: line)
+            return
+        }
+        #endif
+        XCTAssertEqual(options.objectAudioRendering, .off, file: file, line: line)
+    }
+
+    func testFFmpegCreditRemainsWithoutTheRetiredLibDTSXCredit() {
         XCTAssertFalse(PlozzAttributions.entries.contains { $0.title == "LibDTSX" })
         XCTAssertTrue(PlozzAttributions.entries.contains { $0.title == "FFmpeg" })
     }

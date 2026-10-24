@@ -444,6 +444,32 @@ final class UniversalWatchlistHomeTests: XCTestCase {
         XCTAssertEqual(content.watchlist.first?.posterURL, signed)
     }
 
+    func testCacheRefreshBurstsPublishNewestSnapshotOnlyAfterNavigationSettles() async throws {
+        let old = MediaItem(id: "old", title: "Old", kind: .movie, watchlistAliasID: MediaAliasID())
+        let newest = MediaItem(id: "new", title: "New", kind: .movie, watchlistAliasID: MediaAliasID())
+        let handler = UniversalWatchlistHomeHandler(items: [old])
+        let model = HomeViewModel(
+            accounts: [],
+            contentStore: UniversalWatchlistHomeStore(content: .init(watchlist: [old])),
+            mediaItemActionHandler: handler
+        )
+        let initialCalls = handler.resolveCallCount
+        for _ in 0..<5 {
+            handler.items = [newest, old]
+            model.scheduleDurableWatchlistRefresh()
+            model.noteHomeNavigationInteraction()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(handler.resolveCallCount, initialCalls)
+            XCTAssertEqual(model.state.value?.watchlist.map(\.id), ["old"])
+        }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while handler.resolveCallCount == initialCalls, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(handler.resolveCallCount, initialCalls + 1)
+        XCTAssertEqual(model.state.value?.watchlist.map(\.id), ["new", "old"])
+    }
+
     func testNavigationDefersPendingWatchlistFoldUntilInputSettles() async {
         let item = MediaItem(
             id: "one",

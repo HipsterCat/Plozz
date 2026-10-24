@@ -42,12 +42,14 @@ public final class ProfileSettingsModel {
     /// each household member reads Plozz in their own language.
     public private(set) var appLanguageModel: AppLanguageSettingsModel
     public private(set) var themeModel: ThemeSettingsModel
+    public private(set) var contentRatingModel: ContentRatingSettingsModel
     /// Opt-in background theme music for movie and series detail pages.
     public var themeMusicModel: ThemeMusicSettingsModel { heroModels.themeMusic }
     /// Mutually-exclusive hero background mode (off / trailer / theme music)
     /// plus the trailer mute preference.
     public var heroBackgroundModel: HeroBackgroundSettingsModel { heroModels.background }
     public var detailPageModel: DetailPageSettingsModel { heroModels.detailPage }
+    public var libraryPresentationModel: LibraryPresentationSettingsModel { heroModels.library }
     private var heroModels: HeroModels
     public private(set) var diagnosticsModel: DiagnosticsSettingsModel
     /// The full-screen music player's per-profile look + "show extra info"
@@ -96,6 +98,7 @@ public final class ProfileSettingsModel {
     /// not be rebuilt on profile switch.
     public let usesInjectedModels: Bool
     private let allowsDiscovery: @MainActor () -> Bool
+    private let isSeerrConfigured: @MainActor () -> Bool
 
     /// Builds the per-profile settings facet. When the caller supplies any settings
     /// model, all models are treated as injected (test path) and never rebuilt on
@@ -107,6 +110,7 @@ public final class ProfileSettingsModel {
     public init(
         namespace ns: String?,
         allowsDiscovery: @escaping @MainActor () -> Bool = { true },
+        isSeerrConfigured: @escaping @MainActor () -> Bool = { false },
         subtitleBehaviorModel: SubtitleBehaviorModel? = nil,
         subtitleStyleModel: SubtitleStyleModel? = nil,
         spoilerModel: SpoilerSettingsModel? = nil,
@@ -115,9 +119,11 @@ public final class ProfileSettingsModel {
         audioPolicyModel: AudioPolicyModel? = nil,
         appLanguageModel: AppLanguageSettingsModel? = nil,
         themeModel: ThemeSettingsModel? = nil,
+        contentRatingModel: ContentRatingSettingsModel? = nil,
         themeMusicModel: ThemeMusicSettingsModel? = nil,
         heroBackgroundModel: HeroBackgroundSettingsModel? = nil,
         detailPageModel: DetailPageSettingsModel? = nil,
+        libraryPresentationModel: LibraryPresentationSettingsModel? = nil,
         diagnosticsModel: DiagnosticsSettingsModel? = nil,
         musicPlayerModel: MusicPlayerSettingsModel? = nil,
         homeLibraryVisibilityModel: HomeLibraryVisibilityModel? = nil,
@@ -136,8 +142,8 @@ public final class ProfileSettingsModel {
             || spoilerModel != nil || playbackModel != nil
             || subtitlePolicyModel != nil || audioPolicyModel != nil
             || appLanguageModel != nil
-            || themeModel != nil || themeMusicModel != nil || heroBackgroundModel != nil
-            || detailPageModel != nil
+            || themeModel != nil || contentRatingModel != nil || themeMusicModel != nil || heroBackgroundModel != nil
+            || detailPageModel != nil || libraryPresentationModel != nil
             || diagnosticsModel != nil
             || musicPlayerModel != nil || homeLibraryVisibilityModel != nil
             || uiDensityModel != nil || cardStyleModel != nil
@@ -146,6 +152,7 @@ public final class ProfileSettingsModel {
             || nightShiftModel != nil
         self.usesInjectedModels = injected
         self.allowsDiscovery = allowsDiscovery
+        self.isSeerrConfigured = isSeerrConfigured
 
         // Single source of truth for constructing all sub-models: injected models
         // are used as-is, the rest are built scoped to `ns`. `rebuild(namespace:)`
@@ -160,9 +167,11 @@ public final class ProfileSettingsModel {
             subtitlePolicyModel: subtitlePolicyModel,
             audioPolicyModel: audioPolicyModel,
             themeModel: themeModel,
+            contentRatingModel: contentRatingModel,
             themeMusicModel: themeMusicModel,
             heroBackgroundModel: heroBackgroundModel,
             detailPageModel: detailPageModel,
+            libraryPresentationModel: libraryPresentationModel,
             diagnosticsModel: diagnosticsModel,
             musicPlayerModel: musicPlayerModel,
             homeLibraryVisibilityModel: homeLibraryVisibilityModel,
@@ -182,7 +191,9 @@ public final class ProfileSettingsModel {
         self.audioPolicyModel = models.audioPolicyModel
         self.appLanguageModel = models.appLanguageModel
         self.themeModel = models.themeModel
+        self.contentRatingModel = models.contentRatingModel
         models.heroModels.home.setDiscoveryPolicy(allowsDiscovery)
+        models.heroModels.home.setSeerrConnection(isSeerrConfigured)
         self.heroModels = models.heroModels
         self.diagnosticsModel = models.diagnosticsModel
         self.musicPlayerModel = models.musicPlayerModel
@@ -210,8 +221,10 @@ public final class ProfileSettingsModel {
         audioPolicyModel = models.audioPolicyModel
         appLanguageModel = models.appLanguageModel
         themeModel = models.themeModel
+        contentRatingModel = models.contentRatingModel
         heroModels = models.heroModels
         heroModels.home.setDiscoveryPolicy(allowsDiscovery)
+        heroModels.home.setSeerrConnection(isSeerrConfigured)
         diagnosticsModel = models.diagnosticsModel
         musicPlayerModel = models.musicPlayerModel
         homeLibraryVisibilityModel = models.homeLibraryVisibilityModel
@@ -234,6 +247,7 @@ public final class ProfileSettingsModel {
         var subtitlePolicyModel: SubtitlePolicyModel
         var audioPolicyModel: AudioPolicyModel
         var themeModel: ThemeSettingsModel
+        var contentRatingModel: ContentRatingSettingsModel
         var heroModels: HeroModels
         var diagnosticsModel: DiagnosticsSettingsModel
         var musicPlayerModel: MusicPlayerSettingsModel
@@ -251,6 +265,7 @@ public final class ProfileSettingsModel {
         let background: HeroBackgroundSettingsModel
         let themeMusic: ThemeMusicSettingsModel
         let detailPage: DetailPageSettingsModel
+        let library: LibraryPresentationSettingsModel
     }
 
     /// The single source of truth for constructing the per-profile sub-models: each
@@ -266,9 +281,11 @@ public final class ProfileSettingsModel {
         subtitlePolicyModel: SubtitlePolicyModel? = nil,
         audioPolicyModel: AudioPolicyModel? = nil,
         themeModel: ThemeSettingsModel? = nil,
+        contentRatingModel: ContentRatingSettingsModel? = nil,
         themeMusicModel: ThemeMusicSettingsModel? = nil,
         heroBackgroundModel: HeroBackgroundSettingsModel? = nil,
         detailPageModel: DetailPageSettingsModel? = nil,
+        libraryPresentationModel: LibraryPresentationSettingsModel? = nil,
         diagnosticsModel: DiagnosticsSettingsModel? = nil,
         musicPlayerModel: MusicPlayerSettingsModel? = nil,
         homeLibraryVisibilityModel: HomeLibraryVisibilityModel? = nil,
@@ -289,13 +306,19 @@ public final class ProfileSettingsModel {
             subtitlePolicyModel: subtitlePolicyModel ?? SubtitlePolicyModel(store: SubtitlePolicyStore(namespace: ns)),
             audioPolicyModel: audioPolicyModel ?? AudioPolicyModel(store: AudioPolicyStore(namespace: ns)),
             themeModel: themeModel ?? ThemeSettingsModel(store: ThemeSettingsStore(namespace: ns)),
+            contentRatingModel: contentRatingModel ?? ContentRatingSettingsModel(
+                store: ContentRatingSettingsStore(namespace: ns)
+            ),
             heroModels: HeroModels(
                 home: heroSettingsModel ?? HeroSettingsModel(store: HeroSettingsStore(namespace: ns)),
                 background: heroBackgroundModel ?? HeroBackgroundSettingsModel(
                     store: HeroBackgroundSettingsStore(namespace: ns)
                 ),
                 themeMusic: themeMusicModel ?? ThemeMusicSettingsModel(store: ThemeMusicSettingsStore(namespace: ns)),
-                detailPage: detailPageModel ?? DetailPageSettingsModel(store: DetailPageSettingsStore(namespace: ns))
+                detailPage: detailPageModel ?? DetailPageSettingsModel(store: DetailPageSettingsStore(namespace: ns)),
+                library: libraryPresentationModel ?? LibraryPresentationSettingsModel(
+                    store: LibraryPresentationSettingsStore(namespace: ns)
+                )
             ),
             diagnosticsModel: diagnosticsModel ?? DiagnosticsSettingsModel(store: DiagnosticsSettingsStore(namespace: ns)),
             musicPlayerModel: musicPlayerModel ?? MusicPlayerSettingsModel(store: MusicPlayerSettingsStore(namespace: ns)),

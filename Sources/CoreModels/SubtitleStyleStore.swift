@@ -159,9 +159,10 @@ public final class SubtitleStyleModel {
     public init(store: SubtitleStyleStoring = SubtitleStyleStore()) {
         self.store = store
         let prefs = store.load()
-        self.style = prefs.base
-        self.overrides = prefs.overrides
-        self.liveTVStyle = prefs.liveTV
+        // Hydration must not invoke the optional property's persistence observer.
+        self._style = prefs.base
+        self._overrides = prefs.overrides
+        self._liveTVStyle = prefs.liveTV
         storeObserver = NotificationCenter.default.addObserver(
             forName: SubtitleStyleStore.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in

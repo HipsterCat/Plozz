@@ -1,5 +1,17 @@
 import Foundation
 
+public struct OfflinePlaybackAsset: Sendable {
+    public let fileURL: URL
+    public let subtitleTracks: [MediaTrack]
+    public let metadata: MediaSourceMetadata?
+
+    public init(fileURL: URL, subtitleTracks: [MediaTrack] = [], metadata: MediaSourceMetadata? = nil) {
+        self.fileURL = fileURL
+        self.subtitleTracks = subtitleTracks
+        self.metadata = metadata
+    }
+}
+
 /// Leaf seam that lets the playback layer ask "is there a completed offline
 /// download for this item, and if so where is its local file?" WITHOUT taking a
 /// dependency on the `MediaDownloads` module.
@@ -15,25 +27,29 @@ import Foundation
 /// present. Implementations must only return a URL for a **completed** download
 /// whose file actually exists on disk.
 public protocol OfflinePlaybackResolving: Sendable {
-    /// The `file://` URL of a completed, on-disk offline download of a
-    /// **specific version** of `item`, or `nil` when that version isn't
-    /// downloaded. Keyed by cross-server ``MediaIdentity`` so a title downloaded
-    /// from one server plays offline even when opened from another.
-    ///
-    /// The version must be honoured: a title can have a 4K and a 1080p file, and
-    /// only one of them may be on disk. Ignoring it makes every version the user
-    /// picks play whichever copy was downloaded — silently, since playback
-    /// "works", just not with the file they chose.
-    ///
-    /// `nil` `versionID` means "no particular version", which matches any
-    /// downloaded copy (used by callers that only ask "is this available
-    /// offline?").
+    /// A completed, on-disk copy of `item` in the active profile, matched across
+    /// servers. Prefer `versionID` when it is available locally, otherwise use
+    /// another downloaded version before allowing server playback. A nil/empty
+    /// version has no preference. Return nil only when no usable copy exists.
+    /// Subtitles and metadata must come from the same selected local file.
     func localPlaybackURL(for item: MediaItem, versionID: String?) async -> URL?
+    /// Resolve the file and its sidecars together so a concurrently completed
+    /// version cannot replace the metadata of a file already selected to play.
+    func localPlaybackAsset(for item: MediaItem, versionID: String?) async -> OfflinePlaybackAsset?
     func localSubtitleTracks(for item: MediaItem, versionID: String?) async -> [MediaTrack]
     func localPlaybackMetadata(for item: MediaItem, versionID: String?) async -> MediaSourceMetadata?
 }
 
 public extension OfflinePlaybackResolving {
+    func localPlaybackAsset(for item: MediaItem, versionID: String?) async -> OfflinePlaybackAsset? {
+        guard let url = await localPlaybackURL(for: item, versionID: versionID) else { return nil }
+        return await OfflinePlaybackAsset(
+            fileURL: url,
+            subtitleTracks: localSubtitleTracks(for: item, versionID: versionID),
+            metadata: localPlaybackMetadata(for: item, versionID: versionID)
+        )
+    }
+
     func localSubtitleTracks(for item: MediaItem, versionID: String?) async -> [MediaTrack] { [] }
     func localPlaybackMetadata(for item: MediaItem, versionID: String?) async -> MediaSourceMetadata? { nil }
 

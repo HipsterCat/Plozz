@@ -35,6 +35,41 @@ final class ForegroundReloadCoordinatorTests: XCTestCase {
 
     // MARK: - Arming / no-op
 
+    func testInactivitySnapshotDoesNotFreezeAnAdvancingClock() async {
+        let (sut, _, engine) = makeSUT()
+        engine.currentTime = 30
+        sut.captureBeforeInactivity()
+        XCTAssertNil(sut.preservedPosition)
+        engine.currentTime = 45
+        XCTAssertFalse(sut.captureCoalescedBackground())
+        await sut.resume()
+        XCTAssertEqual(engine.currentTime, 45)
+        XCTAssertEqual(engine.reloadCount, 0)
+        XCTAssertEqual(engine.pauseCount, 0)
+    }
+
+    func testExplicitSeekToStartDuringInactivityIsNotAClockReset() async {
+        let (sut, _, engine) = makeSUT()
+        engine.currentTime = 30
+        sut.captureBeforeInactivity()
+        sut.noteUserSeek(to: 0)
+        engine.currentTime = 0
+        XCTAssertFalse(sut.captureCoalescedBackground())
+        await sut.resume()
+        XCTAssertEqual(engine.reloadCount, 0)
+        XCTAssertNil(sut.preservedPosition)
+    }
+
+    func testInactivitySnapshotCannotRecoverAReplacementSession() {
+        let (sut, host, engine) = makeSUT()
+        engine.currentTime = 30
+        sut.captureBeforeInactivity()
+        host.playbackIdentity &+= 1
+        engine.currentTime = 0
+        XCTAssertFalse(sut.captureCoalescedBackground())
+        XCTAssertNil(sut.preservedPosition)
+    }
+
     func testIndependentCheckpointSurvivesEngineResetAndReload() async {
         let (sut, host, engine) = makeSUT(intendsPlayback: false)
         engine.currentTime = 4780.41

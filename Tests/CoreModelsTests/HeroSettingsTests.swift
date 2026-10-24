@@ -26,6 +26,7 @@ final class HeroSettingsTests: XCTestCase {
         let profiles = ProfilesModel(store: ProfileStore(defaults: defaults))
         let store = HeroSettingsStore(defaults: defaults)
         var saved = HeroSettings.default
+        saved.setEnabled(.featured, enabled: true)
         saved.showsDiscoverRow = true
         saved.showsDiscoverySources = true
         saved.discoverySources = [.anilist, .tmdb]
@@ -91,13 +92,124 @@ final class HeroSettingsTests: XCTestCase {
     func testDefaultIsActiveWithoutOptInCollection() {
         let d = HeroSettings.default
         XCTAssertTrue(d.isActive)
-        XCTAssertEqual(d.sources, HeroSourceKind.allCases.filter { $0 != .collection })
+        XCTAssertEqual(d.sources, HeroSourceKind.allCases.filter { $0 != .collection && $0 != .featured })
+        XCTAssertTrue(d.discoveryFollowsSeerr)
         XCTAssertTrue(d.collections.isEmpty)
         XCTAssertTrue(d.hideWatched)
         XCTAssertFalse(d.showsRatings)
         XCTAssertFalse(d.showsDiscoverySources)
         XCTAssertFalse(d.watchlistDiscoveryEnabled)
         XCTAssertEqual(d.maxItems, 8)
+    }
+
+    @MainActor
+    func testFreshDiscoveryFollowsSeerrWithoutPersistingConnectionState() {
+        let store = HeroSettingsStore(defaults: defaults)
+        let model = HeroSettingsModel(store: store)
+        var configured = false
+        model.setSeerrConnection { configured }
+        XCTAssertFalse(model.effectiveSettings.isEnabled(.featured))
+        configured = true
+        XCTAssertTrue(model.effectiveSettings.isEnabled(.featured))
+        XCTAssertEqual(model.effectiveSettings.sources.first, .featured)
+        XCTAssertEqual(store.load(), .default)
+
+        model.settings.maxItems = 12
+        model.settings.setEnabled(.randomFromLibrary, enabled: false)
+        let reloaded = HeroSettingsModel(store: store)
+        reloaded.setSeerrConnection { configured }
+        XCTAssertTrue(reloaded.settings.discoveryFollowsSeerr)
+        XCTAssertTrue(reloaded.effectiveSettings.isEnabled(.featured))
+        configured = false
+        XCTAssertFalse(reloaded.effectiveSettings.isEnabled(.featured))
+        XCTAssertFalse(reloaded.effectiveSettings.isEnabled(.randomFromLibrary))
+        XCTAssertEqual(reloaded.effectiveSettings.maxItems, 12)
+    }
+
+    @MainActor
+    func testExplicitDiscoveryChoiceOverridesSeerrAndTransfersPerProfile() {
+        for enabled in [false, true] {
+            let namespace = "source-\(enabled)"
+            let store = HeroSettingsStore(defaults: defaults, namespace: namespace)
+            let model = HeroSettingsModel(store: store)
+            model.setSeerrConnection { !enabled }
+            model.settings.setEnabled(.featured, enabled: enabled)
+            XCTAssertFalse(model.settings.discoveryFollowsSeerr)
+            let snapshot = ProfileSettingsTransfer.capture(namespace: namespace, defaults: defaults)
+            ProfileSettingsTransfer.apply(snapshot, namespace: "destination", defaults: defaults)
+            let transferred = HeroSettingsModel(
+                store: HeroSettingsStore(defaults: defaults, namespace: "destination")
+            )
+            for configured in [true, false] {
+                transferred.setSeerrConnection { configured }
+                XCTAssertEqual(transferred.effectiveSettings.isEnabled(.featured), enabled)
+            }
+        }
+        XCTAssertTrue(HeroSettingsStore(defaults: defaults).load().discoveryFollowsSeerr)
+    }
+
+    @MainActor
+    func testAutomaticDiscoveryTransferUsesReceivingConnection() {
+        let model = HeroSettingsModel(store: HeroSettingsStore(defaults: defaults, namespace: "sender"))
+        model.setSeerrConnection { true }
+        model.settings.maxItems = 11
+        XCTAssertTrue(model.effectiveSettings.isEnabled(.featured))
+        let snapshot = ProfileSettingsTransfer.capture(namespace: "sender", defaults: defaults)
+        ProfileSettingsTransfer.apply(snapshot, namespace: "receiver", defaults: defaults)
+        let receiver = HeroSettingsModel(
+            store: HeroSettingsStore(defaults: defaults, namespace: "receiver")
+        )
+        XCTAssertTrue(receiver.settings.discoveryFollowsSeerr)
+        XCTAssertFalse(receiver.effectiveSettings.isEnabled(.featured))
+        receiver.setSeerrConnection { true }
+        XCTAssertTrue(receiver.effectiveSettings.isEnabled(.featured))
+        XCTAssertEqual(receiver.settings.maxItems, 11)
+    }
+
+    func testLegacySourceSelectionsDoNotStartFollowingSeerr() throws {
+        for sources in [#"["featured","watchlist"]"#, #"["watchlist"]"#, "[]"] {
+            let settings = try JSONDecoder().decode(
+                HeroSettings.self,
+                from: Data(#"{"sources":\#(sources),"offeredSourcesVersion":1}"#.utf8)
+            )
+            XCTAssertFalse(settings.discoveryFollowsSeerr)
+            for configured in [true, false] {
+                XCTAssertEqual(settings.applyingSeerrDefault(isConfigured: configured), settings)
+            }
+        }
+    }
+
+    @MainActor
+    func testKidsPolicyOverridesAutomaticDiscoveryWithoutChangingPreference() {
+        let model = HeroSettingsModel(store: InMemoryHeroSettingsStore())
+        model.setSeerrConnection { true }
+        model.setDiscoveryPolicy { false }
+        XCTAssertFalse(model.effectiveSettings.isEnabled(.featured))
+        XCTAssertTrue(model.settings.discoveryFollowsSeerr)
+        model.setDiscoveryPolicy { true }
+        XCTAssertTrue(model.effectiveSettings.isEnabled(.featured))
+        XCTAssertEqual(model.settings, .default)
+    }
+
+    @MainActor
+    func testSeerrConnectionInvalidatesEffectiveSettingsObservation() async {
+        let connection = DiscoveryConnection()
+        let model = HeroSettingsModel(store: InMemoryHeroSettingsStore())
+        model.setSeerrConnection { connection.isConfigured }
+        let changed = expectation(description: "Seerr connection invalidates Discovery")
+        withObservationTracking {
+            _ = model.effectiveSettings
+        } onChange: {
+            changed.fulfill()
+        }
+        connection.isConfigured = true
+        await fulfillment(of: [changed], timeout: 1)
+        XCTAssertTrue(model.effectiveSettings.isEnabled(.featured))
+    }
+
+    @Observable
+    final class DiscoveryConnection {
+        var isConfigured = false
     }
 
     func testCollectionSelectionRoundTripsAndTransfersOnlyWithItsProfile() throws {

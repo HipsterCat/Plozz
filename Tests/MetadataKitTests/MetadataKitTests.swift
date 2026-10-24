@@ -273,12 +273,113 @@ final class MetadataKitTests: XCTestCase {
         XCTAssertEqual(TMDbMetadataProvider.bestImagePath(images, preferNeutral: true), "/neutral.jpg")
     }
 
-    func testBestLogoSkipsSVGAndPrefersEnglish() {
+    func testBestLogoIncludesSVGAsPNGAndPrefersEnglish() {
         let logos = [
+            TMDbMetadataProvider.Image(file_path: "/foreign.png", iso_639_1: "fr", vote_average: 20),
+            TMDbMetadataProvider.Image(file_path: "/neutral.png", iso_639_1: nil, vote_average: 15),
             TMDbMetadataProvider.Image(file_path: "/vector.svg", iso_639_1: "en", vote_average: 10),
             TMDbMetadataProvider.Image(file_path: "/logo.png", iso_639_1: "en", vote_average: 5)
         ]
-        XCTAssertEqual(TMDbMetadataProvider.bestLogoPath(logos), "/logo.png")
+        XCTAssertEqual(TMDbMetadataProvider.bestLogoPath(logos), "/vector.png")
+    }
+
+    func testBestLogoKeepsHigherRatedRasterAndStableTies() {
+        let logos = [
+            TMDbMetadataProvider.Image(file_path: "/first.png", iso_639_1: "en", vote_average: 5),
+            TMDbMetadataProvider.Image(file_path: "/second.svg", iso_639_1: "en", vote_average: 5),
+            TMDbMetadataProvider.Image(file_path: "/third.svg", iso_639_1: "en", vote_average: 4)
+        ]
+        XCTAssertEqual(TMDbMetadataProvider.bestLogoPath(logos), "/first.png")
+    }
+
+    func testBestLogoHandlesMissingImagesAndUppercaseSVGExtension() {
+        XCTAssertNil(TMDbMetadataProvider.bestLogoPath(nil))
+        XCTAssertNil(TMDbMetadataProvider.bestLogoPath([]))
+        let logos = [
+            TMDbMetadataProvider.Image(file_path: nil, iso_639_1: "en", vote_average: 10),
+            TMDbMetadataProvider.Image(file_path: "", iso_639_1: "en", vote_average: 10),
+            TMDbMetadataProvider.Image(file_path: "/CaseSensitive.SVG", iso_639_1: nil, vote_average: nil)
+        ]
+        XCTAssertEqual(TMDbMetadataProvider.bestLogoPath(logos), "/CaseSensitive.png")
+    }
+
+    func testSavingPrivateRyanRankingCanSelectOriginalWhiteArtwork() {
+        // Representative TMDb metadata: the white SVG outranks the dark flag PNG.
+        let logos = [
+            TMDbMetadataProvider.Image(
+                file_path: "/vLkIhkELQkSEzprWGLss5egANUq.svg", iso_639_1: "en", vote_average: 3.334
+            ),
+            TMDbMetadataProvider.Image(
+                file_path: "/emQLFPKLJJZn7cJZveKcV0jPGaB.png", iso_639_1: "en", vote_average: 0.5
+            )
+        ]
+        XCTAssertEqual(
+            TMDbMetadataProvider.bestLogoPath(logos),
+            "/vLkIhkELQkSEzprWGLss5egANUq.png"
+        )
+    }
+
+    func testSVGLogoResolutionUsesOneImagesRequestAndOneNormalSizedPNG() async {
+        for kind in [MediaItemKind.movie, .series] {
+            let requests = LogoImagesRequests()
+            let provider = TMDbMetadataProvider(
+                access: .proxy(baseURL: URL(string: "https://metadata.example")!),
+                imagesRequest: { url, _ in
+                    await requests.record(url)
+                    return .init(backdrops: nil, logos: [
+                        .init(file_path: "/white.svg", iso_639_1: "en", vote_average: 10),
+                        .init(file_path: "/dark.png", iso_639_1: "en", vote_average: 5)
+                    ], posters: nil)
+                }
+            )
+            let query = MetadataQuery(item(kind: kind, providerIDs: ["Tmdb": "857"]))
+            let urls = await provider.artworkURLs(.logo, for: query, limit: 5)
+            XCTAssertEqual(urls.map(\.absoluteString), ["https://image.tmdb.org/t/p/w500/white.png"])
+            let recorded = await requests.urls
+            XCTAssertEqual(recorded.map(\.absoluteString), [
+                "https://metadata.example/3/\(kind == .movie ? "movie" : "tv")/857/images"
+            ])
+        }
+    }
+
+    func testMissingLogoDoesNotRequestAlternateImages() async {
+        let requests = LogoImagesRequests()
+        let provider = TMDbMetadataProvider(
+            access: .proxy(baseURL: URL(string: "https://metadata.example")!),
+            imagesRequest: { url, _ in
+                await requests.record(url)
+                return nil
+            }
+        )
+        let urls = await provider.artworkURLs(
+            .logo, for: MetadataQuery(item(providerIDs: ["Tmdb": "857"])), limit: 5
+        )
+        XCTAssertTrue(urls.isEmpty)
+        let count = await requests.urls.count
+        XCTAssertEqual(count, 1)
+    }
+
+    func testDisabledOrZeroLimitLogoLookupDoesNotRequestImages() async {
+        let requests = LogoImagesRequests()
+        let query = MetadataQuery(item(providerIDs: ["Tmdb": "857"]))
+        for access in [TMDbAccess.disabled, .proxy(baseURL: URL(string: "https://metadata.example")!)] {
+            let provider = TMDbMetadataProvider(access: access, imagesRequest: { url, _ in
+                await requests.record(url)
+                return nil
+            })
+            let urls = await provider.artworkURLs(.logo, for: query, limit: access.isEnabled ? 0 : 5)
+            XCTAssertTrue(urls.isEmpty)
+        }
+        let count = await requests.urls.count
+        XCTAssertEqual(count, 0)
+    }
+
+    private actor LogoImagesRequests {
+        private(set) var urls: [URL] = []
+
+        func record(_ url: URL) {
+            urls.append(url)
+        }
     }
 
     // MARK: - Config

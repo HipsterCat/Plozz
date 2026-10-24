@@ -20,12 +20,13 @@ struct PrototypePreviewLayout {
     /// side, halving the dead space beside the logos and the trailing fade.
     /// Nothing where the edge is a notch or rounded-corner inset.
     let guideSideBleed: CGFloat
+    private let isSearching: Bool
 
     /// The gap between the info bar, the toolbar and the guide.
-    var sectionGap: CGFloat { short ? PrototypeLayout.smallGap : PrototypeLayout.sectionGap }
+    var sectionGap: CGFloat { short || isSearching ? PrototypeLayout.smallGap : PrototypeLayout.sectionGap }
 
     var heroArtworkSize: CGSize {
-        let height = min(heroHeight - PrototypeLayout.smallGap, compact ? 92 : 220)
+        let height = max(0, min(heroHeight - PrototypeLayout.smallGap, compact ? 92 : 220))
         return CGSize(width: (height * 16 / 9).rounded(), height: height.rounded())
     }
 
@@ -38,16 +39,23 @@ struct PrototypePreviewLayout {
     }
 
     var availableSidebarWidth: CGFloat {
+        #if os(tvOS)
         guard contentFrame.width >= 960,
               contentFrame.height - heroHeight - PrototypeLayout.sectionGap >= 420 else { return 0 }
-        #if os(tvOS)
         let preferred: CGFloat = contentFrame.width >= 1_400 ? 384 : 320
         return min(preferred, contentFrame.width - PrototypeLayout.sectionGap
             - PrototypeLayout.guideInset * 2 - PrototypeLayout.compactWidth)
         #else
-        return contentFrame.width >= 1_400 ? 272 : 224
+        guard Self.hasRoomForCategorySidebar(contentFrame.size) else { return 0 }
+        return contentFrame.width >= 1_400 ? 272 : (contentFrame.width >= 960 ? 224 : 200)
         #endif
     }
+
+    #if os(iOS)
+    private static func hasRoomForCategorySidebar(_ size: CGSize) -> Bool {
+        size.width >= 700 && size.height >= 500
+    }
+    #endif
 
     var sidebarWidth: CGFloat { hidesSidebar ? 0 : availableSidebarWidth }
 
@@ -91,7 +99,7 @@ struct PrototypePreviewLayout {
         size: CGSize, safeAreaInsets: EdgeInsets = EdgeInsets(),
         navigationInset: CGFloat = 0, nativeNavigation: Bool = false,
         largeText: Bool = false, isSearching: Bool = false,
-        hidesSidebar: Bool = false
+        hidesSidebar: Bool = false, showsCategories: Bool = false
     ) {
         #if os(tvOS)
         self.hidesSidebar = hidesSidebar
@@ -126,8 +134,10 @@ struct PrototypePreviewLayout {
         )
         #if os(tvOS)
         short = false
+        self.isSearching = isSearching
         #else
         short = !compact && !largeText && contentFrame.height < 500
+        self.isSearching = isSearching || (showsCategories && !Self.hasRoomForCategorySidebar(contentFrame.size))
         #endif
         let browsingHeroHeight = short ? 100 : min(
             contentFrame.height * (largeText ? 0.48 : 0.30),
@@ -137,15 +147,24 @@ struct PrototypePreviewLayout {
             // timing and two lines of summary, with no dead band above.)
             largeText ? 440 : (compact ? 184 : 236)
         )
+        #if os(tvOS)
         heroHeight = isSearching
             ? min(browsingHeroHeight, largeText ? 230 : (compact ? 140 : 180))
             : browsingHeroHeight
+        #else
+        heroHeight = self.isSearching ? 0 : browsingHeroHeight
+        #endif
         metadataWidth = compact || largeText ? contentFrame.width : contentFrame.width * 0.56
         let videoWidth = bounds.width
         let videoHeight = videoWidth * 9 / 16
+        #if os(iOS)
+        let videoTop = contentFrame.minY
+        #else
+        let videoTop = bounds.minY
+        #endif
         videoFrame = CGRect(
             x: bounds.maxX - videoWidth,
-            y: bounds.minY,
+            y: videoTop,
             width: videoWidth, height: videoHeight
         )
         fadeEnd = min(bounds.height * 0.82, videoHeight * 0.88)
@@ -154,6 +173,7 @@ struct PrototypePreviewLayout {
 
 struct PrototypeBrowseLayout<Header: View, Sidebar: View, Guide: View>: View {
     let layout: PrototypePreviewLayout
+    var extendsGuideToEdges = true
     @ViewBuilder let header: () -> Header
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let guide: () -> Guide
@@ -201,11 +221,14 @@ struct PrototypeBrowseLayout<Header: View, Sidebar: View, Guide: View>: View {
 
     private var guideSlot: some View {
         guide()
-            .frame(width: layout.guideWidth + layout.guideLeadingExtension + layout.guideTrailingExtension)
-            .padding(.leading, -layout.guideLeadingExtension)
-            .padding(.trailing, -layout.guideTrailingExtension)
+            .frame(width: layout.guideWidth + leadingExtension + trailingExtension)
+            .padding(.leading, -leadingExtension)
+            .padding(.trailing, -trailingExtension)
             .padding(.bottom, -layout.guideBottomExtension)
     }
+
+    private var leadingExtension: CGFloat { extendsGuideToEdges ? layout.guideLeadingExtension : 0 }
+    private var trailingExtension: CGFloat { extendsGuideToEdges ? layout.guideTrailingExtension : 0 }
 }
 
 struct PrototypeGuidePlacement<Content: View>: View {
@@ -358,8 +381,12 @@ struct PrototypePreviewHero: View {
                 Image(systemName: watchTitle == nil ? "play.fill" : "rectangle.split.2x2")
             }
         }
+        #if os(iOS)
+        .plozzActionButton(role: .secondary)
+        #else
         .font(.subheadline.weight(.semibold))
         .plozzGlassPillButton()
+        #endif
         .accessibilityIdentifier("live-tv-info-watch")
     }
 

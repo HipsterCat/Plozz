@@ -1,4 +1,5 @@
 import CoreModels
+import CoreNetworking
 import XCTest
 @testable import FeatureHomeCore
 
@@ -122,6 +123,32 @@ final class PlaybackVersionChoiceTests: XCTestCase {
         await gate.release()
         await assertCancelled(task)
         XCTAssertNil(model.prompt)
+    }
+
+    func testVersionFailurePublishesPreparationEvidenceThroughSharedGate() async throws {
+        let before = Set(PlozzLog.recentEntries(limit: 500).map(\.id))
+        let full = item()
+        let provider = FakeMediaProvider(allItems: [full])
+        provider.playbackItemHandler = { _ in
+            HTTPResponseDiagnostics.recordValidationFailure(
+                .duplicateSourceID, route: .playbackInventory, sourceCount: 2
+            )
+            throw AppError.invalidResponse
+        }
+        do {
+            _ = try await start(full, provider: provider).value
+            XCTFail("The original preparation error must still reach the caller.")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+        let text = try XCTUnwrap(PlozzLog.recentEntries(limit: 500).first {
+            !before.contains($0.id) && $0.message.hasPrefix("format=plozz-preparation-1")
+        }?.message)
+        XCTAssertTrue(text.contains("operation=versions"))
+        XCTAssertTrue(text.contains("validation_0.reason=duplicateSourceID"))
+        XCTAssertTrue(text.contains("validation_0.sources=2"))
+        XCTAssertNil(model.prompt)
+        XCTAssertFalse(model.isPreparing)
     }
 
     func testPreparationFailoverLoadsHealthyInventoryInsteadOfUsingCachedFiles() async throws {
@@ -491,6 +518,41 @@ final class PlaybackVersionChoiceTests: XCTestCase {
         XCTAssertEqual(selected, movie)
         XCTAssertEqual(provider.itemCallCount(for: movie.id), 0)
         XCTAssertNil(settings.settings.versionSelectionMode)
+    }
+
+    func testDownloadedMultiVersionItemBypassesEveryVersionSelectionMode() async throws {
+        struct Local: OfflinePlaybackResolving {
+            func localPlaybackURL(for item: MediaItem, versionID: String?) async -> URL? {
+                URL(fileURLWithPath: "/fixture/download.mkv")
+            }
+        }
+        for mode: PlaybackVersionSelectionMode? in [nil, .askEveryTime, .automatic] {
+            settings.settings.versionSelectionMode = mode
+            var movie = item()
+            movie.selectedVersionID = movie.versions[1].id
+            let provider = FakeMediaProvider(allItems: [])
+            let finished = expectation(description: "Local playback bypasses \(String(describing: mode))")
+            let task = Task {
+                let selected = try await model.prepare(
+                    movie, provider: provider, settings: settings, preferences: preferences,
+                    offlineResolver: Local(),
+                    sourceResolver: { _ in
+                        XCTFail("Local playback must not discover server alternatives")
+                        return .init(sources: [])
+                    }
+                )
+                finished.fulfill()
+                return selected
+            }
+            await fulfillment(of: [finished], timeout: 2)
+            model.cancel()
+            task.cancel()
+            let selected = try await task.value
+            XCTAssertEqual(selected, movie)
+            XCTAssertNil(model.prompt)
+            XCTAssertEqual(provider.itemCallCount(for: movie.id), 0)
+            XCTAssertEqual(settings.settings.versionSelectionMode, mode)
+        }
     }
 
     func testSeriesMemoryToggleAppliesImmediatelyToGateAndExistingRequestResolver() async throws {

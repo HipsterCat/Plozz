@@ -20,6 +20,7 @@ public protocol AccountPersisting: Sendable {
     ) throws -> MediaShareCredentialEnvelope
     func add(_ account: Account, token: String) throws
     func registerAuthenticatedSession(_ session: UserSession) throws -> AccountRegistration
+    func replaceAuthenticatedSession(_ session: UserSession, expected: Account) throws
     func addMediaShare(
         _ account: Account,
         credential: MediaShareCredentialEnvelope,
@@ -40,6 +41,10 @@ public struct AccountRegistration: Sendable {
 }
 
 public extension AccountPersisting {
+    func replaceAuthenticatedSession(_ session: UserSession, expected: Account) throws {
+        throw AccountStoreError.metadataUpdatesUnavailable
+    }
+
     func updateServerMetadata(expected: Account, server: MediaServer) throws {
         throw AccountStoreError.metadataUpdatesUnavailable
     }
@@ -497,6 +502,26 @@ public final class AccountStore: AccountPersisting, RotatingCredentialStoring, @
             account, token: session.accessToken, activate: previous == nil
         )
         return AccountRegistration(account: saved, previousAccount: previous)
+    }
+
+    /// Recovery must replace the requested account, never add a different login
+    /// or revive an account removed while the link code was on screen.
+    public func replaceAuthenticatedSession(_ session: UserSession, expected: Account) throws {
+        Self.processMutationLock.lock()
+        defer { Self.processMutationLock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
+        defer { invalidateCredentialCacheAfterMutationLocked() }
+        guard expected.server.provider.supportsAccountReauthentication,
+              session.server.provider == expected.server.provider,
+              session.server.id == expected.server.id,
+              session.userID == expected.userID,
+              !session.accessToken.isEmpty,
+              try persistedAccountsLockedThrowing().first(where: { $0.id == expected.id }) == expected
+        else { throw AppError.conflict }
+        var account = Account(id: expected.id, from: session, addedAt: expected.addedAt)
+        account.server.alternateConnectionURLs = expected.server.alternateConnectionURLs
+        _ = try addManagedAccountLocked(account, token: session.accessToken, activate: false)
     }
 
     public func updateServerAddresses(expected: Account, alternatives: [URL]) throws {

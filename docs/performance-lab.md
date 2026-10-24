@@ -53,6 +53,48 @@ Cancellation/timeout stops only the owned process group and preserves evidence.
 
 ## Baseline → attribution → candidate → regression
 
+`skeletons-idle` observes 24 production `SkeletonCardView` placeholders over
+2.3-second idle windows on either platform. It verifies all placeholders mounted
+and captures changing visible pixels before timing, so removing the animation
+cannot count as an optimization. `skeletons-static` uses the same content with
+implicit animations disabled and verifies stable pixels; it is an animation-cost
+control, not a simulated system Reduce Motion setting. `cards-idle` separately
+covers settled artwork. These fixtures are not the complete Home screen or a
+multi-server account. CPU measurements include the app process only; resident
+snapshots do not measure GPU/render-server memory or physical-device energy.
+
+The iOS `mobile-preference-sync` scenario applies 24 cloud batches through the
+real mobile app model, updating active Hero preferences and an inactive profile's
+preferred version in each batch. It verifies all 48 applied values and counts
+account invalidations, index resets, and download-model replacements. With no
+accounts or external services, it isolates synchronous configuration-apply work;
+it does not measure full network/indexing completion, CloudKit delivery, rendered
+frames, or physical-device temperature and battery use.
+
+The iOS `mobile-profile-selection` scenario activates sixteen synthetic profiles
+through the real app model. It reports synchronous selection time separately
+from a fixed 5 ms Plex metadata delay, checks that every selection reaches the
+PIN gate, and verifies tokens remain denied. It measures activation work, not
+rendered frame pacing or physical-device network latency.
+
+`mobile-home-rail-prefetch` updates the real mobile Continue Watching rail 24
+times with the same 180 metadata-rich episodes across twelve synthetic account
+identities. Artwork is preloaded into the test cache and online providers are
+disabled. It counts series-source construction while preserving every item and
+waiting for each hosting-graph update. It isolates repeated layout/prefetch-key
+work, not twelve connected servers, profile-transition frame pacing or hardware
+scrolling. `watchlist-artwork-rehydration` separately exercises the production
+Plex/Jellyfin credential-restoration path, checking every title and cast image.
+
+`mobile-profile-pin-handoff` unlocks a local profile in a sixteen-profile
+household using the production 120,000-round verifier. It separates verification
+duration from the largest 2 ms main-actor heartbeat gap. Initialization settles
+before sampling, and all repetitions reuse one household; the warmup covers
+first-entry settings migrations. Each measured switch first leaves the locked
+profile and proves its PIN again. Fixture-owned settings are removed afterward.
+Moving verification off the UI executor should preserve its cost and result,
+not reduce the verifier rounds. Heartbeat gaps are not rendered FPS.
+
 1. Select the scenario matching the suspected work and capture a baseline
    **before** editing production code. Keep the printed run path. Record the
    symptom and configuration; do not replace a reported failure with an easier
@@ -88,6 +130,14 @@ Noise above the larger of 20% of baseline or 1 ms is inconclusive.
 Do not repeatedly rerun until a favorable sample passes. Diagnose contention or
 capture a deliberately new controlled experiment, retaining the failed/noisy one.
 
+`playback-journal-disabled` and `playback-journal-enabled` are an explicit
+off/on control for the new persistent journal, not a historical baseline.
+Each sample handles 10,000 synthetic lifecycle notifications. The enabled case
+awaits encoding and persistence and verifies retained plus discarded counts;
+`enqueueMicroseconds` separately measures synchronous notification handling.
+Both retain the same notification/UUID workload. Wall/CPU include completion;
+neither is a rendered-frame or physical-device energy measurement.
+
 `within-budget` is **not** proof of improvement. Read the deltas and their
 dispersion. Work counts are reported separately and bounded by XCTest
 assertions, not statistical timing allowances. Resident snapshots/deltas are
@@ -100,6 +150,15 @@ foreground path: 72 completed overlays across 24 posters, three visible episode
 badges, and changing playback progress. Each sample uses cold geometry. The
 distinct-bitmap counter exposes redundant synchronous rendering separately from
 wall/CPU time; `native-poster-composition` covers source artwork, not this path.
+
+`portrait-reflection-cold` prepares twelve Detailed portrait reflections through
+the native coordinator using the production 960-pixel poster cap and fresh
+geometry in every sample. It measures completed
+bitmap preparation and the longest synchronous preparation, not frame pacing.
+`portrait-reflection-warm` recreates 288 coordinators and requires all requests to
+reuse the same twelve finished bitmaps. These isolate first-seen artwork cost
+from reuse; neither establishes physical Apple TV smoothness or cache behavior
+under unrelated memory pressure.
 
 `poster-preview-admission` exercises the shared preview gate used by media rows
 and mobile Home. It visits overlapping 16-item look-ahead windows three times per
@@ -117,6 +176,7 @@ fixture with real `XCUIRemote` directional input:
 
 ```sh
 python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID"
+python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID" --workload detail-return
 python3 tools/performance.py report .build/performance/runs/RUN_ID
 ```
 
@@ -126,6 +186,13 @@ starts recording, and only then sends navigation input. The driver attaches to
 that same app without relaunching it. Three traversals must return focus to the
 hero. The runner stops its recorder, terminates its fixture, restores its
 temporary scheme and shuts down the simulator even on failure.
+
+The `detail-return` workload uses native top tabs and eight populated library
+rows. It opens a poster in a deeper row and returns with three rapid Left presses
+for three visits, preserving the profiled app process. The native focus journal
+is retained with the sample; return-stage `at` values use the main-thread
+monotonic clock rather than the journal writer's asynchronous timestamps.
+Animation callbacks do not establish exact presented-frame timing.
 
 `Process Sample` is the default backend and uses macOS's installed `sample`
 tool. The report separates main-thread frames, app-owned main-thread frames and

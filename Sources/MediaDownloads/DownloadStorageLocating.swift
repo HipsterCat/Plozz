@@ -1,9 +1,8 @@
 import CoreModels
 import Foundation
 
-/// Resolves WHERE pinned downloads live on disk. This is the ONLY
-/// platform-specific piece of the download foundation — all business logic stays
-/// neutral, only the base directory differs per OS.
+/// Resolves where pinned downloads live on disk. The base directory and backup
+/// policy differ per OS; download orchestration remains platform-neutral.
 ///
 /// - **iOS / iPadOS:** Application Support (falling back to Documents), marked
 ///   `isExcludedFromBackup` so multi-GB media never bloats iCloud/iTunes backups.

@@ -199,6 +199,7 @@ public final class PlaybackDiagnosticsSampler {
         probedFacts = nil
         latest?.audioPipelineDescription = nil
         latest?.audioOutput = nil
+        latest?.sessionCache = nil
     }
 
     var isSampling: Bool { timerTask != nil }
@@ -350,6 +351,7 @@ public final class PlaybackDiagnosticsSampler {
         if let t = engineTelemetry?() {
             if diagnostics.mode == .plozzigen {
                 diagnostics.audioPipelineDescription = t.audioPipelineDescription
+                diagnostics.sessionCache = t.sessionCache
             }
             if let drops = t.droppedFrameCount, diagnostics.droppedVideoFrames == nil {
                 diagnostics.droppedVideoFrames = drops

@@ -171,14 +171,8 @@ public struct PlexClient: Sendable {
     /// sets. Defaults to a live `.detected()` probe (which falls back to the
     /// conservative `.default` on Linux/CI).
     private let capabilities: MediaCapabilities
-    /// Whether the dual-engine (VLCKit) build is active. When `true`,
-    /// `canDirectPlay` additionally accepts the **extra** formats the on-device
-    /// hybrid engine handles — the Matroska / WebM container (every display-
-    /// supported range, including Dolby Vision, decoded on-device) and DTS / DTS-HD /
-    /// TrueHD audio (decoded on-device, no passthrough required). Defaults to
-    /// `false`, preserving today's native-only direct-play decisions. Must stay in
-    /// lockstep with `EngineRouter`: every extra format accepted here is one the
-    /// router sends to the hybrid engine.
+    /// Aether availability enables the shared linked-input format profile.
+    /// Native-only clients retain their separate capability checks.
     private let hybridEngineEnabled: Bool
 
     /// The server base URL currently in use (best-known reachable connection).
@@ -517,18 +511,23 @@ public struct PlexClient: Sendable {
     }
 
     /// `GET /library/metadata/{ratingKey}` — full detail for one item.
-    func metadata(ratingKey: String) async throws -> PlexMetadata {
+    func metadata(ratingKey: String, includeChapters: Bool = false) async throws -> PlexMetadata {
         let endpoint = Endpoint(
             path: "/library/metadata/\(ratingKey)",
             queryItems: [
                 URLQueryItem(name: "includeGuids", value: "1"),
                 URLQueryItem(name: "includePreferences", value: "1")
-            ],
+            ] + (includeChapters ? [URLQueryItem(name: "includeChapters", value: "1")] : []),
             headers: headers
         )
-        let container = try await decode(PlexMediaContainerResponse.self, endpoint, using: interactiveHTTP).MediaContainer
-        guard let item = container.Metadata?.first else { throw AppError.notFound }
-        return item
+        return try await HTTPResponseDiagnostics.$route.withValue(.itemDetail) {
+            let container = try await decode(PlexMediaContainerResponse.self, endpoint, using: interactiveHTTP).MediaContainer
+            guard let item = container.Metadata?.first else {
+                HTTPResponseDiagnostics.recordValidationFailure(.missingMetadata, route: .itemDetail)
+                throw AppError.notFound
+            }
+            return item
+        }
     }
 
     /// `GET /library/metadata/{ratingKey}?includeMarkers=1` — fetches the item's
@@ -2017,14 +2016,6 @@ public struct PlexClient: Sendable {
     /// by Plex's HLS transcode, which repackages them into a seekable playlist.
     private static let directPlayContainers: Set<String> = ["mp4", "m4v", "mov"]
 
-    /// Containers AVPlayer can't reliably direct-play from a raw file URL but the
-    /// hybrid engine can decode on-device. Only eligible when
-    /// `hybridEngineEnabled`.
-    private static let hybridDirectPlayContainers: Set<String> = [
-        "mkv", "webm", "matroska",
-        "ts", "m2ts", "mts", "m2t", "mpegts", "bdav", "bdmv"
-    ]
-
     /// Lossy audio codecs the Apple TV always decodes in software, regardless of
     /// the connected receiver. These never need passthrough, so they're always
     /// direct-playable. FLAC is lossless but AVFoundation has decoded it natively
@@ -2045,55 +2036,37 @@ public struct PlexClient: Sendable {
         return canDirectPlayVideoRange(part: part)
     }
 
-    /// True only when we can prove the original file plays natively in AVPlayer
-    /// on **this** device + display/audio route. Unknown/missing container or
-    /// codec info, an unsupported codec for the current hardware, or HDR/Dolby
-    /// Vision the display can't accept all fall back to a server transcode
-    /// (matching server-side decisioning).
-    ///
-    /// When `hybridEngineEnabled`, also accepts the extra formats the on-device
-    /// engine handles: hybrid-only containers (Matroska/WebM/TS-family),
-    /// interlaced video, and DTS/DTS-HD/TrueHD/Opus/Vorbis audio (decoded
-    /// on-device).
+    /// Negotiate the linked engine's input formats independently of native
+    /// display/output capabilities. Missing codec metadata is left to its probe.
     func canDirectPlay(media: PlexMedia, part: PlexPart) -> Bool {
         let container = (media.container ?? part.container ?? Self.containerExtension(fromKey: part.key))?.lowercased()
         guard let container else { return false }
-
-        let isAppleContainer = Self.directPlayContainers.contains(container)
-        let isHybridContainer = hybridEngineEnabled && Self.hybridDirectPlayContainers.contains(container)
-        guard isAppleContainer || isHybridContainer else { return false }
-
         let videoStream = part.Stream?.first(where: { $0.streamType == 1 })
-        if Self.isInterlaced(videoStream), !hybridEngineEnabled {
-            return false
+        if hybridEngineEnabled {
+            guard PlozzigenMediaFormats.supports(container: container) else { return false }
+            if let video = media.videoCodec ?? videoStream?.codec, !video.isEmpty,
+               !PlozzigenMediaFormats.supports(videoCodec: video) { return false }
+            let audioStream = part.Stream?.first { $0.streamType == 2 && $0.selected == true }
+                ?? part.Stream?.first { $0.streamType == 2 }
+            if let audio = audioStream?.codec ?? media.audioCodec, !audio.isEmpty,
+               !PlozzigenMediaFormats.supports(audioCodec: audio) { return false }
+            return true
         }
-
-        // Video codec gate. Apple containers must be a hardware-decodable codec;
-        // the hybrid engine demuxes/decodes the broad set inside hybrid-only
-        // containers, so the
-        // codec is left to VLCKit there (the SDR range gate below still applies).
-        if !isHybridContainer, let video = media.videoCodec?.lowercased() {
+        guard Self.directPlayContainers.contains(container),
+              !Self.isInterlaced(videoStream) else { return false }
+        if let video = media.videoCodec?.lowercased() {
             guard let mapped = Self.directPlayVideoCodec(forPlexCodec: video),
                   capabilities.allowedDirectPlayVideoCodecs.contains(mapped) else { return false }
         }
-
         if let audio = media.audioCodec?.lowercased(), !canDirectPlayAudio(codec: audio) {
             return false
         }
-
-        if isHybridContainer {
-            guard isHybridDirectPlayableRange(part: part) else { return false }
-        } else {
-            guard canDirectPlayVideoRange(part: part) else { return false }
-        }
-
-        return true
+        return canDirectPlayVideoRange(part: part)
     }
 
     /// Maps a Plex `videoCodec` token onto a `MediaCapabilities` direct-play
     /// codec. Plex labels HEVC as either `hevc` or `h265`; both fold to `.hevc`.
-    /// Returns `nil` for codecs that are never direct-playable (e.g. mpeg2,
-    /// vc1), forcing a transcode.
+    /// This is the native/server-output set, not Aether's input codec set.
     static func directPlayVideoCodec(forPlexCodec codec: String) -> DirectPlayVideoCodec? {
         switch codec {
         case "h264", "avc": return .h264
@@ -2108,24 +2081,10 @@ public struct PlexClient: Sendable {
     /// passthrough/bitstream codec the **current route** can carry. AC-3/E-AC-3
     /// are always passthrough-eligible; DTS / DTS-HD only when the route reports
     /// `supportsDTSPassthrough`, since Apple TV cannot decode DTS itself.
-    ///
-    /// When `hybridEngineEnabled`, DTS / DTS-HD / TrueHD are additionally accepted
-    /// even without passthrough, because the on-device VLCKit engine decodes them
-    /// (the router sends these to the hybrid engine).
     private func canDirectPlayAudio(codec: String) -> Bool {
         if Self.alwaysDecodableAudioCodecs.contains(codec) { return true }
-        if hybridEngineEnabled, Self.isHybridDecodableAudio(codec) { return true }
         guard let passthrough = Self.passthroughAudioCodec(forPlexCodec: codec) else { return false }
         return capabilities.allowedPassthroughAudioCodecs.contains(passthrough)
-    }
-
-    /// DTS / DTS-HD / TrueHD / Opus / Vorbis: audio the on-device Plozzigen engine
-    /// decodes regardless of the connected receiver's passthrough support.
-    static func isHybridDecodableAudio(_ codec: String) -> Bool {
-        let codec = codec.lowercased()
-        return codec.contains("dts") || codec == "dca" || codec.hasPrefix("dca")
-            || codec.contains("truehd") || codec == "mlp"
-            || codec == "opus" || codec == "vorbis"   // Plozzigen decodes these; AVPlayer can't in Apple containers
     }
 
     /// Maps a Plex `audioCodec` token onto a `MediaCapabilities` passthrough
@@ -2170,33 +2129,6 @@ public struct PlexClient: Sendable {
             return !allowed.isDisjoint(with: doviRanges)
         }
 
-        switch video.colorTrc?.lowercased() {
-        case "smpte2094-40":
-            return allowed.contains(.hdr10Plus)
-        case "smpte2084", "pq":
-            return allowed.contains(.hdr10)
-        case "arib-std-b67", "hlg":
-            return allowed.contains(.hlg)
-        default:
-            return true
-        }
-    }
-
-    /// Range gate for a raw MKV sent to the on-device engine: allows SDR and any
-    /// **display-supported** range, including HDR10 / HLG **and Dolby Vision** —
-    /// the on-device engine decodes the HEVC base layer (HDR10/SDR base for
-    /// Profile 8, tone-mapped for Profile 5), so DoVi-in-MKV plays without the
-    /// unreliable server transcode AVPlayer would otherwise need (it can't demux
-    /// MKV). Matches Infuse and mirrors `EngineRouter` (DoVi-in-MKV → hybrid).
-    private func isHybridDirectPlayableRange(part: PlexPart) -> Bool {
-        guard let video = part.Stream?.first(where: { $0.streamType == 1 }) else { return true }
-        let allowed = Set(capabilities.allowedHDRRanges)
-        if video.DOVIPresent == true {
-            // Decoded on-device whenever the display supports Dolby Vision (which,
-            // on an Apple TV 4K, tracks HEVC hardware decode — effectively always).
-            let doviRanges: Set<HDRRange> = [.dolbyVision, .dolbyVisionWithHDR10, .dolbyVisionWithHLG, .dolbyVisionWithSDR]
-            return !allowed.isDisjoint(with: doviRanges)
-        }
         switch video.colorTrc?.lowercased() {
         case "smpte2094-40":
             return allowed.contains(.hdr10Plus)

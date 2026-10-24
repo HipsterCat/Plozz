@@ -1192,9 +1192,11 @@ public final class AppState {
         // per-profile settings sub-models + this rebuild lifecycle lives in
         // `ProfileSettingsModel`.
         let ns = (profilesModel ?? self.profilesModel).activeNamespace
+        let resolvedSeerService = seerService ?? Self.makeDefaultSeerService()
         self.profileSettings = ProfileSettingsModel(
             namespace: ns,
             allowsDiscovery: { !resolvedProfilesModel.activeProfile.isKids },
+            isSeerrConfigured: { resolvedSeerService.isConfigured },
             subtitleBehaviorModel: subtitleBehaviorModel,
             subtitleStyleModel: subtitleStyleModel,
             spoilerModel: spoilerModel,
@@ -1220,7 +1222,7 @@ public final class AppState {
         self.wetrakrService = wetrakrService ?? WetrakrServiceFactory.make(namespace: ns)
         // Seerr uses ONE shared household connection (user-independent Keychain);
         // profiles differ only by which Seerr user they request as (per request).
-        self.seerService = seerService ?? Self.makeDefaultSeerService()
+        self.seerService = resolvedSeerService
         // A Kids Profile with no mapped Seerr user would otherwise request as the
         // unrestricted admin. Live closure so it always reflects the CURRENT
         // profile — see `SeerService.refusesAdminRequests`.

@@ -84,7 +84,9 @@ TestFlight remains a maintainer-managed closure.
 ### Requirements
 
 - macOS with the Xcode/SDK configuration supported by [CI](workflows/ci.yml)
-  (currently Xcode 26.2). The app deployment targets are iOS 18.0 and tvOS 18.0.
+  (currently Xcode 27 on the `xcode-27` runner image, matching the pinned playback
+  engine's toolchain requirement). The app deployment targets remain iOS 18.0
+  and tvOS 18.0.
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
 
 ### Generate the project and run

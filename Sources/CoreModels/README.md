@@ -10,11 +10,20 @@ language every other module speaks.
 - The dual-provider abstraction: `MediaProvider` protocol, `ProviderKind`,
   `ProviderRegistry` / `ProviderResolving`, `ResolvedAccount`.
 - Cross-cutting UI state: `LoadState`, `AppError`.
+- `PlaybackReadAhead` and `LivePlaybackBuffer` are independent device-local
+  network/storage preferences, not profile settings. Both default to Automatic
+  and are excluded from profile transfer. `EngineSessionCache` carries active
+  temporary-cache usage and the engine's effective playback-safe budget.
 - `PlaybackDiagnosticReport` supplies privacy-safe failure Details for on-demand
   playback, Live TV and IPTV setup. Preserve typed reasons and numeric causes,
   distinguish preparation/opening/playback, and never export raw error text.
   Non-video live responses use fixed HTML/JSON/XML/empty classifications and
   factual messages, not response snippets or inferred credential expiry.
+- `PlaybackDiagnosticJournal` retains up to 256 events / 128 KiB for 48 hours.
+  Optional typed quality, stage and native evidence fields preserve older
+  journals; validation applies both on admission and disk restore. The explicit
+  Send diagnostics action includes this local journal, without enabling
+  automatic on-demand failure uploads or claiming confirmed backend delivery.
 - Shared decode/encode helpers: `JSONDecoder.plozz`, `JSONEncoder.plozz`.
 - `HTTPDate` shares HTTP timestamp parsing/formatting and strict `Retry-After`
   interpretation across HTTP media transports and IPTV. Consumers convert
@@ -24,6 +33,16 @@ language every other module speaks.
   plus the neutral `SubtitleColor` / `SubtitleEdgeStyle` / `SubtitleMode` primitives.
 - Profiles persistence contract: `ProfilePersisting`, `ProfileStore`,
   `ProfilesModel`, plus the Plex Home-user mapping (`PlexHomeUser`).
+- Local PIN proof is in-memory and bound to the current verifier and selection.
+  `ProfilesModel` clears it whenever the active profile changes, including
+  deletion/sync fallbacks. Manual entry to another locked profile requires fresh
+  proof; opting into startup sign-in remains a separate, startup-only exception.
+  Profile Lock verification keeps its full stored derivation cost off the UI
+  executor; callers must recheck request, selection generation and lock afterward.
+- `EpisodeCountBadgeStyle` is an independent, profile-scoped appearance preference.
+  On first load, `WatchStatusIndicatorSettingsStore` preserves the legacy
+  watch-mode-derived style (watched: floating, unwatched: attached), then persists
+  it independently. It transfers with profile settings; watch marks do not follow it.
 
 ## Invariants
 
@@ -54,6 +73,12 @@ language every other module speaks.
   content-aware Home visibility predicate hides confirmed-empty tiles by default,
   while profile-scoped explicit enable choices override that automatic hiding.
   Unknown availability is not emptiness; discovery and browse retain the entry.
+  `CollectionSection` separates an authored row's stable identity, source, name
+  and card presentation from placement. Home stores these definitions in its
+  existing profile-scoped settings, outside the preset/order selection.
+  `CollectionPreviewLoader` shares bounded membership paging with Hero, validates
+  page progress and identity, and never treats a selected library as inferred
+  membership for returned titles.
 
 ## Public surface, at a glance
 
@@ -68,6 +93,15 @@ first completion timestamp. Ending that session allows a new rewatch key; there
 is no day-wide WeTrakr suppression. Older outboxes without these fields remain
 readable and retain their original retry-key derivation.
 
+Failed server targets in the watch outbox have independent persisted retry
+deadlines: 30 seconds initially, doubling to a 15-minute maximum, or longer when
+the server explicitly requests it. Existing drain triggers retry once the deadline
+passes; no polling timer is added. Coalescing preserves the cooldown while keeping
+the latest desired state, and relaunching cannot reset it. Successful destinations
+and tracker mirrors are not held behind a failed server. Cancellation is not a
+server failure, and authorization is still checked before any retry. Legacy
+outboxes without retry metadata remain readable and immediately eligible.
+
 | Concept | Entry point |
 | --- | --- |
 | Provider abstraction | `MediaProvider`, `ProviderKind`, `ProviderRegistry` |
@@ -76,6 +110,32 @@ readable and retain their original retry-key derivation.
 | Profiles | `Profile`, `ProfileStore`, `ProfilesModel`, `PlexHomeUser` |
 | UI state | `LoadState`, `AppError` |
 | Subtitles | `SubtitleBehavior`, `SubtitleStyle` (rendered by `FeaturePlayback`) |
+
+## Content-rating presentation
+
+`ContentRatingPresentation` shortens known classification descriptions, not ages.
+Country prefixes identify the rating system independently of the app's language.
+Existing codes, native scripts, meaningful slashes (India's `U/A`, Portugal's
+`M/12`, Belgium's `AL/TOUS`), and unrecognized qualifiers remain intact.
+French `avec avertissement` is an additional warning: show `TP` or the age
+restriction with a warning indicator, never silently drop it or invent a US rating.
+`MediaItem.officialRating` and the badge's accessibility text retain the original.
+Unknown descriptions remain provider content; presentation bounds their width.
+
+References used for display aliases:
+[CNC classification and warnings](https://www.cnc.fr/cinema/actualites/proteger-sans-censurer--la-classification-des-oeuvres-cinematographiques_1924881),
+[FSK age labels](https://www.fsk.de/altersstufen/),
+[regional classification overview](https://en.wikipedia.org/wiki/Motion_picture_content_rating_system),
+and [Jellyfin's regional input tokens](https://github.com/jellyfin/jellyfin/tree/master/Emby.Server.Implementations/Localization/Ratings).
+Jellyfin's numeric parental-control scores are **not** display equivalences;
+for example, exemptions, warning qualifiers, and age-restricted classifications
+must not collapse just because they share a score. This is not a complete registry
+of every custom classification a media server can supply.
+
+`ContentRatingSettingsModel` owns one default-on, profile-scoped visibility
+preference. It transfers between devices and is rebuilt on profile switches.
+It changes presentation only, never parental authorization, catalog filtering,
+review scores, or Common Sense Media recommendations.
 
 ## Home section editing
 
@@ -129,6 +189,12 @@ existing `HomeRowID` to represent independent instances or change provider IDs
 to make them unique in the UI.
 
 ## Profile deletion and namespace ownership
+
+Transferable preferences use byte-stable sync values. JSON object keys and
+Hero's set-valued `randomLibraryKeys` are canonicalized on capture and apply,
+including legacy blobs. User-ordered arrays such as Hero sources and unknown
+fields retain their meaning; native preferred-version dictionaries stay
+dictionaries rather than becoming JSON data.
 
 Any profile may be deleted while at least one remains. Both cloud adapters apply
 the original/default profile's deletion and omit deleted profiles, membership and
@@ -204,6 +270,11 @@ The separate `declaredFileSizeBytes` extractor reads unambiguous, explicitly
 byte-unit quantities from descriptions. Providers decide whether that declaration
 is authoritative; bitrate units and filename/locator text never become byte sizes.
 
+`MediaProvider.item` supplies passive presentation metadata; `playbackItem` is an
+explicit playback/version-discovery operation that may cause server probing.
+`MediaVersionInventoryLoader` gives an open picker an owner/source/target identity
+and that explicit action, rather than treating a sparse cached list as complete.
+
 Playback version prompting and series memory are independent profile settings.
 `versionSelectionMode` stays unanswered until first multi-version playback or a
 Settings choice; `rememberVersionPerSeries` defaults on. Legacy `rememberChoice`
@@ -254,6 +325,9 @@ survive reload, profile switching, and transfer.
 Synced artwork/label-setting deletions consume their one-time legacy import
 even for profiles not yet loaded on this device. The separate `.migrated` store
 markers remain device-local and never enter profile transfer snapshots.
+Once migrated, loading these stores is read-only. Subtitle appearance model
+hydration likewise does not save or broadcast its loaded values: profile
+activation must not re-persist unchanged preferences on the main actor.
 
 ## Device-local playback buffering
 

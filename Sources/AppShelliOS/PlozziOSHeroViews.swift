@@ -134,6 +134,17 @@ extension View {
     }
 }
 
+private struct PlozziOSHeroLogoSizeKey: EnvironmentKey {
+    static let defaultValue = HeroLogoSize.default
+}
+
+private extension EnvironmentValues {
+    var plozziOSHeroLogoSize: HeroLogoSize {
+        get { self[PlozziOSHeroLogoSizeKey.self] }
+        set { self[PlozziOSHeroLogoSizeKey.self] = newValue }
+    }
+}
+
 enum PlozziOSPageLayout {
     static func horizontalInset(for sizeClass: UserInterfaceSizeClass?) -> CGFloat {
         sizeClass == .compact ? 22 : 36
@@ -145,6 +156,13 @@ enum PlozziOSPageLayout {
 
     static func heroTextMaxWidth(for style: HeroArtworkStyle) -> CGFloat {
         style == .compactPortrait ? 500 : 480
+    }
+
+    static func homeTextMaxWidth(for style: HeroArtworkStyle, logoSize: HeroLogoSize) -> CGFloat {
+        HeroLogoSizing.homeTextWidth(
+            for: style == .compactPortrait ? .compact : .regular,
+            logoSize: logoSize, minimumWidth: heroTextMaxWidth(for: style)
+        )
     }
 
     /// The hero's title logo, capped so it can never be wider than the column it
@@ -169,11 +187,13 @@ enum PlozziOSPageLayout {
     /// wordmark still overhung the column and still dragged the hero's rows left.
     /// Pinning holds every logo wide enough to reach the column to the *same* drawn
     /// width, and returns the width it takes as height so no logo shrinks.
-    static func heroLogoBox(for style: HeroArtworkStyle) -> CGSize {
-        let column = heroLogoMaxWidth(for: style)
-        return HeroLogoFit.pinnedBox(
-            budget: CGSize(width: column, height: heroLogoMaxHeight(for: style)),
-            drawnWidth: column
+    static func heroLogoBox(
+        for style: HeroArtworkStyle, size: HeroLogoSize = .default,
+        availableWidth: CGFloat = .infinity
+    ) -> CGSize {
+        HeroLogoSizing.box(
+            for: style == .compactPortrait ? .compact : .regular,
+            size: size, availableWidth: availableWidth
         )
     }
 
@@ -198,6 +218,7 @@ enum PlozziOSPageLayout {
 /// two must derive from the same code, not from matching numbers.
 struct PlozziOSHeroForegroundPlacement: ViewModifier {
     let style: HeroArtworkStyle
+    var logoSize: HeroLogoSize = .default
 
     func body(content: Content) -> some View {
         content
@@ -211,7 +232,7 @@ struct PlozziOSHeroForegroundPlacement: ViewModifier {
             // too wide to fit, so an oversized child overhangs both edges and
             // moves the column's origin instead of just its own trailing edge.
             .frame(
-                maxWidth: PlozziOSPageLayout.heroTextMaxWidth(for: style),
+                maxWidth: PlozziOSPageLayout.homeTextMaxWidth(for: style, logoSize: logoSize),
                 alignment: style == .compactPortrait ? .center : .leading
             )
             .frame(
@@ -226,8 +247,8 @@ struct PlozziOSHeroForegroundPlacement: ViewModifier {
 
 extension View {
     /// See ``PlozziOSHeroForegroundPlacement``.
-    func plozziOSHeroForegroundPlacement(style: HeroArtworkStyle) -> some View {
-        modifier(PlozziOSHeroForegroundPlacement(style: style))
+    func plozziOSHeroForegroundPlacement(style: HeroArtworkStyle, logoSize: HeroLogoSize = .default) -> some View {
+        modifier(PlozziOSHeroForegroundPlacement(style: style, logoSize: logoSize))
     }
 }
 
@@ -339,9 +360,9 @@ struct PlozziOSHeroRequestButton: View {
                             ?? Text("Request")
                     )
                 }
-            case .requested:
+            case .requested, .awaitingRelease:
                 statusPill {
-                    Label("Requested", systemImage: "clock")
+                    Label(request.cta.requestStatusTitle, systemImage: request.cta.requestStatusSystemImage)
                 }
             case let .downloading(progress):
                 statusPill {
@@ -414,6 +435,7 @@ struct PlozziOSDetailHeroSection: View {
     let selectedVersionID: String?
     let onSelectSource: (String) -> Void
     let onSelectVersion: (String) -> Void
+    var loadVersions: MediaVersionInventoryLoader? = nil
     let actionHandler: any MediaItemActionHandling
     let onPlay: (MediaItem, Bool) -> Void
     var trailerItem: MediaItem?
@@ -449,6 +471,7 @@ struct PlozziOSDetailHeroSection: View {
             // background shows through and the episode's own still leads
             // instead. The show's artwork here made every episode look the same.
             showsBackdrop: !presentsEpisodeStill,
+            textSize: appModel.settings.detailPage.settings.textSize,
             scheduleLine: scheduleLine,
             pullDistance: pullDistance,
             trailerController: trailerController,
@@ -469,6 +492,7 @@ struct PlozziOSDetailHeroSection: View {
                 selectedVersionID: selectedVersionID,
                 onSelectSource: onSelectSource,
                 onSelectVersion: onSelectVersion,
+                loadVersions: loadVersions,
                 presentation: presentation,
                 fallbackPresentation: backdropPresentation,
                 style: style,
@@ -481,6 +505,14 @@ struct PlozziOSDetailHeroSection: View {
                 presentsEpisodeStill: presentsEpisodeStill
             )
         }
+        .environment(\.plozziOSHeroLogoSize, appModel.settings.detailPage.settings.logoSize)
+        .environment(
+            \.heroScrimHeightScale,
+            appModel.settings.detailPage.settings.textSize.scrimHeightScale(
+                logoSize: appModel.settings.detailPage.settings.logoSize,
+                descriptionLines: style == .compactPortrait ? 2 : 3
+            )
+        )
     }
 }
 
@@ -499,6 +531,7 @@ struct PlozziOSHeroStage<Foreground: View>: View {
     let isActive: Bool
     var showsBackdrop = true
     var showsScrim = true
+    var textSize: HeroTextSize = .default
     /// Compact detail renders the availability badge with its separate title/logo.
     var scheduleLine: LocalizedStringResource? = nil
     /// Overscroll pull (points) from the enclosing scroll view. Stretches the
@@ -612,6 +645,7 @@ struct PlozziOSHeroStage<Foreground: View>: View {
                                 logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item),
                                 content: .identity
                             )
+                            .environment(\.metadataTextScale, textSize.scale)
                             .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: style))
                             .padding(.bottom, 12)
                         }
@@ -651,7 +685,8 @@ struct PlozziOSHeroStage<Foreground: View>: View {
         .task(
             id: PlozziOSHeroPlaybackID(
                 itemID: item.id,
-                isActive: isActive && !trailerController.isPlaybackSuppressed,
+                isActive: isActive && !trailerController.isPlaybackSuppressed
+                    && (surfaceRole != .home || !trailerController.isFeaturedReserved),
                 trailerEnabled: surfaceTrailerEnabled,
                 role: surfaceRole
             )
@@ -664,12 +699,14 @@ struct PlozziOSHeroStage<Foreground: View>: View {
 
     private func updateTrailerPlayback() async {
         guard !trailerController.isPlaybackSuppressed else { return }
+        guard surfaceRole != .home || !trailerController.isFeaturedReserved else { return }
         guard isActive, surfaceTrailerEnabled else {
             trailerController.stop(ifShowing: item.id)
             return
         }
         if !trailerController.isShowing(item.id) {
-            trailerController.stop()
+            if surfaceRole == .home { trailerController.stopHero() }
+            else { trailerController.stop() }
         }
         trailerController.claimSurface(surfaceRole, itemID: item.id)
         if surfaceRole == .detail {
@@ -1615,6 +1652,7 @@ private struct PlozziOSStableHomeHeroMetadata: View {
     let ratingPreferences: DetailPageSettings
     let scheduleLine: LocalizedStringResource?
     let logoFallback: HeroLogoFallback?
+    let textSize: HeroTextSize
     @State private var descriptionText: String?
 
     init(
@@ -1624,7 +1662,8 @@ private struct PlozziOSStableHomeHeroMetadata: View {
         hidesRatings: Bool,
         ratingPreferences: DetailPageSettings,
         scheduleLine: LocalizedStringResource?,
-        logoFallback: HeroLogoFallback?
+        logoFallback: HeroLogoFallback?,
+        textSize: HeroTextSize
     ) {
         self.presentation = presentation
         self.displayedArtworkID = displayedArtworkID
@@ -1633,6 +1672,7 @@ private struct PlozziOSStableHomeHeroMetadata: View {
         self.ratingPreferences = ratingPreferences
         self.scheduleLine = scheduleLine
         self.logoFallback = logoFallback
+        self.textSize = textSize
         _descriptionText = State(
             initialValue: HeroContentPolicy.homeDescription(for: presentation)
         )
@@ -1648,7 +1688,8 @@ private struct PlozziOSStableHomeHeroMetadata: View {
             scheduleLine: scheduleLine,
             logoFallback: logoFallback,
             descriptionOverride: .init(text: descriptionText),
-            detailPageSettings: ratingPreferences
+            detailPageSettings: ratingPreferences,
+            textSize: textSize
         )
     }
 }
@@ -1708,8 +1749,10 @@ struct PlozziOSHomeHeroForeground: View {
                 ),
                 ratingPreferences: appModel.settings.hero.settings.ratingPreferences,
                 scheduleLine: scheduleLine,
-                logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item)
+                logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item),
+                textSize: appModel.settings.hero.settings.textSize
             )
+            .environment(\.metadataTextScale, appModel.settings.hero.settings.textSize.scale)
             // The artwork link underneath owns navigation for the whole hero,
             // including its logo and metadata, but not the action row.
             .allowsHitTesting(false)
@@ -1726,10 +1769,15 @@ struct PlozziOSHomeHeroForeground: View {
                     actionButtons(resumeTrailingStyle: .full, wrapsText: true)
                 }
             }
+            .frame(
+                maxWidth: PlozziOSPageLayout.heroTextMaxWidth(for: style),
+                alignment: style == .compactPortrait ? .center : .leading
+            )
             .controlSize(.large)
         }
         // Width fill / alignment now come from the shared placement modifier.
         .multilineTextAlignment(style == .compactPortrait ? .center : .leading)
+        .environment(\.plozziOSHeroLogoSize, appModel.settings.hero.settings.logoSize)
     }
 
     @ViewBuilder
@@ -1844,6 +1892,7 @@ struct PlozziOSDetailHeroForeground: View {
     let selectedVersionID: String?
     let onSelectSource: (String) -> Void
     let onSelectVersion: (String) -> Void
+    var loadVersions: MediaVersionInventoryLoader? = nil
     let presentation: HeroPresentation
     let fallbackPresentation: HeroPresentation
     let style: HeroArtworkStyle
@@ -1926,7 +1975,7 @@ struct PlozziOSDetailHeroForeground: View {
     }
 
     private var hasSourceVersionOptions: Bool {
-        sources.count > 1 || versions.count > 1
+        sources.count > 1 || versions.count > 1 || loadVersions != nil
     }
 
     /// The episode's own 16:9 still, shown above its details on an episode page.
@@ -1987,8 +2036,10 @@ struct PlozziOSDetailHeroForeground: View {
                 logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item),
                 usesCompactDetailLayout: style == .compactPortrait,
                 content: style == .compactPortrait && !presentsEpisodeStill ? .information : .all,
-                detailPageSettings: appModel.settings.detailPage.settings
+                detailPageSettings: appModel.settings.detailPage.settings,
+                textSize: appModel.settings.detailPage.settings.textSize
             )
+            .environment(\.metadataTextScale, appModel.settings.detailPage.settings.textSize.scale)
 
             // Progressive overflow: try every inline layout from "all buttons
             // inline" down to "everything in the … menu", collapsing ONE action
@@ -2055,6 +2106,7 @@ struct PlozziOSDetailHeroForeground: View {
         .playbackSourceMenu(
             state: sourceMenu, sources: sources, selectedSourceID: selectedSourceAccountID,
             versions: versions, selectedVersionID: selectedVersionID,
+            loadVersions: loadVersions,
             onSelectSource: onSelectSource, onSelectVersion: onSelectVersion,
             onPerformAction: performCompactPanelAction
         )
@@ -2062,6 +2114,7 @@ struct PlozziOSDetailHeroForeground: View {
             MediaVersionPicker(
                 versions: versions,
                 selectedVersionID: selectedVersion?.id,
+                loadVersions: loadVersions,
                 onSelect: onSelectVersion
             )
         }
@@ -2430,7 +2483,7 @@ struct PlozziOSDetailHeroForeground: View {
             }
             .pickerStyle(.menu)
         }
-        if versions.count > 1 {
+        if versions.count > 1 || loadVersions != nil {
             Button("Version", systemImage: "film.stack") {
                 isVersionPickerPresented = true
             }
@@ -2527,6 +2580,13 @@ private struct PlozziOSHeroMetadata: View {
     }
 
     @Environment(\.themePalette) private var palette
+    @Environment(\.plozziOSHeroLogoSize) private var logoSize
+    @Environment(\.metadataTextScale) private var textScale
+    @ScaledMetric(relativeTo: .largeTitle) private var titleFontSize: CGFloat = 34
+    @ScaledMetric(relativeTo: .subheadline) private var metadataFontSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .body) private var overviewFontSize: CGFloat = 17
+    @Environment(\.plozzShowsContentRatings) private var showsContentRatings
+    @State private var availableWidth: CGFloat = 0
     let presentation: HeroPresentation
     let style: HeroArtworkStyle
     let mode: Mode
@@ -2558,6 +2618,7 @@ private struct PlozziOSHeroMetadata: View {
     var usesCompactDetailLayout = false
     var content: Content = .all
     var detailPageSettings: DetailPageSettings = .default
+    var textSize: HeroTextSize = .default
 
     struct DescriptionOverride {
         let text: String?
@@ -2584,7 +2645,7 @@ private struct PlozziOSHeroMetadata: View {
             : effectiveGenres
         VStack(
             alignment: style == .compactPortrait ? .center : .leading,
-            spacing: 9
+            spacing: 9 * textScale
         ) {
             if content != .information {
                 if let scheduleLine {
@@ -2614,13 +2675,17 @@ private struct PlozziOSHeroMetadata: View {
                     // which is right when a series hero fronts an episode but wrong
                     // here: the breadcrumb above already names the show.
                     Text(subjectTitle ?? presentation.title)
-                        .font(.largeTitle)
+                        .font(textScale == 1 ? .largeTitle : .system(size: titleFontSize * textScale))
                         .fontWeight(.bold)
                         .foregroundStyle(palette.primaryText)
                         .lineLimit(2)
                         .accessibilityAddTraits(.isHeader)
                 } else {
-                    let logoBox = PlozziOSPageLayout.heroLogoBox(for: style)
+                    let logoBox = PlozziOSPageLayout.heroLogoBox(
+                        for: style, size: logoSize,
+                        availableWidth: availableWidth > 0
+                            ? availableWidth : PlozziOSPageLayout.heroLogoMaxWidth(for: style)
+                    )
                     HeroLogoArtwork(
                         references: presentation.logoReferences,
                         asyncFallbackURL: logoFallback,
@@ -2631,7 +2696,7 @@ private struct PlozziOSHeroMetadata: View {
                         alignment: style == .compactPortrait ? .center : .leading
                     ) {
                         Text(presentation.title)
-                            .font(style == .compactPortrait ? .largeTitle : .largeTitle)
+                            .font(textScale == 1 ? .largeTitle : .system(size: titleFontSize * textScale))
                             .fontWeight(.bold)
                             .foregroundStyle(palette.primaryText)
                             .lineLimit(2)
@@ -2643,13 +2708,13 @@ private struct PlozziOSHeroMetadata: View {
 
             if content != .identity {
                 if effectiveRatingBadge != nil || !contextParts.isEmpty {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 10 * textScale) {
                         if let badge = effectiveRatingBadge {
                             MediaBadgeChip(badge: badge)
                         }
                         if !contextParts.isEmpty {
                             Text(contextParts.joined(separator: "  ·  "))
-                                .font(.subheadline.weight(.medium))
+                                .font(metadataFont.weight(.medium))
                                 .lineLimit(usesCompactDetailLayout ? 2 : 1)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -2662,8 +2727,8 @@ private struct PlozziOSHeroMetadata: View {
                         ExpandableOverviewText(
                             text: descriptionText,
                             title: subjectTitle ?? presentation.title,
-                            lineLimit: 2,
-                            font: .body,
+                            lineLimit: textSize.descriptionLineLimit(base: 2),
+                            font: textScale == 1 ? .body : .system(size: overviewFontSize * textScale),
                             alignment: .center,
                             style: .inline
                         )
@@ -2675,13 +2740,13 @@ private struct PlozziOSHeroMetadata: View {
                                 accent: palette.accent
                             )
                         )
-                        .font(.subheadline)
+                        .font(metadataFont)
                         .plozzForeground(.secondary)
-                        .lineLimit(mode == .home ? 2 : 3)
+                        .lineLimit(textSize.descriptionLineLimit(base: mode == .home ? 2 : 3))
                         .frame(
-                            maxWidth: PlozziOSPageLayout.heroTextMaxWidth(
-                                for: style
-                            ),
+                            maxWidth: mode == .home
+                                ? PlozziOSPageLayout.homeTextMaxWidth(for: style, logoSize: logoSize)
+                                : PlozziOSPageLayout.heroTextMaxWidth(for: style),
                             alignment: style == .compactPortrait
                                 ? .center
                                 : .leading
@@ -2725,10 +2790,18 @@ private struct PlozziOSHeroMetadata: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: style == .compactPortrait ? .center : .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if width > 0 { availableWidth = width }
+        }
     }
 
     private var rootPresentation: HeroPresentation {
         fallbackPresentation ?? presentation
+    }
+
+    private var metadataFont: Font {
+        textScale == 1 ? .subheadline : .system(size: metadataFontSize * textScale)
     }
 
     private var descriptionText: String? {
@@ -2750,19 +2823,20 @@ private struct PlozziOSHeroMetadata: View {
     /// reads identically on both platforms, sized down for a phone.
     @ViewBuilder
     private func scheduleBadge(_ text: LocalizedStringResource) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 10 * textScale, style: .continuous)
         Text(text)
-            .font(.subheadline.weight(.semibold))
+            .font(metadataFont.weight(.semibold))
             .foregroundStyle(palette.primaryText)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12 * textScale)
+            .padding(.vertical, 6 * textScale)
             .background { shape.fill(.regularMaterial) }
-            .overlay { shape.stroke(palette.primaryText.opacity(0.16), lineWidth: 1) }
+            .overlay { shape.stroke(palette.primaryText.opacity(0.16), lineWidth: textScale) }
             .accessibilityLabel(text)
     }
 
     private var effectiveRatingBadge: MediaBadge? {
-        switch mode {
+        guard showsContentRatings else { return nil }
+        return switch mode {
         case .home:
             rootPresentation.ratingBadge
         case .detail:

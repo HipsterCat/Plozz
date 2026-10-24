@@ -19,7 +19,7 @@ public struct SyncDataBreakdown: View {
             SettingsPanel(title: "Sync Data on This Device") {
                 SyncDataBreakdownRows(inventory: inventory, failed: failed)
                 Button("Refresh Breakdown") { refresh += 1 }
-                    .buttonStyle(SettingsFocusButtonStyle())
+                    .plozzActionButton(role: .secondary)
             }
             #else
             SettingsSectionGroup("Sync Data on This Device") {

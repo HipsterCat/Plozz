@@ -20,13 +20,16 @@ public enum CrashDiagnostics {
     /// `false` when reporting is inactive or either event was rejected.
     @MainActor
     @discardableResult
-    public static func send(logText: String, note: String? = nil) -> Bool {
+    public static func send(logText: String, note: String? = nil) async -> Bool {
         #if canImport(Sentry)
+        guard SentrySDK.isEnabled else { return false }
+        let playbackJournal = await PlaybackDiagnosticJournal.shared.report()
         return send(
             logText: logText,
             note: note,
             isEnabled: SentrySDK.isEnabled,
             sourceDiagnostics: { LiveTVSourceDiagnostics.captureReport() },
+            playbackDiagnostics: playbackJournal,
             captureEvent: { event, attachment in
                 SentrySDK.capture(event: event) { scope in
                     scope.addAttachment(attachment)
@@ -46,6 +49,7 @@ public enum CrashDiagnostics {
         note: String?,
         isEnabled: Bool,
         sourceDiagnostics: @MainActor () -> String = { "" },
+        playbackDiagnostics: String = "",
         captureEvent: (Event, Attachment) -> SentryId,
         captureFeedback: (Event) -> SentryId
     ) -> Bool {
@@ -56,6 +60,9 @@ public enum CrashDiagnostics {
         let sourceJournal = sourceDiagnostics()
         if !sourceJournal.isEmpty {
             body += "\n\n--- Persistent Live TV source diagnostics ---\n" + sourceJournal
+        }
+        if !playbackDiagnostics.isEmpty {
+            body += "\n\n--- Structured playback diagnostics ---\n" + playbackDiagnostics
         }
         let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let message = trimmedNote.isEmpty ? "User diagnostics report" : trimmedNote

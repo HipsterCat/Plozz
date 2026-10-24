@@ -25,6 +25,7 @@ public enum PlayerScreenshotHook {
         case subtitleStyle
         case subtitleTracks
         case versions
+        case playback
     }
 
     /// Set by the capture rig when it starts playback; consumed by the controls.
@@ -33,11 +34,11 @@ public enum PlayerScreenshotHook {
     public static var pendingPanel: Panel?
 }
 
-/// The live transport's counterpart: a card tab, or the guide, for the capture
-/// rig and the Live TV fixture to open without a remote. Read once on appear.
+/// The live transport's counterpart: a card, guide, or playback menu for the
+/// capture rig and Live TV fixture to open without a remote. Read once on appear.
 public enum LiveChannelScreenshotHook {
     public enum Surface: String, Sendable {
-        case info, onNow, guide
+        case info, onNow, guide, playback
     }
 
     @MainActor

@@ -31,10 +31,17 @@ private enum HomeLayoutPreviewColors {
 public struct HomeLayoutSwatch: View {
     private let style: HeroStyle
     private let cornerRadius: CGFloat
+    private let logoSize: HeroLogoSize?
+    private let textSize: HeroTextSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(style: HeroStyle, cornerRadius: CGFloat = 16) {
+    public init(
+        style: HeroStyle, cornerRadius: CGFloat = 16, logoSize: HeroLogoSize? = nil, textSize: HeroTextSize = .default
+    ) {
         self.style = style
         self.cornerRadius = cornerRadius
+        self.logoSize = logoSize
+        self.textSize = textSize
     }
 
     private static let screen = CGSize(width: 1920, height: 1080)
@@ -43,7 +50,6 @@ public struct HomeLayoutSwatch: View {
         GeometryReader { geo in
             let scale = min(geo.size.width / Self.screen.width, geo.size.height / Self.screen.height)
             ZStack(alignment: .topLeading) {
-                HomeLayoutPreviewColors.page
                 switch style {
                 case .carousel: spotlight
                 case .followsFocus: immersive
@@ -59,30 +65,24 @@ public struct HomeLayoutSwatch: View {
             )
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: logoSize)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: textSize)
         .accessibilityHidden(true)
     }
 
     // MARK: Fullscreen Hero
 
     private var spotlight: some View {
-        ZStack(alignment: .topLeading) {
-            art
-                .frame(width: 1920, height: 1080)
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white, location: 0.55),
-                            .init(color: .white.opacity(0.6), location: 0.72),
-                            .init(color: .white.opacity(0.2), location: 0.86),
-                            .init(color: .clear, location: 0.98),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            block(144, 608, 500, 48, wordmark: true)
-            block(144, 686, 360, 22)
-            block(144, 732, 280, 18)
+        let scale = CGFloat(textSize.scale)
+        return ZStack(alignment: .topLeading) {
+            HomePreviewBackdrop(style: .carousel, size: Self.screen)
+            if let logoSize {
+                wordmark(size: logoSize, baseline: 656)
+            } else {
+                block(144, 608, 500, 48, wordmark: true)
+            }
+            block(144, 686, 360 * scale, 22 * scale)
+            block(144, 686 + 22 * scale + 24, 280 * scale, 18 * scale)
             // Play, then the round Watchlist, More Info and Next actions.
             Capsule().fill(Color.white).frame(width: 168, height: 74).offset(x: 140, y: 782)
             ForEach(0..<3, id: \.self) { index in
@@ -107,34 +107,17 @@ public struct HomeLayoutSwatch: View {
     // MARK: Showcase
 
     private var immersive: some View {
-        ZStack(alignment: .topLeading) {
-            // Two thirds of the screen at a backdrop's shape, anchored right, with
-            // short feathers into the page on the left and behind the rows below.
-            art
-                .frame(width: 1280, height: 720)
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .white.opacity(0.6), location: 0.18),
-                            .init(color: .white, location: 0.3),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .mask(
-                        LinearGradient(
-                            stops: [.init(color: .white, location: 0.7), .init(color: .clear, location: 1)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                )
-                .offset(x: 640)
-            block(144, 160, 420, 96, wordmark: true)
-            block(144, 282, 300, 22)
-            block(144, 326, 640, 18)
-            block(144, 358, 480, 18)
+        let scale = CGFloat(textSize.scale)
+        return ZStack(alignment: .topLeading) {
+            HomePreviewBackdrop(style: .followsFocus, size: Self.screen)
+            if let logoSize {
+                wordmark(size: logoSize, baseline: 256)
+            } else {
+                block(144, 160, 420, 96, wordmark: true)
+            }
+            block(144, 282, 300 * scale, 22 * scale)
+            block(144, 282 + 22 * scale + 22, 640 * scale, 18 * scale)
+            block(144, 282 + 40 * scale + 36, 480 * scale, 18 * scale)
             block(144, 560, 280, 30)
             cards(y: 640, height: 270, focusedFirst: true)
             block(144, 976, 200, 30)
@@ -144,9 +127,97 @@ public struct HomeLayoutSwatch: View {
 
     // MARK: Shared
 
-    /// A stand-in picture — sky, sun and two ridges — so the art reads as a
-    /// picture at any size rather than as a wash of colour.
-    private var art: some View {
+    private func wordmark(size: HeroLogoSize, baseline: CGFloat) -> some View {
+        let wordmark = HeroLogoPreviewWordmark(size: size, layout: style == .followsFocus ? .showcase : .television)
+        return wordmark.offset(x: 144, y: baseline - wordmark.fittedSize.height)
+    }
+
+    /// A text stand-in: a wordmark or a line of copy at screen coordinates.
+    private func block(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat, wordmark: Bool = false) -> some View {
+        RoundedRectangle(cornerRadius: height * (wordmark ? 0.22 : 0.5), style: .continuous)
+            .fill(wordmark ? HomeLayoutPreviewColors.wordmark : HomeLayoutPreviewColors.text)
+            .frame(width: width, height: height)
+            .offset(x: x, y: y)
+    }
+
+    /// Continue Watching's landscape cards along a row, running off the right edge.
+    private func cards(y: CGFloat, height: CGFloat, focusedFirst: Bool = false) -> some View {
+        let width = height * 16 / 9
+        return ZStack(alignment: .topLeading) {
+            ForEach(0..<4, id: \.self) { index in
+                let focused = focusedFirst && index == 0
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [HomeLayoutPreviewColors.tileTop, HomeLayoutPreviewColors.tileBottom],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .strokeBorder(focused ? Color.white : .clear, lineWidth: 8)
+                    )
+                    .frame(width: width, height: height)
+                    .scaleEffect(focused ? 1.06 : 1)
+                    .offset(x: 150 + CGFloat(index) * (width + 44), y: y)
+            }
+        }
+    }
+}
+
+/// Keeps artwork coverage and edge fades identical across both Settings previews.
+struct HomePreviewBackdrop: View {
+    let style: HeroStyle
+    let size: CGSize
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            HomeLayoutPreviewColors.page
+            switch style {
+            case .carousel:
+                HomePreviewArtwork()
+                    .frame(width: size.width, height: size.height)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white, location: 0.55),
+                                .init(color: .white.opacity(0.6), location: 0.72),
+                                .init(color: .white.opacity(0.2), location: 0.86),
+                                .init(color: .clear, location: 0.98),
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+            case .followsFocus:
+                HomePreviewArtwork()
+                    .frame(width: size.width * 2 / 3, height: size.width * 2 / 3 * 9 / 16)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .white.opacity(0.6), location: 0.18),
+                                .init(color: .white, location: 0.3),
+                            ],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .mask(
+                            LinearGradient(
+                                stops: [.init(color: .white, location: 0.7), .init(color: .clear, location: 1)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    )
+                    .offset(x: size.width / 3)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+}
+
+/// Local scenery shared by Home layout and logo-size previews.
+struct HomePreviewArtwork: View {
+    var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
@@ -182,39 +253,6 @@ public struct HomeLayoutSwatch: View {
                     path.closeSubpath()
                 }
                 .fill(HomeLayoutPreviewColors.artBottom)
-            }
-        }
-    }
-
-    /// A text stand-in: a wordmark or a line of copy at screen coordinates.
-    private func block(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat, wordmark: Bool = false) -> some View {
-        RoundedRectangle(cornerRadius: height * (wordmark ? 0.22 : 0.5), style: .continuous)
-            .fill(wordmark ? HomeLayoutPreviewColors.wordmark : HomeLayoutPreviewColors.text)
-            .frame(width: width, height: height)
-            .offset(x: x, y: y)
-    }
-
-    /// Continue Watching's landscape cards along a row, running off the right edge.
-    private func cards(y: CGFloat, height: CGFloat, focusedFirst: Bool = false) -> some View {
-        let width = height * 16 / 9
-        return ZStack(alignment: .topLeading) {
-            ForEach(0..<4, id: \.self) { index in
-                let focused = focusedFirst && index == 0
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [HomeLayoutPreviewColors.tileTop, HomeLayoutPreviewColors.tileBottom],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .strokeBorder(focused ? Color.white : .clear, lineWidth: 8)
-                    )
-                    .frame(width: width, height: height)
-                    .scaleEffect(focused ? 1.06 : 1)
-                    .offset(x: 150 + CGFloat(index) * (width + 44), y: y)
             }
         }
     }

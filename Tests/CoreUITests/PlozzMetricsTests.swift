@@ -96,7 +96,8 @@ final class PlozzMetricsTests: XCTestCase {
                                    CGSize(width: metrics.landscapeWidth, height: metrics.landscapeHeight))
                     for details in ContinueWatchingPlaybackDetails.allCases {
                         XCTAssertEqual(metrics.artworkSize(for: .poster, showsSeriesArtwork: true, playbackDetails: details),
-                                       CGSize(width: metrics.posterWidth, height: metrics.posterWidth / details.cardAspectRatio))
+                                       CGSize(width: metrics.posterWidth, height: metrics.posterHeight))
+                        XCTAssertEqual(details.cardAspectRatio, 2.0 / 3.0)
                         XCTAssertEqual(metrics.artworkSize(for: .landscape, showsSeriesArtwork: true, playbackDetails: details),
                                        CGSize(width: metrics.continueWatchingWidth,
                                               height: (metrics.continueWatchingWidth / ContinueWatchingCardShape.aspectRatio).rounded()))

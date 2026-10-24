@@ -23,7 +23,7 @@ struct LiveTVIdentityReviewView: View {
                         } label: {
                             Text("Restore \(imports.identityCandidateName(previous))")
                         }
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .buttonStyle(SettingsFormButtonStyle())
                         .disabled(saving)
                     }
                 }

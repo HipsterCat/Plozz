@@ -170,8 +170,11 @@ struct LiveTVMultiviewFavoritesView: View {
         if model.preferencesIssue != nil {
             SettingsSectionGroup {
                 Text("Multiview favorites could not be loaded or saved. Retry to keep your changes.")
-                Button("Retry", action: model.retryPreferences)
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                HStack {
+                    Button("Retry", action: model.retryPreferences)
+                        .plozzActionButton(role: .secondary)
+                }
+                .accessibilityElement(children: .contain)
             }
         }
     }

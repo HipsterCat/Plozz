@@ -47,6 +47,7 @@ struct HeroCollectionPickerSource: Identifiable, Hashable {
     let accountName: String // l10n:content — server-provided account name
     let serverName: String // l10n:content — server name
     let libraryTitle: String? // l10n:content — server-provided library name
+    var providerKind: ProviderKind? = nil
 
     static func available(libraries: [AggregatedLibrary], accounts: [ResolvedAccount]) -> [Self] {
         accounts.flatMap { account in
@@ -56,7 +57,8 @@ struct HeroCollectionPickerSource: Identifiable, Hashable {
                 sources.append(Self(
                     id: ID(accountID: account.account.id, libraryID: nil),
                     accountName: account.provider.session.userName,
-                    serverName: account.provider.session.server.name, libraryTitle: nil
+                    serverName: account.provider.session.server.name, libraryTitle: nil,
+                    providerKind: account.account.server.provider
                 ))
             }
             if capabilities.contains(.libraryCollections) {
@@ -64,7 +66,8 @@ struct HeroCollectionPickerSource: Identifiable, Hashable {
                     $0.accountID == account.account.id && ($0.library.kind == .movie || $0.library.kind == .series)
                 }.map {
                     Self(id: ID(accountID: $0.accountID, libraryID: $0.library.id),
-                         accountName: $0.accountName, serverName: $0.serverName, libraryTitle: $0.library.title)
+                         accountName: $0.accountName, serverName: $0.serverName, libraryTitle: $0.library.title,
+                         providerKind: account.account.server.provider)
                 }
             }
             return sources

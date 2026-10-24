@@ -211,7 +211,7 @@ actor SiloClient {
         case 404: throw AppError.notFound
         case 409, 412: throw AppError.conflict
         case 429:
-            throw AppError.rateLimited(retryAfter: result.1.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init))
+            throw AppError.rateLimited(retryAfter: HTTPDate.retryAfter(result.1.value(forHTTPHeaderField: "Retry-After")))
         default: throw AppError.invalidResponse
         }
         try Task.checkCancellation()

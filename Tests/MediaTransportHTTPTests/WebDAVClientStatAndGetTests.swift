@@ -263,8 +263,8 @@ final class WebDAVClientStatAndGetTests: XCTestCase {
         StubURLProtocol.queue(
             StubResponse(
                 statusCode: 206,
-                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-0/1000"],
-                body: Data([0x00])
+                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-1/1000"],
+                body: Data([0x00, 0x00])
             ),
             for: offRoot
         )

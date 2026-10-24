@@ -78,6 +78,7 @@ public struct ParentalPIN: Codable, Hashable, Sendable {
 /// observable property also stops each gate widening this shell's observable
 /// fan-out by two.
 public struct ParentalSwitchRequest: Equatable, Sendable {
+    public let id = UUID()
     public var target: Profile
     public var error: LocalizedStringResource?
 

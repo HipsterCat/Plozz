@@ -29,11 +29,11 @@ final class WebDAVMediaDeliveryTests: XCTestCase {
     private func queueProbe(at url: URL) {
         StubURLProtocol.queue(
             StubResponse(
-                statusCode: 206, headers: ["ETag": "\"delivery-1\"", "Content-Range": "bytes 0-0/1000"],
-                body: Data([0]),
+                statusCode: 206, headers: ["ETag": "\"delivery-1\"", "Content-Range": "bytes 0-1/1000"],
+                body: Data([0, 0]),
                 onRequest: {
                     XCTAssertEqual($0.httpMethod, "GET")
-                    XCTAssertEqual($0.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+                    XCTAssertEqual($0.value(forHTTPHeaderField: "Range"), "bytes=0-1")
                     XCTAssertEqual($0.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
                     XCTAssertNil($0.value(forHTTPHeaderField: "Authorization"))
                     XCTAssertNil($0.value(forHTTPHeaderField: "Cookie"))
@@ -97,11 +97,11 @@ final class WebDAVMediaDeliveryTests: XCTestCase {
         StubURLProtocol.queue(redirect: StubRedirect(location: final), for: source)
         StubURLProtocol.queue(
             StubResponse(
-                statusCode: 206, headers: ["ETag": "\"same\"", "Content-Range": "bytes 0-0/1000"],
-                body: Data([0]),
+                statusCode: 206, headers: ["ETag": "\"same\"", "Content-Range": "bytes 0-1/1000"],
+                body: Data([0, 0]),
                 onRequest: {
                     XCTAssertNotNil($0.value(forHTTPHeaderField: "Authorization"))
-                    XCTAssertEqual($0.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+                    XCTAssertEqual($0.value(forHTTPHeaderField: "Range"), "bytes=0-1")
                 }
             ), for: final
         )

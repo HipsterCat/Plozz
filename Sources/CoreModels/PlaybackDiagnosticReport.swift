@@ -2,7 +2,7 @@ import Foundation
 
 /// A local, user-shared report. Only closed-vocabulary facts are exported.
 public enum PlaybackDiagnosticReport: Equatable, Sendable {
-    public enum Stage: String, Sendable { case preparation, opening, playback }
+    public enum Stage: String, Codable, Sendable { case preparation, opening, playback }
 
     case setup(IPTVSetupDiagnostic)
     case playback(LiveChannelFailureReport)

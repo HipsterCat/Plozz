@@ -78,6 +78,7 @@ public final class LiveTVPlaybackCoordinator {
         let channel: LiveTVPrototypeChannel
         let reference: LiveTVServerChannelReference?
         let origin: LiveTVGuideRowID?
+        let expandsPlayer: Bool
     }
 
     public init(
@@ -150,7 +151,8 @@ public final class LiveTVPlaybackCoordinator {
     @discardableResult
     public func watch(
         _ channelID: String,
-        origin: LiveTVGuideRowID? = nil
+        origin: LiveTVGuideRowID? = nil,
+        expandsPlayer: Bool = true
     ) -> Task<Bool, Never> {
         cancelWatch()
         guard isActive, isInteractionActive, let channel = model.channel(id: channelID) else {
@@ -159,7 +161,7 @@ public final class LiveTVPlaybackCoordinator {
         cancelPreviewPreparation()
         suppressedPreviewChannelID = nil
         return beginWatch(Target(
-            channel: channel, reference: reference(channelID), origin: origin
+            channel: channel, reference: reference(channelID), origin: origin, expandsPlayer: expandsPlayer
         ))
     }
 
@@ -389,7 +391,9 @@ public final class LiveTVPlaybackCoordinator {
                     target.channel, serverReference: target.reference, isAuthorized: authorized,
                     commit: { [weak self] in
                         guard accepts(), let self else { return false }
-                        self.preview.watch(target.channel.id, origin: target.origin)
+                        self.preview.watch(
+                            target.channel.id, origin: target.origin, expandsPlayer: target.expandsPlayer
+                        )
                         guard !self.model.tuneFailed else {
                             self.model.clearTuneFailure()
                             return false

@@ -38,6 +38,8 @@ public final class AccountsProvidersModel {
     /// from the active profile (falling back to the household-global active set
     /// for the default profile).
     public private(set) var activeAccountIDs: Set<String> = []
+    /// Snapshot on reload so rendering picker badges never reads the Keychain.
+    private var householdActiveAccountIDs: [String] = []
 
     /// Whether the active profile has EXPLICITLY chosen to watch nothing.
     ///
@@ -101,6 +103,25 @@ public final class AccountsProvidersModel {
 
     /// This device's stable client identifier.
     public var deviceID: String { accountStore.deviceID() }
+
+    public func makeAccountReauthentication(
+        account: Account, isAuthorized: @escaping () -> Bool, onComplete: @escaping () -> Void
+    ) -> AccountReauthenticationModel {
+        let profile = AutomaticSignInStore.Session.ProfileAccess(profilesModel.activeProfile)
+        return AccountReauthenticationModel(
+            account: account, deviceID: deviceID, store: accountStore,
+            isAuthorized: { [weak self] in
+                guard let self else { return false }
+                return profile == .init(self.profilesModel.activeProfile) && isAuthorized()
+            },
+            onComplete: { [weak self] in
+                guard let self else { return }
+                self.registry.invalidate(accountID: account.id)
+                self.reloadAccounts()
+                onComplete()
+            }
+        )
+    }
 
     private var accountSelectionIsUnavailable: Bool {
         profilesModel.unconfirmedAccountSelectionProfileIDs.contains(profilesModel.activeProfileID)
@@ -308,6 +329,15 @@ public final class AccountsProvidersModel {
         return [resolvedAccount(account, provider: provider)]
     }
 
+    /// Configured sources for navigation, not authorization to access their data.
+    /// Pending credentials must not turn a media profile into a Live-TV-only one.
+    public var navigationAccounts: [Account] {
+        guard !watchesNothingByChoice, !accountSelectionIsUnavailable else { return [] }
+        let active = accounts.filter { activeAccountIDs.contains($0.id) }
+        if !active.isEmpty { return active }
+        return primaryActiveAccount.map { [$0] } ?? []
+    }
+
     private func resolvedAccount(_ account: Account, provider: any MediaProvider) -> ResolvedAccount {
         ResolvedAccount(
             account: account, provider: provider,
@@ -363,12 +393,22 @@ public final class AccountsProvidersModel {
     }
 
     /// The active account ids for a specific profile, filtered to accounts that
-    /// are still signed in, falling back to the household-global active set.
+    /// are still signed in. An unset or entirely stale nonempty selection falls
+    /// back to the household-global set; an explicit empty selection stays empty.
     public func activeAccountIDs(forProfile id: String) -> [String] {
         let known = Set(accounts.map(\.id))
-        return profilesModel
-            .activeAccountIDs(for: id, fallback: accountStore.activeAccountIDs())
-            .filter { known.contains($0) }
+        if let stored = profilesModel.storedActiveAccountIDs(for: id) {
+            let valid = stored.filter { known.contains($0) }
+            if !valid.isEmpty || stored.isEmpty { return valid }
+        }
+        return householdActiveAccountIDs.filter { known.contains($0) }
+    }
+
+    public func profileShowsPINLock(_ profile: Profile) -> Bool {
+        let plexIDs = Set(accounts.filter { $0.server.provider == .plex }.map(\.id))
+        return profile.showsPINLock(
+            activePlexAccountIDs: Set(activeAccountIDs(forProfile: profile.id)).intersection(plexIDs)
+        )
     }
 
     /// Explicitly adding IPTV includes it in this viewer's selection, not just the household fallback.
@@ -414,29 +454,8 @@ public final class AccountsProvidersModel {
         }
         onAccountsInvalidated()
         accounts = updated
-        let known = Set(accounts.map(\.id))
-        // The household-global active set is the fallback for a profile that has
-        // never chosen a subset (default profile / upgrade path).
-        let globalActive = accountStore.activeAccountIDs()
-        let resolved: Set<String>
-        if let stored = profilesModel.storedActiveAccountIDs(for: profilesModel.activeProfileID) {
-            // The profile made an *explicit* choice. Honor it exactly — including
-            // an intentional empty set ("watch nothing"), which is what turning
-            // the last server off produces and must not be silently re-expanded
-            // to every account (that's what made the master server toggle appear
-            // to do nothing). Only fall back if every chosen account has since
-            // gone stale (e.g. the servers were signed out household-wide), so a
-            // profile isn't left permanently blank by a removal it didn't make.
-            let valid = Set(stored.filter { known.contains($0) })
-            if valid.isEmpty && !stored.isEmpty {
-                resolved = Set(globalActive.filter { known.contains($0) })
-            } else {
-                resolved = valid
-            }
-        } else {
-            // Never chose → default to the household-global active set.
-            resolved = Set(globalActive.filter { known.contains($0) })
-        }
+        householdActiveAccountIDs = accountStore.activeAccountIDs()
+        let resolved = Set(activeAccountIDs(forProfile: profilesModel.activeProfileID))
         activeAccountIDs = resolved
         // Only an explicit, still-honoured empty selection counts as a choice:
         // the stale-fallback branch above has already re-expanded the other case.

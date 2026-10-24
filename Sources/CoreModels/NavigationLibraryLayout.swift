@@ -181,22 +181,7 @@ public struct NavigationLibraryLayout: Codable, Equatable, Sendable {
                 enabled.append(Self.settingsKey)
             }
         }
-        let edited = enabled + disabled
-        // Splice the edited (live) keys back into the persisted order, keeping any
-        // remembered key that isn't currently available exactly where it was.
-        var result: [String] = []
-        var editedIterator = edited.makeIterator()
-        for key in order {
-            if availableSet.contains(key) {
-                if let next = editedIterator.next() { result.append(next) }
-            } else {
-                result.append(key)
-            }
-        }
-        while let next = editedIterator.next() { result.append(next) }
-
-        var seen: Set<String> = []
-        order = result.filter { seen.insert($0).inserted }
+        order = OrderedVisibilityList.mergingOrder(enabled + disabled, into: order, available: available)
         let changed = Set(previous.enabled).symmetricDifference(Set(enabled))
         for key in changed.intersection(availableSet).subtracting(requiredEnabled) {
             if enabled.contains(key) {

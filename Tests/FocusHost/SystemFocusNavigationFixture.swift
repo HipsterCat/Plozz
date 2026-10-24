@@ -1,5 +1,7 @@
 import CoreModels
 import PlozzCoreUI
+import FeatureHomeCore
+import HeroUI
 import SwiftUI
 import UIKit
 
@@ -9,6 +11,12 @@ struct SystemFocusNavigationFixture: View {
     @State private var rows: [[MediaItem]] = []
     @State private var receded = false
     @State private var selection = ""
+    @State private var featuredController = HeroTrailerController()
+    @State private var featuredCoordinator = FeaturedTrailerCoordinator()
+
+    private var featured: Bool {
+        ProcessInfo.processInfo.arguments.contains("--featured-rails")
+    }
 
     private var style: CardStyle {
         ProcessInfo.processInfo.arguments.contains("--borderless") ? .borderless : .framed
@@ -32,11 +40,21 @@ struct SystemFocusNavigationFixture: View {
 
                     LazyVStack(spacing: 60) {
                         ForEach(rows.indices, id: \.self) { row in
-                            MediaRowView(
-                                title: Text(row == 0 ? "Continue Watching" : "Row \(row)"),
-                                items: rows[row], style: .landscape,
-                                playsOnSelect: row == 0
-                            ) { selection = $0.title }
+                            if featured {
+                                FeaturedMediaRow(
+                                    title: Text("Row \(row)"), items: rows[row],
+                                    scope: ObjectIdentifier(featuredController),
+                                    coordinator: featuredCoordinator, controller: featuredController,
+                                    settings: .default, resolver: { _ in nil }, isActive: true,
+                                    onSeeAll: {}, onSelect: { selection = $0.title }
+                                )
+                            } else {
+                                MediaRowView(
+                                    title: Text(row == 0 ? "Continue Watching" : "Row \(row)"),
+                                    items: rows[row], style: .landscape,
+                                    playsOnSelect: row == 0
+                                ) { selection = $0.title }
+                            }
                         }
                     }
                     .padding(.bottom, 100)
@@ -58,13 +76,29 @@ struct SystemFocusNavigationFixture: View {
         }
         .environment(\.plozzCardFocusStyle, .system)
         .environment(\.plozzCardStyle, style)
+        .environment(\.plozzNavigationContentInset, featured ? 64 : 0)
+        .environment(\.plozzPinnedSidebarActive, featured)
         .overlay(alignment: .bottomTrailing) {
-            Text(rows.isEmpty ? "Loading navigation fixture" : "Navigation fixture ready")
-                .font(.caption2)
-                .accessibilityIdentifier("navigation-fixture-status")
-                .allowsHitTesting(false)
+            VStack(alignment: .trailing) {
+                Text(rows.isEmpty ? "Loading navigation fixture" : "Navigation fixture ready")
+                    .accessibilityIdentifier("navigation-fixture-status")
+                if featured {
+                    Text("Preview candidate: \(featuredCandidateTitle)")
+                        .accessibilityIdentifier("featured-preview-status")
+                }
+                if !selection.isEmpty {
+                    Text("Selected \(selection)")
+                }
+            }
+            .font(.caption2)
+            .allowsHitTesting(false)
         }
         .task { await loadRows() }
+        .onDisappear { featuredCoordinator.stop() }
+    }
+
+    private var featuredCandidateTitle: String {
+        rows.joined().first { $0.stablePresentationID == featuredCoordinator.activeItemID }?.title ?? "None"
     }
 
     @MainActor
@@ -74,9 +108,10 @@ struct SystemFocusNavigationFixture: View {
         var settings = store.load()
         settings.preferOnlineArtwork = false
         store.save(settings)
-        let url = URL(string: "https://navigation-fixture.example.test/artwork.png")!
+        let bright = ProcessInfo.processInfo.arguments.contains("--white-artwork")
+        let url = URL(string: "https://navigation-fixture.example.test/\(bright ? "white" : "blue").png")!
         let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 180)).image {
-            UIColor.systemBlue.setFill()
+            (bright ? UIColor.white : .systemBlue).setFill()
             $0.fill(CGRect(x: 0, y: 0, width: 320, height: 180))
         }
         let data = image.pngData()!
@@ -100,7 +135,7 @@ struct SystemFocusNavigationFixture: View {
             (0..<8).map { index in
                 MediaItem(
                     id: "navigation-\(row)-\(index)", title: "Row \(row) Item \(index)",
-                    kind: .movie, posterURL: url, backdropURL: url
+                    kind: .movie, posterURL: url, backdropURL: url, allowsTitleBasedMetadataMatching: false
                 )
             }
         }

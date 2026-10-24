@@ -40,6 +40,7 @@ public struct SettingsPageScroll<Content: View>: View {
 }
 
 public struct SettingsPageSurface: ViewModifier {
+    @Environment(\.themePalette) private var palette
     private let titleDisplayMode: ToolbarTitleDisplayMode
     private let horizontalInset: CGFloat
 
@@ -50,6 +51,7 @@ public struct SettingsPageSurface: ViewModifier {
 
     public func body(content: Content) -> some View {
         content
+            .tint(palette.primaryText)
             .toggleStyle(SettingsSwitchToggleStyle())
             .listStyle(.plain)
             .scrollContentBackground(.hidden)

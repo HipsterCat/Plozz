@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 40 40" role="img" aria-labelledby="title description">
+  <title id="title">Plozz OLED app icon concept</title>
+  <desc id="description">Saved design exploration, not the shipping app icon. The original Plozz outer border, screen border, antenna, eyes, and smile in white on pure black, with no body or screen fill.</desc>
+  <rect width="40" height="40" fill="#000"/>
+  <g transform="translate(4 4)" fill="#fff" shape-rendering="crispEdges">
+    <path d="M5 29h22v1H5zm22-1h1v1h-1zm1-1h1v1h-1zm1-2h1v2h-1zm0-16h1v16h-1zm-1-1h1v1h-1zm-1-1h1v1h-1zm-2-1h2v1h-2zM7 6h18v1H7zM5 6h2v1H5zM4 7h1v1H4zm9-2h1v1h-1zm1-1h1v1h-1zm1-1h1v1h-1zm1-1h1v1h-1zm1 0h1v1h-1zm0 1h1v1h-1zm-1 1h1v1h-1zm-1 1h1v1h-1zm-4 0h1v1h-1zm-1-1h1v1h-1zM9 3h1v1H9z"/>
+    <path d="M10 3h1v1h-1zm1 1h1v1h-1zm1 1h1v1h-1zm2 0h1v1h-1zm1-1h1v1h-1zm1-1h1v1h-1z"/>
+    <path d="M9 2h1v1H9zm3 2h1v1h-1zm-1-1h1v1h-1zm-1-1h1v1h-1zM3 8h1v1H3zM2 9h1v16H2zm0 16h1v2H2zm1 2h1v1H3zm1 1h1v1H4z"/>
+    <path d="M5 11h1v14H5zm21 0h1v14h-1zM6 25h1v1H6zm19 0h1v1h-1zM6 10h1v1H6zm19 0h1v1h-1zM7 26h18v1H7zM7 9h18v1H7z"/>
+    <path d="M12 14h3v1h-3zm5 0h3v1h-3zm-4 1h2v1h-2zm5 0h2v1h-2zm-6 1h2v1h-2zm5 0h2v1h-2zm-5 1h3v1h-3zm5 0h3v1h-3zm-4 3h1v1h-1zm5 0h1v1h-1zm-4 1h4v1h-4z"/>
+  </g>
+</svg>

@@ -10,11 +10,17 @@ import MediaTransportCore
 /// Continue Watching feed (`continueWatching`). The `ShareLibraryStore` never
 /// touches the network for id → item reconstruction, so this needs no SMB server.
 final class ShareProviderWatchTests: XCTestCase {
-    private func makeTempDir() -> URL {
+    private func makeCatalog() throws -> ShareCatalogStore {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("plozz-share-provider-tests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let catalog = ShareCatalogStore(accountKey: "watch-tests", directory: dir)
+        addTeardownBlock {
+            let closed = await catalog.prepareForSuspension(revision: .max)
+            XCTAssertTrue(closed)
+            if closed { try FileManager.default.removeItem(at: dir) }
+        }
+        return catalog
     }
 
     private func makeDurableStore() throws -> DurableLocalStateStore {
@@ -146,6 +152,7 @@ final class ShareProviderWatchTests: XCTestCase {
 
     func testAccountsOnSameEndpointKeepIndependentWatchState() async throws {
         let durableStore = try makeDurableStore()
+        let catalog = try makeCatalog()
         let session = makeSession()
         let first = ShareProvider(
             session: session,
@@ -154,7 +161,8 @@ final class ShareProviderWatchTests: XCTestCase {
                 profileID: "profile",
                 profileNamespace: nil
             ),
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         let second = ShareProvider(
             session: session,
@@ -163,7 +171,8 @@ final class ShareProviderWatchTests: XCTestCase {
                 profileID: "profile",
                 profileNamespace: nil
             ),
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
 
         try await first.reportPlayback(
@@ -184,6 +193,7 @@ final class ShareProviderWatchTests: XCTestCase {
 
     func testProfilesOnSameAccountKeepIndependentWatchState() async throws {
         let durableStore = try makeDurableStore()
+        let catalog = try makeCatalog()
         let session = makeSession()
         let first = ShareProvider(
             session: session,
@@ -192,7 +202,8 @@ final class ShareProviderWatchTests: XCTestCase {
                 profileID: "profile-a",
                 profileNamespace: "household"
             ),
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         let second = ShareProvider(
             session: session,
@@ -201,7 +212,8 @@ final class ShareProviderWatchTests: XCTestCase {
                 profileID: "profile-b",
                 profileNamespace: "household"
             ),
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
 
         try await first.reportPlayback(
@@ -222,6 +234,7 @@ final class ShareProviderWatchTests: XCTestCase {
 
     func testUnlimitedContinueWatchingKeepsMoreThanSixtyOldTitles() async throws {
         let durableStore = try makeDurableStore()
+        let catalog = try makeCatalog()
         let session = makeSession()
         let context = LocalMediaContext(
             accountID: session.server.id,
@@ -244,7 +257,8 @@ final class ShareProviderWatchTests: XCTestCase {
         let provider = ShareProvider(
             session: session,
             localMediaContext: context,
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         let all = try await provider.continueWatching(limit: ContinueWatchingPolicy.default.rowLimit)
         XCTAssertEqual(all.count, 125)
@@ -257,13 +271,15 @@ final class ShareProviderWatchTests: XCTestCase {
 
     func testProgressTickPersistsAcrossRelaunch() async throws {
         let durableStore = try makeDurableStore()
+        let catalog = try makeCatalog()
         let session = makeSession()
         let itemID = "f:TV Shows/The Show/Season 01/S01E02.mkv"
 
         // Live playback: the engine progress timer fires ~every 10s.
         let live = ShareProvider(
             session: session,
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         try await live.reportPlayback(
             PlaybackProgress(itemID: itemID, playSessionID: "s1", positionSeconds: 636, isPaused: false),
@@ -273,7 +289,8 @@ final class ShareProviderWatchTests: XCTestCase {
         // Relaunch: a fresh provider is built for the same account, memory empty.
         let afterRestart = ShareProvider(
             session: session,
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
 
         // 1) Detail page shows a Resume point.
@@ -288,12 +305,14 @@ final class ShareProviderWatchTests: XCTestCase {
 
     func testPauseAlsoPersists() async throws {
         let durableStore = try makeDurableStore()
+        let catalog = try makeCatalog()
         let session = makeSession()
         let itemID = "f:Movies/A Film (2022).mkv"
 
         let live = ShareProvider(
             session: session,
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         try await live.reportPlayback(
             PlaybackProgress(itemID: itemID, playSessionID: "s2", positionSeconds: 120, isPaused: true),
@@ -302,7 +321,8 @@ final class ShareProviderWatchTests: XCTestCase {
 
         let afterRestart = ShareProvider(
             session: session,
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         let cw = try await afterRestart.continueWatching(limit: 20)
         XCTAssertEqual(cw.map(\.id), [itemID], "a paused item must be resumable after relaunch")
@@ -313,12 +333,14 @@ final class ShareProviderWatchTests: XCTestCase {
     /// bar) — and it must survive a relaunch.
     func testProgressWithDurationSurfacesPlayedPercentage() async throws {
         let durableStore = try makeDurableStore()
+        let catalog = try makeCatalog()
         let session = makeSession()
         let itemID = "f:Movies/Timed Film (2021).mkv"
 
         let live = ShareProvider(
             session: session,
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         try await live.reportPlayback(
             PlaybackProgress(itemID: itemID, playSessionID: "s3", positionSeconds: 600, isPaused: false, durationSeconds: 6000),
@@ -327,7 +349,8 @@ final class ShareProviderWatchTests: XCTestCase {
 
         let afterRestart = ShareProvider(
             session: session,
-            durableLocalStateStore: durableStore
+            durableLocalStateStore: durableStore,
+            catalogStore: catalog
         )
         let cw = try await afterRestart.continueWatching(limit: 20)
         XCTAssertEqual(cw.map(\.id), [itemID])
@@ -337,7 +360,7 @@ final class ShareProviderWatchTests: XCTestCase {
 
     func testGroupedMovieRestoresLegacyFileWatchStateOnGridAndDetail() async throws {
         let durableStore = try makeDurableStore()
-        let catalog = ShareCatalogStore(accountKey: "legacy-watch", directory: makeTempDir())
+        let catalog = try makeCatalog()
         let session = makeSession()
         let relPath = "Movies/Legacy Film (2020) 1080p.mkv"
         let movieKey = ShareCatalogID.movieKey(fromTitle: "Legacy Film", year: 2020)

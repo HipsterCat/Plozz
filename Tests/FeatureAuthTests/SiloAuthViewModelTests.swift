@@ -386,9 +386,28 @@ final class SiloAuthViewModelTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    func testRejectedRecoveryRetainsTemporaryLoginForCancellationCleanup() async throws {
+        let http = SiloOnboardingHTTP()
+        let model = makeModel(http, verificationOnly: true) { _ in throw AppError.conflict }
+        defer { model.cancel() }
+        model.start()
+        try await wait { if case .profiles = model.phase { return true }; return false }
+        guard case let .profiles(profiles) = model.phase,
+              let open = profiles.first(where: { !$0.has_pin }) else { return XCTFail("Missing open profile") }
+        model.select(open)
+        try await wait { if case .error = model.phase { return true }; return false }
+        model.cancel()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while await http.count("/api/v2/auth/logout") == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let count = await http.count("/api/v2/auth/logout")
+        XCTAssertEqual(count, 1, "A rejected login must not leak a newly paired Silo session.")
+    }
+
     private func makeModel(_ http: SiloOnboardingHTTP, verificationOnly: Bool = false,
                            diagnostics: SiloSetupDiagnostics = SiloSetupDiagnostics(),
-                           completed: @escaping (UserSession) -> Void = { _ in XCTFail("Unexpected sign-in") }) -> SiloAuthViewModel {
+                           completed: @escaping (UserSession) throws -> Void = { _ in XCTFail("Unexpected sign-in") }) -> SiloAuthViewModel {
         let url = URL(string: "https://silo.test")!
         return SiloAuthViewModel(
             server: MediaServer(id: "silo", name: "Silo", baseURL: url, provider: .silo),

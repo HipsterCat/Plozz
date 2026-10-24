@@ -34,6 +34,7 @@ public struct PlozziOSRootView: View {
     /// Owned here rather than in the tab shell so `receivePairingURL` can see
     /// whether it is up before asking for another sheet.
     @State private var showingProfileSwitcher = false
+    @State private var isSelectingLaunchProfile = false
     /// A pairing link that arrived while a sheet was open — see
     /// `receivePairingURL`.
     @State private var deferredPairingURL: URL?
@@ -60,35 +61,49 @@ public struct PlozziOSRootView: View {
     /// Drives the unrestricted receive/pairing flow launched from the detected-setup
     /// page (brings the whole household over from the detected device).
     @State private var showReceiveFromDetected = false
+    @State private var settingsShellIdentity: (profileID: String, value: String)?
     private var releaseNotes: ReleaseNotesModel { .shared }
 
     public init() {}
 
     public var body: some View {
         Group {
+            if needsDiagnosticConsent {
+                CrashReportingConsentView { enabled in
+                    appModel.crashReporting.isEnabled = enabled
+                    appModel.applyCrashReportingPreference()
+                }
+                .environment(\.themePalette, resolvedPalette)
+                .environment(\.colorScheme, resolvedPalette.isLight ? .light : .dark)
+            } else {
+                appContent
+                    .task { consumeDeferredPairingURL() }
+            }
+        }
+        .onOpenURL { url in
+            if ExternalPlaybackRuntime.shared.receive(url) { return }
+            receivePairingURL(url)
+        }
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+            if let url = activity.webpageURL {
+                receivePairingURL(url)
+            }
+        }
+    }
+
+    private var needsDiagnosticConsent: Bool {
+        appModel.crashReportingController.isConfigured && appModel.crashReporting.needsConsent
+    }
+
+    private var appContent: some View {
+        Group {
             if !appModel.canEnterApp {
                 PlozziOSOnboardingView(appModel: appModel)
-            } else if appModel.mustChooseProfile
-                || (appModel.requiresLaunchProfileSelection
-                    && !appModel.didCompleteLaunchProfileSelection) {
-                PlozziOSProfilePickerView(
-                    // Whoever watched on this device most recently leads.
-                    profiles: appModel.profiles.profilesByRecency,
-                    activeProfileID: appModel.profiles.activeProfileID,
-                    onSelect: { profile in
-                        // Completion is recorded by the model when the switch
-                        // actually lands — a locked or PIN-gated profile only
-                        // raises its prompt here, and cancelling it must leave
-                        // the picker up rather than reveal the profile.
-                        appModel.selectProfile(profile.id)
-                    },
-                    // Same abilities as the switcher. Withholding Add and Edit
-                    // here made one screen behave as two: identical layout, but
-                    // long-press did nothing and the Edit button was missing
-                    // until you'd already picked someone. Netflix and the tvOS
-                    // picker both manage profiles from the launch screen too.
-                    manager: appModel.managementRequiresParentalPIN ? nil : appModel
-                    // No `onCancel`: at launch there is nothing to go back to.
+            } else if showsLaunchProfilePicker {
+                PlozziOSProfileSelectionView(
+                    appModel: appModel,
+                    onSelectionStarted: { isSelectingLaunchProfile = true },
+                    onComplete: { isSelectingLaunchProfile = false }
                 )
             } else if usesInlineStandaloneFirstRun, appModel.pendingFirstRunStep != nil {
                 PlozziOSFirstRunView(
@@ -111,6 +126,13 @@ public struct PlozziOSRootView: View {
         }
         .scrollContentBackground(.hidden)
         .environment(\.managedProviderSetupRouter, providerSetupRouter)
+        .plozzSheet(item: $providerSetupRouter.reauthenticationAccount) { account in
+            PlozziOSAccountReauthenticationView(appModel: appModel, account: account)
+                .presentationSizing(.page)
+        }
+        .onChange(of: appModel.profiles.activeProfileID) { _, _ in
+            providerSetupRouter.reauthenticationAccount = nil
+        }
         .onChange(of: providerSetupRouter.request?.id) { _, _ in
             guard let request = providerSetupRouter.request else { return }
             iptvSetup = request
@@ -138,27 +160,6 @@ public struct PlozziOSRootView: View {
             set: { if !$0 { appModel.cancelProfileOnboarding() } }
         )) {
             PlozziOSProfileOnboardingCover(appModel: appModel)
-        }
-        // "Who are you on this server?" for a question recorded while the user was
-        // elsewhere — CloudSync enabling a server in the background, or an account
-        // signing in and making an already-recorded question answerable.
-        //
-        // The Libraries screen presents this too, for questions raised by its own
-        // toggle; that one is inside the Settings sheet and can't present when
-        // Settings is closed, which is most of the time. Without a presenter here
-        // the question would gate the watchlist import while nothing ever asked
-        // it. The two are mutually exclusive on `isSettingsPresented` so they
-        // can't both try.
-        .plozzSheet(item: Binding(
-            get: { appModel.isSettingsPresented ? nil : appModel.pendingIdentityAccount },
-            set: { if $0 == nil { appModel.resolveIdentityPromptForPending() } }
-        )) { account in
-            PlozziOSServerIdentityPromptView(
-                appModel: appModel,
-                account: account,
-                onFinish: { appModel.concludeIdentityPrompt(for: account.id) },
-                onDecline: { appModel.declineIdentityPrompt(for: account.id) }
-            )
         }
         .task { appModel.resumeProfileOnboardingIfNeeded() }
         .onAppear { PlozziOSScreenshotSeed.applyIfRequested(to: appModel) }
@@ -230,7 +231,41 @@ public struct PlozziOSRootView: View {
             }
         }
         .background { AppBackground(palette: resolvedPalette) }
+        .id(presentationShellIdentity)
+        .onChange(of: appModel.isSettingsPresented) { _, presented in
+            settingsShellIdentity = presented
+                ? (appModel.profiles.activeProfileID, shellIdentity) : nil
+        }
+        .onChange(of: shellIdentity) {
+            heroTrailerController.stop()
+        }
+        // A successful Plex selection changes shellIdentity, not the sheet collecting it.
+        // Libraries owns the same question while Settings is presented.
+        .plozzSheet(item: Binding(
+            get: { appModel.isSettingsPresented ? nil : appModel.pendingIdentityAccount },
+            set: { if $0 == nil { appModel.resolveIdentityPromptForPending() } }
+        )) { account in
+            PlozziOSServerIdentityPromptView(
+                appModel: appModel,
+                account: account,
+                onFinish: { appModel.concludeIdentityPrompt(for: account.id) },
+                onDecline: { appModel.declineIdentityPrompt(for: account.id) }
+            )
+        }
+        // Outside the profile-scoped identity, inside its shared environment:
+        // changing accounts must not tear down the surface collecting their PIN.
+        .plozzFullScreenCover(isPresented: $showingProfileSwitcher, onDismiss: {
+            consumeDeferredPairingURL()
+            notificationDismissals.remove(.profileSwitcher)
+        }) {
+            PlozziOSProfileSelectionView(
+                appModel: appModel,
+                onComplete: { showingProfileSwitcher = false },
+                onCancel: { showingProfileSwitcher = false }
+            )
+        }
         .environment(\.familyGuidanceProvider, appModel.familyGuidance)
+        .environment(\.plozzShowsContentRatings, appModel.settings.contentRatings.showsRatings)
         .environment(
             \.versionPickerAudioLanguage,
             appModel.settings.playback.settings.audioLanguagePreference.explicitLanguageCode
@@ -258,6 +293,8 @@ public struct PlozziOSRootView: View {
             appModel.settings.watchIndicator.indicator
         )
         .environment(\.plozzShowsUnwatchedEpisodeCount, appModel.settings.watchIndicator.showsUnwatchedEpisodeCount)
+        .environment(\.plozzEpisodeCountBadgeStyle, appModel.settings.watchIndicator.episodeCountStyle)
+        .environment(\.plozzWatchIndicatorColor, appModel.settings.watchIndicator.color)
         // See the note in RootView: drives whether an unowned title's corner mark
         // reads as information or as an invitation to request it.
         .environment(\.plozzSeerConnected, appModel.seerService.isConfigured)
@@ -280,10 +317,6 @@ public struct PlozziOSRootView: View {
         .environment(heroTrailerController)
         .environment(sidebarGeometry)
         .syncsWindowInterfaceStyle(appModel.settings.theme.theme.preferredColorScheme)
-        .id(shellIdentity)
-        .onChange(of: shellIdentity) {
-            heroTrailerController.stop()
-        }
         .modifier(PlozziOSDownloadNotificationRouting(
             navigation: downloadNotifications,
             context: downloadNotificationContext,
@@ -363,20 +396,11 @@ public struct PlozziOSRootView: View {
                 .presentationSizing(.page)
         }
         .installNightShiftOverlay(appModel.settings.nightShift)
-        .onOpenURL { url in
-            if ExternalPlaybackRuntime.shared.receive(url) { return }
-            receivePairingURL(url)
-        }
         .externalPlayerSupport(
             context: { appModel.externalPlaybackContext() },
             legacySettings: { appModel.settings.playback.settings.externalPlayer },
             onProgress: { try await appModel.finishExternalPlayback($0) }
         )
-        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
-            if let url = activity.webpageURL {
-                receivePairingURL(url)
-            }
-        }
         .plozzSheet(item: pendingPairingBinding) { pairing in
             Group {
                 if let invite = SyncSetupSourceInvite.decode(pairing.invite) {
@@ -443,9 +467,15 @@ public struct PlozziOSRootView: View {
             && appModel.pendingPairingInvite == nil
     }
 
+    private var showsLaunchProfilePicker: Bool {
+        isSelectingLaunchProfile || appModel.mustChooseProfile
+            || (!appModel.didCompleteLaunchProfileSelection
+                && (appModel.requiresLaunchProfileSelection
+                    || appModel.plexHomeUsers.pendingPlexPINRequest != nil))
+    }
+
     private var shellIdentity: String {
-        if appModel.requiresLaunchProfileSelection
-            && !appModel.didCompleteLaunchProfileSelection {
+        if showsLaunchProfilePicker {
             return "profile-picker"
         }
         let profile = appModel.profiles.activeProfile
@@ -453,6 +483,16 @@ public struct PlozziOSRootView: View {
             + profile.plexPlaybackIdentityKey(
                 for: appModel.accountsProviders.homeAccounts.map(\.account)
             )
+    }
+
+    private var presentationShellIdentity: String {
+        // Settings owns its navigation and nested identity chooser. Rebuild the
+        // covered content after dismissal, but never retain a different profile.
+        if appModel.isSettingsPresented, let settingsShellIdentity,
+           settingsShellIdentity.profileID == appModel.profiles.activeProfileID {
+            return settingsShellIdentity.value
+        }
+        return shellIdentity
     }
 
     private var plexUserSelectionBinding:
@@ -478,12 +518,13 @@ public struct PlozziOSRootView: View {
     private var profileAccessGateBinding: Binding<Bool> {
         Binding(
             get: {
+                guard !showsLaunchProfilePicker, !showingProfileSwitcher else { return false }
                 if appModel.lockedSwitch != nil { return true }
                 if appModel.parentalSwitch != nil { return true }
                 guard !showingSettings,
                       appModel.profileOnboardingStep != .libraries
                 else { return false }
-                return appModel.plexHomeUsers.pendingPlexPINRequest != nil
+                return appModel.plexPINRequestForAppPresentation != nil
             },
             set: { presented in
                 if !presented {
@@ -540,6 +581,10 @@ public struct PlozziOSRootView: View {
     /// with `pendingPairingInvite` left set so it is never re-requested, which
     /// means the link simply does nothing until relaunch.
     private func receivePairingURL(_ url: URL) {
+        guard !needsDiagnosticConsent else {
+            deferredPairingURL = url
+            return
+        }
         guard showingSettings || showingProfileSwitcher || showingAddServer else {
             appModel.handleIncomingURL(url)
             return
@@ -812,9 +857,7 @@ struct PlozziOSTabShell: View {
     /// Set while Settings is closing, so the picker can be raised from its
     /// `onDismiss` rather than in the same turn as the dismissal.
     @State private var wantsProfileSwitcher = false
-    /// A profile chosen in the picker, switched to once the picker has gone: the
-    /// parental/lock gates are covers on an ANCESTOR, and asking for those while
-    /// this cover is dismissing is the same contested-slot case.
+    /// A direct Settings selection waits for that sheet to finish dismissing.
     @State private var pendingSwitchProfileID: String?
 
     /// Raises a link parked by `PlozziOSRootView.receivePairingURL` now that the
@@ -898,7 +941,7 @@ struct PlozziOSTabShell: View {
     private static func navigationAvailability(appModel: PlozziOSAppModel) -> NavigationContentAvailability {
         let navigation = appModel.settings.navigation
         return NavigationContentAvailability(
-            accounts: appModel.accountsProviders.homeAccounts.map(\.account),
+            accounts: appModel.accountsProviders.navigationAccounts,
             libraries: navigation.contentLibraries,
             discoveredAccountIDs: navigation.discoveredAccountIDs,
             disabledLibraryKeys: appModel.settings.homeVisibility.visibility.disabledKeys,
@@ -1144,6 +1187,7 @@ struct PlozziOSTabShell: View {
                     accounts: appModel.accountsProviders.homeAccounts
                 )
             },
+            sectionDiagnostics: appModel.settings.homeVisibility.sectionDiagnostics,
             pendingWatchMutations: { [weak appModel] in
                 await appModel?.pendingWatchMutations() ?? []
             },
@@ -1362,40 +1406,14 @@ struct PlozziOSTabShell: View {
             // when the sheet is actually gone.
             if presented { appModel.noteSettingsPresented(true) }
         }
-        .plozzFullScreenCover(isPresented: $showingProfileSwitcher, onDismiss: {
-            // The gates `selectProfile` can raise are covers on the ROOT. Asking
-            // for one while this cover is still dismissing can be dropped, and
-            // because the gate's binding stays true SwiftUI never re-requests it —
-            // profile switching would wedge until relaunch.
-            if let id = pendingSwitchProfileID {
-                pendingSwitchProfileID = nil
-                appModel.selectProfile(id)
-            }
-            consumeDeferredPairingURL()
-            onNotificationPresentationDismissed(.profileSwitcher)
-        }) {
-            PlozziOSProfilePickerView(
-                profiles: appModel.profiles.profilesByRecency,
-                activeProfileID: appModel.profiles.activeProfileID,
-                onSelect: { profile in
-                    pendingSwitchProfileID = profile.id
-                    showingProfileSwitcher = false
-                },
-                // Withheld inside an enforced Kids Profile — creating a profile
-                // switches into it, which would bypass the Parental PIN gate.
-                manager: appModel.managementRequiresParentalPIN ? nil : appModel,
-                onCancel: { showingProfileSwitcher = false }
-            )
-        }
         .plozzSheet(isPresented: $showingSettings, onDismiss: {
             appModel.noteSettingsPresented(false)
             if wantsProfileSwitcher {
                 wantsProfileSwitcher = false
                 showingProfileSwitcher = true
             } else if let id = pendingSwitchProfileID {
-                // Same rule as the picker's `onDismiss`: the gates this can
-                // raise are covers on the ROOT, so the switch waits until
-                // Settings is actually gone.
+                // This direct Settings action uses the root's authorization
+                // cover, so it waits until Settings is actually gone.
                 pendingSwitchProfileID = nil
                 appModel.selectProfile(id)
             }
@@ -1933,16 +1951,45 @@ private struct PlozziOSHomeLandingView: View {
 }
 
 /// iPhone/iPad counterpart of tvOS's persistent profile-entry gate.
-private struct PlozziOSProfileAccessGateView: View {
+struct PlozziOSProfileAccessGateView: View {
     let appModel: PlozziOSAppModel
+    let profile: Profile?
     let onCancel: () -> Void
 
     @Environment(\.themePalette) private var palette
+    @Environment(\.pinProfileTransition) private var profileTransition
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expectsTwoPINs: Bool
+    @State private var retainedStep: Step?
 
-    init(appModel: PlozziOSAppModel, onCancel: @escaping () -> Void) {
+    private enum Step: Equatable {
+        case parental(ParentalSwitchRequest)
+        case profile(ParentalSwitchRequest)
+        case plex(PlexHomeUsersModel.PlexPINRequest)
+    }
+
+    private static func pendingStep(_ app: PlozziOSAppModel) -> Step? {
+        if let request = app.parentalSwitch { return .parental(request) }
+        if let request = app.lockedSwitch { return .profile(request) }
+        return app.plexHomeUsers.pendingPlexPINRequest.map(Step.plex)
+    }
+
+    private var displayedStep: Step? {
+        let pending = Self.pendingStep(appModel)
+        // Keep the entered local PIN in place until Plex actually needs another
+        // PIN, rather than replacing it with a blank verification page.
+        if case .profile = retainedStep, case .plex = pending,
+           appModel.plexHomeUsers.plexPINEntryAvailability == .checking {
+            return retainedStep
+        }
+        return pending ?? retainedStep
+    }
+
+    init(appModel: PlozziOSAppModel, profile: Profile? = nil, onCancel: @escaping () -> Void) {
         self.appModel = appModel
+        self.profile = profile
         self.onCancel = onCancel
+        _retainedStep = State(initialValue: Self.pendingStep(appModel))
         let profile = appModel.lockedSwitch?.target
         _expectsTwoPINs = State(initialValue:
             profile?.isLocked == true
@@ -1954,21 +2001,20 @@ private struct PlozziOSProfileAccessGateView: View {
     var body: some View {
         ZStack {
             AppBackground(palette: palette).ignoresSafeArea()
+                .opacity(profileTransition == nil ? 1 : 0)
 
-            if let request = appModel.parentalSwitch {
+            switch displayedStep {
+            case let .parental(request):
                 // First: may you leave the child's profile at all?
                 ParentalPINView(
                     destination: request.target,
                     errorMessage: request.error,
                     onSubmit: { appModel.submitParentalPIN($0) },
-                    onCancel: {
-                        onCancel()
-                        appModel.cancelParentalSwitch()
-                    }
+                    onCancel: cancel
                 )
                 .id("parental-pin")
-                .transition(.opacity)
-            } else if let lockRequest = appModel.lockedSwitch {
+                .transition(profileTransition == nil ? .opacity : .identity)
+            case let .profile(lockRequest):
                 ProfileLockPINView(
                     profile: lockRequest.target,
                     errorMessage: lockRequest.error,
@@ -1976,18 +2022,17 @@ private struct PlozziOSProfileAccessGateView: View {
                     sequenceStep: expectsTwoPINs
                         ? .init(current: 1, total: 2)
                         : nil,
-                    onSubmit: { appModel.submitProfileLockPIN($0) },
-                    onCancel: {
-                        onCancel()
-                        appModel.cancelProfileLockPrompt()
-                    }
+                    isSubmitting: appModel.lockedSwitch == nil,
+                    onSubmit: { await appModel.submitProfileLockPIN($0) },
+                    onCancel: cancel
                 )
                 .id("profile-pin")
-                .transition(.opacity)
-            } else if let request = appModel.plexHomeUsers.pendingPlexPINRequest {
+                .transition(profileTransition == nil ? .opacity : .identity)
+            case let .plex(request):
                 PlozziOSPlexPINView(
                     model: appModel.plexHomeUsers,
                     request: request,
+                    profile: profile,
                     sequenceStep: expectsTwoPINs
                         ? .init(current: 2, total: 2)
                         : nil,
@@ -1995,13 +2040,32 @@ private struct PlozziOSProfileAccessGateView: View {
                     onCancel: onCancel
                 )
                 .id("plex-pin")
-                .transition(.opacity)
+                .transition(profileTransition == nil ? .opacity : .identity)
+            case nil:
+                EmptyView()
             }
         }
+        .disabled(Self.pendingStep(appModel) == nil)
+        .onChange(of: displayedStep, initial: true) { _, step in
+            if let step { retainedStep = step }
+        }
         .animation(
-            .easeInOut(duration: 0.2),
-            value: appModel.lockedSwitch?.target.id
+            reduceMotion ? nil : .easeInOut(duration: 0.25),
+            value: profileTransition != nil ? [] : [
+                    appModel.parentalSwitch?.target.id, appModel.lockedSwitch?.target.id,
+                    appModel.plexHomeUsers.pendingPlexPINRequest?.id]
         )
+    }
+
+    private func cancel() {
+        onCancel()
+        if appModel.parentalSwitch != nil {
+            appModel.cancelParentalSwitch()
+        } else if appModel.lockedSwitch != nil {
+            appModel.cancelProfileLockPrompt()
+        } else {
+            appModel.plexHomeUsers.cancelPlexPIN()
+        }
     }
 }
 #endif

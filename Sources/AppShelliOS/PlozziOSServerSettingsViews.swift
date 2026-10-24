@@ -231,6 +231,7 @@ private struct PlozziOSServerSettingsDetailView: View {
 }
 
 struct PlozziOSMyLibrariesSettingsView: View {
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
     let appModel: PlozziOSAppModel
     let onAddServer: () -> Void
     /// Signs an additional user in to an already-added server. Same capability as
@@ -366,8 +367,12 @@ struct PlozziOSMyLibrariesSettingsView: View {
                             }
                             .plozzForeground(.secondary)
                             Spacer()
-                            if failure.requiresSignIn, let account {
-                                Button("Sign In") { onAddUser(account.server) }
+                            if failure.requiresSignIn, let account,
+                               account.server.provider.supportsAccountReauthentication, let providerSetupRouter {
+                                Button("Sign In Again") { providerSetupRouter.reauthenticationAccount = account }
+                            } else if failure.requiresSignIn, let account,
+                                      account.server.provider == .iptv, let providerSetupRouter {
+                                Button("Edit connection") { providerSetupRouter.connectIPTV(account: account) }
                             } else {
                                 Button { Task { await loadLibraries() } } label: {
                                     Label("Retry", systemImage: "arrow.clockwise")

@@ -61,7 +61,7 @@ private struct LiveTVChannelGuideMappingView: View {
                         } catch { failed = true }
                     }
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .buttonStyle(SettingsFormButtonStyle())
                 .disabled(saving)
                 ForEach(imports.guideSources.filter {
                     $0.playlistSourceID == sourceID && imports.enabledSourceIDs.contains($0.id)
@@ -116,11 +116,11 @@ private struct LiveTVGuideStationPicker: View {
                         VStack(alignment: .leading) {
                             Text(channel.name)
                             if let identifier = channel.displayID {
-                                Text(identifier).font(.caption).foregroundStyle(.secondary)
+                                Text(identifier).font(.caption).settingsRowSecondary()
                             }
                         }
                     }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
                     .disabled(saving)
                 }
                 if failed { Text("Guide stations or your correction couldn't be saved. Please retry.") }

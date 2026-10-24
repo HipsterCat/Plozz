@@ -36,6 +36,11 @@ public final class HeroScheduleLines {
         lines[item.id]
     }
 
+    /// Lets constrained headers reserve space without fetching or waiting for a line.
+    public static func canShowLine(for item: MediaItem) -> Bool {
+        carriesSchedule(item) || carriesExternalAvailability(item)
+    }
+
     /// Changes when a slide with the same card id gains external provider ids.
     /// Initial Home slides can front before metadata enrichment lands; keying the
     /// task only by `item.id` permanently cached that first unresolvable attempt.

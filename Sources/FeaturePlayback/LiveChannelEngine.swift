@@ -55,6 +55,7 @@ public struct LiveChannelEngineSnapshot: Equatable, Sendable {
     public var seekableRange: ClosedRange<TimeInterval>?
     public var behindLiveSeconds: TimeInterval?
     public var route: LiveChannelEngineRoute
+    public var isAtLiveEdge: Bool?
 
     public init(
         phase: LiveChannelEnginePhase = .idle,
@@ -63,7 +64,8 @@ public struct LiveChannelEngineSnapshot: Equatable, Sendable {
         bufferedPosition: TimeInterval = 0,
         seekableRange: ClosedRange<TimeInterval>? = nil,
         behindLiveSeconds: TimeInterval? = nil,
-        route: LiveChannelEngineRoute = .none
+        route: LiveChannelEngineRoute = .none,
+        isAtLiveEdge: Bool? = nil
     ) {
         self.phase = phase
         self.firstFrameReady = firstFrameReady
@@ -72,6 +74,7 @@ public struct LiveChannelEngineSnapshot: Equatable, Sendable {
         self.seekableRange = seekableRange
         self.behindLiveSeconds = behindLiveSeconds
         self.route = route
+        self.isAtLiveEdge = isAtLiveEdge
     }
 }
 
@@ -96,6 +99,8 @@ public struct LiveChannelOutputPolicy: Equatable, Sendable {
 @MainActor
 public protocol LiveChannelEngine: VideoEngine {
     var liveSnapshot: LiveChannelEngineSnapshot { get }
+    /// The cushion applied to this load; the host allows that time in addition to its startup deadline.
+    var liveStartupBuffer: LivePlaybackBuffer { get }
     var livePlaybackFailureDiagnostic: PlaybackFailureDiagnostic? { get }
     /// The engine will publish its terminal failure after a bounded diagnostic read.
     var isCapturingLiveFailureDiagnostic: Bool { get }
@@ -116,6 +121,7 @@ public protocol LiveChannelEngine: VideoEngine {
 }
 
 public extension LiveChannelEngine {
+    var liveStartupBuffer: LivePlaybackBuffer { .automatic }
     var livePlaybackFailureDiagnostic: PlaybackFailureDiagnostic? { nil }
     var isCapturingLiveFailureDiagnostic: Bool { false }
     var supportsConcurrentPlayback: Bool { false }

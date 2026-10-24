@@ -34,6 +34,7 @@ public extension View {
         #if os(tvOS)
         environment(\.colorScheme, .dark)
             .environment(\.themePalette, .dark)
+            .tint(nil)
         #else
         self
         #endif

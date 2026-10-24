@@ -3,175 +3,117 @@ import XCTest
 import CoreModels
 @testable import FeaturePlayback
 
-/// Tests the pure engine-routing decision extracted from `PlayerViewModel`.
-/// These pin the dual-engine promise: a network-file source always decodes
-/// on-device, an image-based default subtitle reroutes an otherwise-native
-/// source to Plozzigen so it can be drawn without a server burn-in, and every
-/// image-sub reroute is gated on Plozzigen actually being wired in.
 final class EngineSelectionTests: XCTestCase {
     private func request(
-        item: MediaItem = MediaItem(id: "m1", title: "Movie", kind: .movie),
-        streamURL: URL = URL(string: "https://example.test/movie.m3u8")!,
-        subtitleTracks: [MediaTrack] = [],
-        isTranscoding: Bool = false,
-        sourceMetadata: MediaSourceMetadata? = nil
+        url: URL = URL(string: "https://example.test/movie.mp4")!,
+        transcoding: Bool = false,
+        metadata: MediaSourceMetadata? = nil
     ) -> PlaybackRequest {
         PlaybackRequest(
-            item: item, streamURL: streamURL,
-            subtitleTracks: subtitleTracks,
-            isTranscoding: isTranscoding,
-            sourceMetadata: sourceMetadata)
-    }
-
-    private func imageSub(id: Int, language: String) -> MediaTrack {
-        MediaTrack(
-            id: id, kind: .subtitle, displayTitle: "Sub \(id)",
-            language: language, isImageBasedSubtitle: true)
-    }
-
-    private func route(
-        _ request: PlaybackRequest,
-        forceTranscode: Bool = false,
-        plozzigenAvailable: Bool,
-        rule: SubtitlePolicy.Rule = SubtitlePolicy.Rule(),
-        airPlay: Bool = false
-    ) -> PlaybackEngineKind {
-        EngineSelection.route(
-            request: request,
-            forceTranscode: forceTranscode,
-            plozzigenAvailable: plozzigenAvailable,
-            capabilities: .detected(),
-            subtitleRule: rule,
-            audioRouteIsAirPlay: airPlay)
-    }
-
-    // MARK: Network file
-
-    func testDownloadedLocalFileRoutesToPlozzigenWhenAvailable() {
-        let req = request(
-            streamURL: URL(fileURLWithPath: "/downloads/media.mkv")
-        )
-        XCTAssertEqual(route(req, plozzigenAvailable: true), .plozzigen)
-    }
-
-    func testDownloadedLocalFileFallsBackToNativeWithoutPlozzigen() {
-        let req = request(
-            streamURL: URL(fileURLWithPath: "/downloads/media.mp4")
-        )
-        XCTAssertEqual(route(req, plozzigenAvailable: false), .native)
-    }
-
-    func testDownloadedAssetPackageRoutesToNativeAVFoundation() {
-        let req = request(
-            streamURL: URL(fileURLWithPath: "/downloads/media.movpkg")
-        )
-        XCTAssertEqual(route(req, plozzigenAvailable: true), .native)
-    }
-
-    func testLegacyProgressiveFileWithMovpkgExtensionRoutesToPlozzigen() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent("media.movpkg")
-        try Data("matroska".utf8).write(to: file)
-
-        XCTAssertEqual(
-            route(request(streamURL: file), plozzigenAvailable: true),
-            .plozzigen
+            item: MediaItem(id: "m1", title: "Movie", kind: .movie),
+            streamURL: url, isTranscoding: transcoding, sourceMetadata: metadata
         )
     }
 
-    func testExistingMovpkgDirectoryRoutesToNativeAVFoundation() throws {
-        let package = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString).movpkg", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: package,
-            withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: package) }
-
-        XCTAssertEqual(
-            route(request(streamURL: package), plozzigenAvailable: true),
-            .native
-        )
+    func testAllKnownVideoFormatsAndMissingMetadataUseAether() {
+        for container in PlozzigenMediaFormats.containers {
+            for codec in PlozzigenMediaFormats.videoCodecs {
+                let value = request(metadata: .init(
+                    container: container, video: .init(codec: codec),
+                    audio: .init(codec: "pcm_s16le")
+                ))
+                XCTAssertEqual(
+                    EngineSelection.route(request: value, plozzigenAvailable: true),
+                    .plozzigen, "\(container)/\(codec)"
+                )
+            }
+        }
+        XCTAssertEqual(EngineSelection.route(request: request(), plozzigenAvailable: true), .plozzigen)
     }
 
-    func testNetworkFileAlwaysRoutesToPlozzigen() throws {
-        let identity = try RemoteFileIdentity(kind: .strongETag, value: "\"movie-v1\"")
-        let representation = try RemoteFileRepresentation(
-            size: 1_024, identity: identity, consistency: .stronglyBound)
-        let locator = try NetworkFileLocator(
-            accountID: "account", sourceID: "source",
-            credentialRevision: CredentialRevision(),
-            relativePath: "Movies/Movie.mkv", representation: representation,
-            formatHint: MediaFormatHint(container: "mkv", mimeType: "video/x-matroska"))
-        var req = request()
-        req.playbackSource = .networkFile(locator)
-
-        // Even when Plozzigen were reported unavailable, a network file has no
-        // other engine that can play it — the source itself forces the route.
-        XCTAssertEqual(route(req, plozzigenAvailable: true), .plozzigen)
+    func testServerChosenHLSAndQualityLimitsDoNotChangeEngineOwnership() {
+        var value = request(url: URL(string: "https://example.test/master.m3u8")!, transcoding: true)
+        value.isManifestStream = true
+        XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: true), .plozzigen)
+        value.streamingOptions = .init(quality: .hd720)
+        XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: true), .plozzigen)
+        XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: false), .native)
     }
 
-    // MARK: Image-subtitle rerouting
+    func testSourceProfileAndSubtitleClassDoNotReintroduceNativeFormatGates() {
+        for profile in [5, 7, 8] {
+            var value = request(metadata: .init(
+                container: "mp4",
+                video: .init(codec: "hevc", videoRangeType: "DOVI", dolbyVisionProfile: profile),
+                audio: .init(codec: "truehd")
+            ))
+            for bitmap in [false, true] {
+                value.subtitleTracks = [.init(
+                    id: 1, kind: .subtitle, displayTitle: "English", language: "en",
+                    isImageBasedSubtitle: bitmap
+                )]
+                XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: true), .plozzigen)
+            }
 
-    func testSDHBitmapReroutesEvenWhenRegularTextExists() {
-        var bitmap = imageSub(id: 2, language: "en")
-        bitmap.isHearingImpaired = true
-        let regular = MediaTrack(id: 1, kind: .subtitle, displayTitle: "English", language: "en")
+        }
+    }
+
+    func testServerHEVCInitializationRepairKeepsItsAVAssetLoader() {
+        var value = request(url: URL(string: "https://example.test/master.m3u8")!, transcoding: true)
+        value.isManifestStream = true
+        value.streamingOptions = .init(quality: .hd720)
+        value.negotiatedStreamingVideoCodec = .hevc
+        XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: true), .native)
+        value.isTranscoding = false
+        XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: true), .plozzigen)
+    }
+
+    func testNativeOnlyHostRetainsNativePlayback() {
+        XCTAssertEqual(EngineSelection.route(request: request(), plozzigenAvailable: false), .native)
+    }
+
+    func testSeparateTrailerAudioKeepsItsNativeComposition() {
+        var value = request()
+        value.externalAudioURL = URL(string: "https://example.test/audio.m4a")!
+        XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: true), .native)
+    }
+
+    func testDownloadedFilesUseAetherButMissingAssetPackageStaysNative() {
+        for suffix in ["mp4", "mkv", "ts"] {
+            let value = request(url: URL(fileURLWithPath: "/downloads/movie.\(suffix)"))
+            XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: true), .plozzigen)
+        }
         XCTAssertEqual(EngineSelection.route(
-            request: request(subtitleTracks: [regular, bitmap]), forceTranscode: false,
-            plozzigenAvailable: true, capabilities: .detected(),
-            subtitleRule: .init(mode: .all, preferredLanguages: ["en"]),
-            hearingImpairedPreference: .preferSDH
-        ), .plozzigen)
+            request: request(url: URL(fileURLWithPath: "/downloads/movie.movpkg")),
+            plozzigenAvailable: true
+        ), .native)
     }
 
-    func testImageBasedDefaultSubtitleReroutesNativeToPlozzigen() {
-        // No source facts → router picks native; the only English subtitle is
-        // image-based and the rule wants English → reroute to Plozzigen.
-        let req = request(subtitleTracks: [imageSub(id: 1, language: "en")])
-        let rule = SubtitlePolicy.Rule(mode: .all, preferredLanguages: ["en"])
-        XCTAssertEqual(route(req, plozzigenAvailable: true, rule: rule), .plozzigen)
+    func testDistinguishesAssetPackageFromLegacyProgressiveMovpkgFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = root.appendingPathComponent("asset.movpkg", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("legacy.movpkg")
+        try Data("matroska".utf8).write(to: file)
+        XCTAssertEqual(EngineSelection.route(request: request(url: package), plozzigenAvailable: true), .native)
+        XCTAssertEqual(EngineSelection.route(request: request(url: file), plozzigenAvailable: true), .plozzigen)
     }
 
-    func testImageSubtitleRerouteGatedOnPlozzigenAvailability() {
-        // Same request, but Plozzigen isn't wired in → must stay native (no
-        // engine can render the bitmap sub on-device, so we don't pretend).
-        let req = request(subtitleTracks: [imageSub(id: 1, language: "en")])
-        let rule = SubtitlePolicy.Rule(mode: .all, preferredLanguages: ["en"])
-        XCTAssertEqual(route(req, plozzigenAvailable: false, rule: rule), .native)
-    }
-
-    func testTextSubtitleDefaultStaysNative() {
-        let textSub = MediaTrack(id: 1, kind: .subtitle, displayTitle: "EN", language: "en")
-        let req = request(subtitleTracks: [textSub])
-        let rule = SubtitlePolicy.Rule(mode: .all, preferredLanguages: ["en"])
-        XCTAssertEqual(route(req, plozzigenAvailable: true, rule: rule), .native)
-    }
-
-    func testAirPlayRoutesDirectPlayToPlozzigen() {
-        let mp4 = request(streamURL: URL(string: "https://example.test/episode.mp4")!)
-        XCTAssertEqual(route(mp4, plozzigenAvailable: true), .native)
-        XCTAssertEqual(route(mp4, plozzigenAvailable: true, airPlay: true), .plozzigen)
-        XCTAssertEqual(route(mp4, plozzigenAvailable: false, airPlay: true), .native)
-    }
-
-    func testAirPlayLeavesServerTranscodeNative() {
-        let hls = request(isTranscoding: true)
-        XCTAssertEqual(route(hls, plozzigenAvailable: true, airPlay: true), .native)
-    }
-
-    func testTranscodedSourceStaysNative() {
-        // A server transcode is a seekable HLS stream AVPlayer plays well; even
-        // with an image sub present, a transcoded stream isn't rerouted.
-        let req = request(subtitleTracks: [imageSub(id: 1, language: "en")], isTranscoding: true)
-        let rule = SubtitlePolicy.Rule(mode: .all, preferredLanguages: ["en"])
-        XCTAssertEqual(route(req, plozzigenAvailable: true, rule: rule), .native)
+    func testNetworkFileNeverReachesNativeURLLoader() throws {
+        let identity = try RemoteFileIdentity(kind: .strongETag, value: "\"movie-v1\"")
+        let representation = try RemoteFileRepresentation(size: 1_024, identity: identity, consistency: .stronglyBound)
+        let locator = try NetworkFileLocator(
+            accountID: "account", sourceID: "source", credentialRevision: CredentialRevision(),
+            relativePath: "Movies/Movie.mkv", representation: representation,
+            formatHint: MediaFormatHint(container: "mkv", mimeType: "video/x-matroska")
+        )
+        var value = request()
+        value.playbackSource = .networkFile(locator)
+        for available in [false, true] {
+            XCTAssertEqual(EngineSelection.route(request: value, plozzigenAvailable: available), .plozzigen)
+        }
     }
 }
 #endif

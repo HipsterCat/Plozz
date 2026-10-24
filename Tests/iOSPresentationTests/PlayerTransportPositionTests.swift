@@ -11,6 +11,44 @@ import XCTest
 
 @MainActor
 final class PlayerTransportPositionTests: XCTestCase {
+    func testLivePresentationControlsWithoutExternalRoutesHaveNoStopButtonOrEmptyPill() async throws {
+        let engine = try PlozzigenVideoEngine()
+        defer { engine.stop() }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for permitsExternalPresentation in [true, false] {
+            var invalidate: (@MainActor () -> Void)?
+            let context = LiveChannelPresentationContext(
+                engine: engine, sessionID: UUID(),
+                permitsExternalPresentation: permitsExternalPresentation,
+                isVisible: true, showsControls: true, intendsPlayback: false,
+                hasSelectedSubtitle: false,
+                continuationChanged: { _ in }, restoreUI: { true },
+                registerInvalidation: { invalidate = $0 },
+                stopPlayback: { XCTFail("Presentation controls must not stop playback.") }
+            )
+            let host = UIHostingController(rootView: PlozziOSLivePresentationControls(context: context))
+            host.safeAreaRegions = []
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            let size = host.sizeThatFits(in: CGSize(width: 400, height: 100))
+            XCTAssertEqual(size.width, 0, accuracy: 0.5, "No Stop button or empty glass group may remain.")
+            XCTAssertEqual(size.height, 0, accuracy: 0.5)
+            XCTAssertNotNil(invalidate, "The presentation lifecycle must stay mounted without visible controls.")
+            invalidate?()
+            window.rootViewController = nil
+        }
+    }
+
     func testVODCaptionsClearTheActualCenterControlsOrRetainTheirOriginalPosition() async throws {
         let model = PlayerViewModel(provider: LayoutProvider(), itemID: "fixture")
         model.controls.duration = 1200
@@ -269,6 +307,96 @@ final class PlayerTransportPositionTests: XCTestCase {
         )
     }
 
+    func testLiveTrackControlsStayAtTheBottomTrailingEdgeAboveTheTimeline() async throws {
+        for hasProgram in [false, true] {
+            try await assertLiveTrackControls(hasProgram: hasProgram, opensMenu: false)
+        }
+    }
+
+    func testLiveTrackMenusOpenAboveTheBottomControlsWithoutCoveringTheTimeline() async throws {
+        try await assertLiveTrackControls(hasProgram: true, opensMenu: true)
+    }
+
+    private func assertLiveTrackControls(hasProgram: Bool, opensMenu: Bool) async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let input = LiveChannelInput.stream(
+            url: try XCTUnwrap(URL(string: "https://fixture.invalid/live.m3u8")), httpHeaders: [:]
+        )
+        let tracks = LiveChannelPlayerModel(engine: try PlozzigenVideoEngine(), input: input)
+        LiveChannelScreenshotHook.pendingSurface = opensMenu ? .playback : nil
+        let host = UIHostingController(rootView: LiveLayoutFixture(
+            input: input, tracks: tracks, hasProgram: hasProgram, canGoLive: false, canMultiview: true
+        )
+            .background(.black)
+            .environment(\.themePalette, .dark)
+            .environment(\.colorScheme, .dark)
+        )
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            LiveChannelScreenshotHook.pendingSurface = nil
+            tracks.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for size in [
+            CGSize(width: 440, height: 956), CGSize(width: 956, height: 440),
+            CGSize(width: 393, height: 852), CGSize(width: 852, height: 393),
+            CGSize(width: 320, height: 568),
+            CGSize(width: 768, height: 1024), CGSize(width: 1024, height: 768)
+        ] {
+            window.frame = CGRect(origin: .zero, size: size)
+            host.view.frame = window.bounds
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(500))
+            let layout = tracks.subtitles.controlsLayout
+            if opensMenu {
+                let deadline = ContinuousClock.now + .seconds(5)
+                while layout.frame(for: .menu) == nil, ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                try await Task.sleep(for: .milliseconds(300))
+            }
+            let controls = try XCTUnwrap(layout.frame(for: .trackControls))
+            let timeline = try XCTUnwrap(layout.frame(for: .timeline))
+            let title = try XCTUnwrap(layout.frame(for: .title))
+            let top = try XCTUnwrap(layout.frame(for: .topControls))
+            XCTAssertGreaterThanOrEqual(controls.width, 100, "Both playback options and multiview must remain.")
+            XCTAssertEqual(controls.height, 44, accuracy: 1)
+            XCTAssertEqual(controls.maxX, timeline.maxX, accuracy: 1, "Keep actions at the trailing edge.")
+            XCTAssertEqual(controls.maxY, timeline.minY, accuracy: 1, "Place actions directly above the seek bar.")
+            XCTAssertGreaterThan(controls.minY, size.height / 2)
+            XCTAssertEqual(top.width, 44, accuracy: 1, "Only Close belongs in this overlay's top bar.")
+            if size.height > size.width {
+                XCTAssertLessThanOrEqual(title.maxY + 8, controls.minY + 1, "Portrait keeps a separate title row.")
+            }
+            if opensMenu {
+                let menu = try XCTUnwrap(layout.frame(for: .menu))
+                XCTAssertGreaterThan(menu.height, 44)
+                XCTAssertGreaterThanOrEqual(menu.minY, 0)
+                XCTAssertLessThanOrEqual(menu.maxY + 18, controls.minY + 1)
+                XCTAssertFalse(menu.intersects(timeline))
+            } else {
+                let center = try XCTUnwrap(layout.frame(for: .centerTransport))
+                XCTAssertLessThan(center.maxY, min(title.minY, controls.minY))
+            }
+            if size.width == 440 || size.width == 956 || size.width == 768 {
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "Live bottom actions \(Int(size.width))x\(Int(size.height)) programme \(hasProgram) menu \(opensMenu)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     func testChannelOnlyLiveHeaderClearsTransportInCompactAndTabletWindows() async throws {
         let input = LiveChannelInput.stream(
             url: try XCTUnwrap(URL(string: "https://fixture.invalid/live.m3u8")), httpHeaders: [:]
@@ -389,6 +517,8 @@ final class PlayerTransportPositionTests: XCTestCase {
         let tracks: LiveChannelPlayerModel
         var hasProgram = true
         var phase = LiveChannelPlaybackPhase.playing
+        var canGoLive = true
+        var canMultiview = false
         @FocusState private var focus: LiveChannelControl?
         private let now = Date()
 
@@ -399,10 +529,10 @@ final class PlayerTransportPositionTests: XCTestCase {
                     ? .init(title: "Evening News", start: now.addingTimeInterval(-900), end: now.addingTimeInterval(900))
                     : nil,
                 earlierPrograms: [], libraryItem: nil, openLibraryItem: nil, phase: phase,
-                isAtLiveEdge: true, behindLiveSeconds: 0, canPause: true, canGoLive: true,
+                isAtLiveEdge: true, behindLiveSeconds: 0, canPause: true, canGoLive: canGoLive,
                 seekWindowSeconds: 3600, onSeekBy: { _ in }, onSeekBehindLive: { _ in },
                 focus: $focus, onClose: {}, onPrevious: {}, onPlayPause: {}, onGoLive: {}, onNext: {},
-                onMultiview: nil, guideContent: nil, pendingGuideOpen: false, consumeGuideOpen: {},
+                onMultiview: canMultiview ? {} : nil, guideContent: nil, pendingGuideOpen: false, consumeGuideOpen: {},
                 onGuideCardChange: { _ in }, loadOnNow: { [] }, onTuneChannel: nil,
                 tracks: tracks, diagnosticsEnabled: false, toggleDiagnostics: {},
                 onTracksPresentationChange: { _ in }, onControlActivity: {}, onDismissControls: {}

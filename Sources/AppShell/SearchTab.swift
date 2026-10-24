@@ -352,6 +352,7 @@ struct SearchTab: View {
             // pushed pages never see the router.
             .mediaItemNavigator { navigateToItem($0) }
         }
+        .cinematicDetailNavigation(path: $path)
         // See HomeTab: reports detail-page depth so the custom rail steps aside.
         .reportsNavigationDepth(path.count, to: navigationChrome)
     }
@@ -388,7 +389,7 @@ struct SearchTab: View {
             continueWatchingSnapshot: continueWatchingSnapshot,
             ratingsProvider: ratingsProvider,
             detailMetadataResolver: { await DetailMetadataResolver.household.resolve($0) },
-            discoveryStatusRefresh: { await seer.availability(for: $0) },
+            discoveryStatusRefresh: { await seer.requestAvailability(for: $0) },
             loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
                 makeRelatedTitlesLoader(

@@ -7,6 +7,139 @@ import XCTest
 
 @MainActor
 final class CinematicDetailTransitionHostedTests: XCTestCase {
+    func testNativeNavigationRevealsHeroWithoutZoomArtworkWaitOrReverseCover() async throws {
+        let fixture = try await makeFixture(zoomEnabled: false)
+        defer { fixture.close() }
+        fixture.model.waitsForBackdrop = true
+        fixture.model.revealsEpisodesLast = true
+        for usesCard in [true, false, true] {
+            withAnimation {
+                fixture.model.open(in: fixture.window, usesCard: usesCard)
+            }
+            XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+            XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+            XCTAssertNil(DetailTransitionNavigation.take(in: fixture.window))
+            try await waitUntil { fixture.model.pageVisible }
+            let session = try XCTUnwrap(fixture.model.session)
+            XCTAssertFalse(session.usesZoom)
+            XCTAssertTrue(session.isBackdropShadingVisible)
+            XCTAssertNil(session.returnArtwork)
+            XCTAssertEqual(fixture.model.navigationAnimations.last, true)
+            try await waitUntil { session.stage == .logo }
+            XCTAssertLessThan(try pixel(fixture.window, at: XCTUnwrap(fixture.model.frames[.episodes]))[0], 20)
+            try await waitUntil { session.stage == .complete && fixture.model.stages.last == .complete }
+            XCTAssertEqual(fixture.model.stages, [.artwork, .logo, .metadata, .controls, .episodes, .complete])
+            XCTAssertFalse(session.blocksNavigation)
+            XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+            XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+            XCTAssertGreaterThan(try pixel(fixture.window, at: XCTUnwrap(fixture.model.frames[.episodes]))[0], 240)
+            let dismiss = try XCTUnwrap(fixture.model.nativeDismiss)
+            withAnimation { dismiss() }
+            try await waitUntil { fixture.model.path.isEmpty && !fixture.model.pageVisible }
+            XCTAssertEqual(fixture.model.dismissalAnimations.last, true)
+            XCTAssertFalse(DetailTransitionNavigation.isRestoringSourcePage)
+            XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+            XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+            let frame = try XCTUnwrap(fixture.model.source.visibleFrame(in: fixture.window))
+            XCTAssertGreaterThan(try pixel(fixture.window, at: frame)[0], 200)
+        }
+    }
+
+    func testNativeHeroRevealWaitsForPageAppearanceNotArtworkAndDoesNotReplay() async throws {
+        let fixture = try await makeFixture(zoomEnabled: false)
+        defer { fixture.close() }
+        let session = TVDetailEntranceSession(usesZoom: false)
+        defer { session.finishImmediately() }
+        session.attach(
+            to: fixture.window, enabled: true, waitsForPageAppearance: true,
+            waitsForBackdrop: true, revealsEpisodesLast: true
+        )
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(session.stage, .artwork)
+        XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+        session.pageAppeared()
+        try await waitUntil { session.stage == .logo }
+        session.pageDisappeared()
+        session.disappeared()
+        XCTAssertEqual(session.stage, .complete)
+        session.pageAppeared()
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(session.stage, .complete, "Returning from a child must not restart the hero reveal.")
+        XCTAssertFalse(session.blocksNavigation)
+    }
+
+    func testNativeBackDuringHeroRevealKeepsTheNativePopAndCancelsRemainingStages() async throws {
+        let fixture = try await makeFixture(zoomEnabled: false)
+        defer { fixture.close() }
+        fixture.model.waitsForBackdrop = true
+        fixture.model.revealsEpisodesLast = true
+        withAnimation { fixture.model.open(in: fixture.window, usesCard: true) }
+        try await waitUntil { fixture.model.session?.stage == .logo }
+        let session = try XCTUnwrap(fixture.model.session)
+        let dismiss = try XCTUnwrap(fixture.model.nativeDismiss)
+        withAnimation { dismiss() }
+        try await waitUntil { fixture.model.path.isEmpty && !fixture.model.pageVisible }
+        XCTAssertEqual(fixture.model.dismissalAnimations.last, true)
+        XCTAssertEqual(session.stage, .complete)
+        XCTAssertFalse(session.blocksNavigation)
+        XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+        XCTAssertFalse(DetailTransitionNavigation.isRestoringSourcePage)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(session.stage, .complete)
+    }
+
+    func testNativeHeroRevealRespectsSystemReduceMotion() async throws {
+        try XCTSkipUnless(UIAccessibility.isReduceMotionEnabled, "Run with system Reduce Motion enabled.")
+        let fixture = try await makeFixture(zoomEnabled: false)
+        defer { fixture.close() }
+        fixture.model.revealsEpisodesLast = true
+        fixture.model.open(in: fixture.window, usesCard: true)
+        try await waitUntil { fixture.model.pageVisible }
+        XCTAssertNil(fixture.model.session)
+        XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+        let frame = try XCTUnwrap(fixture.model.frames[.episodes])
+        XCTAssertGreaterThan(try pixel(fixture.window, at: frame)[0], 240)
+    }
+
+    func testDisablingZoomDiscardsPreparedCoverAndLetsTheNextOpenUseNativeNavigation() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.model.source.prepare(for: fixture.model.item)
+        XCTAssertFalse(overlays(in: fixture.window).isEmpty)
+        fixture.model.zoomEnabled = false
+        try await waitUntil { !DetailTransitionNavigation.isZoomEnabled(in: fixture.window) }
+        XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+        fixture.model.source.prepare(for: fixture.model.item)
+        XCTAssertNil(DetailTransitionNavigation.take(in: fixture.window))
+        fixture.model.zoomEnabled = true
+        try await waitUntil { DetailTransitionNavigation.isZoomEnabled(in: fixture.window) }
+        fixture.model.open(in: fixture.window, usesCard: true)
+        try await waitUntil { fixture.model.session?.stage == .complete }
+        XCTAssertNotNil(fixture.model.session)
+    }
+
+    func testZoomRegistrationIsWindowScopedAndIgnoresAnOlderShellTeardown() {
+        let first = UIWindow()
+        let second = UIWindow()
+        let old = UUID()
+        let current = UUID()
+        XCTAssertFalse(DetailTransitionNavigation.isZoomEnabled(in: first))
+        DetailTransitionNavigation.registerZoom(true, in: first, token: old)
+        XCTAssertFalse(DetailTransitionNavigation.isZoomEnabled(in: second))
+        DetailTransitionNavigation.registerZoom(false, in: first, token: current)
+        DetailTransitionNavigation.unregisterZoom(in: first, token: old)
+        XCTAssertFalse(DetailTransitionNavigation.isZoomEnabled(in: first))
+        DetailTransitionNavigation.registerZoom(true, in: first, token: current)
+        DetailTransitionNavigation.unregisterZoom(in: first, token: old)
+        XCTAssertTrue(DetailTransitionNavigation.isZoomEnabled(in: first))
+        DetailTransitionNavigation.unregisterZoom(in: first, token: current)
+        XCTAssertFalse(DetailTransitionNavigation.isZoomEnabled(in: first))
+    }
+
     func testOpeningCurvePicksUpQuicklyAndSettlesWithoutOvershoot() {
         let curve = UnitCurve.bezier(
             startControlPoint: DetailEntranceMotion.pickup,
@@ -91,6 +224,56 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         guardView.pressesEnded([press], with: UIPressesEvent())
         try await waitUntil { self.inputGuards(in: fixture.window).isEmpty }
         XCTAssertFalse(DetailTransitionNavigation.isNavigationInputSuppressed)
+    }
+
+    func testReturnRestoresFocusWhileTheReverseArtworkIsStillMoving() async throws {
+        final class FocusProbe: DetailTransitionFocusRequesting {
+            var request: (() -> Void)?
+            func requestFocus() -> Bool {
+                request?()
+                return true
+            }
+        }
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.model.source.prepare(for: fixture.model.item)
+        var timing = DetailEntranceTiming()
+        timing.reverse = 1
+        let session = TVDetailEntranceSession(timing: timing)
+        defer { session.finishImmediately() }
+        session.attach(to: fixture.window, enabled: true)
+        try await waitUntil { session.stage == .complete }
+        let probe = FocusProbe()
+        fixture.model.source.focusRequester = probe
+        var restored = false
+        var restoredDuringMotion = false
+        probe.request = {
+            restored = true
+            if let cover = self.overlays(in: fixture.window).first {
+                restoredDuringMotion = !(cover.cardContainer.layer.animationKeys() ?? []).isEmpty
+            }
+        }
+        session.close {}
+        try await waitUntil { restored }
+        XCTAssertTrue(restoredDuringMotion, "Source restoration must overlap the reverse animation, not start after it.")
+        XCTAssertTrue(session.blocksNavigation, "Preparing focus early must not release input during the animation.")
+        try await waitUntil { self.overlays(in: fixture.window).isEmpty }
+        XCTAssertFalse(session.blocksNavigation)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+    }
+
+    func testReturnWithoutAnAttachedSessionKeepsNativeDismissal() {
+        let session = TVDetailEntranceSession()
+        var popped = false
+        var dismissed = false
+        session.close(pop: {
+            popped = true
+            return true
+        }) {
+            dismissed = true
+        }
+        XCTAssertTrue(dismissed)
+        XCTAssertFalse(popped, "A return without a cover must not suppress native navigation.")
     }
 
     func testEpisodeRowEntersAfterControlsAndBeforeNavigationUnlocks() async throws {
@@ -301,6 +484,161 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         XCTAssertFalse(blocker.allowedPressTypes.contains(NSNumber(value: UIPress.PressType.menu.rawValue)))
         XCTAssertTrue(blocker.allowedPressTypes.contains(NSNumber(value: UIPress.PressType.select.rawValue)))
         XCTAssertTrue(blocker.allowedTouchTypes.contains(NSNumber(value: UITouch.TouchType.indirect.rawValue)))
+    }
+
+    func testReadyPrimaryEndsAnimationWithoutReleasingHeldInput() async throws {
+        final class SelectPress: UIPress {
+            override var type: UIPress.PressType { .select }
+        }
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let session = TVDetailEntranceSession()
+        defer { session.finishImmediately() }
+        session.attach(to: fixture.window, enabled: true, waitsForPageAppearance: true, waitsForBackdrop: true)
+        session.pageAppeared()
+        let guardView = try XCTUnwrap(inputGuards(in: fixture.window).first)
+        let press = SelectPress()
+        guardView.pressesBegan([press], with: UIPressesEvent())
+        session.finishOpeningForPrimaryAction()
+        XCTAssertFalse(session.blocksNavigation)
+        XCTAssertEqual(session.stage, .complete)
+        XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+        XCTAssertTrue(inputGuards(in: fixture.window).contains { $0 === guardView })
+        guardView.pressesEnded([press], with: UIPressesEvent())
+        try await waitUntil { self.inputGuards(in: fixture.window).isEmpty }
+    }
+
+    func testFinishingEntranceCannotBeUndoneByAnAlreadyAwakenedReveal() async throws {
+        try await assertCompletedEntranceSurvivesAwakenedReveals { $0.finishOpeningForPrimaryAction() }
+    }
+
+    func testDisappearanceCannotBeUndoneByAnAlreadyAwakenedReveal() async throws {
+        try await assertCompletedEntranceSurvivesAwakenedReveals { $0.disappeared() }
+    }
+
+    func testImmediateCompletionCannotBeUndoneByAnAlreadyAwakenedReveal() async throws {
+        try await assertCompletedEntranceSurvivesAwakenedReveals { $0.finishImmediately() }
+    }
+
+    private func assertCompletedEntranceSurvivesAwakenedReveals(
+        _ finish: (TVDetailEntranceSession) -> Void
+    ) async throws {
+        for stage in [DetailEntranceStage.artwork, .logo, .metadata, .controls, .episodes] {
+            let fixture = try await makeFixture()
+            defer { fixture.close() }
+            fixture.model.revealsEpisodesLast = true
+            fixture.model.open(in: fixture.window, usesCard: true)
+            try await waitUntil {
+                fixture.model.session?.isBackdropShadingVisible == true
+                    && fixture.model.session?.stage == stage
+            }
+            let session = try XCTUnwrap(fixture.model.session)
+            finishWhileRevealIsWaitingForMainActor(session, finish: finish)
+            XCTAssertEqual(session.stage, .complete)
+            try await Task.sleep(for: .seconds(session.timing.episodeReveal + 0.1))
+            XCTAssertEqual(session.stage, .complete, "A cancelled \(stage) reveal must not hide completed content.")
+            XCTAssertFalse(session.blocksNavigation)
+            XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+            XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+            try assertForegroundIsPainted(in: fixture, name: "completed-entrance-after-\(stage)")
+        }
+    }
+
+    private func finishWhileRevealIsWaitingForMainActor(
+        _ session: TVDetailEntranceSession, finish: (TVDetailEntranceSession) -> Void
+    ) {
+        let delay: TimeInterval = switch session.stage {
+        case .artwork: session.timing.artworkPause
+        case .logo, .metadata: session.timing.stagger
+        case .controls: session.timing.reveal
+        case .episodes: session.timing.episodeReveal
+        case .complete: 0
+        }
+        // Let the sleep expire while its continuation is waiting for this actor,
+        // then finish before the already-awakened reveal can resume.
+        Thread.sleep(forTimeInterval: delay + 0.1)
+        finish(session)
+    }
+
+    func testSourceChangeDuringEntranceCannotHideDestinationForeground() async throws {
+        for usesCard in [false, true] {
+            let fixture = try await makeFixture()
+            defer { fixture.close() }
+            fixture.model.open(in: fixture.window, usesCard: usesCard)
+            try await waitUntil { fixture.model.session != nil }
+            let session = try XCTUnwrap(fixture.model.session)
+            let retainedArtwork = session.returnArtwork
+            // The source carousel can reconfigure or remove its selected slide
+            // after navigation has captured the target.
+            fixture.model.source.itemKey = "next-carousel-item"
+            fixture.model.source.view = nil
+            try await waitUntil { session.stage == .complete && fixture.model.stages.last == .complete }
+            XCTAssertTrue(session.returnArtwork === retainedArtwork)
+            XCTAssertFalse(session.blocksNavigation)
+            XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+            try assertForegroundIsPainted(in: fixture, name: "detail-after-source-change-card-\(usesCard)")
+            session.close { fixture.model.path.removeLast() }
+            try await waitUntil { self.overlays(in: fixture.window).isEmpty }
+            XCTAssertTrue(fixture.model.path.isEmpty)
+            XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+        }
+    }
+
+    private func assertForegroundIsPainted(in fixture: CinematicFixtureWindow, name: String) throws {
+        let image = DetailTransitionSnapshot.image(of: fixture.window)
+        let shot = XCTAttachment(image: image)
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+        let metadata = try pixel(fixture.window, at: XCTUnwrap(fixture.model.frames[.metadata]))
+        XCTAssertGreaterThan(metadata[0], 240, "The yellow metadata must be painted, not just present in layout.")
+        XCTAssertGreaterThan(metadata[1], 240)
+        let frame = try XCTUnwrap(fixture.model.frames[.controls])
+        let crop = try XCTUnwrap(image.cgImage?.cropping(to: frame.integral))
+        var bytes = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+        try bytes.withUnsafeMutableBytes {
+            let context = try XCTUnwrap(CGContext(
+                data: $0.baseAddress, width: crop.width, height: crop.height,
+                bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+        }
+        let backdrop = try pixel(fixture.window, at: CGRect(x: 960, y: 540, width: 1, height: 1))
+        let paintedPixels = stride(from: 0, to: bytes.count, by: 4).filter {
+            abs(Int(bytes[$0]) - backdrop[0])
+                + abs(Int(bytes[$0 + 1]) - backdrop[1])
+                + abs(Int(bytes[$0 + 2]) - backdrop[2]) > 80
+        }.count
+        XCTAssertGreaterThan(
+            paintedPixels, 100,
+            "The native Play label/fill must differ from the bare backdrop: frame=\(frame), crop=\(crop.width)x\(crop.height)."
+        )
+    }
+
+    func testOpeningSelectOnlyForwardsFreshCompletedPresses() {
+        final class SelectPress: UIPress {
+            override var type: UIPress.PressType { .select }
+        }
+        let blocker = DetailTransitionInputGuard()
+        var activations = 0
+        blocker.onOpeningSelect = { activations += 1 }
+        let press = SelectPress()
+        blocker.pressesEnded([press], with: UIPressesEvent())
+        XCTAssertEqual(activations, 0, "The opening press must not be replayed into the destination.")
+        blocker.pressesBegan([press], with: UIPressesEvent())
+        blocker.pressesEnded([press], with: UIPressesEvent())
+        XCTAssertEqual(activations, 1)
+        blocker.pressesEnded([press], with: UIPressesEvent())
+        XCTAssertEqual(activations, 1)
+        blocker.pressesBegan([press], with: UIPressesEvent())
+        blocker.pressesCancelled([press], with: UIPressesEvent())
+        XCTAssertEqual(activations, 1)
+        blocker.setPhase(.returning)
+        blocker.pressesBegan([press], with: UIPressesEvent())
+        blocker.pressesEnded([press], with: UIPressesEvent())
+        XCTAssertEqual(activations, 1, "Return-transition input must remain suppressed.")
     }
 
     func testLateDestinationDoesNotRestartTheAlreadyRunningZoom() async throws {
@@ -882,7 +1220,8 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
                     // Rasterization belongs to custom focus; native projection
                     // can change the presented artwork's aspect ratio.
                     .environment(\.plozzCardFocusStyle, .outlined)
-                    .environment(\.plozzReduceTransparency, true))
+                    .environment(\.plozzReduceTransparency, true)
+                    .detailNavigationZoom(isEnabled: true))
                 let window = UIWindow(windowScene: scene)
                 window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
                 window.rootViewController = host
@@ -934,14 +1273,14 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         return bytes.map(Int.init)
     }
 
-    private func makeFixture() async throws -> CinematicFixtureWindow {
+    private func makeFixture(zoomEnabled: Bool = true) async throws -> CinematicFixtureWindow {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
         }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
         let policy = artworkPolicy()
-        let fixture = CinematicFixtureWindow(scene: scene, policy: policy)
+        let fixture = CinematicFixtureWindow(scene: scene, policy: policy, zoomEnabled: zoomEnabled)
         let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 180)).image {
             UIColor.blue.setFill()
             $0.fill(CGRect(x: 0, y: 0, width: 320, height: 180))
@@ -954,7 +1293,10 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
             ),
             for: source.key
         )
-        try await waitUntil { fixture.model.source.visibleFrame(in: fixture.window) != nil }
+        try await waitUntil {
+            fixture.model.source.visibleFrame(in: fixture.window) != nil
+                && DetailTransitionNavigation.isZoomEnabled(in: fixture.window) == zoomEnabled
+        }
         try await Task.sleep(for: .milliseconds(150))
         return fixture
     }
@@ -1024,7 +1366,11 @@ private final class CinematicFixtureWindow {
     let previousWindow: UIWindow?
     let model = CinematicFixtureModel()
 
-    init(scene: UIWindowScene, policy: ArtworkPresentationPolicy = .init(area: .details)) {
+    init(
+        scene: UIWindowScene, policy: ArtworkPresentationPolicy = .init(area: .details),
+        zoomEnabled: Bool = true
+    ) {
+        model.zoomEnabled = zoomEnabled
         previousWindow = scene.windows.first(where: \.isKeyWindow)
         window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
@@ -1040,6 +1386,7 @@ private final class CinematicFixtureWindow {
     }
 
     func close() {
+        model.nativeDismiss = nil
         model.session?.finishImmediately()
         DetailTransitionNavigation.take(in: window)?.discard()
         window.isHidden = true
@@ -1054,11 +1401,16 @@ private final class CinematicFixtureModel {
     let source = DetailTransitionSourceReference()
     var path: [Int] = []
     var revealsEpisodesLast = false
+    var waitsForBackdrop = false
+    var zoomEnabled = true
+    @ObservationIgnored var pageVisible = false
+    @ObservationIgnored var nativeDismiss: (() -> Void)?
     @ObservationIgnored var session: TVDetailEntranceSession?
     @ObservationIgnored var stages: [DetailEntranceStage] = []
     @ObservationIgnored var frames: [DetailEntranceStage: CGRect] = [:]
     @ObservationIgnored var events: [String] = []
     @ObservationIgnored var navigationAnimations: [Bool] = []
+    @ObservationIgnored var dismissalAnimations: [Bool] = []
 
     func open(in window: UIWindow, usesCard: Bool) {
         DetailTransitionNavigation.prepare(for: item, in: window, source: usesCard ? source : nil)
@@ -1081,15 +1433,21 @@ private struct CinematicFixtureRoot: View {
                 .focusable()
                 .navigationDestination(for: Int.self) { _ in
                     CinematicFixturePage(model: model)
-                        .cinematicDetailPage(isEnabled: true, revealsEpisodesLast: model.revealsEpisodesLast)
+                        .cinematicDetailPage(
+                            isEnabled: true, waitsForBackdrop: model.waitsForBackdrop,
+                            revealsEpisodesLast: model.revealsEpisodesLast
+                        )
                 }
         }
+        .cinematicDetailNavigation(path: $model.path)
+        .detailNavigationZoom(isEnabled: model.zoomEnabled)
     }
 }
 
 private struct CinematicFixturePage: View {
     let model: CinematicFixtureModel
     @Environment(\.detailEntranceSession) private var session
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -1098,8 +1456,11 @@ private struct CinematicFixturePage: View {
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                     model.frames[.logo] = $0
                 }
-            Color.yellow.frame(width: 400, height: 60)
+            Color(red: 1, green: 1, blue: 0).frame(width: 400, height: 60)
                 .detailEntranceStage(.metadata)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                    model.frames[.metadata] = $0
+                }
             Button("Play") {}
                 .detailEntranceStage(.controls)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
@@ -1121,6 +1482,7 @@ private struct CinematicFixturePage: View {
         .modifier(DetailTopSafeAreaBreakout())
         .onAppear {
             model.session = session
+            model.nativeDismiss = { dismiss() }
             model.stages = [.artwork]
         }
 
@@ -1155,6 +1517,21 @@ private struct NavigationAppearanceProbe: UIViewControllerRepresentable {
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
             model.navigationAnimations.append(transitionCoordinator?.isAnimated ?? animated)
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            model.pageVisible = true
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            model.dismissalAnimations.append(transitionCoordinator?.isAnimated ?? animated)
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            model.pageVisible = false
         }
     }
 }

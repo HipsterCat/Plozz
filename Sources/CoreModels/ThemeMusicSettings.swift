@@ -36,10 +36,13 @@ public struct ThemeMusicSettings: Codable, Equatable, Sendable {
 }
 
 public enum ThemeMusicVolume: String, Codable, CaseIterable, Sendable {
+    /// Retained for decoding older profile preferences, not offered in Settings.
     case off
     case low
     case medium
     case high
+
+    public static let playbackLevels: [Self] = [.low, .medium, .high]
 
     public var gain: Float {
         switch self {

@@ -46,6 +46,7 @@ public struct MediaCardPlaybackIndicators: View {
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzWatchStatusIndicator) private var watchStatusIndicator
     @Environment(\.plozzShowsUnwatchedEpisodeCount) private var showsUnwatchedEpisodeCount
+    @Environment(\.plozzEpisodeCountBadgeStyle) private var episodeCountStyle
     /// Whether an unowned title can be requested, or is merely flagged as absent.
     @Environment(\.plozzSeerConnected) private var seerConnected
     /// Published by the hosting card so this chrome can settle back at rest and
@@ -242,10 +243,10 @@ public struct MediaCardPlaybackIndicators: View {
 
     private func episodeCountBadge(_ count: Int) -> some View {
         MediaEpisodeCountBadge(
-            count: count, indicator: watchStatusIndicator, size: metrics.watchedBadgeSize,
+            count: count, style: episodeCountStyle, size: metrics.watchedBadgeSize,
             cornerRadius: artworkCornerRadius ?? metrics.posterArtworkCornerRadius
         )
-        .padding(watchStatusIndicator == .watched ? floatingBadgeInset : 0)
+        .padding(episodeCountStyle == .floating ? floatingBadgeInset : 0)
         .accessibilityLabel(Text("Unwatched episodes: \(count)"))
     }
 
@@ -373,9 +374,30 @@ enum NativePosterIndicators: View, Equatable {
     }
 }
 
-enum MediaWatchIndicatorStyle {
-    static let fill = Color.white
-    static let foreground = Color(white: 0.13)
+public enum MediaWatchIndicatorStyle {
+    /// The badge and flag fill. Fixed sRGB values rather than system colours so
+    /// the mark looks the same in every theme and appearance.
+    public static func fill(_ color: WatchIndicatorColor) -> Color {
+        switch color {
+        case .white: .white
+        case .blue: Color(red: 0.04, green: 0.52, blue: 1.0)
+        case .green: Color(red: 0.19, green: 0.78, blue: 0.35)
+        case .yellow: Color(red: 1.0, green: 0.80, blue: 0.0)
+        case .orange: Color(red: 1.0, green: 0.58, blue: 0.0)
+        case .red: Color(red: 1.0, green: 0.23, blue: 0.19)
+        case .pink: Color(red: 1.0, green: 0.18, blue: 0.53)
+        case .purple: Color(red: 0.69, green: 0.32, blue: 0.87)
+        }
+    }
+
+    /// The check glyph over `fill(_:)`: dark on the light fills, white otherwise.
+    public static func foreground(_ color: WatchIndicatorColor) -> Color {
+        switch color {
+        case .white, .yellow, .orange, .green: Color(white: 0.13)
+        case .blue, .red, .pink, .purple: .white
+        }
+    }
+
     static let edge = Color.white.opacity(0.32)
     static let countFill = Color(white: 0.08).opacity(0.88)
     static let countForeground = Color.white
@@ -388,14 +410,15 @@ enum MediaWatchIndicatorStyle {
 
 struct MediaWatchedBadge: View {
     let size: CGFloat
+    @Environment(\.plozzWatchIndicatorColor) private var color
     private var scale: CGFloat { size / PlozzTheme.Metrics.watchedBadgeSize }
 
     var body: some View {
         Image(systemName: "checkmark")
             .font(.system(size: size * 0.53, weight: .bold))
-            .foregroundStyle(MediaWatchIndicatorStyle.foreground)
+            .foregroundStyle(MediaWatchIndicatorStyle.foreground(color))
             .frame(width: size, height: size)
-            .background(Circle().fill(MediaWatchIndicatorStyle.fill))
+            .background(Circle().fill(MediaWatchIndicatorStyle.fill(color)))
             .overlay(Circle().stroke(MediaWatchIndicatorStyle.edge, lineWidth: scale))
             .shadow(color: .black.opacity(0.2), radius: 3 * scale, y: scale)
     }
@@ -403,11 +426,12 @@ struct MediaWatchedBadge: View {
 
 struct MediaUnwatchedCorner: View {
     let size: CGFloat
+    @Environment(\.plozzWatchIndicatorColor) private var color
     private var scale: CGFloat { size / PlozzTheme.Metrics.unwatchedFlagSize }
 
     var body: some View {
         TopTrailingCornerFlag()
-            .fill(MediaWatchIndicatorStyle.fill)
+            .fill(MediaWatchIndicatorStyle.fill(color))
             .shadow(color: .black.opacity(0.28), radius: 8 * scale)
             .overlay {
                 TopTrailingCornerFlagEdge().stroke(.black.opacity(0.3), lineWidth: scale)
@@ -418,7 +442,7 @@ struct MediaUnwatchedCorner: View {
 
 struct MediaEpisodeCountBadge: View {
     let count: Int
-    let indicator: WatchStatusIndicator
+    let style: EpisodeCountBadgeStyle
     let size: CGFloat
     let cornerRadius: CGFloat
     @Environment(\.nativePosterIndicatorLayer) private var nativeIndicatorLayer
@@ -434,8 +458,8 @@ struct MediaEpisodeCountBadge: View {
     }
 
     @ViewBuilder var body: some View {
-        switch indicator {
-        case .watched:
+        switch style {
+        case .floating:
             if nativeIndicatorLayer != .background {
                 digits
                     .padding(.horizontal, 12 * scale)
@@ -447,7 +471,7 @@ struct MediaEpisodeCountBadge: View {
                     }
                     .shadow(color: .black.opacity(0.2), radius: 3 * scale, y: scale)
             }
-        case .unwatched:
+        case .attached:
             let height = 52 * scale
             let width = max(48, 24 + CGFloat(String(count).count) * 16) * scale
             let radius = min(cornerRadius, height / 2)

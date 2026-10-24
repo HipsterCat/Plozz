@@ -185,6 +185,7 @@ public struct HomeView: View {
     /// viewer sits on it. `nil` disables polling (previews, hosts with no shares).
     private let onPollShares: () -> Void
     @State private var navigationActivity = HomeNavigationActivity()
+    @State private var featuredTrailers = FeaturedTrailerCoordinator()
     private let heroTrailerResolver: HeroTrailerResolving
     private let heroIsFrontmost: Bool
     private let heroCurator: HeroCurator
@@ -368,6 +369,14 @@ public struct HomeView: View {
     }
 
     public var body: some View {
+        GeometryReader { geometry in
+            screen
+                .environment(\.mediaRowHeaderTrailingInset,
+                             navigationStyle == .rail ? geometry.safeAreaInsets.trailing : 0)
+        }
+    }
+
+    private var screen: some View {
         let _ = PlozzBodyRate.tick("HomeView")
         return ContentStateView(
             state: HomePresentationRow.displayState(
@@ -392,12 +401,8 @@ public struct HomeView: View {
         ) { content in
             // The screen is a data-driven list of rows. Both this loaded view and
             // the skeleton render from the same ordered `HomeRow`/`HomeRowKind`
-            // structure, which keeps them 1:1 and makes the order the single thing
-            // a future row-customization feature edits. `HomeRow.rows` also applies
-            // per-library Home-visibility to *every* row's items (not just the
-            // Libraries tiles), so a hidden library's content is suppressed
-            // app-wide; passing the reactive `isVisible` here keeps toggles taking
-            // effect on the next render even before any re-fetch settles.
+            // structure. Discovery follows live library visibility; global
+            // viewing history remains account-wide.
             let rows = HomeRow.rows(
                 for: content,
                 isLibraryVisible: { visibility.isVisible($0) },
@@ -1276,7 +1281,7 @@ public struct HomeView: View {
     /// hero item **in place**, so the featured CTA tracks the server
     /// (Request → "Downloading n%" → Play) as downloads start and finish.
     ///
-    /// Deliberately surgical: it mutates only those two fields on items whose id
+    /// Deliberately surgical: it mutates only request status fields on items whose id
     /// still matches a fresh featured result, never changing the array's contents
     /// order or any item's id. That's what guarantees the hero carousel doesn't
     /// re-seat, re-wipe its backdrop, restart its dwell, or move focus — only the
@@ -1336,8 +1341,13 @@ public struct HomeView: View {
                 title: Text(row.title), items: row.items, style: visibility.continueWatchingLayout.cardStyle,
                 spoilerSettings: spoilerSettings, showsSeriesArtwork: visibility.continueWatchingUsesSeriesArtwork,
                 loadingPlaceholderCount: row.loadingPlaceholderCount,
-                reservesLoadingFocus: reservesLoadingFocus, playsOnSelect: true,
-                liveChannels: liveTV.recentChannels, onSelect: onPlayItem
+                reservesLoadingFocus: reservesLoadingFocus,
+                playsOnSelect: row.playsOnSelect(continueWatchingAction: visibility.continueWatchingAction),
+                showsResumeChip: true,
+                liveChannels: liveTV.recentChannels,
+                onPlay: onPlayItem,
+                onSelect: row.playsOnSelect(continueWatchingAction: visibility.continueWatchingAction)
+                    ? onPlayItem : onSelectItem
             )
             .environment(\.plozzArtworkArea, .continueWatching)
         case .watchlist:
@@ -1623,10 +1633,13 @@ public struct HomeView: View {
                         onCardFocused: reporter.cardFocused,
                         loadingPlaceholderCount: row.loadingPlaceholderCount,
                         reservesLoadingFocus: reservesLoadingFocus,
-                        playsOnSelect: true,
+                        playsOnSelect: row.playsOnSelect(continueWatchingAction: visibility.continueWatchingAction),
+                        showsResumeChip: true,
                         liveChannels: liveTV.recentChannels,
                         onLiveChannelFocused: reporter.focusedLiveChannel,
-                        onSelect: onPlayItem
+                        onPlay: onPlayItem,
+                        onSelect: row.playsOnSelect(continueWatchingAction: visibility.continueWatchingAction)
+                            ? onPlayItem : onSelectItem
                     )
                     .environment(\.plozzArtworkArea, .continueWatching)
                 case .watchlist:
@@ -1694,10 +1707,19 @@ public struct HomeView: View {
             )
         case .section(let row):
             let section = row.section
-            if let failure = row.failure {
+            if let issue = row.issue {
+                sectionStatusView(issue, browseItem: row.browseItem)
+                    .background { NativeFocusRegionObserver(onFocusEntered: reporter.entered) }
+            } else if let failure = row.failure {
                 rowFailureView(
                     title: section.displayName, error: failure, onFocusEntered: reporter.entered
                 )
+            } else if row.collectionCardStyle == .featured, !row.isLoading {
+                featuredRow(row) { item in
+                    reporter.entered()
+                    reporter.cardFocused(item)
+                    onFocusChange(item)
+                }
             } else {
                 MediaRowView(
                     title: section.displayName,
@@ -1709,8 +1731,9 @@ public struct HomeView: View {
                     onCardFocused: reporter.cardFocused,
                     loadingPlaceholderCount: row.isLoading ? 8 : 0,
                     reservesLoadingFocus: reservesLoadingFocus,
-                    playsOnSelect: section.style == .landscape,
-                    onSelect: section.style == .landscape ? onPlayItem : onSelectItem
+                    playsOnSelect: row.browseItem == nil && section.style == .landscape,
+                    onSeeAll: row.browseItem.map { item in { onSelectItem(item) } },
+                    onSelect: row.browseItem == nil && section.style == .landscape ? onPlayItem : onSelectItem
                 )
             }
         }
@@ -1757,8 +1780,12 @@ public struct HomeView: View {
     @ViewBuilder
     private func libraryRowView(_ row: HomeLibrarySectionGroup.Row) -> some View {
             let section = row.section
-            if let failure = row.failure {
+            if let issue = row.issue {
+                sectionStatusView(issue, browseItem: row.browseItem)
+            } else if let failure = row.failure {
                 rowFailureView(title: section.displayName, error: failure)
+            } else if row.collectionCardStyle == .featured, !row.isLoading {
+                featuredRow(row)
             } else {
                 MediaRowView(
                     title: section.displayName,
@@ -1766,10 +1793,34 @@ public struct HomeView: View {
                     style: cardStyle(section.style),
                     spoilerSettings: spoilerSettings,
                     loadingPlaceholderCount: row.isLoading ? 8 : 0,
-                    playsOnSelect: section.style == .landscape,
-                    onSelect: section.style == .landscape ? onPlayItem : onSelectItem
+                    playsOnSelect: row.browseItem == nil && section.style == .landscape,
+                    onSeeAll: row.browseItem.map { item in { onSelectItem(item) } },
+                    onSelect: row.browseItem == nil && section.style == .landscape ? onPlayItem : onSelectItem
                 )
         }
+    }
+
+    private func featuredRow(
+        _ row: HomeLibrarySectionGroup.Row, onFocus: ((MediaItem) -> Void)? = nil
+    ) -> some View {
+        FeaturedMediaRow(
+            title: row.section.displayName, items: row.section.items,
+            scope: ObjectIdentifier(viewModel),
+            coordinator: featuredTrailers, controller: heroTrailerController,
+            settings: heroBackground.settings, resolver: heroTrailerResolver,
+            isActive: heroIsFrontmost, spoilers: spoilerSettings, onFocus: onFocus,
+            onSeeAll: row.browseItem.map { item in { onSelectItem(item) } },
+            onSelect: onSelectItem
+        )
+    }
+
+    private func sectionStatusView(_ issue: HomeSectionIssue, browseItem: MediaItem?) -> some View {
+        HomeSectionStatusView(issue: issue, onSeeAll: browseItem.map { item in { onSelectItem(item) } }) {
+            Task { await viewModel.load(showLoadingState: false) }
+        }
+        .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
+        .padding(.vertical, metrics.sectionTitleSpacing)
+        .disabled(viewModel.isRefreshing)
     }
 
     private func librariesRow(

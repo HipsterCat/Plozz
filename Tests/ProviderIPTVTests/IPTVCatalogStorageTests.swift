@@ -30,6 +30,43 @@ final class IPTVCatalogStorageTests: XCTestCase {
         try URL(fileURLWithPath: url.path + "-wal").resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
     }
 
+    func testPausedStagingAndFailedCommitLeaveNoMainDatabaseTransactionOrBusyStatement() throws {
+        let url = try location()
+        let catalog = try IPTVCatalog(url: url, key: key)
+        try importRows(1, into: catalog)
+        let db = try XCTUnwrap(catalog.db)
+        try catalog.beginImport()
+        defer { catalog.discardImport() }
+        for index in 0..<3_000 {
+            try catalog.insert(IPTVRecord(item: .init(
+                id: "incoming-\(index)", title: String(repeating: "x", count: 1_000),
+                kind: .movie, libraryID: "movies"
+            )), into: .incoming)
+        }
+        XCTAssertEqual(sqlite3_get_autocommit(db), 1)
+        XCTAssertEqual(sqlite3_txn_state(db, "main"), SQLITE_TXN_NONE)
+        var statement = sqlite3_next_stmt(db, nil)
+        while let current = statement {
+            XCTAssertEqual(sqlite3_stmt_busy(current), 0)
+            statement = sqlite3_next_stmt(db, current)
+        }
+        var observer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(url.path, &observer, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        let observerDB = try XCTUnwrap(observer)
+        defer { sqlite3_close(observerDB) }
+        XCTAssertEqual(sqlite3_wal_checkpoint_v2(observerDB, "main", SQLITE_CHECKPOINT_TRUNCATE, nil, nil), SQLITE_OK)
+
+        enum InterruptedCommit: Error { case interrupted }
+        XCTAssertThrowsError(try catalog.commitImport(library: nil, scope: "playlist") { copied in
+            if copied > 0 { throw InterruptedCommit.interrupted }
+        })
+        XCTAssertEqual(sqlite3_get_autocommit(db), 1)
+        XCTAssertEqual(sqlite3_txn_state(db, "main"), SQLITE_TXN_NONE)
+        XCTAssertEqual(try catalog.count(where: "1 = 1"), 1)
+        XCTAssertEqual(try catalog.record("movie-0").item.id, "movie-0")
+        XCTAssertEqual(sqlite3_wal_checkpoint_v2(observerDB, "main", SQLITE_CHECKPOINT_TRUNCATE, nil, nil), SQLITE_OK)
+    }
+
     func testRepeatedImportsBoundTheRetainedJournalWithoutLosingRows() throws {
         let url = try location()
         let catalog = try IPTVCatalog(url: url, key: key)

@@ -9,6 +9,38 @@ import CoreModels
 
 @MainActor
 final class NativeFocusRequestHostedTests: XCTestCase {
+    func testCinematicGuardBlocksNativeDirectionsButAllowsSourceRestoration() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let poster = try XCTUnwrap(nativePoster(in: fixture.window))
+        let guardView = DetailTransitionNavigation.installInputGuard(in: fixture.window, phase: .returning)
+        defer { guardView.invalidate() }
+        for heading in [UIFocusHeading.left, .right, .up, .down] {
+            XCTAssertFalse(DetailTransitionNavigation.allowsFocusUpdate(heading: heading, in: poster))
+        }
+        XCTAssertTrue(DetailTransitionNavigation.allowsFocusUpdate(heading: [], in: poster),
+                      "Programmatic source restoration must remain available beneath the cover.")
+        guardView.releaseWhenIdle()
+        XCTAssertTrue(DetailTransitionNavigation.allowsFocusUpdate(heading: .left, in: poster),
+                      "Fresh directions must be accepted when the transition releases input.")
+    }
+
+    func testRestoringAnAlreadyFocusedNativeSourceDoesNotQueueAnotherRequest() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let focus = try XCTUnwrap(fixture.model.cardFocus)
+        focus.requestFocus(animated: false)
+        try await waitUntil { focus.isFocused && !focus.request.wrappedValue.wantsFocus }
+        let generation = focus.request.wrappedValue.generation
+        let requester = DetailTransitionSourceAnchor.Coordinator()
+        requester.cardFocus = focus
+        XCTAssertTrue(requester.requestFocus())
+        XCTAssertEqual(focus.request.wrappedValue.generation, generation)
+        XCTAssertFalse(focus.request.wrappedValue.wantsFocus)
+        XCTAssertTrue(focus.focusState.wrappedValue)
+        XCTAssertTrue(try XCTUnwrap(nativePoster(in: fixture.window)).isFocused)
+    }
+
     func testNavigationCallbackRefreshKeepsIdentityAndUsesLatestRoute() async throws {
         let fixture = try await makeFixture()
         let state = NavigatorRefreshState()

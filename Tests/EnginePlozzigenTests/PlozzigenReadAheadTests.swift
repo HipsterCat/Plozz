@@ -9,6 +9,9 @@ final class PlozzigenReadAheadTests: XCTestCase {
         for (choice, segments) in zip(PlaybackReadAhead.allCases, expected) {
             let options = PlozzigenVideoEngine.onDemandLoadOptions(audioChannels: 8, readAhead: choice)
             XCTAssertEqual(options.forwardBufferSegments, segments)
+            XCTAssertEqual(options.sessionCacheByteBudget, choice == .automatic ? nil : Int.max)
+            XCTAssertEqual(options.softwarePacketCacheStorage, .automatic)
+            XCTAssertNil(options.liveEdgeCushionSeconds)
             XCTAssertFalse(options.isLive)
             XCTAssertNil(options.dvrWindowSeconds)
             XCTAssertFalse(options.progressiveSegmentDelivery)
@@ -46,6 +49,7 @@ final class PlozzigenReadAheadTests: XCTestCase {
             )
             let request = PlaybackRequest(item: item, playbackSource: .authenticatedHTTP(locator))
             XCTAssertEqual(engine.onDemandLoadOptions(for: request).forwardBufferSegments, 150)
+            XCTAssertEqual(engine.onDemandLoadOptions(for: request).sessionCacheByteBudget, Int.max)
         }
         let locator = try NetworkFileLocator(
             accountID: "account", sourceID: "share", credentialRevision: .init(),
@@ -59,6 +63,7 @@ final class PlozzigenReadAheadTests: XCTestCase {
         )
         let network = PlaybackRequest(item: item, playbackSource: .networkFile(locator))
         XCTAssertEqual(engine.onDemandLoadOptions(for: network).forwardBufferSegments, 150)
+        XCTAssertEqual(engine.onDemandLoadOptions(for: network).sessionCacheByteBudget, Int.max)
         XCTAssertEqual(engine.onDemandLoadOptions(
             for: PlaybackRequest(item: item, streamURL: remoteURL)
         ).forwardBufferSegments, 150)
@@ -69,9 +74,11 @@ final class PlozzigenReadAheadTests: XCTestCase {
         let localURL = URL(fileURLWithPath: "/fixture/movie.mkv")
         let local = PlaybackRequest(item: item, streamURL: localURL)
         XCTAssertNil(engine.onDemandLoadOptions(for: local).forwardBufferSegments)
+        XCTAssertNil(engine.onDemandLoadOptions(for: local).sessionCacheByteBudget)
         var scheduled = PlaybackRequest(item: item, streamURL: remoteURL)
         scheduled.suppressOrdinaryWatchReporting = true
         XCTAssertNil(engine.onDemandLoadOptions(for: scheduled).forwardBufferSegments)
+        XCTAssertNil(engine.onDemandLoadOptions(for: scheduled).sessionCacheByteBudget)
         let preview = try PlozzigenVideoEngine()
         XCTAssertNil(preview.onDemandLoadOptions(
             for: PlaybackRequest(item: item, streamURL: remoteURL)
@@ -82,10 +89,19 @@ final class PlozzigenReadAheadTests: XCTestCase {
             )
             XCTAssertTrue(options.isLive)
             XCTAssertNil(options.forwardBufferSegments)
+            XCTAssertNil(options.sessionCacheByteBudget)
             XCTAssertNil(options.dvrWindowSeconds)
         }
     }
 
     private var item: MediaItem { MediaItem(id: "movie", title: "Fixture", kind: .movie) }
+    func testVODHLSLeavesCarriageClassificationToAether() throws {
+        let engine = try PlozzigenVideoEngine()
+        let request = PlaybackRequest(item: item, streamURL: URL(string: "https://example.test/master.m3u8")!)
+        let options = engine.onDemandLoadOptions(for: request)
+        XCTAssertFalse(options.nativeRemoteHLS, "An explicit bypass skips finite HEVC-in-TS classification.")
+        XCTAssertFalse(options.isLive)
+    }
+
     private var remoteURL: URL { URL(string: "https://example.invalid/movie.mkv")! }
 }

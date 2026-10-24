@@ -8,6 +8,11 @@ import XCTest
 /// (h2-cw-clamp)
 final class WatchOutboxResumeRecencyTests: XCTestCase {
 
+    private final class Clock: @unchecked Sendable {
+        var date: Date
+        init(_ date: Date) { self.date = date }
+    }
+
     private final class FakeApplier: WatchMutationApplying, @unchecked Sendable {
         private let lock = NSLock()
         var failingAccounts: Set<String> = []
@@ -110,7 +115,6 @@ final class WatchOutboxResumeRecencyTests: XCTestCase {
     /// The record is short-lived: a later drain past the TTL prunes it, so a stale
     /// record can never override a genuine later play (e.g. one made on another client).
     func testAppliedRecencyPrunedAfterTTL() async {
-        final class Clock: @unchecked Sendable { var date: Date; init(_ d: Date) { date = d } }
         let store = InMemoryWatchMutationStore()
         let applier = FakeApplier()
         let clock = Clock(drainTime)
@@ -133,10 +137,11 @@ final class WatchOutboxResumeRecencyTests: XCTestCase {
     /// A newer play supersedes the recorded time (newest-wins), and a target whose
     /// write failed (offline server) records nothing until it actually converges.
     func testNewestWinsAndFailedWriteRecordsNothing() async {
+        let clock = Clock(drainTime)
         let store = InMemoryWatchMutationStore()
         let applier = FakeApplier()
         applier.failingAccounts = ["plex"]
-        let reconciler = WatchStateReconciler(store: store, applier: applier, now: { self.drainTime })
+        let reconciler = WatchStateReconciler(store: store, applier: applier, now: { clock.date })
 
         // Plex offline: the resume write throws, stays queued, records nothing.
         await reconciler.enqueue(resume(900, capturedAt: playTime, targets: [target("plex", "rk1")]))
@@ -146,6 +151,7 @@ final class WatchOutboxResumeRecencyTests: XCTestCase {
 
         // Plex back online: the queued write converges and records the play time.
         applier.failingAccounts = []
+        clock.date = clock.date.addingTimeInterval(30)
         await reconciler.drain()
         let afterConverge = await reconciler.snapshot().appliedRecency["plex:rk1"]
         XCTAssertEqual(afterConverge?.capturedAt, playTime)

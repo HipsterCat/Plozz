@@ -62,19 +62,34 @@ public struct SettingsPageHeader: View {
 
 public struct SettingsBackButton: View {
     private let action: () -> Void
+    private let usesGlass: Bool
 
-    public init(action: @escaping () -> Void) {
+    public init(usesGlass: Bool = false, action: @escaping () -> Void) {
         self.action = action
+        self.usesGlass = usesGlass
     }
 
     public var body: some View {
+        styledButton
+            .buttonBorderShape(.capsule)
+            .controlSize(.regular)
+            .fixedSize()
+    }
+
+    @ViewBuilder
+    private var styledButton: some View {
+        if usesGlass {
+            button.plozzGlassPillButton()
+        } else {
+            button.buttonStyle(.bordered)
+        }
+    }
+
+    private var button: some View {
         Button(action: action) {
             Label("Back", systemImage: "chevron.backward")
+                .labelStyle(.iconOnly)
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
-        .controlSize(.regular)
-        .fixedSize()
     }
 }
 #endif

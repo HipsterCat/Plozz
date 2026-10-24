@@ -18,12 +18,14 @@ final class ProfileSettingsTransferTests: XCTestCase {
         // Non-transferable, device-local keys that must NOT travel.
         source.set("sidebar", forKey: "navigationStyle")
         source.set(true, forKey: "preventsAccidentalExit")
+        source.set(true, forKey: NavigationStyleSettingsStore.detailZoomStorageKey)
 
         let entries = ProfileSettingsTransfer.capture(namespace: nil, defaults: source)
         XCTAssertNotNil(entries["com.plozz.playbackSettings"])
         XCTAssertNotNil(entries["musicLyricsEnabled"])
         XCTAssertNil(entries["navigationStyle"], "device-local settings must not be captured")
         XCTAssertNil(entries["preventsAccidentalExit"], "tvOS-only settings must not be captured")
+        XCTAssertNil(entries[NavigationStyleSettingsStore.detailZoomStorageKey])
 
         let target = makeDefaults()
         ProfileSettingsTransfer.apply(entries, namespace: nil, defaults: target)
@@ -31,6 +33,7 @@ final class ProfileSettingsTransferTests: XCTestCase {
         XCTAssertEqual(target.bool(forKey: "musicLyricsEnabled"), true)
         XCTAssertNil(target.string(forKey: "navigationStyle"))
         XCTAssertNil(target.object(forKey: "preventsAccidentalExit"))
+        XCTAssertNil(target.object(forKey: NavigationStyleSettingsStore.detailZoomStorageKey))
     }
 
     func testNamespacedProfileKeysAreIsolated() {
@@ -91,5 +94,59 @@ final class ProfileSettingsTransferTests: XCTestCase {
         let target = makeDefaults()
         ProfileSettingsTransfer.apply(first, namespace: nil, defaults: target)
         XCTAssertEqual(target.data(forKey: "com.plozz.appTheme"), Data([0xFF, 0x00, 0x42]))
+    }
+
+    func testDictionaryPreferencesStayByteStableAcrossCaptureAndApply() throws {
+        let source = makeDefaults()
+        let receiver = makeDefaults()
+        let key = "com.plozz.playback.preferredVersions"
+        let entries = (0..<40).map { ("title-\($0)", "version-\($0)") }
+        source.set(Dictionary(uniqueKeysWithValues: entries), forKey: key)
+        let original = ProfileSettingsTransfer.capture(namespace: nil, defaults: source)
+        for offset in 0..<20 {
+            let reordered = Array(entries[offset...]) + Array(entries[..<offset])
+            source.set(Dictionary(uniqueKeysWithValues: reordered), forKey: key)
+            let captured = ProfileSettingsTransfer.capture(namespace: nil, defaults: source)
+            XCTAssertEqual(captured, original)
+            ProfileSettingsTransfer.apply(captured, namespace: nil, defaults: receiver)
+            XCTAssertEqual(ProfileSettingsTransfer.capture(namespace: nil, defaults: receiver), original)
+            XCTAssertEqual(receiver.dictionary(forKey: key) as? [String: String], Dictionary(uniqueKeysWithValues: entries))
+        }
+        source.set(["title": "changed-version"], forKey: key)
+        XCTAssertNotEqual(ProfileSettingsTransfer.capture(namespace: nil, defaults: source), original)
+    }
+
+    func testHeroSetOrderIsCanonicalButSourceOrderStillMatters() throws {
+        let defaults = makeDefaults()
+        let key = "com.plozz.heroSettings"
+        defaults.set(Data(#"{"randomLibraryKeys":["library-b","library-a"],"sources":["watchlist","continueWatching"]}"#.utf8), forKey: key)
+        let first = ProfileSettingsTransfer.capture(namespace: nil, defaults: defaults)
+        defaults.set(Data(#"{"randomLibraryKeys":["library-a","library-b"],"sources":["watchlist","continueWatching"]}"#.utf8), forKey: key)
+        XCTAssertEqual(ProfileSettingsTransfer.capture(namespace: nil, defaults: defaults), first)
+        let receiver = makeDefaults()
+        ProfileSettingsTransfer.apply(first, namespace: nil, defaults: receiver)
+        XCTAssertEqual(ProfileSettingsTransfer.capture(namespace: nil, defaults: receiver), first)
+        defaults.set(Data(#"{"randomLibraryKeys":["library-a","library-b"],"sources":["continueWatching","watchlist"]}"#.utf8), forKey: key)
+        XCTAssertNotEqual(ProfileSettingsTransfer.capture(namespace: nil, defaults: defaults), first)
+    }
+
+    func testHeroCanonicalizationPreservesUnknownFieldsAndMalformedValues() throws {
+        let key = "com.plozz.heroSettings"
+        let defaults = makeDefaults()
+        let raw = Data(#"{"randomLibraryKeys":["b","a"],"futureField":{"ordered":["z","a"]},"maxItems":7}"#.utf8)
+        let legacy = try PropertyListSerialization.data(fromPropertyList: [raw], format: .binary, options: 0)
+        ProfileSettingsTransfer.applyOne(baseKey: key, blob: legacy, namespace: nil, defaults: defaults)
+        let applied = try XCTUnwrap(defaults.data(forKey: key))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: applied) as? [String: Any])
+        XCTAssertEqual(object["randomLibraryKeys"] as? [String], ["a", "b"])
+        XCTAssertEqual((object["futureField"] as? [String: Any])?["ordered"] as? [String], ["z", "a"])
+        XCTAssertEqual(object["maxItems"] as? Int, 7)
+
+        let malformed = Data(#"{"randomLibraryKeys":["b",4,"a"]}"#.utf8)
+        let canonical = try XCTUnwrap(ProfileSettingsTransfer.canonicalize(malformed, baseKey: key) as? Data)
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: canonical) as? NSDictionary,
+            try JSONSerialization.jsonObject(with: malformed) as? NSDictionary
+        )
     }
 }

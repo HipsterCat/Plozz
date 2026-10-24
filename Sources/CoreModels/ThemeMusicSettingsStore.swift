@@ -9,13 +9,17 @@ public protocol ThemeMusicSettingsStoring: Sendable {
 public final class ThemeMusicSettingsStore: ThemeMusicSettingsStoring, @unchecked Sendable {
     private let defaults: UserDefaults
     private let key: String
+    private let namespace: String?
 
     public init(defaults: UserDefaults = .standard, namespace: String? = nil) {
         self.defaults = defaults
+        self.namespace = namespace
         self.key = SettingsKey.scoped("com.plozz.themeMusicSettings", namespace: namespace)
     }
 
     public func load() -> ThemeMusicSettings {
+        // Either model may load first; migrate the paired background choice before volume.
+        _ = HeroBackgroundSettingsStore(defaults: defaults, namespace: namespace).load()
         guard let data = defaults.data(forKey: key),
               let settings = try? JSONDecoder().decode(ThemeMusicSettings.self, from: data) else {
             return .default

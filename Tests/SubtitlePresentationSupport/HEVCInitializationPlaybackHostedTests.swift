@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreModels
 import FeaturePlayback
+import EnginePlozzigen
 import Foundation
 import XCTest
 
@@ -75,6 +76,21 @@ final class HEVCInitializationPlaybackHostedTests: XCTestCase {
         )
         request.streamingOptions = .init(quality: .low)
         request.negotiatedStreamingVideoCodec = .hevc
+        // Verify the current engine still needs Plozz's custom AVAsset repair,
+        // rather than preserving a native exception based on an old comment.
+        let aether = try PlozzigenVideoEngine()
+        defer { aether.stop() }
+        await aether.load(request: request, startPosition: 0)
+        let aetherDeadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < aetherDeadline {
+            if case .failed = aether.status { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard case .failed = aether.status else {
+            XCTFail("Recheck the native exception: Aether no longer rejected the original initialization.")
+            return
+        }
+        aether.stop()
         await engine.load(request: request, startPosition: 0)
         let player = try XCTUnwrap(engine.underlyingPlayer)
         player.isMuted = true

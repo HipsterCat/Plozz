@@ -5,6 +5,50 @@ import XCTest
 @testable import ProviderJellyfin
 
 final class JellyfinPlaybackNegotiationTests: XCTestCase {
+    func testDecoderBackedPlaybackDoesNotOverrideDirectPlayWithALegacyServerRemux() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            for container in ["mp4", "mkv"] {
+                let original = """
+                {"PlaySessionId":"original","MediaSources":[{
+                  "Id":"version","Container":"\(container)","SupportsDirectPlay":true,
+                  "MediaStreams":[
+                    {"Index":0,"Type":"Video","Codec":"hevc","CodecTag":"hev1","VideoRangeType":"DOVIWithHDR10"},
+                    {"Index":1,"Type":"Audio","Codec":"eac3","IsDefault":true}
+                  ]
+                }]}
+                """
+                let http = fixtureHTTP(decisions: [original, decision(session: "unnecessary-remux")])
+                let request = try await provider(kind, http: http, hybrid: true).playbackInfo(
+                    for: "movie", mediaSourceID: "version", forceTranscode: false
+                )
+                XCTAssertEqual(http.sentPaths.filter { $0.hasSuffix("/PlaybackInfo") }.count, 1)
+                XCTAssertFalse(request.isTranscoding)
+                XCTAssertEqual(request.deliveryMode, .directPlay)
+                XCTAssertEqual(request.playSessionID, "original")
+                XCTAssertEqual(request.sourceMetadata?.container, container)
+                XCTAssertTrue(releasedSessions(http).isEmpty)
+                guard case .authenticatedHTTP(let locator) = request.playbackSource else {
+                    return XCTFail("Keep the selected original source")
+                }
+                XCTAssertEqual(locator.mediaSourceID, "version")
+                XCTAssertEqual(locator.deliveryMode, .directFile)
+            }
+        }
+    }
+
+    func testDecoderBackedPlaybackStillHonorsServerConversionAndUserQuality() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            for bounded in [false, true] {
+                let http = fixtureHTTP(decisions: [decision(session: "required-conversion")])
+                let request = try await request(provider(kind, http: http, hybrid: true), streaming: bounded)
+                XCTAssertTrue(request.isTranscoding)
+                XCTAssertEqual(request.playSessionID, "required-conversion")
+                XCTAssertEqual(request.streamingOptions?.quality, bounded ? .hd720 : nil)
+                XCTAssertEqual(http.sentPaths.filter { $0.hasSuffix("/PlaybackInfo") }.count, 1)
+            }
+        }
+    }
+
     func testUnavailablePlaceholderNeverBecomesAPlaybackLocatorAndReleasesSession() async throws {
         for kind in [ProviderKind.jellyfin, .emby] {
             let http = fixtureHTTP(decisions: ["""
@@ -253,11 +297,11 @@ final class JellyfinPlaybackNegotiationTests: XCTestCase {
         return try await provider.playbackInfo(for: "movie", mediaSourceID: "version", forceTranscode: false)
     }
 
-    private func provider(_ kind: ProviderKind, http: any HTTPClient) -> JellyfinProvider {
+    private func provider(_ kind: ProviderKind, http: any HTTPClient, hybrid: Bool = false) -> JellyfinProvider {
         JellyfinProvider(session: .init(
             server: .init(id: "server", name: "Server", baseURL: URL(string: "https://fixture.test")!, provider: kind),
             userID: "user", userName: "User", deviceID: "device", accessToken: "fixture"
-        ), http: http)
+        ), http: http, hybridEngineEnabled: hybrid, playbackRequests: .init())
     }
 
     private func fixtureHTTP(decisions: [String]) -> StubHTTPClient {

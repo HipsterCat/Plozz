@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class SeerDiscoveryStatusTests: XCTestCase {
+    func testStatusRefreshRetainsQueuedDownloadEvidenceWithoutProgress() async throws {
+        let http = SeerRecordingHTTPClient()
+        http.stub(pathSuffix: "/movie/42", json:
+            #"{"mediaInfo":{"status":3,"downloadStatus":[{"size":100,"sizeLeft":100}]}}"#)
+        let movie = MediaItem(
+            id: "future", title: "Future Movie", kind: .movie,
+            releaseDate: MediaItem.calendarDayReleaseDate(from: "2099-10-20"),
+            providerIDs: ["Tmdb": "42"], availability: .processing,
+            locallyValidatedPlayableSource: false, hasRequestDownloadActivity: false
+        )
+        let updates = await service(http).availabilityUpdates(for: [movie])
+        let updated = try XCTUnwrap(updates.first)
+        XCTAssertTrue(updated.hasRequestDownloadActivity == true)
+        XCTAssertNil(updated.downloadProgress)
+        XCTAssertEqual(updated.heroCTA(seerConnected: true), .requested)
+        XCTAssertEqual(updated.releaseDate, movie.releaseDate)
+    }
+
     private func service(
         _ http: any HTTPClient,
         budget: Duration = .seconds(5),
@@ -265,9 +283,10 @@ final class SeerDiscoveryStatusTests: XCTestCase {
             var updated = item
             updated.availability = index == 0 ? .processing : .pending
             updated.downloadProgress = index == 0 ? 0.75 : nil
+            updated.hasRequestDownloadActivity = index == 0
             return updated
         }
-        XCTAssertEqual(call.result, expected, "Only status and progress may change")
+        XCTAssertEqual(call.result, expected, "Only request status, progress, and queue evidence may change")
         XCTAssertEqual(http.snapshot.requests.count, 6)
     }
 

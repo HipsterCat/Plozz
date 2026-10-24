@@ -398,11 +398,11 @@ final class HomeAggregatorUnmergedTests: XCTestCase {
             let content = await HomeAggregator().unmergedContent(
                 from: [resolved("acct", provider: provider)], visibility: visibility
             )
-            XCTAssertEqual(Set(content.continueWatching.map(\.id)), ["resume", "next"], preset.rawValue)
+            XCTAssertEqual(Set(content.continueWatching.map(\.id)), ["resume", "next", "blocked"], preset.rawValue)
             XCTAssertEqual(content.continueWatching.first { $0.id == "resume" }?.resumePosition, 60)
             XCTAssertEqual(provider.nativeRequests, ["picks"])
             XCTAssertTrue(provider.nextUpRequests.isEmpty)
-            XCTAssertEqual(provider.continueWatchingScopes, [["shows"]])
+            XCTAssertEqual(provider.continueWatchingScopes, [nil])
             XCTAssertEqual(content.serverRows.map(\.definition.section.id), ["picks"])
             XCTAssertTrue(content.librarySections.flatMap(\.sections).allSatisfy { $0.id != "nextUp" })
         }
@@ -441,6 +441,66 @@ final class HomeAggregatorUnmergedTests: XCTestCase {
         await model.loadIfNeeded(for: visibility)
         XCTAssertEqual(model.state.value?.continueWatching.map(\.id), ["resume"])
         XCTAssertEqual(model.state.value?.serverRows.map(\.definition.section.kind), [.nextUp])
+    }
+
+    func testNativeHistoryKeepsAccountScopeThroughRenderingDetailAndTopShelf() async throws {
+        let resume = MediaItem(id: "resume", title: "Resume", kind: .movie, resumePosition: 60, libraryID: "hidden")
+        let next = MediaItem(id: "next", title: "Next", kind: .episode, libraryID: "hidden")
+        let definitions: [HomeServerRowDefinition] = [
+            .init(accountID: "acct", serverName: "Server", providerKind: .jellyfin,
+                  section: .init(id: "resume", kind: .continueWatching)),
+            .init(accountID: "acct", serverName: "Server", providerKind: .jellyfin,
+                  section: .init(id: "next", kind: .nextUp)),
+            .init(accountID: "acct", serverName: "Server", providerKind: .jellyfin,
+                  section: .init(id: "picks", kind: .recommendations)),
+            .init(accountID: "acct", serverName: "Server", providerKind: .jellyfin,
+                  section: .init(id: "scoped-next", kind: .nextUp, libraryID: "hidden"))
+        ]
+        let provider = UnmergedStub(
+            libraries: [lib("hidden", "Hidden", .series)],
+            nativeItems: ["resume": [resume], "next": [next], "picks": [resume], "scoped-next": [next]]
+        )
+        let visibility = HomeLibraryVisibility(
+            disabledKeys: ["acct:hidden"],
+            rowCustomization: .init(
+                defaults: .custom, shown: Set(definitions.map(\.id)), serverRows: definitions
+            ),
+            mergeNextUpIntoContinueWatching: false
+        )
+        let published = expectation(description: "Account-wide history published")
+        let publishedIDs = Mutex<[String]>([])
+        let model = HomeViewModel(
+            accounts: [resolved("acct", provider: provider)],
+            layoutStore: InMemoryHomeLayoutStore(), contentStore: InMemoryHomeContentStore(),
+            currentVisibility: { visibility },
+            contentPublisher: { history, _ in
+                publishedIDs.withLock { $0 = history.map(\.id) }
+                published.fulfill()
+            }
+        )
+        await model.load()
+        await fulfillment(of: [published], timeout: 2)
+        let content = try XCTUnwrap(model.state.value)
+        XCTAssertEqual(content.continueWatching.map(\.id), ["resume"])
+        XCTAssertEqual(Set(model.continueWatchingForDetail.map(\.id)), ["resume", "next"])
+        XCTAssertEqual(publishedIDs.withLock { $0 }, ["resume"])
+        XCTAssertEqual(provider.nativeLibraryExclusions["resume"], [])
+        XCTAssertEqual(provider.nativeLibraryExclusions["next"], [])
+        XCTAssertEqual(provider.nativeLibraryExclusions["picks"], ["hidden"])
+        XCTAssertNil(provider.nativeLibraryExclusions["scoped-next"])
+        XCTAssertEqual(provider.nativeBatchRequests.map { $0.joined(separator: ",") }.sorted(), ["next", "picks"])
+        let rows = HomeRow.rows(for: content, isLibraryVisible: visibility.isEnabled)
+        let presented = HomePresentationRow.resolve(rows: rows, content: content, visibility: visibility)
+        XCTAssertEqual(Set(presented.map(\.id)), Set(definitions.prefix(3).map(\.id)))
+        guard case let .library(nextRow) = presented.first(where: { $0.id == definitions[1].id })?.source else {
+            return XCTFail("Missing account-wide Next Up")
+        }
+        XCTAssertEqual(nextRow.section.items.map(\.id), ["next"])
+        guard case let .library(discoveryRow) = presented.first(where: { $0.id == definitions[2].id })?.source else {
+            return XCTFail("Missing empty discovery-row explanation")
+        }
+        XCTAssertTrue(discoveryRow.section.items.isEmpty)
+        XCTAssertEqual(discoveryRow.issue?.reason, .empty)
     }
 
     // MARK: - Music exclusion
@@ -545,6 +605,8 @@ private final class UnmergedStub: MediaProvider, @unchecked Sendable {
     private let nativeItems: [String: [MediaItem]]
     private let nativeError: AppError?
     private let nativeCalls = Mutex<[String]>([])
+    private let nativeExclusions = Mutex<[String: Set<String>]>([:])
+    var nativeLibraryExclusions: [String: Set<String>] { nativeExclusions.withLock { $0 } }
     private let scopedFeedCalls = Mutex<[[String]]>([])
     var scopedLibraryRequests: [[String]] { scopedFeedCalls.withLock { $0 } }
     var nativeRequests: [String] { nativeCalls.withLock { $0 } }
@@ -611,8 +673,11 @@ private final class UnmergedStub: MediaProvider, @unchecked Sendable {
         section: ServerHomeSection, limit: Int, excludingLibraryIDs: Set<String>
     ) async throws -> [MediaItem] {
         nativeCalls.withLock { $0.append(section.id) }
+        nativeExclusions.withLock { $0[section.id] = excludingLibraryIDs }
         if let nativeError { throw nativeError }
-        return nativeItems[section.id] ?? []
+        return (nativeItems[section.id] ?? []).filter {
+            $0.libraryID.map { !excludingLibraryIDs.contains($0) } ?? true
+        }
     }
     func serverHomeItems(
         sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>

@@ -1063,7 +1063,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         try streaming?.quality.validate()
         // Original playback needs only metadata. Bounded conversion additionally
         // validates Plex's decision before handing a transcode URL to the player.
-        let detail = try await client.metadata(ratingKey: itemID)
+        let detail = try await client.metadata(ratingKey: itemID, includeChapters: true)
         // Pick the chosen Media element (version) by id, else Plex's first.
         let mediaList = detail.Media ?? []
         if streaming != nil, let mediaSourceID,
@@ -1228,6 +1228,18 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
                 ?? PlaybackRequest.sourceFileName(from: part.key)
         )
         request.scrubStillSource = originalPlaybackSource
+        let chapterEntries: [PlexChapter] = detail.Chapter ?? []
+        request.chapters = MediaChapter.normalized(chapterEntries.compactMap { chapter -> MediaChapter? in
+            guard let milliseconds = chapter.startTimeOffset else {
+                PlozzLog.playback.error("Ignoring Plex chapter without a start position.")
+                return nil
+            }
+            return MediaChapter(
+                start: TimeInterval(milliseconds) / 1_000,
+                title: chapter.tag,
+                imageURL: client.imageURL(path: chapter.thumb, maxWidth: 480)
+            )
+        }, duration: mappedItem.runtime)
         request.streamingSessionID = resolved.isTranscoding ? playbackSessionID : nil
         if let streaming {
             request.streamingOptions = streaming

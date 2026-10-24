@@ -8,6 +8,7 @@ import PlozzCoreUI
 @MainActor
 @Observable
 final class HeroForegroundRatingsState {
+    var textScale: CGFloat = 1
     private(set) var ratings: [ExternalRating] = []
     private(set) var familyGuidanceAge: Double?
 
@@ -22,6 +23,7 @@ private struct HeroForegroundRatingsView: View {
 
     var body: some View {
         RatingsBadgeRow(ratings: state.ratings, familyGuidanceAge: state.familyGuidanceAge)
+            .environment(\.metadataTextScale, state.textScale)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -51,6 +53,26 @@ final class HeroForegroundUIView: UIView {
     )
     private let pillsContainer = UIView()
     var contentLocale: Locale = .current
+    var logoSize: HeroLogoSize = .default {
+        didSet {
+            if oldValue != logoSize { setNeedsLayout() }
+        }
+    }
+    var textSize: HeroTextSize = .default {
+        didSet {
+            guard oldValue != textSize else { return }
+            applyTextSizing()
+            setNeedsLayout()
+        }
+    }
+    var appTextScale: CGFloat = 1 {
+        didSet {
+            guard oldValue != appTextScale else { return }
+            applyTextSizing()
+            setNeedsLayout()
+        }
+    }
+    private var textScale: CGFloat { PlozzTypography.scale(local: textSize.scale, app: appTextScale) }
     /// Effect-less host: dots/pill render directly over the hero with no capsule.
     private let dotsContainer = UIVisualEffectView(effect: nil)
     private let useGauge = HeroForegroundConfig.useGauge
@@ -127,8 +149,6 @@ final class HeroForegroundUIView: UIView {
     private let dotSize: CGFloat = 10
     private let activeDotWidth: CGFloat = 30
     private let dotSpacing: CGFloat = 12
-    /// Narrower cinematic text column (was 576; trimmed 80pt for a tighter column).
-    private let contentMaxWidth: CGFloat = 496
     // The wordmark's own box is shared with the detail hero — see `HeroLogoLayout`.
     private let dotsGlassHPad: CGFloat = 0
     private let dotsGlassVPad: CGFloat = 0
@@ -149,39 +169,26 @@ final class HeroForegroundUIView: UIView {
         // from the image's alpha, so it must not be clipped.
         logoImageView.layer.masksToBounds = false
 
-        titleLabel.font = .systemFont(ofSize: 64, weight: .bold)
         titleLabel.numberOfLines = 2
 
-        ratingLabel.font = UIFont(name: "Bungee-Regular", size: 18)
-            ?? .systemFont(ofSize: 18, weight: .semibold)
-        ratingLabel.layer.borderWidth = 3
-        ratingLabel.layer.cornerRadius = 6
-        ratingLabel.insets = UIEdgeInsets(top: 0, left: 11, bottom: 0, right: 11)
-        ratingLabel.fixedHeight = 36
         ratingLabel.textAlignment = .center
+        ratingLabel.lineBreakMode = .byTruncatingTail
         ratingLabel.isHidden = true
 
-        metadataLabel.font = .systemFont(ofSize: 23, weight: .medium)
         metadataLabel.numberOfLines = 1
 
         // Chrome matched to the flat idle pill rather than the detail hero's
         // material: this renderer exists because live blur re-samples the moving
         // backdrop every transition frame, and a badge that sampled would give back
         // exactly the hitch the flat styles were introduced to remove.
-        scheduleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
-        scheduleLabel.insets = UIEdgeInsets(top: 0, left: 18, bottom: 0, right: 18)
-        scheduleLabel.fixedHeight = 52
         scheduleLabel.textAlignment = .center
-        scheduleLabel.layer.cornerRadius = 14
         scheduleLabel.layer.cornerCurve = .continuous
         // Without this the fill keeps its square corners and only the border is
         // rounded, so the backdrop shows through each corner.
         scheduleLabel.clipsToBounds = true
-        scheduleLabel.layer.borderWidth = HeroForegroundGlass.borderWidth
         scheduleLabel.isHidden = true
 
-        overviewLabel.font = .systemFont(ofSize: 22)
-        overviewLabel.numberOfLines = 3
+        applyTextSizing()
         ratingsHost.view!.backgroundColor = .clear
         ratingsHost.view!.isUserInteractionEnabled = false
 
@@ -205,6 +212,37 @@ final class HeroForegroundUIView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    private func applyTextSizing() {
+        let scale = textScale
+        overviewLabel.numberOfLines = textSize.descriptionLineLimit(base: 3)
+        titleLabel.font = .systemFont(ofSize: PlozzTypography.heroFallbackTitle.scaled(by: scale).pointSize, weight: .bold)
+        metadataLabel.font = .systemFont(ofSize: PlozzTypography.heroMetadata.scaled(by: scale).pointSize, weight: .medium)
+        overviewLabel.font = .systemFont(ofSize: PlozzTypography.heroDescription.scaled(by: scale).pointSize)
+        applyOverviewText()
+        ratingLabel.font = UIFont(name: "Bungee-Regular", size: 18 * scale)
+            ?? .systemFont(ofSize: 18 * scale, weight: .semibold)
+        ratingLabel.layer.borderWidth = 3 * scale
+        ratingLabel.layer.cornerRadius = 6 * scale
+        ratingLabel.insets = UIEdgeInsets(top: 0, left: 11 * scale, bottom: 0, right: 11 * scale)
+        ratingLabel.fixedHeight = 36 * scale
+        ratingLabel.invalidateIntrinsicContentSize()
+        scheduleLabel.font = .systemFont(ofSize: PlozzTypography.heroSchedule.scaled(by: scale).pointSize, weight: .semibold)
+        scheduleLabel.insets = UIEdgeInsets(top: 0, left: 18 * scale, bottom: 0, right: 18 * scale)
+        scheduleLabel.fixedHeight = 52 * scale
+        scheduleLabel.layer.cornerRadius = 14 * scale
+        scheduleLabel.layer.borderWidth = HeroForegroundGlass.borderWidth * scale
+        scheduleLabel.invalidateIntrinsicContentSize()
+        ratingsState.textScale = scale
+    }
+
+    private func applyOverviewText() {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = PlozzTypography.heroDescription.scaled(by: textScale).lineSpacing
+        paragraph.lineBreakMode = .byTruncatingTail
+        overviewLabel.attributedText = model?.overview.map {
+            NSAttributedString(string: $0, attributes: [.paragraphStyle: paragraph])
+        }
+    }
 
     override func willMove(toWindow newWindow: UIWindow?) {
         super.willMove(toWindow: newWindow)
@@ -274,7 +312,8 @@ final class HeroForegroundUIView: UIView {
         }
 
         if let rating = model.ratingBadgeText, !rating.isEmpty {
-            ratingLabel.text = rating.uppercased()
+            ratingLabel.text = ContentRatingPresentation(rating).text
+            ratingLabel.accessibilityLabel = rating
             ratingLabel.isHidden = false
         } else {
             ratingLabel.isHidden = true
@@ -286,7 +325,7 @@ final class HeroForegroundUIView: UIView {
         scheduleLabel.text = model.scheduleLine
         scheduleLabel.isHidden = (model.scheduleLine ?? "").isEmpty
 
-        overviewLabel.text = model.overview
+        applyOverviewText()
         overviewLabel.isHidden = (model.overview ?? "").isEmpty
         ratingsState.update(model.ratings, familyGuidanceAge: model.familyGuidanceAge)
         ratingsHost.view!.isHidden = model.ratings.isEmpty && model.familyGuidanceAge == nil
@@ -581,7 +620,10 @@ final class HeroForegroundUIView: UIView {
         // fallback. Layout in host-local coordinates so physical x matches cards.
         let leading: CGFloat = 0
         let trailing: CGFloat = 60
-        let maxWidth = max(1, min(bounds.width - leading - trailing, contentMaxWidth))
+        let availableWidth = bounds.width - leading - trailing
+        let maxWidth = HeroLogoSizing.homeTextWidth(
+            for: .television, logoSize: logoSize, availableWidth: availableWidth
+        )
 
         // Measure the bottom-anchored block bottom→top.
         var y = bounds.height - bottomMargin
@@ -603,9 +645,9 @@ final class HeroForegroundUIView: UIView {
 
         if !ratingsHost.view!.isHidden {
             let size = ratingsHost.sizeThatFits(
-                in: CGSize(width: maxWidth, height: 52)
+                in: CGSize(width: maxWidth, height: .greatestFiniteMagnitude)
             )
-            let h = min(max(size.height, 36), 52)
+            let h = max(size.height, 36 * textScale)
             ratingsHost.view!.frame = CGRect(
                 x: leading,
                 y: y - h,
@@ -618,19 +660,23 @@ final class HeroForegroundUIView: UIView {
         // Overview above the pills (bottom-anchored: its bottom sits at y).
         if !overviewLabel.isHidden {
             let size = overviewLabel.sizeThatFits(CGSize(width: maxWidth, height: .greatestFiniteMagnitude))
-            let h = min(size.height, ceil(overviewLabel.font.lineHeight * 3))
+            let style = PlozzTypography.heroDescription.scaled(by: textScale)
+            let h = min(size.height, ceil(style.height(
+                lineHeight: overviewLabel.font.lineHeight, lines: overviewLabel.numberOfLines
+            )))
             overviewLabel.frame = CGRect(x: leading, y: y - h, width: maxWidth, height: h)
             y -= h + columnSpacing
         }
 
         // Metadata line.
         if !metadataLabel.isHidden || !ratingLabel.isHidden {
-            let h: CGFloat = 36
+            let h: CGFloat = 36 * textScale
             var x = leading
             if !ratingLabel.isHidden {
-                let rSize = ratingLabel.intrinsicContentSize
+                var rSize = ratingLabel.intrinsicContentSize
+                rSize.width = min(rSize.width, min(240, maxWidth * 0.5))
                 ratingLabel.frame = CGRect(x: x, y: y - h + (h - rSize.height) / 2, width: rSize.width, height: rSize.height)
-                x += rSize.width + 16
+                x += rSize.width + 16 * textScale
             }
             if !metadataLabel.isHidden {
                 metadataLabel.frame = CGRect(x: x, y: y - h, width: maxWidth - (x - leading), height: h)
@@ -648,20 +694,10 @@ final class HeroForegroundUIView: UIView {
 
         var logoTop = y
         if !logoImageView.isHidden, let image = logoImageView.image, image.size.width > 0 {
-            // Shared with the detail hero via `HeroLogoLayout`, so one show's
-            // wordmark is drawn at the same size on both screens — and so a tall or
-            // very wide logo isn't shrunk for its shape.
-            //
-            // The box is PINNED to the text column: `HeroLogoFit` flexes a wide
-            // shape past its budget, so a wordmark was being drawn a quarter wider
-            // than the description beneath it. Pinning holds every wide logo to the
-            // same drawn width and gives the width back as height, so nothing
-            // shrinks — see `HeroLogoFit.pinnedBox`.
-            //
             // The frame is the ACTUAL fitted image, not the slot: `.scaleAspectFit`
             // centres within its frame, so a frame wider than the drawn image would
             // push a tall/narrow wordmark right instead of leaving it left-aligned.
-            let box = HeroLogoLayout.box(fitting: maxWidth)
+            let box = HeroLogoLayout.box(size: logoSize, availableWidth: availableWidth)
             let fitted = HeroLogoFit.fittedSize(
                 for: image.size,
                 maxWidth: box.width,

@@ -212,7 +212,7 @@ struct UpNextCardView: View {
 
             if model.skipMode == .autoDelay, let deadline = model.upNextCard.advanceAtSeconds {
                 let remaining = deadline - model.currentSeconds
-                let fraction = min(1, max(0, remaining / SkipIntrosMode.autoSkipDelay))
+                let fraction = min(1, max(0, remaining / model.automaticUpNextDelay))
                 CountdownRing(fraction: fraction)
             }
 

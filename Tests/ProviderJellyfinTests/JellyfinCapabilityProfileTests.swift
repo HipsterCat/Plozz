@@ -88,6 +88,11 @@ final class JellyfinCapabilityProfileTests: XCTestCase {
             for hdr10 in [false, true] {
                 let caps = MediaCapabilities(supportsHEVC: true, supportsHDR10: hdr10)
                 let profile = JellyfinCapabilityProfile.appleTV(capabilities: caps, hybridEngineEnabled: hybrid)
+                if hybrid {
+                    let json = try encoded(profile)
+                    XCTAssertTrue(try XCTUnwrap(json["CodecProfiles"] as? [[String: Any]]).isEmpty)
+                    continue
+                }
                 let tokens = try hevcVideoRange(encoded(profile)).split(separator: "|").map(String.init)
                 XCTAssertEqual(tokens.contains("HDR10Plus"), hdr10)
                 XCTAssertEqual(tokens.contains("HDR10"), hdr10)
@@ -194,7 +199,9 @@ final class JellyfinCapabilityProfileTests: XCTestCase {
         // even in Apple containers (the router sends Opus-in-MP4 to Plozzigen).
         let json = try encoded(.appleTV(capabilities: .default, hybridEngineEnabled: true))
         let direct = try XCTUnwrap(json["DirectPlayProfiles"] as? [[String: Any]])
-        let mp4 = try XCTUnwrap(direct.first { ($0["Container"] as? String) == "mp4,m4v" })
+        let mp4 = try XCTUnwrap(direct.first {
+            ($0["Container"] as? String)?.split(separator: ",").contains("mp4") == true
+        })
         XCTAssertTrue((mp4["AudioCodec"] as? String ?? "").split(separator: ",").contains("opus"),
                       "Opus must be advertised in MP4 when hybrid engine is enabled")
     }

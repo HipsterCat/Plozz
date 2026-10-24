@@ -292,7 +292,7 @@ public struct MetadataSettingsDetailView: View {
                         Label("Reset to Recommended", systemImage: "arrow.uturn.backward")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(SettingsFocusButtonStyle())
+                    .buttonStyle(SettingsFormButtonStyle())
                     .disabled(isReordering)
                     .padding(.top, 6)
                     #endif
@@ -366,7 +366,7 @@ public struct MetadataSettingsDetailView: View {
                     } label: {
                         Label(tmdbKey.isConfigured ? "Replace Key" : "Save Key", systemImage: "square.and.arrow.down")
                     }
-                    .buttonStyle(SettingsFocusButtonStyle())
+                    .plozzActionButton()
                     .disabled(!tmdbKey.canSaveDraft)
 
                     Button {
@@ -374,7 +374,7 @@ public struct MetadataSettingsDetailView: View {
                     } label: {
                         Label("Verify Key", systemImage: "checkmark.shield")
                     }
-                    .buttonStyle(SettingsFocusButtonStyle())
+                    .plozzActionButton(role: .secondary)
                     .disabled((!tmdbKey.canSaveDraft && !tmdbKey.isConfigured) || tmdbKey.verifyState == .verifying)
 
                     if tmdbKey.isConfigured {
@@ -383,7 +383,7 @@ public struct MetadataSettingsDetailView: View {
                         } label: {
                             Label("Remove Key", systemImage: "trash")
                         }
-                        .buttonStyle(SettingsFocusButtonStyle())
+                        .plozzActionButton(role: .secondary)
                     }
                 }
             }
@@ -533,7 +533,7 @@ private struct MetadataDiagnosticsOverviewPanel: View {
                     Button(action: onRefresh) {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(SettingsFocusButtonStyle())
+                    .plozzActionButton(role: .secondary)
                     .disabled(isRefreshing)
                 }
 
@@ -683,7 +683,7 @@ private struct MetadataDiagnosticsCachePanel: View {
                     Label("Clear Cache", systemImage: "trash")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(SettingsFocusButtonStyle())
+                .buttonStyle(SettingsFormButtonStyle())
             }
         }
         .confirmationDialog(

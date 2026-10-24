@@ -56,7 +56,7 @@ private struct DolbyVisionFELControl: View {
         SettingsControlRows {
             Toggle("Dolby Vision FEL (experimental)", isOn: $isOn)
                 .accessibilityIdentifier("playback-dolby-vision-fel")
-            Text("Decode the full enhancement layer in supported Dolby Vision Profile 7 videos. Uses more GPU and memory and may stutter. FEL playback loses Dolby Atmos objects and DTS:X height audio.")
+            Text("More picture detail for supported Dolby Vision Profile 7 videos. Uses more memory, may stutter, and turns off overhead sound.")
                 .settingsHelperText()
                 .fixedSize(horizontal: false, vertical: true)
         }

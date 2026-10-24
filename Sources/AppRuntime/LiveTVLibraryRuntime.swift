@@ -332,8 +332,9 @@ public final class LiveTVLibraryRuntime {
                     throw CancellationError()
                 } catch {
                     try check(stamp, accounts: accounts, expected: expected)
-                    automaticChannelsIssue = (error as? LibraryChannelError) ?? .storageFailed
-                    PlozzLog.app.error("Automatic Plozz channel lineup could not be prepared")
+                    let issue = (error as? LibraryChannelError) ?? .storageFailed
+                    automaticChannelsIssue = issue
+                    PlozzLog.app.error("Automatic Plozz channel lineup could not be prepared: \(issue)")
                 }
             } else {
                 try service.setAutomaticChannelsEnabled(false)

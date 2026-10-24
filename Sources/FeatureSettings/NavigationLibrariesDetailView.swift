@@ -129,7 +129,7 @@ public struct NavigationLibrariesDetailView: View {
             #if os(iOS)
             .buttonStyle(.borderless)
             #else
-            .buttonStyle(SettingsFocusButtonStyle())
+            .buttonStyle(SettingsFormButtonStyle())
             #endif
             .disabled(isReordering)
         }

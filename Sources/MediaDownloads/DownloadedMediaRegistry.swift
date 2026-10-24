@@ -86,10 +86,8 @@ public actor DownloadedMediaRegistry {
     /// The record for a specific **version** of an item, if that exact version
     /// has been downloaded.
     ///
-    /// Playback must use this, not ``record(for:)``: a title can have several
-    /// downloaded versions (or one downloaded version among many streamable
-    /// ones), and matching on the title alone plays whichever copy happens to be
-    /// on disk regardless of the version the user picked.
+    /// Download-management controls use this to keep separately saved versions
+    /// distinct. Playback uses ``playbackRecords(for:preferring:)`` instead.
     ///
     /// A `nil` `versionID` means "the caller has no particular version in mind",
     /// which falls back to the any-version lookup.
@@ -118,7 +116,7 @@ public actor DownloadedMediaRegistry {
 
     /// The record satisfying any of an item's cross-server identities, if present.
     /// Version-agnostic: use it for "does a download exist for this title?" (the
-    /// downloads list, a card badge), never to choose what to play.
+    /// downloads list, a card badge), not to choose a playable file.
     public func record(for item: MediaItem) -> DownloadedMediaRecord? {
         // Records are keyed by identity AND version, so an exact-key hit only
         // finds version-less copies; a version-scoped copy has to be matched on
@@ -156,6 +154,68 @@ public actor DownloadedMediaRegistry {
             return source.hasPrefix(DownloadMediaIdentity.accountSourcePrefix)
         }
         return sourceScopedMatches.count == 1 ? sourceScopedMatches[0] : nil
+    }
+
+    /// All matching copies in this profile, with the requested version first.
+    /// The resolver must check each file: an incomplete or missing preferred
+    /// copy must not hide another usable download.
+    public func playbackRecords(
+        for item: MediaItem,
+        preferring versionID: String?
+    ) -> [DownloadedMediaRecord] {
+        let identities = MediaItemIdentity.identities(for: item)
+        let identitySet = Set(identities)
+        let sources = MediaSourceRef.retainingKindCompatible(
+            item.sources, itemKind: item.kind,
+            selfIDs: Set([item.sourceAccountID.map { "\($0):\(item.id)" }].compactMap { $0 })
+        )
+        func matchesSource(accountID: String?, itemID: String?) -> Bool {
+            guard let accountID, !accountID.isEmpty,
+                  let itemID, !itemID.isEmpty else { return false }
+            return (accountID == item.sourceAccountID && itemID == item.id)
+                || sources.contains { $0.accountID == accountID && $0.itemID == itemID }
+        }
+        return state.records.values.filter { record in
+            let snapshot = record.snapshot
+            guard snapshot.kind == item.kind else { return false }
+            var pinned = MediaItem(
+                id: snapshot.sourceItemID ?? "", title: snapshot.title, kind: snapshot.kind
+            )
+            pinned.productionYear = snapshot.year
+            pinned.providerIDs = snapshot.providerIDs
+            pinned.seasonNumber = snapshot.seasonNumber
+            pinned.episodeNumber = snapshot.episodeNumber
+            var capturedIdentities = MediaItemIdentity.identities(for: pinned)
+            if case let .external(source, _) = record.identity,
+               !source.hasPrefix(DownloadMediaIdentity.accountSourcePrefix) {
+                // Older snapshots can omit IDs that are still present in the key.
+                capturedIdentities.removeAll {
+                    if case .title = $0 { return true }
+                    return false
+                }
+            }
+            capturedIdentities.append(record.identity)
+            guard !MediaItemIdentity.externalIdentitiesConflict(identities, capturedIdentities) else {
+                return false
+            }
+            if !identitySet.isDisjoint(with: capturedIdentities)
+                || matchesSource(accountID: snapshot.sourceAccountID, itemID: snapshot.sourceItemID) {
+                return true
+            }
+            guard case let .external(source, value) = record.identity,
+                  source.hasPrefix(DownloadMediaIdentity.accountSourcePrefix) else { return false }
+            return matchesSource(
+                accountID: String(source.dropFirst(DownloadMediaIdentity.accountSourcePrefix.count)),
+                itemID: value
+            )
+        }.sorted { lhs, rhs in
+            if let versionID, !versionID.isEmpty {
+                let lhsPreferred = lhs.versionID == versionID
+                let rhsPreferred = rhs.versionID == versionID
+                if lhsPreferred != rhsPreferred { return lhsPreferred }
+            }
+            return lhs.identityKey < rhs.identityKey
+        }
     }
 
     /// The records belonging to a download group (e.g. a season).

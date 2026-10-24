@@ -1,9 +1,80 @@
 # FeatureHome
 
+Home history completion records returned, curated and visible item counts plus
+failed-account counts in the existing bounded recent-activity log. This separates
+an empty provider feed from local curation without recording media or account IDs.
+
 Home rows, item detail, series/season experience, and the online-trailer
 fallback when the user's server has no attached trailer.
 
+tvOS detail entry keeps the real primary action focusable while its play target
+loads. An early press queues one activation, replacing the icon with a spinner
+without resizing the button. Readiness consumes that intent once through the
+normal playback callback; a pending series request opens the normal season
+chooser, never a bulk request. A fresh Select during the cinematic entrance
+queues only while the target is unavailable. A ready action finishes the
+decorative entrance immediately rather than waiting for its animation or artwork;
+the opening press, cancelled presses, and return-transition input are not replayed.
+Leaving/covering the page, scene inactivity,
+profile/request-identity changes, explicit source/version changes, or entering
+the episode browser cancel the intent. Failed/empty resolution clears it and
+retains the existing error/retry presentation. Late episode resolution must not move focus back from a
+secondary action the user selected. Request/status actions retain the same
+leading-entry preference, and returning from a child preserves source focus.
+
+## Request status
+
+Movie request statuses in Home and detail heroes use the same
+`Requested · Unreleased` wording as season requests. This is an approved request
+with a known future release day, not a prediction that downloading will start on
+that day. Pending approval stays Requested; library availability and reported
+queue activity take precedence, including queue items with no measurable progress.
+Release days use the viewer's local calendar day, and missing dates are not guessed.
+The UIKit and SwiftUI hero renderers share the localized status and calendar symbol.
+
 ## Responsibility
+
+Global Continue Watching and account-wide server Next Up are the active accounts'
+viewing history, independent of library/catalog visibility. This applies to
+combined and individual-row layouts, detail resume hints, and Top Shelf. Hiding
+catalogs must not empty history or fan it out into catalog-scoped requests.
+Library-specific rows, discovery, account selection, server-user permissions,
+and parental authorization retain their existing boundaries. A catalog-load
+failure does not replace a successful history response with that failure.
+
+Home text sizing applies to both SwiftUI and persistent UIKit foregrounds.
+Detail Page, Showcase, and library Recommended have independent profile-scoped sizes.
+Title fallbacks, descriptions, metadata, and badge details scale together;
+artwork sizing and action controls remain independent. On Apple TV, Detail Page
+text sizing also scales the episode titles and three-line synopses below episode
+artwork, including loading placeholders; other row/card labels remain independent.
+Home's text column can use the same wider budget as an enlarged logo, even at
+default Text size. Smaller logos retain the original reading width; changing
+Text size alone never widens it. Both TV foreground renderers share this rule,
+and mobile Home remains capped by its available screen width. Apple TV Detail
+descriptions can grow to the live facts/badges row's width, within the shared
+reading-width limit and the space reserved for right-side credits. Showcase
+and Recommended keep their existing column widths.
+Apple TV descriptions default to 24pt with 3pt additional line spacing; the
+slider spans 18–36pt. Detail descriptions stay capped at four lines, while Home
+may gain a fourth line when enlarged. Mobile typography is unchanged. Their scrims
+extend upward by the larger of the requested logo growth and description-height
+growth, without weakening default coverage or resizing the artwork.
+Showcase and Recommended keep their row positions and description budgets.
+Custom sizes use the actual space above the active row, not a fixed worst-case
+footprint. They fit the complete logo/metadata block down by one shared factor
+only when that space is insufficient; the requested proportions stay intact.
+Incoming titles use their destination size from the first frame, not a smaller
+transitional size. The native motion owner adjusts placement and the row mask
+together to protect the title while rows move, including reversals.
+Recommended sizes against the destination's navigation clearance immediately,
+but reserves the outgoing header's space until it fades. Custom Recommended
+uses the logo's actual artwork height and the header's existing bottom padding
+rather than reserving empty logo space or a second navigation gap.
+Default Recommended sizing retains its existing constrained layout.
+
+Shared typography and future app-wide scale composition are owned by
+[`CoreUI/PlozzTypography`](../CoreUI/README.md#responsibility), not individual heroes.
 
 Home Continue Watching failures use the existing Details / Try Again actions on
 TV (including focus-following layouts), iPhone and iPad. The report follows the
@@ -18,6 +89,13 @@ untried-account failover before constructing a player. Every replacement still
 loads authoritative inventory; explicit selections, cancellation and revoked
 presentation scope never fail over. An unavailable unselected edition is logged
 and omitted from the current picker rather than blocking a confirmed primary.
+
+The shared version gate and detail/episode inventory enrichment emit bounded,
+failure-only `plozz-preparation-1` records to Recent Activity. They identify the
+request stage, elapsed time, HTTP/network failure, safe decode field/type, and
+inventory validation reason. Identity checks name the mismatched dimension, not
+the item/account values. The existing Send Recent Activity action includes these
+records on both platforms; error dialogs, playback routing and timeouts are unchanged.
 
 - **Library browse failures** — Browse, Collections, Playlists and their member
   pages use the shared Details / Try Again actions on mobile and TV, including
@@ -52,18 +130,20 @@ and omitted from the current picker rather than blocking a confirmed primary.
   family succeeds, including an authoritative empty result. Cancellation never
   publishes a partial success or replaces the last completed diagnostic.
 
-- **Deferred version inventory** — providers that advertise lazy file discovery
-  refresh movie/episode choices after detail first paint and the existing dwell
-  gate. Inventory publication is fenced by the current source and cancellation;
-  later cross-server discovery cannot overwrite it with the original sparse
-  seed. Leaving cancels the work and returning resumes an unfinished attempt.
+- **Explicit version inventory** — providers that advertise lazy file discovery
+  expose Version regardless of the cached source count, but load it only after
+  that action is opened. Home, detail dwell, returning to a page and passive
+  episode badge enrichment use presentation metadata, never playback inventory.
+  Publication is fenced by the current source and the picker task's cancellation;
+  later sparse metadata cannot erase authoritative file choices. Same-account
+  alternate files use the same sequential discovery as the Play gate.
   Failure keeps browsing available but never authorizes playback: Play runs its
   own strict gate. Providers with complete detail inventories incur no extra fetch.
-  Series heroes resolve the episode that Play would start through the same
-  inventory contract. Mobile source/version actions use that episode even while
+  Series heroes enrich the playable episode's ordinary metadata. Explicit
+  mobile source/version actions use that episode even while
   the hero shows the series' artwork and description, matching tvOS. Choosing a
   version therefore remembers the episode/series preference, not a container file.
-  An explicit no-stream result from the provider replaces the detail Play action with
+  A confirmed no-stream result from explicit detail discovery replaces Play with
   `No streams found` on both platforms. It rechecks the selected source without
   starting playback; successful recovery restores Play. This page-local result is
   scoped to the active server and episode, not inferred from timeouts, missing
@@ -81,7 +161,7 @@ and omitted from the current picker rather than blocking a confirmed primary.
   app-wide maturity threshold.
 - **Home section customization** — Settings > Screens & Navigation > Customize Home
   uses the same section editor on TV, iPhone and iPad. Tap a section to configure
-  it, Reorder to move it, or Add section to show another existing feed. Hero
+  it, Reorder to move it, or Add section to choose a collection or another existing feed. Hero
   stays configurable at the top, outside the movable row list. Rows from different
   libraries can be interleaved, reordered or hidden, including the Libraries
   tiles. `HomeRowCustomization` stores typed identity, order and explicit
@@ -103,6 +183,15 @@ and omitted from the current picker rather than blocking a confirmed primary.
   selecting the already active preset does nothing.
   **Merge Next Up rows** is a profile-scoped setting inside the **Continue Watching**
   section's configuration on every platform, alongside its artwork choice.
+  **Continue Watching action** chooses **Play** (the unchanged default) or
+  **Open details** for movie/episode cards on Home, including merged Next Up
+  entries and every TV Home layout. It persists and transfers with the profile.
+  Artwork, progress overlays, context menus and Live TV tuning are unchanged.
+  Library Recommended rows retain their existing detail navigation.
+  On Apple TV, the remote's center button follows this choice, while Play/Pause
+  always starts the focused Continue Watching item through the normal playback
+  path. Play/Pause never opens details, including when **Open details** is selected.
+  Normal resume/restart and version-choice prompts still apply.
   It uses the provider's combined resume/next-episode feed without changing the
   preset, library exclusions, or other row choices. Separate Next Up rows are
   neither requested nor presented while merged; the arranger omits them rather
@@ -130,12 +219,66 @@ and omitted from the current picker rather than blocking a confirmed primary.
   each failed server, distinguishing offline, sign-in, and Home-loading problems
   instead of showing a blanket warning about server arrangements. Recovery clears
   that server's status; failures never reset saved row choices.
+  Enabled sections missing their content retain a compact warning on Home with
+  source, Details, and Retry. Customize Home shares the same completed-load
+  evidence, distinguishing typed failures, empty results, and saved sections
+  absent from the latest refresh. Missing sections do not prove a server error:
+  dynamic recommendations may be empty or changed. Normal empty default library
+  feeds remain quiet unless explicitly added. Existing usable cached/partial
+  cards remain visible, with any load warning available in the editor.
+  Warnings are runtime-only, scoped to the current profile, accounts, server
+  users, credentials, and settings; cancellation is not a failure and successful
+  recovery clears the warning. Details expose safe error categories, not URLs,
+  credentials, or response bodies.
   Mobile library discovery follows the effective credential and Plex Home viewer,
   and cancelled lookups cannot restore another viewer's library choices.
   The section catalog enumerates optional recommendations only while the editor
-  is open. Section editing retains `HomeRowID` and the existing renderer; there
-  are no duplicate section instances, mixed feeds, per-section source filters
-  or new card layouts in this foundation. Home omits
+  is open. Authored collection rows have independent stable section identities,
+  names and poster, landscape or Featured presentation. Each references one account/viewer-qualified
+  collection through `MediaProvider`; its bounded preview preserves server order
+  and membership, showing supported movie and series cards without reconstructing
+  library membership. **See all** opens the existing collection browser using
+  the original provider ID. All card styles open title details.
+  Collection definitions persist with the profile separately from arrangement:
+  removing a row or choosing a preset retains its configuration in Add section.
+  Disabled libraries and a different server viewer prevent collection requests;
+  failures remain distinct from empty collections.
+  Featured is available only for authored collection rows. Large artwork cards
+  place the title logo (or text fallback) and real metadata at the lower left.
+  TV rows reuse the standard media-row heading and See all action, with the same
+  pinned-navigation keyline, leading fade and card-slot parking as ordinary rows.
+  System-focus Featured cards share the image-based native poster renderer.
+  Physical comparisons reproduced the exposed edge with SwiftUI card buttons,
+  including a flattened label, but not with the native image renderer. Do not
+  restore that card surface or the generic hosted `TVCardView` bridge, which can
+  retain enlarged artwork after held directional navigation. One artwork
+  resolution supplies the native image and its live composition. Artwork,
+  video, scrim and metadata use the public image overlay surface with its shared
+  outer clip; do not add individual image/video clips or rasterize live video.
+  Featured disables the ordinary overlay's additional rounded clip so its
+  scrim covers bright backing artwork through the corners throughout focus
+  transitions. The native image surface alone supplies the outer silhouette.
+  The TV scrim extends 40pt beyond each edge without moving its fade stops or
+  changing the image, video and metadata layout. This covers oversized
+  aspect-fill pixels during native settling; the live composition must not
+  apply a rectangular clip that would discard that extra coverage.
+  Ordinary poster overlays retain rasterization. Non-system styles retain the
+  shared focus fallback. TV widths round outward to multiples of four points,
+  keeping both dimensions integral and the 4:5 ratio exact. Keep native clip geometry in
+  whole points rather than rounding each dimension separately to physical
+  pixels. Standalone previews and mobile cards keep their own outer rounded clip.
+  Rails reserve the shared shadow clearance without increasing row spacing.
+  Full-bleed Home artwork preserves the measured trailing title-safe inset for
+  row actions. Remote-driven coverage checks resting painted sizes after rapid
+  navigation; simulator rendering is not proof of physical remote-tilt behavior.
+  The focused TV card or settled visible mobile card can play a supported
+  local/server trailer, using the profile's Home trailer enable/mute preferences.
+  A shared coordinator arbitrates visible rails and borrows the existing hero
+  player; it never creates per-card players or performs online trailer extraction.
+  Scrolling away, navigation, backgrounding, source changes and full playback
+  cancel the preview. Reduce Motion keeps the cards static. Missing or failed
+  trailers retain artwork. Mixed feeds, filters and library-page placement are
+  not part of this slice. Home omits
   unselected row-family requests and stops a recommendation family after all its
   known rows are hidden. The separate library Recommended screen and Showcase's
   optional external Discover row are not redefined by these Home preferences.
@@ -173,6 +316,12 @@ and omitted from the current picker rather than blocking a confirmed primary.
   configured. Completion belongs to the current curation inputs and profile;
   cancelled work cannot settle a replacement request. This never changes saved
   preferences or treats a failed fetch as authority to erase cached candidates.
+  New profiles include Discovery in the carousel only while Seerr is configured.
+  Explicitly toggling Discovery saves that profile's choice, independent of later
+  connections or disconnections. Other Hero edits retain the automatic default,
+  and temporary Seerr reachability failures do not change it. Existing saved
+  source lists retain their selection; Kids restrictions still take precedence.
+  Showcase's separate Discovery row remains opt-in.
   On iPhone and iPad, tapping the Home hero artwork, logo or metadata opens its
   item/provider detail page instead of a separate More Info button. The artwork
   link sits behind the non-interactive metadata and foreground actions, so Play,
@@ -312,6 +461,9 @@ and omitted from the current picker rather than blocking a confirmed primary.
   previous movie's trailer. A confirmed cancelled cinematic Back restores the page that
   remains on the real navigation stack, removes its cover/input guard, and keeps
   its controls focusable. Older transition completions cannot finish a newer pop.
+  Returning to a retained page restores its cached artwork palette without a
+  second crossfade after the cinematic cover lifts. Ordinary artwork changes
+  still crossfade, and hidden pages still release their displayed-artwork owner.
   The bounded debug handoff journal records page membership, return outcomes,
   and hashed trailer ownership so an intermittent failure can be inspected
   without restarting the affected app.
@@ -371,12 +523,20 @@ and omitted from the current picker rather than blocking a confirmed primary.
   preserve overlapping work across reversals and cancel obsolete queued work.
   Admission rechecks decoded residency; content, density, lifecycle and background
   generation changes cannot keep stale warming alive or suppress a later pass.
-  They show Recommended by default for server-backed video libraries, with
+  They initially show the first supported tab in the profile's shared library
+  arrangement (Recommended by default for server-backed video libraries), with
   library-scoped Continue Watching and Recently Added plus native Plex hubs
   or Jellyfin/Emby movie recommendation categories. TV uses Showcase, showing
   its mode tabs only while the first row is active; mobile uses touch-sized rows.
   iPhone and iPad keep Recommended, Browse, Collections, and Playlists in a
   horizontally scrolling tab strip, limited to the provider's capabilities.
+  `LibraryPresentationSettings` shares tab order/visibility and TV logo size
+  across libraries, independently of Home and detail pages. Recommended row
+  order/visibility is account-and-library-qualified within that profile.
+  Presentation edits resolve the already-loaded rows without refetching them;
+  unavailable rows and unsupported tabs retain saved intent. Browse remains
+  accessible when no preferred tab is supported. Collection/playlist member
+  routes remain plain Browse destinations.
   Library modes and series seasons both use CoreUI's `PlozzContentTabs`, with
   the same selected glass pill, inactive text, touch sizing, and reveal behavior.
   Tabs retain their identity through loading, empty, and failure states and
@@ -427,11 +587,25 @@ and omitted from the current picker rather than blocking a confirmed primary.
   grows: a live scan update would apply the size delta twice, overlapping posters
   until another focus/layout pass. Banner height and artwork alignment must be
   correct while unfocused, through focus changes, and when progress reappears.
-  Showcase preserves the Home-sized details footprint under that header,
-  keeping the same metadata-to-heading clearance as Home. A cold logo is adopted
+  Library Showcase measures its navigation clearance and reserves one native
+  badge's height for schedule/availability-capable items before the line loads.
+  The visible badge hugs the fitted logo, not unused space in its sizing slot;
+  late schedule arrival cannot resize it. Default sizing trims description lines
+  before constraining the logo. Custom sizing fits the logo and text together
+  within the fixed details footprint, retaining their proportions. Row motion
+  translates that block without resizing it or borrowing navigation space.
+  A cold logo is adopted
   when it finishes for the still-current title, without requiring a focus round trip.
   Its title slot stays visually empty while the logo resolves; text appears only
   after no usable logo is found, never as a temporary title before the wordmark.
+  Home hero and Showcase use independent `HeroSettings` logo sizes; full detail
+  heroes use `DetailPageSettings.logoSize`. Both Home foreground renderers apply
+  the same sizing math without reloading artwork. Defaults preserve existing sizes,
+  while text fallback fonts follow the separate text preference. The compact
+  series-browser logo remains unchanged.
+  Dark coloured Showcase logos can select CoreUI's cached contrast lift against
+  the leading page colour, preserving hue, saturation, white highlights, and
+  the logo's geometry rather than whitening the lettering.
   Showcase gates lower rows only until the first row actually receives native
   focus, so an already-ready Discover row cannot win cold-start entry while
   Continue Watching is still realizing. Once entered, normal navigation and
@@ -724,9 +898,10 @@ the pinned geometry unchanged while letting the system sidebar button recognize
 the top of Home. Native chrome still auto-hides farther down and returns at the
 first row. The UI regression checks actual painted chrome, not just its
 accessibility presence, including sidebar and detail returns.
-The schedule badge sits 16pt above the logo slot; Showcase
-constrains even tall logos to that slot rather than letting artwork grow into
-the badge. The outgoing row tucks upward by up to 110pt behind the 24pt mask fade so no
+The schedule badge sits 16pt above the fitted, already-trimmed artwork inside
+the logo slot. Showcase reuses the cached off-main crop and existing dwell-gated
+schedule requests; it does not scan pixels or eagerly fetch schedules while browsing.
+The outgoing row tucks upward by up to 110pt behind the 24pt mask fade so no
 bottom strip remains above the next row. This offset has its own native spring:
 deriving it from the scroll view's logical geometry makes the returning row
 release all 110pt immediately, ahead of the moving presentation viewport.

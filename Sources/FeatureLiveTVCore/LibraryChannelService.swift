@@ -1,4 +1,5 @@
 import CoreModels
+import CoreNetworking
 import Foundation
 import Observation
 
@@ -298,18 +299,26 @@ public final class LibraryChannelService {
                     ) {
                         try await self.checkAutomatic(stamp: stamp, automaticStamp: automaticStamp)
                     }
-                    catalog.entries += source.entries
-                    catalog.libraries += source.libraries
-                    catalog.accessibleLibraries.formUnion(source.accessibleLibraries)
                     catalog.skippedItemCount += source.skippedItemCount
                     catalog.queriedItemCount += source.queriedItemCount
                     guard catalog.queriedItemCount <= LibraryChannelPortableState.maximumItems else {
                         throw LibraryChannelError.catalogTooLarge
                     }
+                    // An entirely malformed response is not evidence that saved channels were deleted.
+                    guard !source.entries.isEmpty || source.invalidMetadataItemCount == 0 else {
+                        throw LibraryChannelError.invalidSnapshot
+                    }
+                    catalog.entries += source.entries
+                    catalog.libraries += source.libraries
+                    catalog.accessibleLibraries.formUnion(source.accessibleLibraries)
                 } catch let error as CancellationError {
                     throw error
                 } catch let error as LibraryChannelError {
-                    throw error
+                    try await self.checkAutomatic(stamp: stamp, automaticStamp: automaticStamp)
+                    guard error == .invalidSnapshot || error == .catalogChanged else { throw error }
+                    PlozzLog.app.error("Automatic Plozz channel source rejected: \(error)")
+                    failures.append(LibraryChannelSourceFailure(
+                        accountID: context.accountID, serverName: context.provider.session.server.name, error: error))
                 } catch {
                     try await self.checkAutomatic(stamp: stamp, automaticStamp: automaticStamp)
                     failures.append(LibraryChannelSourceFailure(
@@ -688,7 +697,8 @@ public final class LibraryChannelService {
             return LiveTVPrototypeChannel(
                 id: definition.catalogID, number: index + 1, name: recipe.name,
                 category: "Plozz", symbol: recipe.symbol, accent: index % 6, source: .plozz,
-                tagline: "", configuredSourceID: definition.sourceID.uuidString
+                tagline: "", configuredSourceID: definition.sourceID.uuidString,
+                plozzChannelMood: LibraryChannelArtworkMood(automaticKey: definition.automaticKey, recipe: recipe)
             )
         }
     }

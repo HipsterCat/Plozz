@@ -9,6 +9,60 @@ import XCTest
 
 @MainActor
 final class PlaybackSettingsHostedTests: XCTestCase {
+    func testSkipControlsRevealAutomaticTimingAndHideConfigurationWhenDisabled() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "SkipSettingsTV-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let playback = PlaybackSettingsModel(store: PlaybackSettingsStore(defaults: defaults))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            ScrollView {
+                SkipMarkerSettingsControl(model: playback)
+                    .frame(width: SettingsFormMetrics.pageWidth)
+                    .padding(40)
+            }
+            .toggleStyle(SettingsSwitchToggleStyle())
+            .environment(\.themePalette, .dark)
+            .environment(\.locale, Locale(identifier: "en_US"))
+            .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let manual = try visibleText(in: window, attachment: "skip-settings-TV-manual")
+        XCTAssertTrue(manual.contains("Show skip button"), manual)
+        XCTAssertFalse(manual.contains("Skip after"), manual)
+        for label in ["Enable skipping", "Movies", "TV Shows", "Anime"] {
+            XCTAssertTrue(manual.contains(label), manual)
+        }
+        playback.settings.setConfiguredSkipMode(.autoDelay)
+        playback.settings.setSkipAutomaticDelay(30)
+        try await Task.sleep(for: .milliseconds(200))
+        let automatic = try visibleText(in: window, attachment: "skip-settings-TV-automatic")
+        XCTAssertTrue(automatic.contains("Skip automatically"), automatic)
+        XCTAssertTrue(automatic.contains("Skip after"), automatic)
+        XCTAssertTrue(automatic.contains("30 seconds"), automatic)
+        playback.settings.setSkipAutomaticDelay(0)
+        try await Task.sleep(for: .milliseconds(500))
+        let immediate = try visibleText(in: window, attachment: "skip-settings-TV-immediate")
+        XCTAssertTrue(immediate.contains("Immediately"), immediate)
+        playback.settings.setSkipMarkersEnabled(false)
+        try await Task.sleep(for: .milliseconds(200))
+        let disabled = try visibleText(in: window, attachment: "skip-settings-TV-disabled")
+        XCTAssertTrue(disabled.contains("Enable skipping"), disabled)
+        for label in ["Behavior", "Skip after", "Movies", "Set each marker separately", "Use community markers"] {
+            XCTAssertFalse(disabled.contains(label), disabled)
+        }
+    }
+
     func testAdvancedPlaybackShowsFELControlAndAudioTradeoff() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -38,9 +92,11 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(400))
         let text = try visibleText(in: window, attachment: "FEL advanced playback setting")
-        for label in ["FEL", "experimental", "GPU", "memory", "Dolby Atmos", "DTS:X"] {
+        for label in ["FEL", "experimental", "memory", "stutter", "turns off overhead sound"] {
             XCTAssertTrue(text.contains(label), "The setting and tradeoff must be visible: \(text)")
         }
+        XCTAssertFalse(text.contains("Dolby Atmos"), text)
+        XCTAssertFalse(text.contains("DTS:X"), text)
         XCTAssertFalse(playback.settings.dolbyVisionFELEnabled)
     }
 
@@ -169,7 +225,10 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
                 let page = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
                 visible += " " + page
-                if page.contains("Skip intros") || page.contains("Use community markers") || page.contains("Version selection") {
+                if page.contains("Skip intros") || page.contains("Use community markers")
+                    || page.contains("Version selection") || page.contains("Video buffer")
+                    || page.contains("Live TV buffer") || page.contains("Autoplay")
+                    || page.contains("Preferred audio language") {
                     let attachment = XCTAttachment(image: image)
                     attachment.name = "Playback-inline-skip-separate-\(separate)-\(Int(offset))"
                     attachment.lifetime = .keepAlways
@@ -180,16 +239,45 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             for label in [
                 "Version selection", "Choose on first play", "Ask every time", "Choose automatically",
                 "Remember series version choices",
-                "Skip intros, credits", "Set each marker separately", "Use community markers",
-                "Video buffer", "1 minute", "5 minutes", "10 minutes", "Maximum available"
+                "Remember audio language per series",
+                "Autoplay next episode", "Autoplay next playlist item",
+                "Show Up Next card", "Time before the end",
+                "Skip intros, credits", "Enable skipping", "Movies", "TV Shows", "Anime",
+                "Show skip button", "Set each marker separately", "Use community markers",
+                "From IntroDB", "your server has none", "Shares",
+                "Video buffer", "Live TV buffer", "Automatic", "temporary storage",
+                "adds live delay", "Spatial audio", "height channel support",
+                "TrueHD Atmos", "DTS:X", "Apple spatial audio", "lossy"
             ] {
                 XCTAssertTrue(visible.contains(label), "Missing inline control \(label): \(visible)")
             }
+            for option in ["1 minute", "5 minutes", "10 minutes", "Maximum available", "45 seconds"] {
+                XCTAssertFalse(visible.contains(option), "Buffer choices must stay inside their menus: \(visible)")
+            }
+            XCTAssertFalse(visible.contains("Turn off if playback stutters"), visible)
+            XCTAssertFalse(visible.contains("Applies to new playback sessions"), visible)
+            XCTAssertFalse(visible.contains("How Plozz picks the audio language"), visible)
+            XCTAssertFalse(visible.contains("The next episode starts when one finishes"), visible)
+            XCTAssertFalse(visible.contains("The player closes when an episode finishes"), visible)
+            XCTAssertFalse(visible.contains("Show a Skip button, or skip automatically"), visible)
+            XCTAssertFalse(visible.contains("When your server has no intro or credits marker"), visible)
+            XCTAssertTrue(playback.settings.trueHDAtmosEnabled)
             if separate {
                 for label in ["Intros", "Credits", "Recaps", "Previews", "Commercials"] {
                     XCTAssertTrue(visible.contains(label), "Missing inline per-kind control \(label)")
                 }
             }
+        }
+        playback.settings.autoPlayNextEpisode = false
+        for showCard in [false, true] {
+            playback.settings.showUpNextCard = showCard
+            scroll.setContentOffset(CGPoint(x: 0, y: 540 - scroll.adjustedContentInset.top), animated: false)
+            try await Task.sleep(for: .milliseconds(300))
+            let text = try visibleText(in: window, attachment: "Playback-Up-Next-card-\(showCard)-autoplay-off")
+            XCTAssertTrue(text.contains("Autoplay next episode"), text)
+            XCTAssertTrue(text.contains("Show Up Next card"), text)
+            XCTAssertEqual(text.contains("Time before the end"), showCard, text)
+            XCTAssertFalse(playback.settings.autoPlayNextEpisode, "Showing the card must not enable autoplay.")
         }
     }
 

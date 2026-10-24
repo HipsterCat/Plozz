@@ -31,13 +31,15 @@ private enum PreviewTileState {
 }
 
 /// A tiny mock "poster row" painted with fixed colours: a faux title bar over
-/// three poster tiles representing a finished title, an in-progress title (always
+/// three poster tiles representing a finished title, an in-progress series (always
 /// shows a progress bar) and a brand-new title. Which tiles wear a corner mark is
 /// driven by `indicator`, so the two option cards differ only in *where* the mark
 /// lands — exactly the choice the setting makes. Fills whatever frame the caller
 /// gives it and stays proportionate at the compact and full sizes.
 private struct WatchIndicatorMini: View {
     let indicator: WatchStatusIndicator
+    @Environment(\.plozzShowsUnwatchedEpisodeCount) private var showsEpisodeCount
+    @Environment(\.plozzEpisodeCountBadgeStyle) private var episodeCountStyle
 
     private let states: [PreviewTileState] = [.finished, .inProgress, .new]
 
@@ -119,10 +121,17 @@ private struct WatchIndicatorMini: View {
 
     /// The corner mark for a tile, matching the real card: a "watched" check on
     /// the finished tile (only in `.watched` mode) or an "unwatched" flag on the
-    /// new tile (only in `.unwatched` mode). In-progress tiles never get a mark.
+    /// new tile (only in `.unwatched` mode). The in-progress series demonstrates
+    /// the independent episode count without hiding either watch-mark example.
     @ViewBuilder
     private func cornerMark(for state: PreviewTileState, tileWidth: CGFloat) -> some View {
         switch (indicator, state) {
+        case (_, .inProgress) where showsEpisodeCount:
+            let size = tileWidth * 0.47
+            MediaEpisodeCountBadge(
+                count: 3, style: episodeCountStyle, size: size, cornerRadius: tileWidth * 0.12
+            )
+            .padding(episodeCountStyle == .floating ? MediaWatchIndicatorStyle.floatingInset(for: size) : 0)
         case (.watched, .finished):
             let d = tileWidth * 0.47
             MediaWatchedBadge(size: d)
@@ -157,7 +166,8 @@ private struct WatchIndicatorMini: View {
 
 /// The per-option preview graphic for the watch-status indicator picker: a mock
 /// poster row whose corner mark lands on the finished title (`.watched`) or the
-/// new title (`.unwatched`). Fills the caller's frame, so it scales for both the
+/// new title (`.unwatched`), with an optional count on the in-progress series.
+/// Fills the caller's frame, so it scales for both the
 /// full and compact card sizes, mirroring `ThemeSwatch` / `MusicStyleSwatch`.
 public struct WatchStatusIndicatorSwatch: View {
     private let indicator: WatchStatusIndicator

@@ -268,6 +268,11 @@ private struct NavigationRailShellContent<Content: View>: View {
                     destinationFocus.cancel()
                 }
                 chrome.resetForDestinationChange()
+                // Settings is hosted outside the rail, so its Back action bypasses
+                // selectDestination and needs the same presentation-gated handoff.
+                if previous == .settings, destination != .settings {
+                    destinationFocus.begin(destination)
+                }
                 isOpeningNavigation = false
                 hasEnteredSearchContent = false
                 pinnedSidebarInteraction.setSearchResultsFocused(false)
@@ -399,6 +404,18 @@ private struct NavigationRailShellContent<Content: View>: View {
         } else {
             requestNavigationFocus()
         }
+    }
+}
+
+/// A retained root keeps its geometry while the shell hides behind pushed pages.
+struct NavigationRailRootContentInset: ViewModifier {
+    @Environment(\.plozzPinnedSidebarActive) private var isPinned
+
+    func body(content: Content) -> some View {
+        content.environment(
+            \.plozzNavigationContentInset,
+            isPinned ? NavigationRailMetrics.contentInset : 0
+        )
     }
 }
 

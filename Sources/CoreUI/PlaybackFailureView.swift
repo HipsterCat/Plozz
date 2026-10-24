@@ -26,30 +26,11 @@ public struct PlaybackFailureView<Actions: View>: View {
     }
 
     public var body: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    PlaybackFailureHeading(title: title, message: message, systemImage: systemImage)
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 16) {
-                            PlaybackFailureDetailsButton(isAvailable: report != nil, showsDetails: $showsDetails)
-                            actions
-                        }
-                        VStack(alignment: .leading, spacing: 16) {
-                            PlaybackFailureDetailsButton(isAvailable: report != nil, showsDetails: $showsDetails)
-                            actions
-                        }
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(Self.cardPadding)
-                .frame(maxWidth: Self.cardWidth, alignment: .leading)
-                .plozzSurface(.raised, cornerRadius: 28)
-                .padding(Self.outerPadding)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: geometry.size.height)
-            }
-            .scrollBounceBehavior(.basedOnSize)
+        RecoveryScreen {
+            PlaybackFailureHeading(title: title, message: message, systemImage: systemImage)
+        } actions: { _ in
+            PlaybackFailureDetailsButton(isAvailable: report != nil, showsDetails: $showsDetails)
+            actions
         }
         .accessibilityIdentifier("playback-failure")
         .plozzSheet(isPresented: $showsDetails) {
@@ -58,16 +39,6 @@ public struct PlaybackFailureView<Actions: View>: View {
         .environment(\.themePalette, .dark)
         .environment(\.colorScheme, .dark)
     }
-
-    #if os(tvOS)
-    private static var cardWidth: CGFloat { 960 }
-    private static var cardPadding: CGFloat { 48 }
-    private static var outerPadding: CGFloat { 60 }
-    #else
-    private static var cardWidth: CGFloat { 560 }
-    private static var cardPadding: CGFloat { 24 }
-    private static var outerPadding: CGFloat { 20 }
-    #endif
 }
 
 private struct PlaybackFailureHeading: View {

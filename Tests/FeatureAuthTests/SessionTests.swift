@@ -778,6 +778,54 @@ final class AccountStoreTests: XCTestCase {
         XCTAssertEqual(first.loadAccounts(), [original])
     }
 
+    func testPlexRecoveryReplacesExactLegacyAccountWithoutChangingSelections() throws {
+        let store = AccountStore(secureStore: InMemorySecureStore())
+        var original = account("legacy")
+        original.server.provider = .plex
+        original.server.alternateConnectionURLs = [URL(string: "https://approved.example")!]
+        let session = original.session(token: "NEW")
+        let duplicate = Account(id: Account.stableID(for: session), from: session)
+        try store.add(original, token: "OLD")
+        try store.add(duplicate, token: "DUPLICATE")
+        store.setActiveAccountIDs([duplicate.id])
+
+        try store.replaceAuthenticatedSession(session, expected: original)
+
+        let recovered = try XCTUnwrap(store.loadAccounts().first { $0.id == original.id })
+        XCTAssertEqual(recovered.addedAt, original.addedAt)
+        XCTAssertEqual(recovered.server.alternateConnectionURLs, original.server.alternateConnectionURLs)
+        XCTAssertNotEqual(recovered.credentialRevision, original.credentialRevision)
+        XCTAssertEqual(store.activeAccountIDs(), [duplicate.id])
+        XCTAssertEqual(store.loadAccounts().count, 2)
+        XCTAssertEqual(store.token(for: original.id), "NEW")
+        XCTAssertEqual(store.token(for: duplicate.id), "DUPLICATE")
+    }
+
+    func testPlexRecoveryRejectsDifferentIdentityRemovedAndReplacedAccounts() throws {
+        let store = AccountStore(secureStore: InMemorySecureStore())
+        var original = account("legacy")
+        original.server.provider = .plex
+        try store.add(original, token: "OLD")
+        let session = original.session(token: "NEW")
+        var wrongUser = session
+        wrongUser.userID = "another-owner"
+        var wrongServer = session
+        wrongServer.server.id = "another-server"
+        var wrongProvider = session
+        wrongProvider.server.provider = .jellyfin
+        for invalid in [wrongUser, wrongServer, wrongProvider] {
+            XCTAssertThrowsError(try store.replaceAuthenticatedSession(invalid, expected: original))
+            XCTAssertEqual(store.token(for: original.id), "OLD")
+        }
+        try store.add(original, token: "CONCURRENT-REPLACEMENT")
+        XCTAssertThrowsError(try store.replaceAuthenticatedSession(session, expected: original))
+        XCTAssertEqual(store.token(for: original.id), "CONCURRENT-REPLACEMENT")
+        try store.remove(id: original.id)
+        XCTAssertThrowsError(try store.replaceAuthenticatedSession(session, expected: original))
+        XCTAssertTrue(store.loadAccounts().isEmpty)
+        XCTAssertNil(store.token(for: original.id))
+    }
+
     func testMultipleAccountsPersistInAddedOrder() throws {
         let store = AccountStore(secureStore: InMemorySecureStore())
         try store.add(account("a2", added: 200), token: "T2")

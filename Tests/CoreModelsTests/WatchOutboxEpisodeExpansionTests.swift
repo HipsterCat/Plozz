@@ -145,17 +145,21 @@ final class WatchOutboxEpisodeExpansionTests: XCTestCase {
     }
 
     func testExpansionIsIdempotentAcrossDrains() async throws {
+        let clock = TestClock(Date())
         let applier = ExpandingFakeApplier()
         applier.expansion = WatchTargetExpansion(
             targets: [WatchMutationTarget(accountID: "B", itemID: "B-ep")]
         )
         // Origin write fails the first time so the mutation survives a second drain.
         applier.failingAccounts = ["A"]
-        let reconciler = WatchStateReconciler(store: InMemoryWatchMutationStore(), applier: applier)
+        let reconciler = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(), applier: applier, now: { clock.now }
+        )
 
-        await reconciler.enqueue(episodeMutation(capturedAt: Date()))
+        await reconciler.enqueue(episodeMutation(capturedAt: clock.now))
         await reconciler.drain()   // B written, A fails → still pending
         applier.failingAccounts = []
+        clock.now = clock.now.addingTimeInterval(30)
         await reconciler.drain()   // A written; B must NOT be written twice
 
         let bWrites = applier.playedWrites.filter { $0.accountID == "B" }
@@ -309,4 +313,3 @@ final class WatchOutboxEpisodeExpansionTests: XCTestCase {
         XCTAssertEqual(decoded.targets, modern.targets)
     }
 }
-

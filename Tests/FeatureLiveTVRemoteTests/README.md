@@ -11,6 +11,8 @@ source, or pre-existing `.build` content is required.
 Requirements: Xcode with a tvOS 26-or-newer simulator, XcodeGen, and the repository's
 normal Apple-build prerequisites. The current fixture was verified on tvOS 27.
 Select the appropriate Xcode with `DEVELOPER_DIR` if it differs from `xcode-select`.
+The tvOS host and unit-test bundle share one `AppShell` package root, matching
+the main focus host and avoiding a `CoreUI.framework` collision in XCTest's loader.
 
 From the repository root:
 
@@ -31,7 +33,7 @@ tools/with-apple-build-lease.sh plozz-native-fixture -- \
   -project Tests/FeatureLiveTVRemoteTests/LiveTVSearchFixture.xcodeproj \
   -scheme LiveTVSearchFixture \
   -destination "platform=tvOS Simulator,id=$TVOS_SIMULATOR_ID" \
-  -derivedDataPath .build/live-tv-native-fixture \
+  -derivedDataPath .build/live-tv-shared-root-derived-data \
   -resultBundlePath ".build/live-tv-native-results-$(date +%Y%m%d-%H%M%S).xcresult" \
   -parallel-testing-enabled NO \
   -collect-test-diagnostics never \

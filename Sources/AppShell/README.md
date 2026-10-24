@@ -42,6 +42,45 @@ registry.
 
 ## Invariants
 
+- **Returning from Settings restores pinned-page focus.** Settings is hosted
+  outside the navigation rail. Its Back action uses the same destination
+  presentation fence and native content-focus request as selecting a rail
+  destination, rather than relying on automatic focus after the overlay disappears.
+
+- **Signing in does not change the starting page.** TV and mobile navigation
+  availability uses the active profile's configured account metadata, not its
+  credential-ready playback providers. A pending Plex Home identity or another
+  unavailable credential must not make a media profile look Live-TV-only.
+  Provider access remains credential-gated; excluded accounts and explicitly
+  empty profile selections remain excluded from navigation availability too.
+
+- **The TV startup expression survives a fast restore.** Smile leads into wink,
+  delight, or surprise, rotating on each cold launch. The launch logo stays mounted
+  until its first 0.7 seconds of active animation and session bootstrap both
+  finish. Bootstrap runs independently; profile routing, covers and deferred
+  incoming links wait for presentation. First-run diagnostic consent appears
+  after the same intro, without starting bootstrap before consent. Reduce Motion
+  skips the animation hold, and returning from the background does not repeat it.
+
+- **Mobile Home keeps background folds out of scrolling.** Watchlist cache-load
+  notifications use the same coalesced refresh as membership changes. Vertical
+  scrolling and horizontal rail movement both extend the interaction settle
+  window; cached Home rows still paint immediately on profile entry.
+  Artwork prefetch task identity compares retained media and policy inputs,
+  rather than constructing every item's metadata query during layout. Actual
+  artwork lookup remains bounded to the existing nearby-card window. Changed
+  items, artwork/provider preferences, spoilers and presentation restart that
+  window; disabled prefetch performs no source preparation.
+
+- **Preference sync is not a profile switch.** Mobile cloud apply rebuilds active
+  settings and track/version preferences without restarting downloads, provider
+  caches, identity indexing, or tracker/watchlist imports. Inactive-profile
+  preferences and unchanged membership do not rebuild the active runtime.
+  Changes to the active profile, namespace, membership, or local accounts still
+  reconcile sources, after mandatory profile-lock checks. Retained downloads
+  read current preferences from their original profile's stores when preparing
+  new work.
+
 - **Top Shelf actions retain their intent and owner.** Play opens the title then
   starts playback; More Info opens the same detail/episode-context destination
   without playback. Requests wait for signed-in admission and route through the
@@ -198,6 +237,12 @@ inside pushed pages and presentations still belongs to those surfaces. A hidden
 Home destination is temporarily available for this explicit return without
 changing the profile's hidden/order preferences. Native navigation and its
 optional exit protection are unchanged.
+
+`HomeTab` applies `NavigationRailRootContentInset` only to its root, before
+registering destinations. Home, Watchlist and library roots retain their sidebar
+clearance while details hide the rail; hiding chrome must not resize retained
+rows or grids. Pushed pages still receive the shell's zero inset and remain
+full-bleed. Native navigation roots keep their zero custom inset.
 
 `NavigationRailEdgeCatcher` passively observes arrow presses and indirect-touch
 swipes. Left at an unresolved content edge opens the sidebar; Right at an

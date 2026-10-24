@@ -331,8 +331,10 @@ final class SettingsDetailNavigationHostedTests: XCTestCase {
                     let labels = try self.captureLabels(window, name: "profile-pin-\(parental)-\(direction)")
                     let heading = try self.label(parental ? "Create a Parental PIN" : "Add a Profile PIN?", in: labels)
                     XCTAssertLessThan(heading.height, 80)
-                    let focused = UIFocusSystem.focusSystem(for: window)?.focusedItem
-                    let keys = try self.focusItems(in: window).map { item in
+                    let focused = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+                    let items = self.focusItems(in: window)
+                    XCTAssertTrue(items.contains { $0 === focused }, "Entry focus must land on the keypad.")
+                    let keys = try items.map { item in
                         let frame = try XCTUnwrap(NavigationRowFocusRequester.frame(of: item, relativeTo: window))
                         if item !== focused {
                             XCTAssertEqual(frame.height, 108, accuracy: 1,
@@ -343,6 +345,15 @@ final class SettingsDetailNavigationHostedTests: XCTestCase {
                     }
                     XCTAssertEqual(keys.count, 11, "All ten digits and Delete must remain focusable.")
                     let pad = keys.reduce(CGRect.null) { $0.union($1) }
+                    let focusedFrame = try XCTUnwrap(
+                        NavigationRowFocusRequester.frame(of: focused, relativeTo: window)
+                    )
+                    XCTAssertEqual(focusedFrame.minY, pad.minY, accuracy: 1)
+                    XCTAssertEqual(
+                        direction == .leftToRight ? focusedFrame.minX : focusedFrame.maxX,
+                        direction == .leftToRight ? pad.minX : pad.maxX,
+                        accuracy: 1, "Digit 1 must receive entry focus in both layout directions."
+                    )
                     let padOffset: CGFloat = 420 // Half the shared 720pt prose column plus 120pt gap.
                     XCTAssertEqual(
                         pad.midX, window.bounds.midX + (direction == .leftToRight ? padOffset : -padOffset),
@@ -350,6 +361,49 @@ final class SettingsDetailNavigationHostedTests: XCTestCase {
                     )
                     for frame in keys + [heading] {
                         XCTAssertTrue(window.bounds.insetBy(dx: 40, dy: 0).contains(frame))
+                    }
+                }
+            }
+        }
+    }
+
+    func testProfileEditorActionsShareOneNativeControlRow() async throws {
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            for reduceTransparency in [false, true] {
+                for autoSave in [false, true] {
+                    try await withProfileDestination(
+                        .profileAppearance(profileID: "controls"), direction: direction
+                    ) {
+                        ProfileEditorView(
+                            editingProfile: Profile(id: "controls", name: "Sample profile"),
+                            canDelete: true, onSave: { _ in },
+                            onLiveChange: autoSave ? { _ in } : nil,
+                            ownsFullScreen: false, onDelete: {}, onCancel: {}
+                        )
+                        .environment(\.plozzReduceTransparency, reduceTransparency)
+                    } inspect: { window in
+                        let labels = try self.captureLabels(
+                            window, name: "profile-controls-\(direction)-opaque-\(reduceTransparency)-autosave-\(autoSave)"
+                        )
+                        let action = try self.label(autoSave ? "Done" : "Save", in: labels)
+                        let controls = try self.focusItems(in: window).map {
+                            try XCTUnwrap(NavigationRowFocusRequester.frame(of: $0, relativeTo: window))
+                        }.filter { abs($0.midY - action.midY) < 8 }
+                        XCTAssertEqual(
+                            controls.count, autoSave ? 3 : 4,
+                            "Back, Delete and Done/Cancel/Save must share one row; unchanged Revert is disabled."
+                        )
+                        let trash = try XCTUnwrap(controls.min { $0.width < $1.width })
+                        XCTAssertGreaterThanOrEqual(trash.width, 44)
+                        XCTAssertGreaterThanOrEqual(trash.height, 44)
+                        for frame in controls {
+                            XCTAssertEqual(frame.midY, trash.midY, accuracy: 1)
+                            XCTAssertTrue(window.bounds.insetBy(dx: 40, dy: 0).contains(frame))
+                        }
+                        let ordered = controls.sorted { $0.minX < $1.minX }
+                        for pair in zip(ordered, ordered.dropFirst()) {
+                            XCTAssertLessThan(pair.0.maxX, pair.1.minX, "Action hit targets must not overlap.")
+                        }
                     }
                 }
             }

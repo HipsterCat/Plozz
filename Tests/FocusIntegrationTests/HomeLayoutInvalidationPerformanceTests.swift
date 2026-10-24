@@ -348,10 +348,18 @@ final class HomeLayoutInvalidationPerformanceTests: XCTestCase {
             }
             let red = image(.red, size: CGSize(width: 320, height: 180))
             let blue = image(.blue, size: CGSize(width: 320, height: 180))
+            let logo = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 60)).image { context in
+                UIColor(red: 0.04, green: 0.05, blue: 0.18, alpha: 1).setFill()
+                context.fill(CGRect(x: 10, y: 10, width: 100, height: 40))
+                UIColor(red: 0.45, green: 0.03, blue: 0.04, alpha: 1).setFill()
+                context.fill(CGRect(x: 130, y: 10, width: 100, height: 40))
+                UIColor.white.setFill()
+                context.fill(CGRect(x: 30, y: 20, width: 10, height: 10))
+            }
             let server = try LibraryArtworkServer(images: [
                 "red": try XCTUnwrap(red.pngData()), "blue": try XCTUnwrap(blue.pngData()),
                 "poster": try XCTUnwrap(image(.white, size: CGSize(width: 120, height: 180)).pngData()),
-                "logo": try XCTUnwrap(image(.white, size: CGSize(width: 240, height: 60)).pngData())
+                "logo": try XCTUnwrap(logo.pngData())
             ])
             do {
                 let port = try await server.start()
@@ -389,9 +397,8 @@ final class HomeLayoutInvalidationPerformanceTests: XCTestCase {
         func prepare() async throws {
             try await Self.waitUntil {
                 self.window.layoutIfNeeded()
-                return self.probe.rowSizes.count == self.state.rows.count
-                    && self.probe.artwork?.backgroundSample != nil
-                    && self.probe.artwork?.displayed?.artwork.variant == .heroBackdrop
+                return self.descendants(NativePosterButton.self, in: self.window)
+                    .contains { $0.accessibilityLabel == "Layout 0-0" }
             }
             focusSystem = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
             let first = try poster(named: "Layout 0-0")
@@ -399,6 +406,12 @@ final class HomeLayoutInvalidationPerformanceTests: XCTestCase {
             focusSystem.requestFocusUpdate(to: host)
             focusSystem.updateFocusIfNeeded()
             try await Self.waitUntil { self.focusSystem.focusedItem === first }
+            try await Self.waitUntil {
+                self.window.layoutIfNeeded()
+                return self.probe.rowSizes.count == self.state.rows.count
+                    && self.probe.artwork?.backgroundSample != nil
+                    && self.probe.artwork?.displayed?.artwork.variant == .heroBackdrop
+            }
             try await Task.sleep(for: .milliseconds(650))
             backdrop = try XCTUnwrap(descendants(HeroWipeContainerView.self, in: window).first)
             let display = try XCTUnwrap(probe.artwork)

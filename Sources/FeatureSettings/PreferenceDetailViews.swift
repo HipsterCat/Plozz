@@ -19,7 +19,7 @@ struct AppearanceDetailView: View {
     /// Circadian Mode (night-warming) settings, folded in as sections here — it's
     /// a display concern, so it no longer earns its own top-level row.
     @Bindable var nightShift: NightShiftSettingsModel
-    /// Browsing protection belongs to this profile's Appearance preferences.
+    /// Profile-scoped browsing protection, presented under All screens.
     @Bindable var spoilers: SpoilerSettingsModel
     var section: AppearanceSettingsSection = .appearance
     #if os(tvOS)
@@ -38,6 +38,7 @@ struct AppearanceDetailView: View {
     @Environment(NavigationStyleSettingsModel.self) private var navigation
     @Environment(TransparencyPreferenceModel.self) private var transparency
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
+    @Environment(ContentRatingSettingsModel.self) private var contentRatings
 
     var body: some View {
         @Bindable var settingsNavigation = settingsNavigation
@@ -67,20 +68,34 @@ struct AppearanceDetailView: View {
 
     private var rows: [SettingsSplitRow] {
         let availableRows = allRows
-        #if os(tvOS)
-        if inWorkspace {
-            if section == .screensNavigation {
-                return [
-                    SettingsSplitRow(id: "customize-home", title: "Customize Home") { EmptyView() }
-                        .destination(.customizeHome)
-                ] + availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
+        if section == .screensNavigation {
+            return [
+                SettingsSplitRow(
+                    id: "content-ratings", title: "Show content ratings",
+                    sectionStart: .heading(Text("All screens"))
+                ) {
+                    ContentRatingToggle(model: contentRatings)
+                }.labeledControl()
+            ] + SpoilerRowsBuilder(spoilers: spoilers).rows.map { $0.page() }
+                + availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
+                    SettingsSplitRow(
+                        id: "customize-home", title: "Customize Home",
+                        sectionStart: .heading(Text("Customize individual screens"))
+                    ) { EmptyView() }.destination(.customizeHome),
+                    SettingsSplitRow(id: "customize-libraries", title: "Customize Libraries") { EmptyView() }
+                        .destination(.customizeLibraries),
                     SettingsSplitRow(id: "title-details", title: "Detail Page") { EmptyView() }
                         .destination(.detailPage)
                 ] + availableRows.filter { $0.id == "music-player" }.map { $0.page() }
-            }
-            return ["theme", "cards", "artwork", "spoilers", "night-shift"].flatMap { id in
+        }
+        #if os(tvOS)
+        if inWorkspace {
+            return ["theme", "cards", "artwork", "night-shift"].flatMap { id in
                 availableRows.filter { $0.id == id }.map { row in
-                    id == "artwork" ? row.destination(.artwork) : row.page()
+                    switch id {
+                    case "artwork": row.destination(.artwork)
+                    default: row.page()
+                    }
                 }
             }
         }
@@ -167,7 +182,6 @@ struct AppearanceDetailView: View {
                     )
                 }.illustratedContent()
         ] + CircadianRowsBuilder(model: nightShift).rows
-            + SpoilerRowsBuilder(spoilers: spoilers).rows
     }
 
     /// Theme cards plus the transparency (liquid-glass) control folded in beneath
@@ -223,6 +237,8 @@ struct AppearanceDetailView: View {
                 SettingsControlGroup(illustrated: true) {
                     CompactNavigationPicker(selection: $navigation.style)
                     Toggle("Prevent Accidental Exit", isOn: $navigation.preventsAccidentalExit)
+                    Toggle("Zoom when opening titles", isOn: $navigation.detailZoomEnabled)
+                        .accessibilityIdentifier("detail-zoom-enabled")
                 }
                 #else
                 CompactNavigationPicker(selection: $navigation.style)
@@ -253,7 +269,7 @@ struct SpoilersDetailView: View {
     }
 }
 
-/// Shared spoiler controls for Appearance on tvOS and the legacy detail layout.
+/// Shared spoiler controls for Screens & Navigation and the legacy detail layout.
 @MainActor
 struct SpoilerRowsBuilder {
     let spoilers: SpoilerSettingsModel
@@ -300,6 +316,7 @@ struct SpoilerRowsBuilder {
 /// theme music. Kept separate from the Home hero (which lives in Customize Home)
 /// and from Playback (which is video-playback behaviour).
 struct DetailPageDetailView: View {
+    let cards: CardStyleSettingsModel
     @Bindable var themeMusic: ThemeMusicSettingsModel
     @Bindable var heroBackground: HeroBackgroundSettingsModel
     @Environment(\.detailHeaderSettings) private var detailHeaderSettings
@@ -312,8 +329,7 @@ struct DetailPageDetailView: View {
         var rows = [
             SettingsSplitRow(
                 id: "detail-page-hero-mode",
-                title: "Background",
-                description: "Choose what plays behind the hero on a title's detail page. Trailer and theme music never play together."
+                title: "Background"
             ) {
                 SettingsControlRows(nonTVSpacing: SettingsMetrics.sectionSpacing) {
                     DescribedSegmentedPicker(
@@ -328,7 +344,7 @@ struct DetailPageDetailView: View {
                     if heroBackground.settings.detailMode == .themeMusic {
                         SettingsDetailGroup(title: "Volume") {
                             DescribedSegmentedPicker(
-                                options: ThemeMusicVolume.allCases,
+                                options: ThemeMusicVolume.playbackLevels,
                                 selection: $themeMusic.settings.volume,
                                 title: { $0.displayName },
                                 detail: { $0.detail }
@@ -339,6 +355,12 @@ struct DetailPageDetailView: View {
             }
         ]
         if let detailHeaderSettings {
+            rows.insert(SettingsSplitRow(
+                id: "detail-page-logo-size",
+                title: "Logo & text size"
+            ) {
+                DetailLogoSizeSettingsForm(model: detailHeaderSettings)
+            }, at: 0)
             rows.append(SettingsSplitRow(
                 id: "detail-page-header-ratings",
                 title: "Review scores"
@@ -352,7 +374,18 @@ struct DetailPageDetailView: View {
                 DetailHeaderAgeSettingsForm(model: detailHeaderSettings)
             })
         }
+        rows.append(SettingsSplitRow(id: "detail-page-card-labels", title: "Card labels") {
+            CardCaptionSettingsControls(cards: cards, scope: .detail)
+        })
         return rows
+    }
+}
+
+private struct DetailLogoSizeSettingsForm: View {
+    @Bindable var model: DetailPageSettingsModel
+
+    var body: some View {
+        HeroLogoSizeControl(size: $model.settings.logoSize, textSize: $model.settings.textSize, surface: .detail)
     }
 }
 
@@ -581,7 +614,7 @@ struct PlaybackDetailView: View {
             if section == .subtitles { return subtitleRows }
             return [
                 SettingsSplitRow(id: "audio", title: "Audio") {
-                    SettingsControlRows {
+                    SettingsConnectedControlGroups {
                         ForEach(audioRows) { row in
                             VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
                                 row.detail()
@@ -591,12 +624,12 @@ struct PlaybackDetailView: View {
                             }
                         }
                     }
-                },
+                }.groupedContent(),
                 SettingsSplitRow(id: "autoplay-up-next", title: "Autoplay & Up Next") {
-                    SettingsControlRows {
+                    SettingsConnectedControlGroups {
                         ForEach(upNextRows) { $0.detail() }
                     }
-                }
+                }.groupedContent()
             ] + versionSelectionRows + readAheadRows + skipIntroRows + [
                 SettingsSplitRow(id: "seeking", title: "Seeking") {
                     SettingsControlRows {
@@ -638,7 +671,10 @@ struct PlaybackDetailView: View {
         [
             SettingsSplitRow(id: "read-ahead", title: "Video buffer") {
                 PlaybackReadAheadControl()
-            }
+            }.labeledControl(),
+            SettingsSplitRow(id: "live-buffer", title: "Live TV buffer") {
+                LivePlaybackBufferControl()
+            }.labeledControl()
         ]
     }
 
@@ -761,8 +797,7 @@ struct PlaybackDetailView: View {
         var rows = [
             SettingsSplitRow(
                 id: "audio-defaults",
-                title: "Audio defaults",
-                description: "How Plozz picks the audio language when a title offers more than one — with optional per-content-type rules and per-series memory.",
+                title: "Audio defaults"
             ) {
                 SettingsControlRows(nonTVSpacing: 32) {
                     // Set separately, "Everything else" takes over the one
@@ -787,7 +822,7 @@ struct PlaybackDetailView: View {
                         }
                     }
 
-                    Toggle("Remember audio per series", isOn: $playback.settings.rememberAudioTrackPerSeries)
+                    Toggle("Remember audio language per series", isOn: $playback.settings.rememberAudioTrackPerSeries)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -796,10 +831,11 @@ struct PlaybackDetailView: View {
         if #available(tvOS 26.0, *) {
             rows.append(SettingsSplitRow(
                 id: "truehd-atmos",
-                title: "TrueHD Atmos and DTS:X",
-                description: "Hear overhead sound from supported TrueHD Atmos and DTS:X tracks on compatible equipment, using lossy conversion. If playback stutters or seeking is slow, try turning this off. Those tracks will still play, but without height positioning. Dolby Digital Plus Atmos is unaffected. Applies to new playback sessions."
+                title: "Spatial audio (height channel support)",
+                description: "Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy)."
             ) {
-                Toggle("TrueHD Atmos and DTS:X", isOn: $playback.settings.trueHDAtmosEnabled)
+                Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
+                    .accessibilityIdentifier("spatial-audio-toggle")
             })
         }
         #endif
@@ -810,38 +846,11 @@ struct PlaybackDetailView: View {
         [
             SettingsSplitRow(
                 id: "skip-intros-mode",
-                title: "Skip intros, credits & more",
-                description: "Show a Skip button, or skip automatically, during intros, credits, recaps, previews and commercials.",
+                title: "Skip intros, credits & more"
             ) {
-                SkipModeControl(
-                    baseMode: $playback.settings.skipIntros,
-                    perKindEnabled: perKindSkipBinding,
-                    kindMode: { skipModeBinding(for: $0) },
-                    useCommunityMarkers: $playback.settings.useCommunityMarkers
-                )
+                SkipMarkerSettingsControl(model: playback)
             }
         ]
-    }
-
-    /// On seeds every kind with the current mode, so turning it on changes
-    /// nothing until a kind is set; off returns every kind to the one mode.
-    private var perKindSkipBinding: Binding<Bool> {
-        Binding(
-            get: { !playback.settings.skipModeOverrides.isEmpty },
-            set: { on in
-                let base = playback.settings.skipIntros
-                playback.settings.skipModeOverrides = on
-                    ? Dictionary(uniqueKeysWithValues: MediaSegment.Kind.skippable.map { ($0, base) })
-                    : [:]
-            }
-        )
-    }
-
-    private func skipModeBinding(for kind: MediaSegment.Kind) -> Binding<SkipIntrosMode> {
-        Binding(
-            get: { playback.settings.skipMarkerModes.mode(for: kind) },
-            set: { playback.settings.skipModeOverrides[kind] = $0 }
-        )
     }
 
     private var skipIntervalRows: [SettingsSplitRow] {
@@ -951,18 +960,10 @@ struct PlaybackDetailView: View {
         [
             SettingsSplitRow(
                 id: "autoplay-next-episode",
-                title: "Autoplay",
-                description: "Play the next episode automatically.",
+                title: "Autoplay"
             ) {
                 SettingsControlRows(nonTVSpacing: 8) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Autoplay next episode", isOn: $playback.settings.autoPlayNextEpisode)
-                        Text(playback.settings.autoPlayNextEpisode
-                             ? "The next episode starts when one finishes."
-                             : "The player closes when an episode finishes.")
-                            .settingsHelperText()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    Toggle("Autoplay next episode", isOn: $playback.settings.autoPlayNextEpisode)
                     Toggle("Autoplay next playlist item", isOn: $playback.settings.autoPlayNextPlaylistItem)
                 }
             },
@@ -1018,55 +1019,6 @@ private struct DescribedSegmentedPicker<Option: Hashable>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .animation(.easeInOut(duration: 0.18), value: describedOption)
-    }
-}
-
-/// The "Skip intros, credits & more" control: one Off / On / Auto (delay) / Auto
-/// (instant) picker for every kind of marker, with its explanation directly
-/// beneath, or, set separately, a ``SeparateSettingRow`` per kind. Community
-/// markers are one switch below.
-private struct SkipModeControl: View {
-    @Binding var baseMode: SkipIntrosMode
-    @Binding var perKindEnabled: Bool
-    let kindMode: (MediaSegment.Kind) -> Binding<SkipIntrosMode>
-    @Binding var useCommunityMarkers: Bool
-
-    var body: some View {
-        SettingsControlRows(nonTVSpacing: 32) {
-            if !perKindEnabled {
-                DescribedSegmentedPicker(
-                    options: SkipIntrosMode.allCases,
-                    selection: $baseMode,
-                    title: { $0.title },
-                    detail: { $0.detail }
-                )
-                .transition(.opacity)
-            }
-
-            SettingsRevealSection(isOn: $perKindEnabled, masterLabel: "Set each marker separately") {
-                ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
-                    SeparateSettingRow(
-                        title: kind.settingsTitle,
-                        hint: kind.settingsHint,
-                        // Four segments don't fit beside a name column.
-                        namePlacement: .above,
-                        options: SkipIntrosMode.allCases,
-                        selection: kindMode(kind),
-                        optionTitle: { $0.title },
-                        detail: { $0.detail }
-                    )
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                Toggle("Use community markers", isOn: $useCommunityMarkers)
-                Text("When your server has no intro or credits marker, Plozz looks one up on IntroDB and TheIntroDB, sending them the title’s IMDb or TMDB ID.")
-                    .settingsHelperText()
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .animation(.easeInOut(duration: 0.22), value: perKindEnabled)
     }
 }
 

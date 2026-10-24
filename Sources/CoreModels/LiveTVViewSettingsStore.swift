@@ -2,6 +2,7 @@ import Foundation
 
 /// Profile-scoped preferences that control how Live TV channels are presented.
 public struct LiveTVViewSettings: Equatable, Sendable {
+    public var startsWithCategories: Bool
     public var sortByName: Bool
     public var autoPreview: Bool
     public var hasChosenAutoPreview: Bool
@@ -23,8 +24,10 @@ public struct LiveTVViewSettings: Equatable, Sendable {
         wifiOnly: Bool = false,
         previewAfterWatching: Bool = true,
         showsRecentChannels: Bool = true,
-        hasChosenAutoPreview: Bool = false
+        hasChosenAutoPreview: Bool = false,
+        startsWithCategories: Bool = true
     ) {
+        self.startsWithCategories = startsWithCategories
         self.sortByName = sortByName
         self.autoPreview = autoPreview
         self.hasChosenAutoPreview = hasChosenAutoPreview
@@ -64,6 +67,7 @@ public final class LiveTVViewSettingsStore: LiveTVViewSettingsStoring, @unchecke
     static let wifiOnlyKey = "com.plozz.liveTV.view.wifiOnly"
     static let previewAfterWatchingKey = "com.plozz.liveTV.view.previewAfterWatching"
     static let showsRecentChannelsKey = "com.plozz.liveTV.view.showsRecentChannels"
+    static let startsWithCategoriesKey = "com.plozz.liveTV.view.startsWithCategories"
 
     private let defaults: UserDefaults
     private let sortByNameKey: String
@@ -75,6 +79,7 @@ public final class LiveTVViewSettingsStore: LiveTVViewSettingsStoring, @unchecke
     private let wifiOnlyKey: String
     private let previewAfterWatchingKey: String
     private let showsRecentChannelsKey: String
+    private let startsWithCategoriesKey: String
 
     /// - Parameter namespace: per-profile scope. `nil` (the default/primary
     ///   profile) uses un-suffixed keys; other profiles pass their `Profile.id`.
@@ -91,6 +96,7 @@ public final class LiveTVViewSettingsStore: LiveTVViewSettingsStoring, @unchecke
         self.wifiOnlyKey = SettingsKey.scoped(Self.wifiOnlyKey, namespace: namespace)
         self.previewAfterWatchingKey = SettingsKey.scoped(Self.previewAfterWatchingKey, namespace: namespace)
         self.showsRecentChannelsKey = SettingsKey.scoped(Self.showsRecentChannelsKey, namespace: namespace)
+        self.startsWithCategoriesKey = SettingsKey.scoped(Self.startsWithCategoriesKey, namespace: namespace)
     }
 
     public func load() -> LiveTVViewSettings {
@@ -106,7 +112,8 @@ public final class LiveTVViewSettingsStore: LiveTVViewSettingsStoring, @unchecke
             wifiOnly: value(forKey: wifiOnlyKey, default: fallback.wifiOnly),
             previewAfterWatching: value(forKey: previewAfterWatchingKey, default: fallback.previewAfterWatching),
             showsRecentChannels: value(forKey: showsRecentChannelsKey, default: fallback.showsRecentChannels),
-            hasChosenAutoPreview: value(forKey: hasChosenAutoPreviewKey, default: fallback.hasChosenAutoPreview)
+            hasChosenAutoPreview: value(forKey: hasChosenAutoPreviewKey, default: fallback.hasChosenAutoPreview),
+            startsWithCategories: value(forKey: startsWithCategoriesKey, default: fallback.startsWithCategories)
         )
     }
 
@@ -120,6 +127,7 @@ public final class LiveTVViewSettingsStore: LiveTVViewSettingsStoring, @unchecke
         defaults.set(settings.wifiOnly, forKey: wifiOnlyKey)
         defaults.set(settings.previewAfterWatching, forKey: previewAfterWatchingKey)
         defaults.set(settings.showsRecentChannels, forKey: showsRecentChannelsKey)
+        defaults.set(settings.startsWithCategories, forKey: startsWithCategoriesKey)
         NotificationCenter.default.post(name: Self.didChange, object: nil)
     }
 

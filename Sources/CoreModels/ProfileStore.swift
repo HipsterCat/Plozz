@@ -480,7 +480,30 @@ public final class ProfilesModel {
     /// See ``ProfilePersisting/rootNamespaceOwnerID()``.
     @ObservationIgnored
     public private(set) var rootNamespaceOwnerID: String?
-    public private(set) var activeProfileID: String
+    public private(set) var activeProfileID: String {
+        didSet {
+            if activeProfileID != oldValue {
+                unlockedProfileLocks.removeAll()
+                selectionGeneration += 1
+            }
+        }
+    }
+    @ObservationIgnored public private(set) var selectionGeneration = 0
+    private var unlockedProfileLocks: [String: ProfileLock] = [:]
+
+    public func isProfileUnlocked(_ id: String) -> Bool {
+        guard let lock = profiles.first(where: { $0.id == id })?.lock else { return false }
+        return unlockedProfileLocks[id] == lock
+    }
+
+    /// Keeps proof only until the active profile changes, including sync/deletion fallbacks.
+    public func noteProfileUnlocked(_ id: String) {
+        unlockedProfileLocks[id] = profiles.first(where: { $0.id == id })?.lock
+    }
+
+    public func forgetProfileUnlock(_ id: String) {
+        unlockedProfileLocks[id] = nil
+    }
     /// Whether the current Apple TV system user already has a *stored* profile
     /// pick (vs. the in-memory default). Drives the launch picker: with system
     /// multi-user support, a user with no remembered pick still sees the picker

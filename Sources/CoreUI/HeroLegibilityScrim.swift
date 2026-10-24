@@ -1,6 +1,20 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry public var heroScrimHeightScale: CGFloat = 1
+}
+
+struct HeroScrimCoverage: ViewModifier {
+    @Environment(\.heroScrimHeightScale) private var heightScale
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(x: 1, y: max(1, heightScale), anchor: .bottom)
+            .clipped()
+    }
+}
+
 /// A seamless legibility vignette for hero backdrops.
 ///
 /// Replaces a single directional scrim (which pooled the darkening on one side —
@@ -93,6 +107,7 @@ public struct HeroLegibilityScrim: View {
                 )
             }
         }
+        .modifier(HeroScrimCoverage())
     }
 
     /// Ramps the side darkening in vertically, so the upper corners keep the

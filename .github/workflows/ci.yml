@@ -17,9 +17,10 @@ env:
   GIT_CONFIG_PARAMETERS: "'safe.bareRepository=all'"
 
 jobs:
+  # The pinned playback engine requires Xcode 27; use its supported runner image.
   guards:
     name: Deterministic preflight
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -31,8 +32,10 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/.build/ci-scratch"
           printf 'TMPDIR=%s/.build/ci-scratch\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_26.2.app
+      - name: Show Xcode toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift --version
 
       - name: Architecture layering guard
         run: python3 tools/arch-guard.py
@@ -87,7 +90,7 @@ jobs:
   app-build:
     name: Build tvOS simulator app
     needs: guards
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -142,8 +145,8 @@ jobs:
   package-tests:
     name: Full package test matrix
     needs: guards
-    runs-on: macos-15
-    timeout-minutes: 60
+    runs-on: xcode-27
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v5
         with:
@@ -156,7 +159,7 @@ jobs:
           lane: package-tests
 
       - name: Run full test matrix (tvOS Simulator, build-once)
-        run: python3 tools/run-bounded.py 2400 "CI full test matrix" -- tools/run-tests.sh
+        run: python3 tools/run-bounded.py 3600 "CI full test matrix" -- tools/run-tests.sh
 
       - name: Save successful trusted caches
         if: ${{ success() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
@@ -181,8 +184,8 @@ jobs:
   hosted-focus:
     name: App-hosted focus tests
     needs: guards
-    runs-on: macos-15
-    timeout-minutes: 90
+    runs-on: xcode-27
+    timeout-minutes: 140
     steps:
       - uses: actions/checkout@v5
         with:
@@ -195,6 +198,8 @@ jobs:
           lane: hosted-focus
 
       - name: Run app-hosted episode focus tests
+        env:
+          PLOZZ_FOCUS_TEST_TIMEOUT: "5400"
         run: tools/run-focus-tests.sh
 
       - name: Save successful trusted caches

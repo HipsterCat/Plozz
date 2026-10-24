@@ -6,6 +6,30 @@ import CoreModels
 /// propagation onto the mapped `MediaItem`, so the hero can draw a live bar for a
 /// requested title that's still being fetched by Radarr/Sonarr.
 final class SeerDownloadProgressTests: XCTestCase {
+    func testFutureMovieUsesReleaseStatusUnlessTheQueueAlreadyHasMedia() throws {
+        let queues: [[SeerDownloadingItem]] = [
+            [],
+            [.init(size: nil, sizeLeft: nil)],
+            [.init(size: 100, sizeLeft: 100)]
+        ]
+        for queue in queues {
+            let result = SeerDiscoverResult(
+                id: 42, mediaType: "movie", title: "Future Movie",
+                releaseDate: "2099-10-20",
+                mediaInfo: .init(status: 3, downloadStatus: queue)
+            )
+            let movie = try XCTUnwrap(SeerMapper.mediaItem(from: result))
+            XCTAssertNil(movie.downloadProgress)
+            XCTAssertEqual(movie.hasRequestDownloadActivity, !queue.isEmpty)
+            XCTAssertEqual(movie.heroCTA(seerConnected: true), queue.isEmpty ? .awaitingRelease : .requested)
+            let details = SeerMapper.requestAvailability(from: .init(
+                mediaInfo: .init(status: 3, downloadStatus: queue)
+            ))
+            XCTAssertEqual(details.hasDownloadActivity, !queue.isEmpty)
+            XCTAssertNil(details.downloadProgress)
+        }
+    }
+
     func testNilWhenNoDownloadStatus() {
         XCTAssertNil(SeerMapper.downloadProgress(from: nil))
         XCTAssertNil(SeerMapper.downloadProgress(from: []))

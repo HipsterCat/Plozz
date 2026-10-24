@@ -64,10 +64,19 @@ final class TopShelfSettingsHostedTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(400))
         let image = DetailTransitionSnapshot.image(of: window)
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Top Shelf device-wide settings"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let page = CGRect(
+            x: (window.bounds.width - SettingsFormMetrics.pageWidth) / 2,
+            y: 0, width: SettingsFormMetrics.pageWidth, height: window.bounds.height
+        ).applying(CGAffineTransform(scaleX: image.scale, y: image.scale))
+        let pageImage = try XCTUnwrap(image.cgImage?.cropping(to: page))
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.recognitionLanguages = ["en-US"]
-        try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+        try VNImageRequestHandler(cgImage: pageImage).perform([request])
         let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
         for label in [
             "Top Shelf", "Show Top Shelf", "Continue Watching", "Recently Added",
@@ -77,21 +86,18 @@ final class TopShelfSettingsHostedTests: XCTestCase {
             XCTAssertTrue(text.localizedCaseInsensitiveContains(label), "Missing settings copy \(label): \(text)")
         }
         XCTAssertFalse(text.contains("Applies to everyone on this device."))
-        let toggleTitle = try XCTUnwrap(request.results?.first {
-            $0.topCandidates(1).first?.string == "Show Top Shelf"
-        })
-        let description = try XCTUnwrap(request.results?.first {
-            $0.topCandidates(1).first?.string.hasPrefix("Place Plozz") == true
-        })
-        XCTAssertLessThan(description.boundingBox.maxY, toggleTitle.boundingBox.minY,
+        func textBounds(_ text: String) throws -> CGRect {
+            let candidate = try XCTUnwrap(request.results?.compactMap { $0.topCandidates(1).first }
+                .first { $0.string.localizedCaseInsensitiveContains(text) }, "Missing settings copy \(text)")
+            let range = try XCTUnwrap(candidate.string.range(of: text, options: .caseInsensitive))
+            return try XCTUnwrap(candidate.boundingBox(for: range)).boundingBox
+        }
+        let toggleTitle = try textBounds("Show Top Shelf")
+        let description = try textBounds("Place Plozz")
+        XCTAssertLessThan(description.maxY, toggleTitle.minY,
                           "The description belongs beneath the toggle title, not above the control.")
-        XCTAssertEqual(description.boundingBox.minX, toggleTitle.boundingBox.minX, accuracy: 0.01,
+        XCTAssertEqual(description.minX, toggleTitle.minX, accuracy: 0.01,
                        "The description should align with the toggle title inside its label.")
-        let attachment = XCTAttachment(image: image)
-        attachment.name = "Top Shelf device-wide settings"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-
         model.settings.usesFullScreen = true
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(TopShelfSettingsModel(defaults: defaults).settings,

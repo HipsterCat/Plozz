@@ -36,22 +36,22 @@ public struct LiveTVChannelPreferencesView: View {
                         language: optional(language), country: optional(country)
                     ), channelID: channelID)
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .buttonStyle(SettingsFormButtonStyle())
                 Button("Use source metadata") {
                     failed = !model.setMetadataOverride(nil, channelID: channelID)
                     if !failed { name = ""; category = ""; language = ""; country = "" }
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .buttonStyle(SettingsFormButtonStyle())
             } footer: {
                 Text("Blank fields use source metadata. These changes are personal labels, not program information.")
             }
             if model.favoriteOrder.contains(channelID) {
                 SettingsSectionGroup("Favorite order") {
                     Button("Move earlier") { move(-1) }
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .buttonStyle(SettingsFormButtonStyle())
                         .disabled(model.favoriteOrder.first == channelID)
                     Button("Move later") { move(1) }
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .buttonStyle(SettingsFormButtonStyle())
                         .disabled(model.favoriteOrder.last == channelID)
                 }
             }
@@ -99,14 +99,14 @@ public struct LiveTVUnavailableFavoritesView: View {
                             NavigationLink("Link to an imported channel") {
                                 LiveTVFavoriteRecoveryPicker(imports: imports, model: model, previousID: channel.id)
                             }
-                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                            .buttonStyle(SettingsFormButtonStyle())
                         }
                         Button("Remove favorite") { model.toggleFavoriteWithFeedback(channel.id) }
-                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                            .plozzActionButton(role: .secondary)
                     }
                 }
                 Button("Review sources", action: openSources)
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
             } footer: {
                 Text("Favorites stay saved while their source is unavailable or disabled. A similar name never replaces a saved channel.")
             }
@@ -149,11 +149,11 @@ private struct LiveTVFavoriteRecoveryPicker: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(channel.name)
                             if let country = channel.country {
-                                Text(country).font(.caption).foregroundStyle(.secondary)
+                                Text(country).font(.caption).settingsRowSecondary()
                             }
                         }
                     }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
                     .disabled(saving)
                 }
                 if failed { Text("This favorite couldn't be restored. Its saved identity has been kept.") }

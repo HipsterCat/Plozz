@@ -181,13 +181,16 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
     public var rendersThroughPlayer: Bool {
         output.map { !$0.suppressesPlayerRendering } ?? wantsPlayerRendering
     }
+    func isSelecting(_ option: AVMediaSelectionOption) -> Bool {
+        selectionEnabled && output != nil && selectedOption == option
+    }
 
-    public func select(enabled: Bool) {
+    public func select(enabled: Bool, option: AVMediaSelectionOption? = nil) {
         renderingGeneration &+= 1
         renderingTask?.cancel()
         renderingTask = nil
         selectionEnabled = enabled
-        selectedOption = nil
+        selectedOption = enabled ? option : nil
         replaceOutput()
     }
 
@@ -262,8 +265,8 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
             // Clear the old native line before changing drawing ownership.
             await Task.yield()
             guard !Task.isCancelled, self.renderingGeneration == generation, self.item === item else { return }
-            item.select(selected, in: group)
             self.replaceOutput()
+            item.select(selected, in: group)
         }
     }
 

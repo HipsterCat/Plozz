@@ -51,20 +51,38 @@ final class WebDAVDiscPlaybackHostedTests: XCTestCase {
         let path = "fixture.\(fileExtension)"
         let data = try Data(contentsOf: file, options: .mappedIfSafe)
         let etag = "\"synthetic-disc\""
-        let xml = """
-        <D:multistatus xmlns:D="DAV:"><D:response>
+        let collection = """
+        <D:response><D:href>/dav/</D:href><D:propstat><D:prop>
+        <D:resourcetype><D:collection/></D:resourcetype>
+        </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+        """
+        let fileProperties = """
+        <D:response>
         <D:href>/dav/\(path)</D:href><D:propstat><D:prop>
         <D:getcontentlength>\(data.count)</D:getcontentlength>
         <D:getetag>\(etag)</D:getetag>
         <D:getcontenttype>application/octet-stream</D:getcontenttype>
         </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>
-        </D:response></D:multistatus>
+        </D:response>
         """
         let server = try IPTVTestHTTPServer { request in
             if request.hasPrefix("OPTIONS ") {
                 return .init(headers: ["DAV": "1, 2"])
             }
             if request.hasPrefix("PROPFIND ") {
+                let target = request.split(separator: " ").dropFirst().first
+                let properties: String
+                if target == "/dav" || target == "/dav/" {
+                    let listsChildren = request.components(separatedBy: "\r\n").contains {
+                        $0.lowercased() == "depth: 1"
+                    }
+                    properties = collection + (listsChildren ? fileProperties : "")
+                } else if target == "/dav/\(path)" {
+                    properties = fileProperties
+                } else {
+                    return .init(status: 404)
+                }
+                let xml = "<D:multistatus xmlns:D=\"DAV:\">\(properties)</D:multistatus>"
                 return .init(data: Data(xml.utf8), status: 207, headers: ["Content-Type": "application/xml"])
             }
             guard request.hasPrefix("GET /dav/\(path) "),

@@ -2,6 +2,277 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/063",
+      "version": "2026.10.24",
+      "marketingVersion": "2026.10.24",
+      "build": 63,
+      "releasedAt": "2026-10-24",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            {
+              "text": "Separate text sizing for Home, Showcase, library recommendations and detail pages, including episode descriptions.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Separate text sizing for Home and detail pages.",
+              "platforms": ["iOS"]
+            },
+            "Option to hide content ratings across the app.",
+            {
+              "text": "Press Play while title details are loading; playback begins when ready.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            {
+              "text": "Native page transitions when opening titles, with optional zoom in Settings.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Larger, roomier descriptions and more space for Showcase artwork and text.",
+              "platforms": ["tvOS"]
+            },
+            "Shorter content-rating labels, with warnings preserved.",
+            "Reorganized Screens & Navigation, separating shared options from individual-screen settings.",
+            "Card-label controls are now available in Home, Libraries and Detail Page settings.",
+            "Simplified theme music volume controls.",
+            "Reorganized Live TV settings, with sources and channel controls together.",
+            {
+              "text": "Tap a Live TV channel or programme to preview it before opening fullscreen.",
+              "platforms": ["iOS"]
+            },
+            "Updated video playback with broader format compatibility.",
+            "More useful playback details when sending diagnostics.",
+            "Clearer intro, credits and programme markers on the playback timeline.",
+            "Clearer status for requested films and seasons that have not been released.",
+            {
+              "text": "Play and Request keep focus while title details load.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "More consistent spacing and focus across Settings controls.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Live TV using the wrong aspect ratio after a channel starts.",
+            {
+              "text": "Downloads reporting insufficient space when usable storage is available.",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/062",
+      "version": "2026.10.23",
+      "marketingVersion": "2026.9.25",
+      "build": 62,
+      "releasedAt": "2026-10-23",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Create Home sections from your library collections, with your own names and card layouts.",
+            "Choose large Featured cards for collection sections, with optional previews of supported trailers.",
+            "Reorder or hide library tabs and arrange each library's Recommended rows.",
+            {
+              "text": "Adjust title-logo sizes separately for Home, Showcase, libraries and detail pages.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Adjust title-logo sizes separately for Home and detail pages.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Choose whether Continue Watching resumes playback or opens details; Play/Pause always resumes.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Choose whether Continue Watching resumes playback or opens the title's details.",
+              "platforms": ["iOS"]
+            },
+            "Jump between available chapters in the video player.",
+            "Adjust Live TV buffering; more buffering can reduce interruptions but adds live delay and may slow channel changes."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Clearer Home customization, with prominent Add section actions and easier section reordering.",
+            "Home explains when a saved section is empty, unavailable or unable to load.",
+            "Continue Watching posters fit standard card sizes with clearer playback details.",
+            "Choose skipping separately for movies, TV shows and anime, with automatic delays from 0 to 30 seconds.",
+            "Sign in again to saved Plex, Jellyfin, Emby or Silo connections without removing them.",
+            "Choose whether to share diagnostics before any reports are sent.",
+            "Larger video buffers can use more temporary storage, except with Apple's native player. Diagnostics show cache usage when available.",
+            "Continue Watching and other history rows now follow enabled libraries on compatible servers.",
+            "TV guide titles and descriptions prefer your device language when the guide provides it.",
+            "Refreshed Plozz Channel artwork that follows your theme.",
+            "New profiles show Discovery in the Home hero by default only when Seerr is connected.",
+            "Improved Dolby Vision playback for compatible UHD Blu-ray videos (base layer only).",
+            {
+              "text": "Dark title logos are easier to read in Showcase.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Scroll through the generated channel lineup with the remote.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "A fresh Plozz expression at startup.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Home waits to refresh watchlist rows until scrolling stops.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Playback now prefers a downloaded copy over streaming, even when another server or version is selected.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Live TV options sit above the timeline in portrait mode; the separate Stop button has been removed.",
+              "platforms": ["iOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Watched status not saving to Silo.",
+            "Excessive watch-history retries when a server is unavailable or rate-limited.",
+            "Native-player subtitles disappearing when switching tracks while paused.",
+            "WebDAV sign-in, folder detection and playback problems on affected servers, including Nextcloud.",
+            "A crash when an SMB connection changes state or disconnects.",
+            "Some XMLTV guides failing to load or match channels.",
+            "Plozz Channels failing to generate when a library contains unusable media entries.",
+            {
+              "text": "Channel management and availability checks not opening from Live TV Sources.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Channel availability checks not opening from Live TV Sources.",
+              "platforms": ["iOS"]
+            },
+            "Some HLG TV broadcasts being treated as standard video.",
+            "Seeking failing during software playback of buffered videos with affected audio tracks.",
+            "Repeated interruptions during software Live TV playback with long segments; affected streams now play further behind live.",
+            "Missing title logos for some movies and shows.",
+            {
+              "text": "Playback stopping when opening Control Center or Siri.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Silence or frozen video when resuming supported spatial audio on HomePods on tvOS 26+.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Playback controls losing contrast with colored browsing themes.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "PIN entry not focusing the keypad in Settings.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Title logos changing size when availability badges appear in Showcase.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Losing your place or seeing a second transition when returning from title details.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Rows shifting or background colors flashing after returning to Home.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Episode previews staying in a loading state or showing a mismatched background on title pages.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Downloads and server activity restarting when synced preferences change.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Downloaded titles streaming when another saved copy is incomplete or missing.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "The next episode streaming even after its download has finished.",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/061",
+      "version": "2026.10.21",
+      "marketingVersion": "2026.9.25",
+      "build": 61,
+      "releasedAt": "2026-10-21",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Browse Live TV categories with channel counts, and choose whether Live TV opens to Categories or Guide.",
+            "Search Live TV categories alongside channels.",
+            "Import IPTV playlists using public Google Drive file links.",
+            "Choose watch-indicator colors and attached or floating unwatched episode-count badges."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Live TV category browsing adapts to the available screen space.",
+            "More responsive profile switching and PIN verification.",
+            "Native profile-name and color controls.",
+            "Clearer spacing and grouping for ratings, picture formats, audio, and language details.",
+            "Better cleanup of unused IPTV cache files.",
+            "More useful troubleshooting details when a title's versions cannot load.",
+            {
+              "text": "Profile editor actions grouped alongside Back.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Clearer explanations for spatial audio and experimental Dolby Vision playback.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Simpler Live TV controls, a standard-size search field, and more consistent spacing.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Smoother transitions between profile selection, PIN entry, and Home.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Clearer Plex user selection, with PIN entry and retry kept in the same screen.",
+              "platforms": ["iOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Locked profiles opening without a new PIN after switching away and back.",
+            "Missing lock icons for profiles using a Plex PIN."
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/060",
       "version": "2026.10.21",
       "marketingVersion": "2026.9.25",
@@ -111,7 +382,7 @@
         {
           "category": "New",
           "items": [
-            "Try experimental Dolby Vision FEL decoding for supported Profile 7 videos in Playback > Advanced. Off by default; uses more GPU and memory and loses Dolby Atmos objects and DTS:X height audio."
+            "Try experimental Dolby Vision FEL decoding for supported Profile 7 videos in Playback > Advanced. Off by default; uses more GPU and memory and plays channel-based audio without spatial objects or height positioning."
           ]
         },
         {
@@ -132,7 +403,7 @@
           "category": "Fixed",
           "items": [
             "Series pages failing to resume an in-progress episode on some Jellyfin-compatible servers.",
-            "AIOStreams Continue Watching disappearing when libraries are turned off.",
+            "Continue Watching disappearing when libraries are hidden on some Jellyfin-compatible servers.",
             {
               "text": "Episode rows jumping or losing the selected episode when returning from Related or other detail sections.",
               "platforms": ["tvOS"]
@@ -142,11 +413,11 @@
               "platforms": ["tvOS"]
             },
             {
-              "text": "Some supported DTS:X tracks losing height audio at playback start on tvOS 26+.",
+              "text": "Some supported spatial soundtracks losing height audio at playback start on tvOS 26+.",
               "platforms": ["tvOS"]
             },
             {
-              "text": "Distortion in loud passages of supported DTS:X height-audio tracks on tvOS 26+.",
+              "text": "Distortion in loud passages of some supported spatial soundtracks on tvOS 26+.",
               "platforms": ["tvOS"]
             }
           ]
@@ -222,11 +493,11 @@
             "IPTV playlists recognize more logo, channel-number and guide-ID fields.",
             "Software-played live streams start closer to the live broadcast.",
             {
-              "text": "Updated TrueHD Atmos detection and rendering on supported Apple TVs.",
+              "text": "Updated lossless spatial-audio detection and rendering on supported Apple TVs.",
               "platforms": ["tvOS"]
             },
             {
-              "text": "DTS:X object audio uses compatible standard layouts; other layouts use channel audio.",
+              "text": "An additional spatial-audio decoding path uses compatible standard layouts; other layouts use channel audio.",
               "platforms": ["tvOS"]
             },
             {
@@ -397,7 +668,7 @@
               "platforms": ["tvOS"]
             },
             {
-              "text": "On tvOS 26+, TrueHD Atmos heights use the surround mix; unsupported DTS:X mixes play in 7.1.",
+              "text": "On tvOS 26+, one lossless spatial-audio path derives heights from the surround mix; unsupported spatial mixes play in 7.1.",
               "platforms": ["tvOS"]
             }
           ]
@@ -477,7 +748,7 @@
               "platforms": ["iOS"]
             },
             {
-              "text": "Missed TrueHD Atmos tracks and surround choices with unlabelled audio on tvOS 26+.",
+              "text": "Missed lossless spatial tracks and surround choices with unlabelled audio on tvOS 26+.",
               "platforms": ["tvOS"]
             },
             "TrueHD playback failing after a seek or audio-track change.",
@@ -806,7 +1077,7 @@
               "platforms": ["tvOS"]
             },
             {
-              "text": "DTS:X height audio on supported Apple TV setups running tvOS 26 or later.",
+              "text": "Height audio from additional supported spatial soundtracks on Apple TV setups running tvOS 26 or later.",
               "platforms": ["tvOS"]
             },
             {
@@ -888,7 +1159,7 @@
               "platforms": ["tvOS"]
             },
             {
-              "text": "TrueHD Atmos receiver activation, brief sound loss after seeking, and incorrect surround or overhead sound placement.",
+              "text": "Spatial-audio receiver activation, brief sound loss after seeking, and incorrect surround or overhead sound placement.",
               "platforms": ["tvOS"]
             },
             "Some redirected IPTV streams repeatedly restarting instead of continuing.",
@@ -970,7 +1241,7 @@
           "category": "New",
           "items": [
             {
-              "text": "TrueHD Atmos overhead audio on compatible equipment with tvOS 26 or later, enabled by default in Settings > Playback.",
+              "text": "Overhead spatial audio on compatible equipment with tvOS 26 or later, enabled by default in Settings > Playback.",
               "platforms": ["tvOS"]
             }
           ]

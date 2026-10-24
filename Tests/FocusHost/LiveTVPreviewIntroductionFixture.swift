@@ -31,6 +31,9 @@ struct LiveTVPreviewIntroductionFixture: View {
         let store = LiveTVViewSettingsStore(
             defaults: defaults, namespace: profile == ProfileStore.defaultProfileID ? nil : profile
         )
+        var browsing = store.load()
+        browsing.startsWithCategories = false
+        store.save(browsing)
         if arguments.contains("--preview-refresh-catalog") {
             var selected = store.load()
             selected.chooseAutoPreview(false)

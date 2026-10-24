@@ -53,6 +53,8 @@ private struct ShimmerModifier: ViewModifier {
                         // gives the calm "breathe in / pause / breathe in" feel
                         // instead of a relentless strobe.
                         .frame(width: max(width, 1) * 0.95)
+                        // Keep the gradient raster stable while only its translation animates.
+                        .drawingGroup()
                         .offset(x: phase * max(width, 1) * 2.0)
                         // Keep the repeat off transactions used to mount unrelated native content.
                         .animation(

@@ -295,14 +295,15 @@ final class AutomaticSignInTests: XCTestCase {
         }
     }
 
-    func testJellyfinAndLocalProfileLockUseStartupOnlyUnlockCredit() throws {
+    func testJellyfinAndLocalProfileLockUseStartupOnlyUnlockCredit() async throws {
         let house = try household(provider: .jellyfin)
         let first = launch(house)
         var parent = first.profiles.activeProfile
         parent.replaceLock(with: ProfileLock.make(pin: "1357", iterations: 1))
         first.profiles.update(parent)
         first.flow.switchProfile(to: parent.id)
-        XCTAssertTrue(first.flow.submitProfileLockPIN("1357"))
+        let accepted = await first.flow.submitProfileLockPIN("1357")
+        XCTAssertTrue(accepted)
         first.flow.setAutomaticallySignIn(true)
 
         let next = launch(house)
@@ -539,7 +540,7 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertNil(reenabled.plex.resolvedToken(for: "account"))
     }
 
-    func testDisabledPlexSourceDoesNotBypassSeparateProfileLock() throws {
+    func testDisabledPlexSourceDoesNotBypassSeparateProfileLock() async throws {
         let house = try household()
         let env = launch(house)
         var profile = env.profiles.activeProfile.settingHomeUserBinding(
@@ -551,8 +552,10 @@ final class AutomaticSignInTests: XCTestCase {
         env.hub.reloadAccounts()
         env.flow.switchProfile(to: profile.id)
         XCTAssertTrue(env.flow.activeProfileAwaitsUnlock)
-        XCTAssertFalse(env.flow.submitProfileLockPIN("0000"))
-        XCTAssertTrue(env.flow.submitProfileLockPIN("1357"))
+        let incorrect = await env.flow.submitProfileLockPIN("0000")
+        XCTAssertFalse(incorrect)
+        let accepted = await env.flow.submitProfileLockPIN("1357")
+        XCTAssertTrue(accepted)
         XCTAssertFalse(env.flow.activeProfileAwaitsUnlock)
         XCTAssertNil(env.plex.pendingPlexPINRequest)
         XCTAssertNil(env.plex.resolvedToken(for: "account"))
@@ -706,7 +709,7 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertNotNil(settings.error)
     }
 
-    func testLocalProfileStartupIsProviderIndependent() throws {
+    func testLocalProfileStartupIsProviderIndependent() async throws {
         for provider in [ProviderKind.jellyfin, .emby, .silo] {
             let house = try household(provider: provider)
             let env = launch(house)
@@ -714,7 +717,8 @@ final class AutomaticSignInTests: XCTestCase {
             profile.replaceLock(with: ProfileLock.make(pin: "1357", iterations: 1))
             env.profiles.update(profile)
             env.flow.switchProfile(to: profile.id)
-            XCTAssertTrue(env.flow.submitProfileLockPIN("1357"))
+            let accepted = await env.flow.submitProfileLockPIN("1357")
+            XCTAssertTrue(accepted)
             env.flow.setAutomaticallySignIn(true)
             let next = launch(house)
             next.flow.prepareLaunchPicker()

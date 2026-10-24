@@ -12,6 +12,8 @@ import UIKit
 /// picture instead of on top of the subject. This works out the two bands that
 /// split: how much of the card the picture itself occupies, and how much is left
 /// underneath for ``ExtendedArtworkFill`` to fill.
+/// A reserved band can instead shrink the picture within a fixed poster slot,
+/// leaving symmetric side reflections rather than making the card taller.
 ///
 /// Split out from the view so the numbers are unit-testable without rendering.
 public struct ExtendedArtworkGeometry: Equatable, Sendable {
@@ -23,6 +25,8 @@ public struct ExtendedArtworkGeometry: Equatable, Sendable {
     /// the slot whenever a side crop is asked for; that overhang is what gets
     /// trimmed, and it is also what makes the picture stand taller in the card.
     public let renderedWidth: CGFloat
+    /// Equal side bands when reserving playback space makes the complete picture narrower.
+    public let sideReflectionWidth: CGFloat
 
     /// - Parameters:
     ///   - slot: the space the card gave the artwork.
@@ -30,19 +34,31 @@ public struct ExtendedArtworkGeometry: Equatable, Sendable {
     ///     16:9 for backdrop art; anything the source isn't gets centre-cropped
     ///     into it, exactly as a plain fill would.
     ///   - sideCrop: fraction of the width trimmed from **each** side.
-    public init(slot: CGSize, artworkAspectRatio: CGFloat, sideCrop: CGFloat) {
+    ///   - minimumReflectionShare: minimum bottom band as a fraction of picture height.
+    ///   - minimumReflectionHeight: space needed for playback text, within the fixed slot.
+    public init(
+        slot: CGSize, artworkAspectRatio: CGFloat, sideCrop: CGFloat,
+        minimumReflectionShare: CGFloat = 0, minimumReflectionHeight: CGFloat = 0
+    ) {
         let width = max(0, slot.width)
         let height = max(0, slot.height)
         let aspect = artworkAspectRatio > 0 ? artworkAspectRatio : 16.0 / 9.0
         // A crop of half the width or more would be a different picture, not a
         // trim, so the visible fraction is floored well before that.
         let visible = min(1, max(0.5, 1 - 2 * max(0, sideCrop)))
-        renderedWidth = width / visible
+        let pictureBudget = min(
+            height / (1 + max(0, minimumReflectionShare)),
+            height - min(height, max(0, minimumReflectionHeight))
+        )
+        renderedWidth = minimumReflectionShare > 0 || minimumReflectionHeight > 0
+            ? min(width / visible, pictureBudget * aspect)
+            : width / visible
         // Never taller than the slot: with no room to spare the picture simply
         // fills it and there is no reflection, which is what a 16:9 slot (a
         // thumbnail-style card) gets.
-        pictureHeight = min(height, renderedWidth / aspect)
+        pictureHeight = min(pictureBudget, renderedWidth / aspect)
         reflectionHeight = max(0, height - pictureHeight)
+        sideReflectionWidth = max(0, (width - renderedWidth) / 2)
     }
 
     /// Where the picture ends, as a fraction of the slot's height — i.e. where
@@ -67,9 +83,11 @@ public struct ExtendedArtworkGeometry: Equatable, Sendable {
 ///
 /// Portrait cards can progressively blur only the mirrored band, leaving the
 /// complete original picture sharp. Landscape retains its unblurred reflection.
+/// Reserving bottom space within a fixed portrait slot mirrors its left/right
+/// edges into narrow side gaps, gradually softening only those gaps outward.
 ///
 /// Takes the picture as a ready-made view rather than loading one, so the card
-/// and its reflection are two layers over ONE decode (see ``FallbackAsyncImage``,
+/// and its reflections are layers over ONE decode (see ``FallbackAsyncImage``,
 /// whose `content` hands over the resolved `Image`) — and so the Settings
 /// preview can render a fabricated picture through this exact same code path
 /// instead of imitating it.
@@ -77,23 +95,35 @@ public struct ExtendedArtworkFill<Picture: View>: View {
     private let picture: Picture
     private let artworkAspectRatio: CGFloat
     private let sideCrop: CGFloat
+    private let minimumReflectionShare: CGFloat
     private let progressivelyBlursReflection: Bool
+    private var reflectionPicture: Picture?
+    @Environment(\.portraitPlaybackReflectionHeight) private var playbackReflectionHeight
 
     /// - Parameters:
     ///   - picture: the image to lay in, sized by this view. Callers with a
-    ///     resolved `Image` should use ``init(image:artworkAspectRatio:sideCrop:)``.
+    ///     resolved `Image` should use the image initializer.
     ///   - artworkAspectRatio: the shape the picture is drawn at (width ÷ height).
     ///   - sideCrop: fraction of the width trimmed from **each** side.
+    ///   - minimumReflectionShare: reserves bottom space without enlarging the slot.
     public init(
         picture: Picture,
         artworkAspectRatio: CGFloat = 16.0 / 9.0,
         sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop,
+        minimumReflectionShare: CGFloat = 0,
         progressivelyBlursReflection: Bool = false
     ) {
         self.picture = picture
         self.artworkAspectRatio = artworkAspectRatio
         self.sideCrop = sideCrop
+        self.minimumReflectionShare = minimumReflectionShare
         self.progressivelyBlursReflection = progressivelyBlursReflection
+    }
+
+    fileprivate func reflectionSource(_ picture: Picture) -> Self {
+        var copy = self
+        copy.reflectionPicture = picture
+        return copy
     }
 
     public var body: some View {
@@ -101,22 +131,23 @@ public struct ExtendedArtworkFill<Picture: View>: View {
             let geometry = ExtendedArtworkGeometry(
                 slot: geo.size,
                 artworkAspectRatio: artworkAspectRatio,
-                sideCrop: sideCrop
+                sideCrop: sideCrop,
+                minimumReflectionShare: minimumReflectionShare,
+                minimumReflectionHeight: minimumReflectionShare > 0
+                    ? min(geo.size.height * 0.30, playbackReflectionHeight) : 0
             )
-            // ONE clip, on the outside, and none within.
-            //
-            // Every `.clipped()` is a rasterisation boundary, and a boundary is
-            // resampled independently when an ancestor scales the card on focus.
-            // Two of them on the same line — the picture's bottom and the
-            // reflection's top — meant that at rest they landed on whole pixels
-            // and looked perfect, while any scale resampled both and let a
-            // hairline show between them. Overlapping the layers alone did not
-            // fix it, because the edges were still there to be resampled; they
-            // have to not exist. Nothing here needs its own clip: the picture may
-            // overrun into the band because the opaque reflection covers it, and
-            // the reflection may overrun past the card because this clip cuts it.
+            // Reflections overlap behind the fitted picture, then share the
+            // card's outer clip so focus scaling cannot open gaps at the joins.
             ZStack(alignment: .top) {
                 sizedPicture(geometry)
+                if progressivelyBlursReflection, geometry.sideReflectionWidth > 0 {
+                    HStack(spacing: 0) {
+                        sideReflectionBlur(geometry, leading: true)
+                        Spacer(minLength: 0)
+                        sideReflectionBlur(geometry, leading: false)
+                    }
+                    .frame(width: geo.size.width, height: geometry.pictureHeight)
+                }
                 if geometry.reflectionHeight > 0 {
                     reflection(geometry, width: geo.size.width)
                         .offset(y: geometry.pictureHeight - ExtendedArtworkWash.seamOverlap)
@@ -127,11 +158,48 @@ public struct ExtendedArtworkFill<Picture: View>: View {
         }
     }
 
-    /// The artwork at its own shape, rendered wide enough that the slot trims a
-    /// sliver from each side.
-    private func sizedPicture(_ geometry: ExtendedArtworkGeometry) -> some View {
-        picture
+    private func sideReflectionBlur(_ geometry: ExtendedArtworkGeometry, leading: Bool) -> some View {
+        let radius = geometry.sideReflectionWidth * 0.35
+        let halo = ceil(radius * 3)
+        return Color.clear
+            .frame(width: geometry.sideReflectionWidth, height: geometry.pictureHeight)
+            .overlay(alignment: leading ? .trailing : .leading) {
+                (reflectionPicture ?? picture)
+                    .frame(width: geometry.renderedWidth, height: geometry.pictureHeight)
+                    .scaleEffect(x: -1, y: 1)
+                    .offset(x: leading ? ExtendedArtworkWash.sideSeamOverlap : -ExtendedArtworkWash.sideSeamOverlap)
+            }
+            .padding(halo)
+            .clipped()
+            .blur(radius: radius)
+            .padding(-halo)
+            .mask {
+                LinearGradient(
+                    stops: ArtworkGradientRamp.stops(peak: 1, from: 0, to: 1),
+                    startPoint: leading ? .trailing : .leading,
+                    endPoint: leading ? .leading : .trailing
+                )
+            }
+    }
+
+    /// Preserve the picture's shape, mirroring its edges only when it is narrower than the slot.
+    private func sizedPicture(_ geometry: ExtendedArtworkGeometry, reflected: Bool = false) -> some View {
+        let sized = (reflected ? reflectionPicture ?? picture : picture)
             .frame(width: geometry.renderedWidth, height: geometry.pictureHeight)
+        let mirror = (reflectionPicture ?? picture)
+            .frame(width: geometry.renderedWidth, height: geometry.pictureHeight)
+        return ZStack {
+            if geometry.sideReflectionWidth > 0 {
+                let offset = max(0, geometry.renderedWidth - ExtendedArtworkWash.sideSeamOverlap)
+                mirror.scaleEffect(x: -1, y: 1).offset(x: -offset)
+                mirror.scaleEffect(x: -1, y: 1).offset(x: offset)
+                // Aspect-fill sources can be wider than their proposed frame.
+                // Keep the visible crop from painting over its mirrored edges.
+                sized.clipped()
+            } else {
+                sized
+            }
+        }
     }
 
     /// The band under the picture: the same image flipped vertically, so its top
@@ -150,7 +218,7 @@ public struct ExtendedArtworkFill<Picture: View>: View {
         Color.clear
             .frame(width: width, height: geometry.reflectionHeight + ExtendedArtworkWash.seamOverlap)
             .overlay(alignment: .top) {
-                sizedPicture(geometry)
+                sizedPicture(geometry, reflected: true)
                     .scaleEffect(x: 1, y: -1)
             }
             .overlay {
@@ -173,10 +241,16 @@ public struct ExtendedArtworkFill<Picture: View>: View {
     ) -> some View {
         // Crossfade increasing blur levels only inside the reflection. Both masks
         // start transparent, preserving the sharp poster and its seamless join.
-        Color.clear
+        let halo = ceil(radius * 3)
+        return Color.clear
             .overlay(alignment: .top) {
-                sizedPicture(geometry).scaleEffect(x: 1, y: -1).blur(radius: radius)
+                sizedPicture(geometry, reflected: true).scaleEffect(x: 1, y: -1)
             }
+            // Bound filtering to the visible band plus its kernel, not three full posters.
+            .padding(halo)
+            .clipped()
+            .blur(radius: radius)
+            .padding(-halo)
             .mask {
                 LinearGradient(
                     stops: ArtworkGradientRamp.stops(peak: 1, from: start, to: end),
@@ -191,12 +265,14 @@ extension ExtendedArtworkFill where Picture == ArtworkFillImage {
         image: Image,
         artworkAspectRatio: CGFloat = 16.0 / 9.0,
         sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop,
+        minimumReflectionShare: CGFloat = 0,
         progressivelyBlursReflection: Bool = false
     ) {
         self.init(
             picture: ArtworkFillImage(image),
             artworkAspectRatio: artworkAspectRatio,
             sideCrop: sideCrop,
+            minimumReflectionShare: minimumReflectionShare,
             progressivelyBlursReflection: progressivelyBlursReflection
         )
     }
@@ -211,10 +287,12 @@ enum ExtendedArtworkBitmap {
         let scale: CGFloat
         let artworkAspectRatio: CGFloat
         let sideCrop: CGFloat
+        let minimumReflectionShare: CGFloat
         let progressivelyBlursReflection: Bool
 
         init(
             image: UIImage, size: CGSize, scale: CGFloat, artworkAspectRatio: CGFloat, sideCrop: CGFloat,
+            minimumReflectionShare: CGFloat,
             progressivelyBlursReflection: Bool
         ) {
             source = ObjectIdentifier(image)
@@ -222,6 +300,7 @@ enum ExtendedArtworkBitmap {
             self.scale = scale
             self.artworkAspectRatio = artworkAspectRatio
             self.sideCrop = sideCrop
+            self.minimumReflectionShare = minimumReflectionShare
             self.progressivelyBlursReflection = progressivelyBlursReflection
         }
 
@@ -233,6 +312,7 @@ enum ExtendedArtworkBitmap {
             hasher.combine(scale)
             hasher.combine(artworkAspectRatio)
             hasher.combine(sideCrop)
+            hasher.combine(minimumReflectionShare)
             hasher.combine(progressivelyBlursReflection)
             return hasher.finalize()
         }
@@ -241,6 +321,7 @@ enum ExtendedArtworkBitmap {
             guard let other = object as? CacheKey else { return false }
             return source == other.source && size == other.size && scale == other.scale
                 && artworkAspectRatio == other.artworkAspectRatio && sideCrop == other.sideCrop
+                && minimumReflectionShare == other.minimumReflectionShare
                 && progressivelyBlursReflection == other.progressivelyBlursReflection
         }
     }
@@ -264,16 +345,20 @@ enum ExtendedArtworkBitmap {
 
     private struct Content: View {
         let image: UIImage
+        let reflectionImage: UIImage
         let size: CGSize
         let artworkAspectRatio: CGFloat
         let sideCrop: CGFloat
+        let minimumReflectionShare: CGFloat
         let progressivelyBlursReflection: Bool
 
         var body: some View {
             ExtendedArtworkFill(
                 image: Image(uiImage: image), artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+                minimumReflectionShare: minimumReflectionShare,
                 progressivelyBlursReflection: progressivelyBlursReflection
             )
+                .reflectionSource(ArtworkFillImage(Image(uiImage: reflectionImage)))
                 .frame(width: size.width, height: size.height)
                 .clipped()
         }
@@ -286,6 +371,7 @@ enum ExtendedArtworkBitmap {
         image: UIImage, size: CGSize, scale: CGFloat,
         artworkAspectRatio: CGFloat = 16.0 / 9.0,
         sideCrop: CGFloat = PlozzTheme.Metrics.continueWatchingArtworkSideCrop,
+        minimumReflectionShare: CGFloat = 0,
         progressivelyBlursReflection: Bool = false
     ) -> UIImage? {
         guard size.width.isFinite, size.height.isFinite, scale.isFinite,
@@ -296,6 +382,7 @@ enum ExtendedArtworkBitmap {
         }
         let key = CacheKey(
             image: image, size: size, scale: scale, artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+            minimumReflectionShare: minimumReflectionShare,
             progressivelyBlursReflection: progressivelyBlursReflection
         )
         // Lazy rows recreate coordinators. Share the finished pixels without
@@ -303,8 +390,37 @@ enum ExtendedArtworkBitmap {
         if let cached = cache.object(forKey: key), cached.source === image {
             return cached.bitmap
         }
+        // Render through the complete pixel allocation, not a fractional frame
+        // that leaves a partially painted last row or column in the bitmap.
+        let rasterSize = CGSize(
+            width: ceil(size.width * scale) / scale,
+            height: ceil(size.height * scale) / scale
+        )
+        var reflectionImage = image
+        #if os(tvOS)
+        if minimumReflectionShare > 0 {
+            let geometry = ExtendedArtworkGeometry(
+                slot: rasterSize, artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+                minimumReflectionShare: minimumReflectionShare
+            )
+            let reflectionSize = CGSize(width: geometry.renderedWidth, height: geometry.pictureHeight)
+            if image.size.width * image.scale > ceil(reflectionSize.width * scale)
+                || image.size.height * image.scale > ceil(reflectionSize.height * scale) {
+                // Filter reflection copies at their displayed resolution, preserving
+                // the original source for the sharp central poster.
+                guard let fitted = autoreleasepool(invoking: {
+                    NativePosterArtworkBitmap.image(
+                        source: image, size: reflectionSize, scale: scale, clipsToArtwork: false
+                    )
+                }) else { return nil }
+                reflectionImage = fitted
+            }
+        }
+        #endif
         let content = Content(
-            image: image, size: size, artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+            image: image, reflectionImage: reflectionImage, size: rasterSize,
+            artworkAspectRatio: artworkAspectRatio, sideCrop: sideCrop,
+            minimumReflectionShare: minimumReflectionShare,
             progressivelyBlursReflection: progressivelyBlursReflection
         )
         let active: ImageRenderer<Content>
@@ -321,7 +437,7 @@ enum ExtendedArtworkBitmap {
         var rendered: UIImage?
         active.render(rasterizationScale: scale) { _, draw in
             rendered = NativePosterArtworkBitmap.image(
-                source: nil, size: size, scale: scale, backgroundColor: .clear,
+                source: nil, size: rasterSize, scale: scale, backgroundColor: .clear,
                 clipsToArtwork: false, drawOverlay: draw
             )
         }
@@ -348,13 +464,13 @@ enum ExtendedArtworkBitmap {
 /// drift apart. Everything here is a fraction of the card, so it holds at any
 /// display density.
 public enum ContinueWatchingCardShape {
-    /// Preserve the entire 2:3 poster, then reserve a reflected band for playback details.
-    public static let portraitAspectRatio: CGFloat =
-        (2.0 / 3.0) / (1 + PlozzTheme.Metrics.continueWatchingPortraitReflectionShare)
+    /// Fit the complete poster and its playback band inside an ordinary poster footprint.
+    public static let portraitAspectRatio: CGFloat = 2.0 / 3.0
 
     public static let portraitGeometry = ExtendedArtworkGeometry(
         slot: CGSize(width: portraitAspectRatio, height: 1),
-        artworkAspectRatio: 2.0 / 3.0, sideCrop: 0
+        artworkAspectRatio: 2.0 / 3.0, sideCrop: 0,
+        minimumReflectionShare: PlozzTheme.Metrics.continueWatchingPortraitReflectionShare
     )
 
     /// Width ÷ height of the whole card, derived from how much reflection it
@@ -684,6 +800,8 @@ private enum ExtendedArtworkWash {
     /// would have shown two points lower. Adjacent rows of a photograph are
     /// indistinguishable, so this costs nothing.
     static let seamOverlap: CGFloat = 2
+    /// Cover the portrait's side joins beneath the sharp original during focus scaling.
+    static let sideSeamOverlap: CGFloat = 1
 
     /// Built once. Every input is a constant, so rebuilding the ramp inside
     /// `body` would only mean allocating the same eight stops again for every

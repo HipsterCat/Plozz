@@ -11,6 +11,166 @@ import UIKit
 
 @MainActor
 final class PlayerViewModelEOFTests: XCTestCase {
+    func testLocalPlaybackBypassesServerResolutionAcrossProviders() async {
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie)
+        let localURL = URL(fileURLWithPath: "/fixture/download.mp4")
+        for kind in [ProviderKind.jellyfin, .plex, .emby, .silo] {
+            let provider = RecordingPlaybackProvider(
+                request: .init(item: item, streamURL: URL(string: "https://fixture.invalid/remote.mp4")!),
+                kind: kind
+            )
+            let engine = SpyVideoEngine()
+            let model = PlayerViewModel(
+                provider: provider, itemID: item.id, mediaSourceID: "remote-4k",
+                offlineItem: item,
+                offlinePlaybackResolver: LocalPlaybackFixture(files: [item.id: localURL]),
+                playbackSettings: .init(showUpNextCard: false),
+                engineFactory: .init(makeNative: { _ in engine })
+            )
+            await model.load()
+            let calls = await provider.playbackInfoCallCountValue()
+            XCTAssertEqual(calls, 0, kind.rawValue)
+            XCTAssertEqual(engine.lastLoadedRequest?.streamURL, localURL)
+            await model.stop()
+        }
+    }
+
+    func testEpisodePrefetchResolvesTheIncomingDownloadBeforeTheServer() async throws {
+        let current = MediaItem(id: "current", title: "Current", kind: .episode)
+        let next = MediaItem(id: "next", title: "Next", kind: .episode)
+        let localURL = URL(fileURLWithPath: "/fixture/next.mp4")
+        let provider = RecordingPlaybackProvider(request: .init(
+            item: next, streamURL: URL(string: "https://fixture.invalid/next.mp4")!
+        ))
+        let model = PlayerViewModel(
+            provider: provider, itemID: current.id, offlineItem: current,
+            offlinePlaybackResolver: LocalPlaybackFixture(files: [
+                current.id: URL(fileURLWithPath: "/fixture/current.mp4"),
+                next.id: localURL
+            ]),
+            engineFactory: .init(makeNative: { _ in SpyVideoEngine() })
+        )
+        await model.load()
+        for forceTranscode in [false, true] {
+            let resolved = try await model.upNextResolveAndRoute(item: next, forceTranscode: forceTranscode)
+            XCTAssertEqual(resolved.request.item.id, next.id)
+            XCTAssertEqual(resolved.request.streamURL, localURL)
+        }
+        let calls = await provider.playbackInfoCallCountValue()
+        XCTAssertEqual(calls, 0)
+        await model.stop()
+    }
+
+    func testNewlyAvailableDownloadSupersedesAnAdoptedServerStream() async {
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie)
+        let localURL = URL(fileURLWithPath: "/fixture/download.mp4")
+        let remote = PlaybackRequest(
+            item: item, streamURL: URL(string: "https://fixture.invalid/remote.mp4")!
+        )
+        let provider = RecordingPlaybackProvider(request: remote)
+        let engine = SpyVideoEngine()
+        let model = PlayerViewModel(
+            provider: provider, itemID: item.id, offlineItem: item,
+            offlinePlaybackResolver: LocalPlaybackFixture(files: [item.id: localURL]),
+            playbackSettings: .init(showUpNextCard: false),
+            engineFactory: .init(makeNative: { _ in engine }),
+            adoptedResolved: .init(itemID: item.id, request: remote, engineKind: .native)
+        )
+        await model.load()
+        let calls = await provider.playbackInfoCallCountValue()
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(engine.lastLoadedRequest?.streamURL, localURL)
+        await model.stop()
+    }
+
+    func testSkipContentGatesUseTheSharedClassificationOnBothProviders() async throws {
+        let fixtures: [(MediaItem, ContentCategory)] = [
+            (.init(id: "movie", title: "Movie", kind: .movie), .movie),
+            (.init(id: "episode", title: "Episode", kind: .episode), .tvShow),
+            (.init(id: "anime", title: "Anime", kind: .episode, providerIDs: ["AniList": "100"]), .anime),
+            (.init(id: "anime-film", title: "Anime film", kind: .movie, genres: ["Anime"]), .anime)
+        ]
+        let segment = MediaSegment(id: "intro", kind: .intro, start: 10, end: 70)
+        for providerKind in [ProviderKind.jellyfin, .plex] {
+            for (item, category) in fixtures {
+                for enabled in [false, true] {
+                    let provider = RecordingPlaybackProvider(
+                        request: .init(item: item, streamURL: URL(string: "https://fixture.invalid/video.mp4")!),
+                        kind: providerKind, segments: [segment]
+                    )
+                    let engine = SpyVideoEngine()
+                    let settings = PlaybackSettings(
+                        skipIntros: .autoDelay,
+                        skipContentCategories: enabled ? [category] : Set(ContentCategory.allCases).subtracting([category]),
+                        skipAutomaticDelaySeconds: 17, useCommunityMarkers: false,
+                        showUpNextCard: false
+                    )
+                    let viewModel = PlayerViewModel(
+                        provider: provider, itemID: item.id, playbackSettings: settings,
+                        engineFactory: .init(makeNative: { _ in engine })
+                    )
+                    await viewModel.load()
+                    for _ in 0..<1_000 where enabled && viewModel.controls.skipSegments.segments.isEmpty {
+                        await Task.yield()
+                    }
+                    let calls = await provider.segmentCallCount
+                    XCTAssertEqual(calls, enabled ? 1 : 0, "\(providerKind) \(item.id)")
+                    viewModel.controls.currentSeconds = 20
+                    XCTAssertEqual(viewModel.controls.skipMode, enabled ? .autoDelay : .off)
+                    XCTAssertEqual(viewModel.controls.automaticSkipDelay, enabled ? 17 : 0)
+                    XCTAssertEqual(viewModel.controls.skipButtonVisible, enabled)
+                    await viewModel.stop()
+                }
+            }
+        }
+    }
+
+    func testDisabledSkipContentStillLoadsUpNextMarkersWithoutCommunityLookupOrSkipButton() async {
+        let item = MediaItem(
+            id: "movie", title: "Movie", kind: .movie, providerIDs: ["Imdb": "tt1234567"]
+        )
+        let marker = MediaSegment(id: "intro", kind: .intro, start: 10, end: 70)
+        let provider = RecordingPlaybackProvider(
+            request: .init(item: item, streamURL: URL(string: "https://fixture.invalid/video.mp4")!),
+            segments: [marker]
+        )
+        let engine = SpyVideoEngine()
+        let community = RecordingCommunityMarkers()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: item.id,
+            playbackSettings: .init(skipIntros: .autoInstant, skipContentCategories: [.tvShow, .anime]),
+            communitySkipMarkers: community,
+            engineFactory: .init(makeNative: { _ in engine })
+        )
+        await viewModel.load()
+        for _ in 0..<1_000 where viewModel.controls.skipSegments.segments.isEmpty {
+            await Task.yield()
+        }
+        XCTAssertEqual(viewModel.controls.skipSegments.segments, [marker])
+        XCTAssertEqual(viewModel.controls.skipModes, .allOff)
+        viewModel.controls.currentSeconds = 20
+        XCTAssertFalse(viewModel.controls.skipButtonVisible)
+        let queries = await community.queries
+        XCTAssertTrue(queries.isEmpty)
+        await viewModel.stop()
+    }
+
+    func testAutomaticSkipAndCreditsCountdownUseTheirOwnConfiguredDurations() {
+        let controls = PlayerControlsModel()
+        controls.skipModes = SkipMarkerModes(
+            base: .autoDelay, automaticDelay: 13, automaticDelayOverrides: [.credits: 27]
+        )
+        controls.skipSegments.segments = [
+            .init(id: "intro", kind: .intro, start: 10, end: 60),
+            .init(id: "credits", kind: .credits, start: 100, end: 200)
+        ]
+        controls.currentSeconds = 20
+        XCTAssertEqual(controls.automaticSkipDelay, 13)
+        XCTAssertEqual(controls.automaticUpNextDelay, 27)
+        controls.currentSeconds = 110
+        XCTAssertEqual(controls.automaticSkipDelay, 27)
+    }
+
     func testCommunityMarkersResolveSeriesOrderAndTVDBEvenWithExistingTMDB() async throws {
         let item = MediaItem(id: "episode", title: "Episode", kind: .episode,
                              seasonNumber: 1, episodeNumber: 2, seriesID: "series",
@@ -993,38 +1153,41 @@ final class PlayerViewModelEOFTests: XCTestCase {
         await viewModel.stop()
     }
 
-    func testTrueHDAtmosPreferenceReachesInitialAndHandoffLoads() async throws {
+    func testLegacyAudioSettingsPreserveTrackPreferencesAcrossHandoff() async throws {
         for enabled in [false, true] {
+            let settings = try JSONDecoder().decode(
+                PlaybackSettings.self, from: Data("{\"trueHDAtmosEnabled\":\(enabled)}".utf8)
+            )
             let (viewModel, engine, _) = makeViewModel(
-                playbackSettings: .init(trueHDAtmosEnabled: enabled)
+                playbackSettings: settings
             )
             await viewModel.load()
-            XCTAssertEqual(engine.lastLoadedRequest?.trueHDAtmosEnabled, enabled)
             var handoff = try XCTUnwrap(engine.lastLoadedRequest)
-            handoff.trueHDAtmosEnabled = !enabled
             handoff.preferredAudioLanguages = ["ja"]
             handoff.preferredAudioTrackID = 3
             await viewModel.handoffPlayResolved(handoff, engineKind: .native, startPosition: 10)
             XCTAssertEqual(engine.loadCount, 2)
-            XCTAssertEqual(engine.lastLoadedRequest?.trueHDAtmosEnabled, enabled)
             XCTAssertEqual(engine.lastLoadedRequest?.preferredAudioLanguages, ["ja"])
             XCTAssertEqual(engine.lastLoadedRequest?.preferredAudioTrackID, 3)
             await viewModel.stop()
         }
     }
 
-    func testFELPreferenceReachesInitialAndHandoffLoads() async throws {
+    func testSpatialAndFELPreferencesReachInitialAndHandoffLoads() async throws {
         for enabled in [false, true] {
             let (viewModel, engine, _) = makeViewModel(
-                playbackSettings: .init(dolbyVisionFELEnabled: enabled)
+                playbackSettings: .init(trueHDAtmosEnabled: enabled, dolbyVisionFELEnabled: enabled)
             )
             await viewModel.load()
             XCTAssertEqual(engine.lastLoadedRequest?.dolbyVisionFELEnabled, enabled)
+            XCTAssertEqual(engine.lastLoadedRequest?.trueHDAtmosEnabled, enabled)
             var handoff = try XCTUnwrap(engine.lastLoadedRequest)
             handoff.dolbyVisionFELEnabled = !enabled
+            handoff.trueHDAtmosEnabled = !enabled
             await viewModel.handoffPlayResolved(handoff, engineKind: .native, startPosition: 10)
             XCTAssertEqual(engine.loadCount, 2)
             XCTAssertEqual(engine.lastLoadedRequest?.dolbyVisionFELEnabled, enabled)
+            XCTAssertEqual(engine.lastLoadedRequest?.trueHDAtmosEnabled, enabled)
             await viewModel.stop()
         }
     }
@@ -1206,15 +1369,102 @@ final class PlayerViewModelEOFTests: XCTestCase {
         XCTAssertEqual(checkpoints.onlyCall?.percent, 25)
     }
 
-    func testInactiveOnlyPauseDoesNotReloadEngine() async {
-        let (viewModel, engine, _) = makeViewModel()
+    func testTransientInactivityPreservesPlatformPlaybackPolicyWithoutReload() async {
+        let (viewModel, engine, provider) = makeViewModel()
         await viewModel.load()
 
-        viewModel.suspendForBackground()
+        viewModel.didBecomeInactive()
+        #if os(tvOS)
+        XCTAssertFalse(engine.isPaused)
+        XCTAssertFalse(viewModel.controls.intendsPause)
+        #else
+        XCTAssertTrue(engine.isPaused)
+        #endif
         await viewModel.resumeAfterBackground()
 
         XCTAssertEqual(engine.reloadAfterForegroundCount, 0)
+        #if os(tvOS)
+        XCTAssertFalse(engine.isPaused)
+        for _ in 0..<10 { await Task.yield() }
+        let reports = await provider.reports
+        XCTAssertEqual(reports.map(\.event.rawValue), ["start"])
+        #else
         XCTAssertTrue(engine.isPaused)
+        #endif
+        await viewModel.stop()
+    }
+
+    #if os(tvOS)
+    func testCoalescedBackgroundAfterInactivityRestoresPositionAndStaysPaused() async {
+        let (viewModel, engine, _) = makeViewModel()
+        await viewModel.load()
+        engine.currentTime = 30
+        viewModel.didBecomeInactive()
+        engine.currentTime = 0
+        engine.status = .idle
+
+        await viewModel.resumeAfterBackground()
+
+        XCTAssertEqual(engine.reloadAfterForegroundCount, 1)
+        XCTAssertEqual(engine.currentTime, 30)
+        XCTAssertTrue(engine.isPaused)
+        await viewModel.stop()
+    }
+
+    func testBackgroundAfterOverlayUsesObservedPositionIfEngineAlreadyToreDown() async {
+        let (viewModel, engine, _) = makeViewModel()
+        await viewModel.load()
+        engine.currentTime = 30
+        viewModel.didBecomeInactive()
+        viewModel.controls.currentSeconds = 45
+        engine.currentTime = 0
+        engine.status = .idle
+
+        viewModel.didEnterBackground()
+        await viewModel.resumeAfterBackground()
+
+        XCTAssertEqual(engine.currentTime, 45)
+        XCTAssertTrue(engine.isPaused)
+        await viewModel.stop()
+    }
+    #endif
+
+    func testTransientInactivityDoesNotResumeAnExplicitPause() async {
+        let (viewModel, engine, _) = makeViewModel()
+        await viewModel.load()
+        viewModel.setPaused(true)
+
+        viewModel.didBecomeInactive()
+        await viewModel.resumeAfterBackground()
+
+        XCTAssertTrue(engine.isPaused)
+        XCTAssertTrue(viewModel.controls.intendsPause)
+        XCTAssertEqual(engine.reloadAfterForegroundCount, 0)
+        await viewModel.stop()
+    }
+
+    func testBackgroundAfterSystemOverlayPreservesLatestPlaybackPosition() async {
+        let (viewModel, engine, _) = makeViewModel()
+        await viewModel.load()
+        engine.currentTime = 30
+        viewModel.didBecomeInactive()
+        #if os(tvOS)
+        engine.currentTime = 45
+        #endif
+
+        viewModel.didEnterBackground()
+        XCTAssertTrue(engine.isPaused)
+        engine.currentTime = 0
+        await viewModel.resumeAfterBackground()
+
+        XCTAssertEqual(engine.reloadAfterForegroundCount, 1)
+        #if os(tvOS)
+        XCTAssertEqual(engine.currentTime, 45, "Keep progress made while the system overlay was open")
+        #else
+        XCTAssertEqual(engine.currentTime, 30)
+        #endif
+        XCTAssertTrue(engine.isPaused)
+        await viewModel.stop()
     }
 
     func testForegroundReturnReloadsOnceAndRemainsPaused() async {
@@ -1571,9 +1821,13 @@ final class PlayerViewModelEOFTests: XCTestCase {
         gate.releaseNext()
         await loadTask.value
 
-        XCTAssertTrue(plozzigenEngines.isEmpty)
+        XCTAssertEqual(plozzigenEngines.count, 1, "Only the idle bootstrap engine should exist.")
+        let initial = try XCTUnwrap(plozzigenEngines.first)
+        XCTAssertEqual(initial.loadCount, 0)
+        XCTAssertEqual(initial.stopCount, 1)
+        XCTAssertNil(initial.onProbedSourceFactsChanged)
         XCTAssertEqual(native.loadCount, 0)
-        XCTAssertEqual(native.stopCount, 1)
+        XCTAssertEqual(native.stopCount, 0)
         XCTAssertEqual(native.status, .idle)
         XCTAssertNil(native.onProbedSourceFactsChanged)
     }
@@ -1605,7 +1859,8 @@ final class PlayerViewModelEOFTests: XCTestCase {
 
         gate.releaseNext()
         await staleLoad.value
-        XCTAssertTrue(plozzigenEngines.isEmpty)
+        XCTAssertEqual(plozzigenEngines.count, 1, "The stale load must not replace the bootstrap engine.")
+        XCTAssertEqual(plozzigenEngines[0].loadCount, 0)
         XCTAssertEqual(native.stopCount, 0)
 
         gate.releaseNext()
@@ -1613,7 +1868,7 @@ final class PlayerViewModelEOFTests: XCTestCase {
         XCTAssertEqual(plozzigenEngines.count, 1)
         XCTAssertEqual(plozzigenEngines[0].loadCount, 1)
         XCTAssertNotNil(plozzigenEngines[0].onProbedSourceFactsChanged)
-        XCTAssertEqual(native.stopCount, 1)
+        XCTAssertEqual(native.stopCount, 0)
         await viewModel.stop()
     }
 
@@ -2281,6 +2536,8 @@ private actor RecordingPlaybackProvider: MediaProvider {
     private let playlistMembers: [MediaItem]
     private let playlistPageLimit: Int?
     private let childrenByParent: [String: [MediaItem]]
+    private let segments: [MediaSegment]
+    private(set) var segmentCallCount = 0
     private var childErrors: [String: any Error] = [:]
     private var itemError: (any Error)?
     private var playbackInfoGate: PreCommitYieldGate?
@@ -2299,7 +2556,8 @@ private actor RecordingPlaybackProvider: MediaProvider {
         requestsByItemID: [String: PlaybackRequest] = [:],
         playlistMembers: [MediaItem] = [],
         playlistPageLimit: Int? = nil,
-        childrenByParent: [String: [MediaItem]] = [:]
+        childrenByParent: [String: [MediaItem]] = [:],
+        segments: [MediaSegment] = []
     ) {
         self.request = request
         self.kind = kind
@@ -2307,11 +2565,16 @@ private actor RecordingPlaybackProvider: MediaProvider {
         self.playlistMembers = playlistMembers
         self.playlistPageLimit = playlistPageLimit
         self.childrenByParent = childrenByParent
+        self.segments = segments
     }
 
     func libraries() async throws -> [MediaLibrary] { [] }
     func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
     func latest(limit: Int) async throws -> [MediaItem] { [] }
+    func mediaSegments(for itemID: String) async throws -> [MediaSegment] {
+        segmentCallCount += 1
+        return segments
+    }
     func item(id: String) async throws -> MediaItem {
         itemCallCount += 1
         if let itemError { throw itemError }
@@ -2444,6 +2707,14 @@ private actor NeighborResolverGate {
     }
 }
 
+private struct LocalPlaybackFixture: OfflinePlaybackResolving {
+    let files: [String: URL]
+
+    func localPlaybackURL(for item: MediaItem, versionID: String?) async -> URL? {
+        files[item.id]
+    }
+}
+
 @MainActor
 private final class SpyVideoEngine: VideoEngine {
     var maximumPlaybackSpeed = 4.0
@@ -2490,6 +2761,7 @@ private final class SpyVideoEngine: VideoEngine {
     func pause() { isPaused = true }
     func reloadAfterForeground() async throws {
         reloadAfterForegroundCount += 1
+        status = .ready
     }
     func seek(to seconds: TimeInterval) async {
         currentTime = seconds

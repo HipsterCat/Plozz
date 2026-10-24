@@ -11,6 +11,7 @@ private final class FakeWatchApplier: WatchMutationApplying, @unchecked Sendable
 
     private let lock = NSLock()
     private(set) var playedWrites: [PlayedWrite] = []
+    private(set) var playedAttempts: [PlayedWrite] = []
     private(set) var resumeWrites: [ResumeWrite] = []
     private(set) var traktScrobbles: [TraktScrobbleIntent] = []
     private(set) var simklScrobbles: [TraktScrobbleIntent] = []
@@ -23,17 +24,19 @@ private final class FakeWatchApplier: WatchMutationApplying, @unchecked Sendable
 
     /// Accounts whose writes currently fail (simulating an offline / asleep server).
     var failingAccounts: Set<String> = []
+    var failure: AppError = .serverUnreachable
     /// When true, Trakt mirroring throws (simulating an offline tracker).
     var traktFails = false
     var targetExpansion: WatchTargetExpansion = .none
 
     func setPlayed(_ played: Bool, on target: WatchMutationTarget) async throws {
-        if failingAccounts.contains(target.accountID) { throw AppError.serverUnreachable }
+        lock.lock(); playedAttempts.append(.init(played: played, accountID: target.accountID, itemID: target.itemID)); lock.unlock()
+        if failingAccounts.contains(target.accountID) { throw failure }
         lock.lock(); playedWrites.append(.init(played: played, accountID: target.accountID, itemID: target.itemID)); lock.unlock()
     }
 
     func setResumePosition(_ seconds: TimeInterval, on target: WatchMutationTarget, capturedAt: Date) async throws {
-        if failingAccounts.contains(target.accountID) { throw AppError.serverUnreachable }
+        if failingAccounts.contains(target.accountID) { throw failure }
         lock.lock(); resumeWrites.append(.init(seconds: seconds, accountID: target.accountID, itemID: target.itemID)); lock.unlock()
     }
 
@@ -72,6 +75,140 @@ private final class FakeWatchApplier: WatchMutationApplying, @unchecked Sendable
 
 private func target(_ account: String, _ item: String) -> WatchMutationTarget {
     WatchMutationTarget(accountID: account, itemID: item)
+}
+
+private final class WatchOutboxTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date = Date(timeIntervalSince1970: 10_000)
+    var now: Date { lock.withLock { date } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { date.addTimeInterval(seconds) } }
+}
+
+final class WatchOutboxRetryTests: XCTestCase {
+    func testThreeRejectedTargetsDoNotStormDuringTenMinutesOfFrequentDrains() async throws {
+        let clock = WatchOutboxTestClock()
+        let applier = FakeWatchApplier()
+        applier.failingAccounts = ["silo"]
+        applier.failure = .invalidResponse
+        let reconciler = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(), applier: applier, now: { clock.now }
+        )
+        for item in ["movie", "episode1", "episode2"] {
+            await reconciler.enqueue(playedMutation(
+                canonical: item, capturedAt: clock.now, targets: [target("silo", item)]
+            ))
+        }
+        for _ in 0..<600 {
+            await reconciler.drain()
+            clock.advance(1)
+        }
+        XCTAssertEqual(applier.playedAttempts.count, 15, "Each target tries at 0, 30, 90, 210 and 450 seconds")
+        let pending = await reconciler.snapshot().pending
+        XCTAssertEqual(pending.count, 3, "Failed writes are never reported as success or discarded")
+        XCTAssertTrue(pending.allSatisfy { $0.targetRetries.values.first?.failures == 5 })
+        XCTAssertTrue(applier.playedWrites.isEmpty)
+    }
+
+    func testCooldownSurvivesRelaunchAndCoalescingWithoutBlockingHealthyCopies() async throws {
+        let clock = WatchOutboxTestClock()
+        let applier = FakeWatchApplier()
+        applier.failingAccounts = ["offline"]
+        let store = InMemoryWatchMutationStore()
+        let reconciler = WatchStateReconciler(store: store, applier: applier, now: { clock.now })
+        await reconciler.enqueue(playedMutation(capturedAt: clock.now, targets: [target("offline", "item")]))
+        await reconciler.drain()
+        let persisted = try JSONDecoder().decode(
+            WatchOutboxState.self, from: JSONEncoder().encode(store.load())
+        )
+        let restored = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(persisted), applier: applier, now: { clock.now }
+        )
+        clock.advance(1)
+        await restored.enqueue(playedMutation(
+            played: false, capturedAt: clock.now,
+            targets: [target("offline", "item"), target("healthy", "copy")]
+        ))
+        applier.failingAccounts = []
+        await restored.drain()
+        XCTAssertEqual(applier.playedAttempts.map(\.accountID), ["offline", "healthy"])
+        XCTAssertEqual(applier.playedWrites, [.init(played: false, accountID: "healthy", itemID: "copy")])
+        clock.advance(28)
+        await restored.drain()
+        XCTAssertEqual(applier.playedAttempts.count, 2)
+        clock.advance(1)
+        await restored.drain()
+        XCTAssertEqual(applier.playedWrites.last, .init(played: false, accountID: "offline", itemID: "item"))
+        let final = await restored.snapshot()
+        XCTAssertTrue(final.pending.isEmpty)
+    }
+
+    func testRetryDelayCapsAtFifteenMinutesAndHonorsLongerServerDelay() async throws {
+        let clock = WatchOutboxTestClock()
+        let applier = FakeWatchApplier()
+        applier.failingAccounts = ["offline"]
+        let reconciler = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(), applier: applier, now: { clock.now }
+        )
+        await reconciler.enqueue(playedMutation(capturedAt: clock.now, targets: [target("offline", "item")]))
+        for delay in [30.0, 60, 120, 240, 480, 900, 900] {
+            await reconciler.drain()
+            let pending = await reconciler.snapshot().pending
+            let retry = try XCTUnwrap(pending.first?.targetRetries.values.first)
+            XCTAssertEqual(retry.notBefore.timeIntervalSince(clock.now), delay)
+            clock.advance(delay)
+        }
+        applier.failure = .rateLimited(retryAfter: 3600)
+        await reconciler.drain()
+        let pending = await reconciler.snapshot().pending
+        XCTAssertEqual(pending.first?.targetRetries.values.first?.notBefore, clock.now.addingTimeInterval(3600))
+    }
+
+    func testCancellationDoesNotBackOffAndLegacyIntentsRemainImmediatelyEligible() async throws {
+        let clock = WatchOutboxTestClock()
+        let applier = FakeWatchApplier()
+        applier.failingAccounts = ["server"]
+        applier.failure = .cancelled
+        let original = playedMutation(capturedAt: clock.now, targets: [target("server", "item")])
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        payload.removeValue(forKey: "targetRetries")
+        let legacy = try JSONDecoder().decode(WatchMutation.self, from: JSONSerialization.data(withJSONObject: payload))
+        XCTAssertTrue(legacy.targetRetries.isEmpty)
+        let reconciler = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(), applier: applier, now: { clock.now }
+        )
+        await reconciler.enqueue(legacy)
+        await reconciler.drain()
+        let pending = await reconciler.snapshot().pending
+        XCTAssertTrue(try XCTUnwrap(pending.first).targetRetries.isEmpty)
+        applier.failingAccounts = []
+        await reconciler.drain()
+        XCTAssertEqual(applier.playedAttempts.count, 2)
+        let final = await reconciler.pendingCount
+        XCTAssertEqual(final, 0)
+    }
+
+    func testFailedServerDoesNotHoldTrackerMirrorsOrSuccessfulTargets() async throws {
+        let clock = WatchOutboxTestClock()
+        let applier = FakeWatchApplier()
+        applier.failingAccounts = ["offline"]
+        let reconciler = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(), applier: applier, now: { clock.now }
+        )
+        var mutation = playedMutation(
+            capturedAt: clock.now, targets: [target("offline", "item"), target("healthy", "copy")]
+        )
+        mutation.trakt = .init(kind: .movie, title: nil, year: nil, seasonNumber: nil,
+                               episodeNumber: nil, providerIDs: ["Tmdb": "1"], progress: 100)
+        mutation.traktPending = true
+        await reconciler.enqueue(mutation)
+        await reconciler.drain()
+        for _ in 0..<50 { await reconciler.drain() }
+        XCTAssertEqual(applier.playedAttempts.count, 2)
+        XCTAssertEqual(applier.playedWrites.count, 1)
+        XCTAssertEqual(applier.traktScrobbles.count, 1)
+        let pending = await reconciler.snapshot().pending
+        XCTAssertEqual(pending.first?.targets, [target("offline", "item")])
+    }
 }
 
 final class WetrakrWatchMutationTests: XCTestCase {
@@ -720,6 +857,7 @@ final class WatchOutboxDurabilityTests: XCTestCase {
     /// the (failing) network call, reloaded from disk by a fresh reconciler, and then
     /// applied once the server is reachable — never silently dropped.
     func testOfflineWriteSurvivesRelaunchThenConverges() async throws {
+        let clock = WatchOutboxTestClock()
         let durable = try DurableLocalStateStore(
             secureStore: WatchOutboxMemoryStore()
         )
@@ -732,7 +870,7 @@ final class WatchOutboxDurabilityTests: XCTestCase {
                 store: durable,
                 profileID: "prof"
             )
-            let reconciler1 = WatchStateReconciler(store: store1, applier: applier1)
+            let reconciler1 = WatchStateReconciler(store: store1, applier: applier1, now: { clock.now })
             await reconciler1.enqueue(playedMutation(capturedAt: Date(), targets: [target("plex", "p1")]))
             await reconciler1.drain()
             let pending1 = await reconciler1.pendingCount
@@ -746,10 +884,11 @@ final class WatchOutboxDurabilityTests: XCTestCase {
             store: durable,
             profileID: "prof"
         )
-        let reconciler2 = WatchStateReconciler(store: store2, applier: applier2)
+        let reconciler2 = WatchStateReconciler(store: store2, applier: applier2, now: { clock.now })
         let reloaded = await reconciler2.pendingCount
         XCTAssertEqual(reloaded, 1, "Intent reloaded from disk")
 
+        clock.advance(30)
         await reconciler2.drain()
         XCTAssertEqual(applier2.playedWrites, [.init(played: true, accountID: "plex", itemID: "p1")])
         let converged = await reconciler2.pendingCount
@@ -777,10 +916,11 @@ final class WatchOutboxDurabilityTests: XCTestCase {
     /// converges immediately and the unreachable target stays queued (the watch is
     /// never dropped), then lands on the next drain.
     func testPartialFanOutKeepsOnlyTheFailedTarget() async throws {
+        let clock = WatchOutboxTestClock()
         let store = InMemoryWatchMutationStore()
         let applier = FakeWatchApplier()
         applier.failingAccounts = ["plex"]
-        let reconciler = WatchStateReconciler(store: store, applier: applier)
+        let reconciler = WatchStateReconciler(store: store, applier: applier, now: { clock.now })
 
         await reconciler.enqueue(playedMutation(capturedAt: Date(), targets: [target("jellyfin", "j1"), target("plex", "p1")]))
         await reconciler.drain()
@@ -797,6 +937,7 @@ final class WatchOutboxDurabilityTests: XCTestCase {
         )
 
         applier.failingAccounts = []
+        clock.advance(30)
         await reconciler.drain()
         let pendingAfterRetry = await reconciler.pendingCount
         XCTAssertEqual(pendingAfterRetry, 0)

@@ -8,6 +8,34 @@ import XCTest
 
 @MainActor
 final class LiveChannelControlsAppearanceTests: XCTestCase {
+    func testProgrammeFallbackPreservesTheGuidesMoodAndTheme() throws {
+        let size = CGSize(width: 200, height: 128)
+        for palette in [ThemePalette.light, .dark, .pureBlack] {
+            for mood in [LibraryChannelArtworkMood.calm, .intense, .mysterious] {
+                let guide = ImageRenderer(content: ChannelLogoArtwork(
+                    name: "Movies", logoURL: nil, size: size, cornerRadius: 12,
+                    plozzChannelID: "channel", plozzChannelMood: mood
+                ).environment(\.themePalette, palette))
+                let player = ImageRenderer(content: LiveChannelProgramArtwork(
+                    artworkURL: nil, channelName: "Movies", logoURL: nil,
+                    plozzChannelID: "channel", plozzChannelMood: mood, size: size
+                ).environment(\.themePalette, palette))
+                guide.scale = 1
+                player.scale = 1
+                let guideImage = try XCTUnwrap(guide.cgImage)
+                let playerImage = try XCTUnwrap(player.cgImage)
+                XCTAssertEqual(guideImage.width, playerImage.width)
+                XCTAssertEqual(guideImage.height, playerImage.height)
+                let expected = try rgbaPixels(guideImage)
+                let actual = try rgbaPixels(playerImage)
+                for y in 12..<116 {
+                    let range = (y * 200 + 12) * 4..<(y * 200 + 188) * 4
+                    XCTAssertEqual(actual[range], expected[range], "Guide and player must use identical artwork.")
+                }
+            }
+        }
+    }
+
     func testScheduledChannelsDoNotClaimToBeLiveBroadcasts() {
         XCTAssertEqual(String(localized: LiveChannelPlaybackPhase.loading.activityLabel), "Loading channel…")
         XCTAssertEqual(

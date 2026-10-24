@@ -7,11 +7,19 @@ to its underlying media sources.
 
 **Home section**:
 A configurable part of Home, such as Continue Watching, a library's Recently
-Added row, Live TV, or the Hero.
-_Avoid_: Widget, module
+Added titles, Live TV, or the Hero. Its content is independent of its visual layout.
+_Avoid_: Row (as a synonym for the section), widget, module
 
 **Row**:
-A horizontal collection of cards within a Home section.
+A horizontal arrangement of cards within a Home section.
+
+**Collection**:
+A named group of titles supplied by a media source. A Home section can use a
+collection without changing the collection itself.
+
+**Section layout**:
+The visual presentation of a section's content, such as posters, landscape cards,
+or Featured cards.
 
 **Hero**:
 The optional featured area anchored at the top of Home. Its content and appearance

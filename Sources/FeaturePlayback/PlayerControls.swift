@@ -41,8 +41,7 @@ struct PlayerOptionsActions {
 ///    Reached by pressing **Up** from the scrub surface; Menu (or the idle
 ///    auto-hide) returns to the video, since nothing sits above them.
 ///  * **Scrub bar** — buffered/played fill + floating trickplay thumbnail.
-///  * **Tab row** — beneath the scrubber; today just Info, later joined by siblings
-///    (Chapters, …).
+///  * **Tab row** — beneath the scrubber; Info and available browsing cards.
 ///  * **Info** — pressing **Down** from the scrub surface (or selecting the tab)
 ///    slides the Info card up from the bottom edge, pushing the Info tab up above
 ///    it, Apple-TV style. While the card is up the track-control row steps aside,
@@ -64,7 +63,7 @@ struct PlayerControls: View {
     let onExitToSurface: () -> Void
 
     enum Category: Hashable {
-        case subtitles, audio, playback, sync, info, cast, episodes, playlist, version
+        case subtitles, audio, playback, sync, info, cast, chapters, episodes, playlist, version
 
         var title: LocalizedStringResource {
             switch self {
@@ -103,6 +102,7 @@ struct PlayerControls: View {
                 )
             case .episodes: return "Episodes"
             case .playlist: return "Playlist"
+            case .chapters: return "Chapters"
             }
         }
 
@@ -117,6 +117,7 @@ struct PlayerControls: View {
             case .cast: return "person.2"
             case .episodes: return "rectangle.stack"
             case .playlist: return "text.line.first.and.arrowtriangle.forward"
+            case .chapters: return "list.number"
             }
         }
     }
@@ -134,6 +135,7 @@ struct PlayerControls: View {
         case castMember(Int)
         case sequenceItem(Int)
         case episodeItem(PlayerEpisodeEntry.ID)
+        case chapter(MediaChapter.ID)
         /// Back out of a cast member's details to the row.
         case castBack
         /// One title in a cast member's credits row, by position.
@@ -334,6 +336,11 @@ struct PlayerControls: View {
             guard let panel = PlayerScreenshotHook.pendingPanel else { return }
             PlayerScreenshotHook.pendingPanel = nil
             switch panel {
+            case .playback:
+                try? await Task.sleep(for: .milliseconds(600))
+                model.controlsVisible = true
+                model.isPanelOpen = true
+                openPanel = .playback
             case .versions:
                 guard model.versions.isAvailable else { return }
                 model.controlsVisible = true
@@ -526,6 +533,9 @@ struct PlayerControls: View {
             // already uses on close. Any one-frame highlight of the engine's pick happens
             // while the panel is still at ~0 opacity (mid fade-in), so it's imperceptible.
             restoreFocus(preferredPanelFocus)
+        }
+        .onChange(of: model.infoCard.chapters.isEmpty) { _, empty in
+            if empty, openPanel == .chapters { closeInfoCard() }
         }
         .plozzRemoteCommands(
             onExit: handleExit,
@@ -921,7 +931,8 @@ struct PlayerControls: View {
     /// clock. A sibling tab therefore switches the card's *content*; it never
     /// mounts a second card, which would reflow the stage and break that.
     static func usesBottomCard(_ category: Category?) -> Bool {
-        category == .info || category == .cast || category == .episodes || category == .playlist
+        category == .info || category == .cast || category == .chapters
+            || category == .episodes || category == .playlist
     }
 
     /// `openPanel` with Info masked out, so the options panels' own animation can be
@@ -1008,9 +1019,7 @@ struct PlayerControls: View {
     private static let infoReveal: Animation = .smooth(duration: 0.5)
 
 
-    /// The tab row beneath the scrub bar. Today a single Info tab; siblings
-    /// (Chapters, …) join it here and switch the card below rather than opening
-    /// their own floating panel. Titled, not icon-only — these read as tabs.
+    /// Bottom tabs switch the shared card rather than opening a floating menu.
     private var tabRow: some View {
         HStack(spacing: 20) {
             Button {
@@ -1028,6 +1037,22 @@ struct PlayerControls: View {
             .accessibilityIdentifier("player-tab-info")
             .disabled(!tabFocusable(.info))
             .onChange(of: focus) { _, slot in selectCardTab(focusedTo: slot) }
+
+            if isTabVisible(.chapters) {
+                Button { toggle(.chapters) } label: {
+                    Text(Category.chapters.title)
+                }
+                .buttonStyle(PlayerTabButtonStyle(
+                    focused: focus == .button(.chapters), selected: openPanel == .chapters
+                ))
+                .reportSubtitleControlsFrame(
+                    in: model.subtitleLayout, region: .tab("chapters"),
+                    isVisible: model.controlsVisible && !model.isScrubbing && !chromeHidden
+                )
+                .focused($focus, equals: .button(.chapters))
+                .accessibilityIdentifier("player-tab-chapters")
+                .disabled(!tabFocusable(.chapters))
+            }
 
             // Hidden entirely when what is playing has no cast: a tab that opens
             // an empty card is worse than an absent one, and `.disabled` alone
@@ -1171,6 +1196,7 @@ struct PlayerControls: View {
     private func isTabVisible(_ tab: Category) -> Bool {
         switch tab {
         case .cast: !model.infoCard.cast.isEmpty
+        case .chapters: player != nil && !model.infoCard.chapters.isEmpty
         case .episodes: player?.episodeBrowser != nil
         case .playlist: player?.playlistContext != nil
         default: true
@@ -1319,7 +1345,12 @@ struct PlayerControls: View {
     /// one.
     @ViewBuilder
     private var cardContent: some View {
-        if (parkedCardTab == .playlist || parkedCardTab == .episodes), let player {
+        if parkedCardTab == .chapters, let player {
+            PlayerChapterPanel(model: model, spoilerSettings: player.spoilerSettings, focus: $focus) {
+                player.seekToChapter($0)
+                closeInfoCard()
+            }
+        } else if (parkedCardTab == .playlist || parkedCardTab == .episodes), let player {
             PlayerSequencePanel(
                 player: player,
                 source: parkedCardTab == .playlist ? .playlist : .episodes,

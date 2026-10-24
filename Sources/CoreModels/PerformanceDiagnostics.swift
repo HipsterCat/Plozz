@@ -151,8 +151,10 @@ public final class PerformanceDiagnostics: @unchecked Sendable {
 
     private let lock = NSLock()
     private let uptime: @Sendable () -> UInt64
+    private let wallClock: @Sendable () -> Date
     private var generation: UUID?
     private var epoch: UInt64 = 0
+    private var startedAt = Date.distantFuture
     private var nextID: UInt64 = 0
     private var active: [UInt64: Entry] = [:]
     private var recent = Ring(capacity: PerformanceDiagnostics.maximumRecent)
@@ -163,13 +165,20 @@ public final class PerformanceDiagnostics: @unchecked Sendable {
     public convenience init() { self.init(uptime: { DispatchTime.now().uptimeNanoseconds }) }
 
     /// Clock injection is internal and only used for deterministic tests; it must not reenter the recorder.
-    init(uptime: @escaping @Sendable () -> UInt64) { self.uptime = uptime }
+    init(
+        uptime: @escaping @Sendable () -> UInt64,
+        wallClock: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.uptime = uptime
+        self.wallClock = wallClock
+    }
 
     public func start() {
         lock.withLock {
             guard generation == nil else { return }
             generation = UUID()
             epoch = uptime()
+            startedAt = wallClock()
         }
     }
 
@@ -177,6 +186,7 @@ public final class PerformanceDiagnostics: @unchecked Sendable {
         lock.withLock {
             generation = nil
             epoch = 0
+            startedAt = .distantFuture
             nextID = 0
             active.removeAll(keepingCapacity: false)
             recent = Ring(capacity: Self.maximumRecent)
@@ -227,10 +237,16 @@ public final class PerformanceDiagnostics: @unchecked Sendable {
         }
     }
 
-    /// Takes a bounded value copy under the lock; ordering, conversion and encoding happen outside it.
-    public func snapshot() -> Snapshot? {
+    /// Event timestamps must belong to the current consent session. Wall-clock
+    /// boundaries are local attribution checks only and are never serialized.
+    /// Takes a bounded value copy under the lock; encoding happens outside it.
+    public func snapshot(forEventAt eventDate: Date? = nil) -> Snapshot? {
         let captured = lock.withLock { () -> (UUID, UInt64, UInt64, Int, Int, [UInt64: Entry], Ring, Ring)? in
             guard let generation else { return nil }
+            if let eventDate {
+                guard eventDate.timeIntervalSinceReferenceDate.isFinite,
+                      eventDate >= startedAt, eventDate <= wallClock() else { return nil }
+            }
             return (generation, epoch, uptime(), maxActive, dropped, active, recent, slow)
         }
         guard let (generation, epoch, now, maxActive, dropped, active, recent, slow) = captured else { return nil }

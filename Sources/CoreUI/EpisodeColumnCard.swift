@@ -45,8 +45,17 @@ public struct EpisodeColumnCard: View, Equatable {
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
     @Environment(\.plozzArtworkPolicy) private var artworkPolicy
+    @Environment(\.detailHeaderSettings) private var detailSettings
+    @Environment(\.plozzAppTextScale) private var appTextScale
 
     private let metrics = PlozzMetrics.standard
+    private var textScale: CGFloat {
+        #if os(tvOS)
+        PlozzTypography.scale(local: detailSettings?.settings.textSize.scale ?? 1, app: appTextScale)
+        #else
+        1
+        #endif
+    }
 
     public init(
         item: MediaItem,
@@ -103,7 +112,7 @@ public struct EpisodeColumnCard: View, Equatable {
     private var episodeCaption: some View {
         VStack(alignment: .leading, spacing: 0) {
             presentation.titleLine
-                .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
+                .font(.system(size: PlozzTypography.episodeTitle.scaled(by: textScale).pointSize, weight: .semibold))
                 .foregroundStyle(presentation.isUpcoming ? .secondary : .primary)
                 .lineLimit(1)
                 .padding(.top, metrics.landscapeCaptionTopSpacing + metrics.focusCaptionPush)
@@ -116,7 +125,8 @@ public struct EpisodeColumnCard: View, Equatable {
                     || presentation.overviewTreatment == .placeholder,
                 mode: spoilerSettings.mode,
                 lineCount: 3,
-                fontSize: 20,
+                fontSize: PlozzTypography.episodeDescription.scaled(by: textScale).pointSize,
+                lineSpacing: PlozzTypography.episodeDescription.scaled(by: textScale).lineSpacing,
                 maxWidth: Self.artworkSize.width
             )
             .opacity(synopsisVisible ? 1 : 0)

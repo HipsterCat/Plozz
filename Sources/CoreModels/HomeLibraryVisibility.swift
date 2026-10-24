@@ -9,8 +9,8 @@ import Foundation
 /// - `mergeLibrariesOnHome` — the all-or-nothing "merge every library's content
 ///   into unified cross-server rows" switch. `true` (the default) is the classic
 ///   behaviour; `false` lets each library contribute its own opt-in rows.
-/// - `disabledKeys` — libraries turned **off** (hidden everywhere: Home, Search,
-///   Music, browse). A library is either on or off; a video library that's on
+/// - `disabledKeys` — libraries turned **off** for discovery (Home, Search,
+///   Music, browse), not account-wide viewing history. A video library that's on
 ///   shows on Home + search, a music library that's on shows in the Music tab.
 /// - `disabledGlobalHomeRows` — the global Home rows (Continue Watching / Watchlist
 ///   / Recently Added) the user has turned **off** (opt-out; default all on). The
@@ -32,6 +32,7 @@ import Foundation
 public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
     /// Nil preserves an existing profile's legacy combined/grouped choices.
     public var rowCustomization: HomeRowCustomization?
+    public var collectionSections: [CollectionSection]
 
     public var intent: Self {
         var copy = self
@@ -71,7 +72,7 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
     /// opt-in rows (`false`).
     public var mergeLibrariesOnHome: Bool
 
-    /// Keys of libraries turned **off** — hidden from Home, Search, Music and
+    /// Keys of libraries turned **off** — hidden from discovery on Home, Search, Music and
     /// browse alike.
     public var disabledKeys: Set<String>
 
@@ -109,6 +110,7 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
     public var continueWatchingShowsSeriesArtwork: Bool
     public var continueWatchingLayout: ContinueWatchingCardLayout
     public var continueWatchingPlaybackDetails: ContinueWatchingPlaybackDetails
+    public var continueWatchingAction: ContinueWatchingAction
 
     public var continueWatchingUsesSeriesArtwork: Bool {
         continueWatchingLayout == .portrait || continueWatchingShowsSeriesArtwork
@@ -124,8 +126,10 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
         continueWatchingShowsSeriesArtwork: Bool = true,
         continueWatchingLayout: ContinueWatchingCardLayout = .landscape,
         continueWatchingPlaybackDetails: ContinueWatchingPlaybackDetails = .default,
+        continueWatchingAction: ContinueWatchingAction = .default,
         rowCustomization: HomeRowCustomization? = nil,
-        mergeNextUpIntoContinueWatching: Bool = true
+        mergeNextUpIntoContinueWatching: Bool = true,
+        collectionSections: [CollectionSection] = []
     ) {
         self.mergeLibrariesOnHome = mergeLibrariesOnHome
         self.disabledKeys = disabledKeys
@@ -136,8 +140,10 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
         self.continueWatchingShowsSeriesArtwork = continueWatchingShowsSeriesArtwork
         self.continueWatchingLayout = continueWatchingLayout
         self.continueWatchingPlaybackDetails = continueWatchingPlaybackDetails
+        self.continueWatchingAction = continueWatchingAction
         self.rowCustomization = rowCustomization
         self.mergeNextUpIntoContinueWatching = mergeNextUpIntoContinueWatching
+        self.collectionSections = collectionSections
     }
 
     /// Fresh profiles match their server; existing blobs retain legacy behavior.
@@ -235,7 +241,7 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
         switch id {
         case let .global(row): return isGlobalRowEnabled(row)
         case .libraries: return true
-        case .server, .liveTV: return false
+        case .server, .liveTV, .section: return false
         case let .library(key, _):
             return !mergeLibrariesOnHome
                 && id.libraryKind.map { isLibraryRowEnabled(key, kind: $0) } == true
@@ -316,7 +322,7 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
                 library: $0.library,
                 isProviderDefault: rowCustomization?.defaults == .legacy
                     ? (isLegacyRowVisible($0.id) && $0.isLegacyDefault) : $0.isProviderDefault,
-                serverRow: $0.serverRow
+                serverRow: $0.serverRow, collectionSection: $0.collectionSection
             )
         }
         rowCustomization?.apply(sections, choices: resolvedChoices)
@@ -368,7 +374,9 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
         case continueWatchingLayout
         // Preserve the stored preference introduced with portrait cards.
         case continueWatchingPlaybackDetails = "continueWatchingPortraitDetails"
+        case continueWatchingAction
         case rowCustomization
+        case collectionSections
         case mergeNextUpIntoContinueWatching
     }
 
@@ -406,7 +414,11 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
         self.continueWatchingPlaybackDetails = try container.decodeIfPresent(
             ContinueWatchingPlaybackDetails.self, forKey: .continueWatchingPlaybackDetails
         ) ?? .default
+        self.continueWatchingAction = try container.decodeIfPresent(
+            ContinueWatchingAction.self, forKey: .continueWatchingAction
+        ) ?? .default
         self.rowCustomization = try container.decodeIfPresent(HomeRowCustomization.self, forKey: .rowCustomization)
+        self.collectionSections = try container.decodeIfPresent([CollectionSection].self, forKey: .collectionSections) ?? []
         self.mergeNextUpIntoContinueWatching = try container.decodeIfPresent(
             Bool.self, forKey: .mergeNextUpIntoContinueWatching
         ) ?? true
@@ -423,7 +435,9 @@ public struct HomeLibraryVisibility: Codable, Equatable, Sendable {
         try container.encode(continueWatchingShowsSeriesArtwork, forKey: .continueWatchingShowsSeriesArtwork)
         try container.encode(continueWatchingLayout, forKey: .continueWatchingLayout)
         try container.encode(continueWatchingPlaybackDetails, forKey: .continueWatchingPlaybackDetails)
+        try container.encode(continueWatchingAction, forKey: .continueWatchingAction)
         try container.encodeIfPresent(rowCustomization, forKey: .rowCustomization)
+        if !collectionSections.isEmpty { try container.encode(collectionSections, forKey: .collectionSections) }
         try container.encode(mergeNextUpIntoContinueWatching, forKey: .mergeNextUpIntoContinueWatching)
     }
 }
@@ -436,6 +450,12 @@ public enum ContinueWatchingPlaybackDetails: String, CaseIterable, Codable, Send
     case detailed, progressOnly
 
     public static let `default`: Self = .detailed
+}
+
+public enum ContinueWatchingAction: String, CaseIterable, Codable, Sendable {
+    case play, openDetails
+
+    public static let `default`: Self = .play
 }
 
 /// A global (cross-server, cross-library) row on Home. The hero is handled

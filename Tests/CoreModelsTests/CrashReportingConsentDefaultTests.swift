@@ -13,51 +13,81 @@ final class CrashReportingConsentDefaultTests: XCTestCase {
         func save(_ settings: CrashReportingSettings) { stored = settings }
     }
 
-    func testUnsetUsesBetaDefaultOn() {
-        let model = CrashReportingSettingsModel(
-            store: MemoryStore(stored: nil),
-            defaultConsentWhenUnset: true
-        )
-        XCTAssertTrue(model.settings.isEnabled)
+    func testNewInstallRequiresConsentAndStartsDisabled() {
+        let model = CrashReportingSettingsModel(store: MemoryStore(stored: nil))
+        XCTAssertTrue(model.needsConsent)
+        XCTAssertFalse(model.isEnabled)
     }
 
-    func testUnsetUsesProductionDefaultOff() {
-        let model = CrashReportingSettingsModel(
-            store: MemoryStore(stored: nil),
-            defaultConsentWhenUnset: false
-        )
-        XCTAssertFalse(model.settings.isEnabled)
-    }
-
-    func testExplicitOptOutIsRespectedEvenInBeta() {
-        let model = CrashReportingSettingsModel(
-            store: MemoryStore(stored: CrashReportingSettings(isEnabled: false)),
-            defaultConsentWhenUnset: true
-        )
-        XCTAssertFalse(model.settings.isEnabled)
-    }
-
-    func testExplicitOptInIsRespectedInProduction() {
-        let model = CrashReportingSettingsModel(
-            store: MemoryStore(stored: CrashReportingSettings(isEnabled: true)),
-            defaultConsentWhenUnset: false
-        )
-        XCTAssertTrue(model.settings.isEnabled)
+    func testEveryLegacyPreferenceRequiresANewChoice() throws {
+        for enabled in [false, true] {
+            let data = Data("{\"isEnabled\":\(enabled)}".utf8)
+            let legacy = try JSONDecoder().decode(CrashReportingSettings.self, from: data)
+            let store = MemoryStore(stored: legacy)
+            let model = CrashReportingSettingsModel(store: store)
+            XCTAssertTrue(model.needsConsent)
+            XCTAssertFalse(model.isEnabled, "Legacy beta defaults cannot authorize reporting.")
+            XCTAssertEqual(store.loadStored(), legacy, "Merely opening the prompt is not a choice.")
+        }
     }
 
     func testDefaultIsNotPersistedUntilUserChoosesSomething() {
         let store = MemoryStore(stored: nil)
-        _ = CrashReportingSettingsModel(store: store, defaultConsentWhenUnset: true)
-        // The channel default must NOT be written, so a later upgrade to a
-        // production build (default off) still reverts a never-touched install.
+        _ = CrashReportingSettingsModel(store: store)
         XCTAssertNil(store.loadStored())
     }
 
-    func testTogglingPersistsTheChoice() {
+    func testEitherChoicePersistsAndDoesNotAskAgainAfterRelaunch() {
+        for enabled in [false, true] {
+            let store = MemoryStore(stored: nil)
+            let model = CrashReportingSettingsModel(store: store)
+            model.isEnabled = enabled
+            XCTAssertEqual(model.isEnabled, enabled)
+            XCTAssertFalse(model.needsConsent)
+            XCTAssertEqual(store.loadStored(), CrashReportingSettings(
+                isEnabled: enabled,
+                consentVersion: CrashReportingSettings.currentConsentVersion
+            ))
+
+            let relaunched = CrashReportingSettingsModel(store: store)
+            XCTAssertFalse(relaunched.needsConsent)
+            XCTAssertEqual(relaunched.isEnabled, enabled)
+        }
+    }
+
+    func testSettingsCanWithdrawAndRestoreConsentWithoutAnotherStartupPrompt() {
         let store = MemoryStore(stored: nil)
-        let model = CrashReportingSettingsModel(store: store, defaultConsentWhenUnset: false)
-        model.settings.isEnabled = true
-        XCTAssertEqual(store.loadStored(), CrashReportingSettings(isEnabled: true))
+        let model = CrashReportingSettingsModel(store: store)
+        for enabled in [true, false, true] {
+            model.isEnabled = enabled
+            let restored = CrashReportingSettingsModel(store: store)
+            XCTAssertEqual(restored.isEnabled, enabled)
+            XCTAssertFalse(restored.needsConsent)
+        }
+    }
+
+    func testUnknownConsentVersionsFailClosed() {
+        for version in [0, CrashReportingSettings.currentConsentVersion + 1] {
+            let model = CrashReportingSettingsModel(store: MemoryStore(stored: .init(
+                isEnabled: true, consentVersion: version
+            )))
+            XCTAssertFalse(model.isEnabled)
+            XCTAssertTrue(model.needsConsent)
+        }
+    }
+
+    func testConsentRoundTripsThroughDeviceStore() throws {
+        let name = "CrashReportingConsentDefaultTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = CrashReportingSettingsStore(defaults: defaults)
+        let model = CrashReportingSettingsModel(store: store)
+        model.isEnabled = false
+        let restored = CrashReportingSettingsModel(
+            store: CrashReportingSettingsStore(defaults: defaults)
+        )
+        XCTAssertFalse(restored.isEnabled)
+        XCTAssertFalse(restored.needsConsent)
     }
 
     func testBetaChannelsReportBeta() {
@@ -91,23 +121,17 @@ final class CrashReportingConsentDefaultTests: XCTestCase {
         XCTAssertNil(AppReleaseChannel.baked("nonsense"))
     }
 
-    /// The whole point of the bake: a TestFlight build must default consent ON
-    /// even when the App Store receipt runtime detection relies on is missing,
-    /// which on tvOS is the normal state until a purchase happens.
-    func testBakedTestFlightChannelDefaultsConsentOn() {
-        XCTAssertEqual(AppReleaseChannel.baked("testflight")?.isBeta, true)
-        XCTAssertEqual(AppReleaseChannel.baked("production")?.isBeta, false)
-    }
-
     func testLegacySettingsWithoutTheRetiredMarkerStillDecode() throws {
         let legacy = Data(#"{"isEnabled":false}"#.utf8)
         let decoded = try JSONDecoder().decode(CrashReportingSettings.self, from: legacy)
         XCTAssertFalse(decoded.isEnabled, "an explicit opt-out must survive the migration")
+        XCTAssertNil(decoded.consentVersion)
     }
 
     func testLegacyTestingMarkerIsIgnoredWithoutLosingConsent() throws {
         let legacy = Data(#"{"isEnabled":true,"isMaintainerDevice":true}"#.utf8)
         let decoded = try JSONDecoder().decode(CrashReportingSettings.self, from: legacy)
         XCTAssertTrue(decoded.isEnabled)
+        XCTAssertNil(decoded.consentVersion)
     }
 }

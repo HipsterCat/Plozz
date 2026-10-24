@@ -7,21 +7,12 @@ struct LiveTVSetupActionLabel: View {
 
     var body: some View {
         SettingsRowLabel(icon: symbol, title: title)
-        #if os(tvOS)
-        .padding(.vertical, 4)
+        #if os(iOS)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         #endif
-        .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(title))
-    }
-
-    private var minimumHeight: CGFloat {
-        #if os(tvOS)
-        64
-        #else
-        44
-        #endif
     }
 }
 

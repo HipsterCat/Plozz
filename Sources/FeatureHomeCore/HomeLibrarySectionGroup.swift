@@ -12,7 +12,7 @@ public struct HomeLibrarySectionGroup: Identifiable, Equatable, Sendable {
     /// the "browse everything" destination when the header is selected.
     public let library: AggregatedLibrary
 
-    /// The library's completed, nonempty rows in display order.
+    /// Completed rows; explicitly selected empty sections retain diagnostic evidence.
     public var sections: [LibrarySection]
     public var loadingRows: Set<LibraryHomeRowKind>
     public var failures: [LibraryHomeRowKind: AppError]
@@ -36,6 +36,9 @@ public struct HomeLibrarySectionGroup: Identifiable, Equatable, Sendable {
         public let section: LibrarySection
         public let isLoading: Bool
         public let failure: AppError?
+        public var browseItem: MediaItem? = nil
+        public var issue: HomeSectionIssue? = nil
+        public var collectionCardStyle: CollectionSection.CardStyle? = nil
         public var id: String { section.id }
     }
 

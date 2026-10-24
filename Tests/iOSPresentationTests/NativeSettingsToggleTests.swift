@@ -34,6 +34,145 @@ final class NativeSettingsToggleTests: XCTestCase {
         try await verifyNativeSwitch(grouped: false)
     }
 
+    func testSkipControlsRevealNativeConfigurationAndRetainProfileChoices() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "SkipSettingsHosted-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = PlaybackSettingsStore(defaults: defaults, namespace: "viewer")
+        window.overrideUserInterfaceStyle = .dark
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        for width: CGFloat in [390, 834] {
+            store.save(.init(
+                skipIntros: .autoDelay, skipMarkersEnabled: false,
+                skipContentCategories: [.tvShow, .anime], skipAutomaticDelaySeconds: 12
+            ))
+            let model = PlaybackSettingsModel(store: store)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 1000)
+            window.rootViewController = UIHostingController(rootView:
+                List { SkipMarkerSettingsControl(model: model) }
+                    .environment(\.themePalette, .dark)
+                    .environment(\.colorScheme, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            window.makeKeyAndVisible()
+            try await settle(window)
+            XCTAssertEqual(listedSwitches(in: window).count, 1)
+            let master = try XCTUnwrap(listedSwitches(in: window).first)
+            master.setOn(true, animated: false)
+            master.sendActions(for: .valueChanged)
+            try await settle(window)
+            XCTAssertTrue(model.settings.skipMarkersEnabled)
+            XCTAssertEqual(listedSwitches(in: window).count, 6)
+            let automatic = try captureText(window, name: "skip-settings-automatic-\(Int(width))")
+            for label in ["Enable skipping", "Behavior", "Skip automatically", "Skip after", "12 seconds",
+                          "Movies", "TV Shows", "Anime", "Set each marker separately",
+                          "Use community markers", "From IntroDB", "your server has none", "Shares"] {
+                XCTAssertTrue(automatic.contains(label), "Missing \(label): \(automatic)")
+            }
+            XCTAssertFalse(automatic.contains("When your server has no intro or credits marker"), automatic)
+            let stepper = try XCTUnwrap(firstStepper(in: window))
+            stepper.value += stepper.stepValue
+            stepper.sendActions(for: .valueChanged)
+            try await settle(window)
+            XCTAssertEqual(model.settings.skipAutomaticDelaySeconds, 13)
+            XCTAssertEqual(store.load().skipAutomaticDelaySeconds, 13)
+            model.settings.setSkipAutomaticDelay(29)
+            try await settle(window)
+            for _ in 0..<2 {
+                stepper.value += stepper.stepValue
+                stepper.sendActions(for: .valueChanged)
+                try await settle(window)
+                XCTAssertEqual(model.settings.skipAutomaticDelaySeconds, 30)
+            }
+            let categories = listedSwitches(in: window).sorted {
+                $0.convert($0.bounds, to: window).minY < $1.convert($1.bounds, to: window).minY
+            }
+            let movies = try XCTUnwrap(categories.dropFirst().first)
+            XCTAssertFalse(movies.isOn)
+            movies.setOn(true, animated: false)
+            movies.sendActions(for: .valueChanged)
+            try await settle(window)
+            XCTAssertEqual(model.settings.skipContentCategories, [.movie, .tvShow, .anime])
+            movies.setOn(false, animated: false)
+            movies.sendActions(for: .valueChanged)
+            model.settings.setSkipAutomaticDelay(1)
+            try await settle(window)
+            for _ in 0..<2 {
+                stepper.value -= stepper.stepValue
+                stepper.sendActions(for: .valueChanged)
+                try await settle(window)
+                XCTAssertEqual(model.settings.skipAutomaticDelaySeconds, 0)
+                XCTAssertEqual(model.settings.skipMarkerModes.mode(for: .intro), .autoInstant)
+            }
+            try await settle(window)
+            XCTAssertTrue(try captureText(window, name: "skip-settings-immediate-\(Int(width))").contains("Immediately"))
+            model.settings.setConfiguredSkipMode(.on)
+            try await settle(window)
+            let manual = try captureText(window, name: "skip-settings-manual-\(Int(width))")
+            XCTAssertTrue(manual.contains("Show skip button"), manual)
+            XCTAssertFalse(manual.contains("Skip after"), manual)
+            model.settings.setSkipMarkersEnabled(false)
+            try await settle(window)
+            XCTAssertEqual(listedSwitches(in: window).count, 1)
+            XCTAssertEqual(store.load().skipContentCategories, [.tvShow, .anime])
+            XCTAssertEqual(store.load().skipAutomaticDelaySeconds, 0)
+            XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
+        }
+    }
+
+    private func firstStepper(in view: UIView) -> UIStepper? {
+        if let stepper = view as? UIStepper { return stepper }
+        return view.subviews.lazy.compactMap { self.firstStepper(in: $0) }.first
+    }
+
+    func testBufferControlsShowIndependentDeviceSelectionsAtPhoneAndTabletWidths() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "BufferSettingsHosted-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        for width: CGFloat in [390, 834] {
+            PlaybackReadAheadStore(defaults: defaults).save(.automatic)
+            LivePlaybackBufferStore(defaults: defaults).save(.automatic)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 900)
+            window.rootViewController = UIHostingController(rootView:
+                List {
+                    PlaybackReadAheadControl(defaults: defaults)
+                    LivePlaybackBufferControl(defaults: defaults)
+                }
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            window.makeKeyAndVisible()
+            try await settle(window)
+            let initial = try captureText(window, name: "automatic-buffers-\(Int(width))")
+            XCTAssertTrue(initial.contains("Video buffer"), initial)
+            XCTAssertTrue(initial.contains("Live TV buffer"), initial)
+            XCTAssertTrue(initial.contains("Automatic"), initial)
+            PlaybackReadAheadStore(defaults: defaults).save(.oneMinute)
+            LivePlaybackBufferStore(defaults: defaults).save(.thirtySeconds)
+            try await settle(window)
+            let selected = try captureText(window, name: "selected-buffers-\(Int(width))")
+            XCTAssertTrue(selected.contains("1 minute"), selected)
+            XCTAssertTrue(selected.contains("30 seconds"), selected)
+        }
+    }
+
     func testAdvancedPlaybackFELUsesNativeSwitchAndPersistsOnlyTheActiveProfile() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -67,11 +206,13 @@ final class NativeSettingsToggleTests: XCTestCase {
                 let control = try XCTUnwrap(switches.first)
                 XCTAssertFalse(control.isOn)
                 let text = try captureText(
-                    window, name: "fel-settings-\(Int(width))-\(scheme)", technicalWords: ["DTS:X"]
+                    window, name: "fel-settings-\(Int(width))-\(scheme)"
                 )
-                for label in ["FEL", "experimental", "GPU", "memory", "Dolby Atmos", "DTS:X"] {
+                for label in ["FEL", "experimental", "memory", "stutter", "turns off overhead sound"] {
                     XCTAssertTrue(text.contains(label), "The setting and tradeoff must be visible: \(text)")
                 }
+                XCTAssertFalse(text.contains("Dolby Atmos"), text)
+                XCTAssertFalse(text.contains("DTS:X"), text)
                 control.setOn(true, animated: false)
                 control.sendActions(for: .valueChanged)
                 try await settle(window)
@@ -367,6 +508,7 @@ final class NativeSettingsToggleTests: XCTestCase {
             let hero = HeroSettingsModel(store: InMemoryHeroSettingsStore())
             let background = HeroBackgroundSettingsModel(store: InMemoryHeroBackgroundSettingsStore())
             hero.settings.sources = [.randomFromLibrary, .collection, .featured]
+            hero.settings.setEnabled(.featured, enabled: true)
             window.frame = CGRect(x: 0, y: 0, width: width, height: 1200)
             window.rootViewController = UIHostingController(rootView: NavigationStack {
                 HeroSettingsScreen(page: .titles, libraries: [], accounts: [])
@@ -404,6 +546,61 @@ final class NativeSettingsToggleTests: XCTestCase {
             XCTAssertFalse(collapsed.contains("Choose libraries"), collapsed)
             XCTAssertTrue(collapsed.contains("Choose collections"), collapsed)
             XCTAssertTrue(collapsed.contains("Discovery providers"), collapsed)
+        }
+    }
+
+    func testDiscoverySwitchFollowsSeerrUntilExplicitlyChanged() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for width: CGFloat in [390, 834] {
+            let connection = Model()
+            let hero = HeroSettingsModel(store: InMemoryHeroSettingsStore())
+            hero.setSeerrConnection { connection.isOn }
+            let background = HeroBackgroundSettingsModel(store: InMemoryHeroBackgroundSettingsStore())
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 1600)
+            window.rootViewController = UIHostingController(rootView: NavigationStack {
+                HeroSettingsScreen(page: .titles, libraries: [], accounts: [])
+            }
+            .environment(hero)
+            .environment(background))
+            window.makeKeyAndVisible()
+            try await settle(window)
+            func discoverySwitch() throws -> UISwitch {
+                try XCTUnwrap(listedSwitches(in: window).max {
+                    $0.convert($0.bounds, to: window).minY < $1.convert($1.bounds, to: window).minY
+                })
+            }
+            XCTAssertFalse(try discoverySwitch().isOn)
+            connection.isOn = true
+            try await settle(window)
+            let control = try discoverySwitch()
+            XCTAssertTrue(control.isOn)
+            XCTAssertTrue(hero.settings.discoveryFollowsSeerr)
+            control.setOn(false, animated: false)
+            control.sendActions(for: .valueChanged)
+            try await settle(window)
+            XCTAssertFalse(hero.settings.discoveryFollowsSeerr)
+            connection.isOn = false
+            try await settle(window)
+            connection.isOn = true
+            try await settle(window)
+            XCTAssertFalse(try discoverySwitch().isOn)
+
+            connection.isOn = false
+            try await settle(window)
+            let enable = try discoverySwitch()
+            enable.setOn(true, animated: false)
+            enable.sendActions(for: .valueChanged)
+            try await settle(window)
+            XCTAssertTrue(hero.effectiveSettings.isEnabled(.featured))
+            XCTAssertTrue(try discoverySwitch().isOn)
         }
     }
 

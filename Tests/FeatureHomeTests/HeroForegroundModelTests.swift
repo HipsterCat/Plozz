@@ -17,6 +17,40 @@ final class HeroForegroundModelTests: XCTestCase {
     private typealias Builder = HeroForegroundModelBuilder
     private typealias PillInput = HeroForegroundModelBuilder.PillInput
 
+    func testContentRatingVisibilityIsIndependentOfReviewScoresAndAgeRecommendations() {
+        var item = movie(officialRating: "FR/Tous publics avec avertissement")
+        item.ratings = [.init(source: .imdb, value: 8, scale: .outOfTen)]
+        item.familyGuidance = .init(recommendedAge: 14, qualityRating: nil)
+        let model = Builder.model(
+            item: item, overviewVisible: true, showsContentRatings: false,
+            maskedTitle: nil, pillInputs: [], selectedIndex: 0, heroFocused: false,
+            slideCount: 1, slideIndex: 0
+        )
+        XCTAssertNil(model.ratingBadgeText)
+        XCTAssertEqual(model.ratings, item.ratings)
+        XCTAssertEqual(model.familyGuidanceAge, 14)
+        XCTAssertEqual(item.officialRating, "FR/Tous publics avec avertissement")
+    }
+
+    func testUnreleasedMovieStatusUsesSharedLocalizedCopyAndCalendar() throws {
+        let cta = HeroCTA.awaitingRelease
+        let input = PillInput(
+            kind: .downloadStatus, prominent: true,
+            requestTitle: cta.requestStatusTitle, requestSystemImage: cta.requestStatusSystemImage
+        )
+        let pill = Builder.pill(for: input)
+        var title = try XCTUnwrap(pill.localizedTitle)
+        title.locale = Locale(identifier: "en")
+        XCTAssertEqual(String(localized: title), "Requested · Unreleased")
+        XCTAssertEqual(pill.systemImage, "calendar")
+        XCTAssertNil(pill.text)
+        XCTAssertNil(pill.progress)
+        var downloading = input
+        downloading.downloadProgress = 0.42
+        XCTAssertEqual(Builder.pill(for: downloading).text, "42%")
+        XCTAssertEqual(Builder.pill(for: downloading).systemImage, "arrow.down.circle")
+    }
+
     func testHeroShowsAgeAndTwoReviewsByDefaultAndHonorsHiding() {
         var item = movie()
         item.familyGuidance = .init(recommendedAge: 14, qualityRating: 5)

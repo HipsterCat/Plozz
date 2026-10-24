@@ -23,6 +23,7 @@ public struct HeroLegibilityTexture: View {
                 .resizable()
                 .renderingMode(.template)
                 .foregroundStyle(tone)
+                .modifier(HeroScrimCoverage())
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         } else {

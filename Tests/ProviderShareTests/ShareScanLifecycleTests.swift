@@ -57,6 +57,7 @@ final class ShareScanLifecycleTests: XCTestCase {
         private var startedCount = 0
         private var rootListCountValue = 0
         private var shutdownCountValue = 0
+        private var rootWaiters: [CheckedContinuation<Void, Never>] = []
         private var blocksRootFlag: Bool
         private let ignoresTaskCancellation: Bool
         let tree: [String: [String]]
@@ -80,10 +81,14 @@ final class ShareScanLifecycleTests: XCTestCase {
         private var hasStarted: Bool { lock.withLock { startedCount > 0 } }
 
         func noteShutdown() {
-            lock.withLock {
+            let waiters = lock.withLock {
                 shutdownCountValue += 1
                 openedFlag = true
+                let pending = rootWaiters
+                rootWaiters.removeAll()
+                return pending
             }
+            waiters.forEach { $0.resume() }
         }
 
         func noteRootList() {
@@ -118,12 +123,19 @@ final class ShareScanLifecycleTests: XCTestCase {
         /// Blocks the root listing until force-close (open) or task cancellation.
         func blockRoot() async {
             guard lock.withLock({ blocksRootFlag }) else { return }
-            while !isOpened && (ignoresTaskCancellation || !Task.isCancelled) {
-                if ignoresTaskCancellation {
-                    await Task.yield()
-                } else {
-                    try? await Task.sleep(nanoseconds: 2_000_000)
+            if ignoresTaskCancellation {
+                await withCheckedContinuation { continuation in
+                    let opened = lock.withLock {
+                        if openedFlag { return true }
+                        rootWaiters.append(continuation)
+                        return false
+                    }
+                    if opened { continuation.resume() }
                 }
+                return
+            }
+            while !isOpened && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000)
             }
         }
     }
@@ -486,7 +498,15 @@ final class ShareScanLifecycleTests: XCTestCase {
         await controller.waitUntilListing()
 
         // Playback admission drains (cancels) the in-flight scan.
-        let playback = try await coordinator.acquirePlayback(accountKey: accountID)
+        XCTAssertEqual(controller.rootLists, 1, "the scan must reach its blocked listing")
+        let playback: MediaIOPlaybackLease
+        do {
+            playback = try await coordinator.acquirePlayback(accountKey: accountID)
+        } catch {
+            controller.noteShutdown()
+            await coordinator.invalidate(accountKey: accountID)
+            throw error
+        }
 
         let recorded = await poll {
             diagnostics.records.contains { $0.owner == .playbackAdmission }

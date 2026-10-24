@@ -17,11 +17,11 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     let client: JellyfinClient
     let collectionLibraryCache = MediaBrowserCollectionLibraryCache()
     let videoPlaylistCache = VideoPlaylistSnapshotCache()
-    let watchHistoryScope = JellyfinWatchHistoryScope()
     let liveTVLeases = JellyfinLiveTVLeaseStore()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
     private let probeDescriptors: MediaBrowserProbeDescriptorStore
+    private let hybridEngineEnabled: Bool
     public var authenticatedHTTPOrigin: URL { client.baseURL }
 
     private var connectionAddresses: [URL] { client.addressResolver?.addresses ?? [session.server.baseURL] }
@@ -43,6 +43,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         hybridEngineEnabled: Bool = false,
         authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)? = nil,
         addressProbe: any HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
+        playbackRequests: PlaybackInfoRequestCoordinator = .shared,
         themeArchiveResolver: @escaping @Sendable (String?) async -> URL? = {
             await ThemeMusicArchive.resolvedURL(tvdbID: $0)
         }
@@ -55,6 +56,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         self.credentialRevision = credentialRevision
         self.themeArchiveResolver = themeArchiveResolver
         self.authenticatedStreamProber = authenticatedStreamProber
+        self.hybridEngineEnabled = hybridEngineEnabled
         self.probeDescriptors = MediaBrowserProbeDescriptorStore()
         self.client = JellyfinClient(
             baseURL: session.server.baseURL,
@@ -66,7 +68,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             capabilityProfile: .detected(hybridEngineEnabled: hybridEngineEnabled),
             serverID: session.server.id,
             alternateURLs: session.server.alternateConnectionURLs ?? [],
-            addressProbe: addressProbe
+            addressProbe: addressProbe,
+            playbackRequests: playbackRequests
         )
     }
 
@@ -183,8 +186,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         guard separateNextUp else {
             return try await continueWatching(limit: limit, inLibraries: libraryIDs)
         }
-        let historyLibraries = try await watchHistoryLibraries(libraryIDs)
-        let parents: [String?] = historyLibraries.map {
+        let parents: [String?] = libraryIDs.map {
             $0.filter { $0 != collectionDirectoryID }.map(Optional.some)
         } ?? [nil]
         var items: [MediaItem] = []
@@ -218,13 +220,14 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     /// moment you finish an episode.
     ///
     /// Resume and NextUp run concurrently and fail independently: one successful
-    /// feed is still useful when the other endpoint is unavailable. Failures are
-    /// logged rather than silently swallowed. Results are deduped by id and
+    /// nonempty feed is still useful when the other endpoint is unavailable.
+    /// An empty companion feed must not hide a failed request. Results are deduped by id and
     /// ordered by effective recency. `Int.max` drains both feeds through bounded
     /// HTTP pages and deliberately applies no final cap.
     public func continueWatching(limit: Int) async throws -> [MediaItem] {
         let outcome = try await continueWatchingDTOs(limit: limit, parentID: nil)
-        guard outcome.successfulEndpointCount > 0 else {
+        guard outcome.successfulEndpointCount > 0,
+              !outcome.items.isEmpty || outcome.firstError == nil else {
             throw outcome.firstError ?? AppError.invalidResponse
         }
         let merged = outcome.items
@@ -244,7 +247,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         let outcome = try await continueWatchingDTOs(
             limit: .max, parentID: seriesID, seriesID: seriesID
         )
-        guard outcome.successfulEndpointCount > 0 else {
+        guard outcome.successfulEndpointCount > 0,
+              !outcome.items.isEmpty || outcome.firstError == nil else {
             throw outcome.firstError ?? AppError.invalidResponse
         }
         let episodes = outcome.items.filter { $0.Type == "Episode" && $0.SeriesId == seriesID }
@@ -384,6 +388,10 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
 
         var seen = Set<String>()
         let merged = (resume + nextUp).filter { seen.insert($0.Id).inserted }
+        let scope = parentID == nil ? "account" : seriesID == nil ? "library" : "series"
+        PlozzLog.networking.info(
+            "\(kind.rawValue) history scope=\(scope) resume=\(resume.count) nextUp=\(nextUp.count) successfulFeeds=\(successfulEndpointCount)/2 items=\(merged.count)"
+        )
         return ContinueWatchingDTOOutcome(
             items: merged,
             successfulEndpointCount: successfulEndpointCount,
@@ -402,9 +410,13 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         parentID: String?,
         error: AppError
     ) {
-        let scope = parentID == nil ? "unscoped" : "library-scoped"
+        let scope = parentID == nil ? "account" : "scoped"
+        let diagnostic = LibraryLoadDiagnostic(
+            provider: kind, operation: .homeContinueWatching,
+            failures: [.init(section: .continueWatching, error: error)]
+        )
         PlozzLog.networking.error(
-            "Jellyfin Continue Watching \(endpoint) failed (\(scope)); preserving other feed results: \(String(describing: error))"
+            "History \(endpoint) failed (\(scope)): \(diagnostic.supportText)"
         )
     }
 
@@ -554,12 +566,10 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     /// so the only reliable way to attribute — and therefore Home-filter — items
     /// is to fetch them **scoped to each visible library** via `ParentId` and
     /// stamp the result. `nil` keeps the fast unscoped feed (used when the user
-    /// has hidden nothing on this account). AIOStreams explicitly owns history
-    /// at account scope, independently of its virtual catalogs.
+    /// has hidden nothing on this account). An empty scope never fetches history.
     public func continueWatching(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem] {
         guard limit > 0 else { return [] }
-        guard let libraryIDs = try await watchHistoryLibraries(libraryIDs)?
-            .filter({ $0 != collectionDirectoryID }) else {
+        guard let libraryIDs = libraryIDs?.filter({ $0 != collectionDirectoryID }) else {
             return try await continueWatching(limit: limit)
         }
         guard !libraryIDs.isEmpty else { return [] }
@@ -602,8 +612,10 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         let successfulEndpointCount = perLibrary.reduce(0) {
             $0 + $1.successfulEndpointCount
         }
-        guard successfulEndpointCount > 0 else {
-            throw perLibrary.compactMap(\.firstError).first ?? AppError.invalidResponse
+        let firstError = perLibrary.compactMap(\.firstError).first
+        guard successfulEndpointCount > 0,
+              perLibrary.contains(where: { !$0.items.isEmpty }) || firstError == nil else {
+            throw firstError ?? AppError.invalidResponse
         }
 
         // Series play dates are user-global (not library-scoped), so fetch once and
@@ -626,13 +638,6 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         // path: a just-finished show's stamped next episode must survive the cut.
         let ordered = orderedByEffectiveRecency(result)
         return limit == Int.max ? ordered : Array(ordered.prefix(limit))
-    }
-
-    private func watchHistoryLibraries(_ libraryIDs: [String]?) async throws -> [String]? {
-        guard let libraryIDs else { return nil }
-        if !libraryIDs.isEmpty, libraryIDs.allSatisfy({ $0 == collectionDirectoryID }) { return [] }
-        return try await watchHistoryScope.isAccountWide(client: client, serverID: session.server.id)
-            ? nil : libraryIDs
     }
 
     /// Library-scoped Recently Added — see ``continueWatching(limit:inLibraries:)``
@@ -672,48 +677,51 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     public func item(id: String) async throws -> MediaItem {
-        try await item(id: id, requiresSourceInventory: false)
+        let dto = try await client.item(userID: session.userID, id: id)
+        await probeDescriptors.remember(itemID: id, sources: dto.MediaSources)
+        return map(item: dto)
     }
 
     public func playbackItem(id: String) async throws -> MediaItem {
-        try await item(id: id, requiresSourceInventory: true)
-    }
-
-    private func item(id: String, requiresSourceInventory: Bool) async throws -> MediaItem {
-        let dto = try await client.item(userID: session.userID, id: id)
-        await probeDescriptors.remember(itemID: id, sources: dto.MediaSources)
-        var item = map(item: dto)
-        let remotePlaceholder = dto.MediaSources?.count == 1 && dto.MediaSources?.first?.IsRemote == true
-        // Add-on servers may resolve streams only through PlaybackInfo, even
-        // when item detail already contains sources or omits IsRemote.
-        if (item.kind == .movie || item.kind == .episode),
-           requiresSourceInventory || remotePlaceholder {
+        var item = try await item(id: id)
+        if item.kind == .movie || item.kind == .episode {
+            let inventory = try await client.playbackSourceInventory(userID: session.userID, itemID: id)
+            try Task.checkCancellation()
             do {
-                let inventory = try await client.playbackSourceInventory(userID: session.userID, itemID: id)
-                try Task.checkCancellation()
                 try validateStreamingDecision(inventory)
-                let ids = inventory.MediaSources.compactMap(\.Id)
-                guard !ids.isEmpty, ids.count == inventory.MediaSources.count,
-                      ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-                      Set(ids).count == ids.count else { throw AppError.invalidResponse }
-                // Placeholder item streams must not overwrite the real first
-                // source's language, codec, or quality facts.
-                let sources = inventory.MediaSources.filter { !Self.isUnavailablePlaceholder($0, itemID: id) }
-                guard !sources.isEmpty else {
-                    PlozzLog.playback.error("The server returned an unavailable-source placeholder.")
-                    throw StreamingQualityError.noStreams
-                }
-                item.versions = Self.versions(from: sources)
-                await probeDescriptors.remember(itemID: id, sources: sources)
             } catch {
-                try Task.checkCancellation()
-                if requiresSourceInventory || (error as? AppError) == .cancelled || error is CancellationError {
-                    throw error
-                }
-                PlozzLog.networking.error(
-                    "Remote source inventory unavailable; retaining item metadata: \(String(describing: error))"
+                HTTPResponseDiagnostics.recordValidationFailure(
+                    .serverRejected, route: .playbackInventory, sourceCount: inventory.MediaSources.count
                 )
+                throw error
             }
+            let ids = inventory.MediaSources.compactMap(\.Id)
+            guard !ids.isEmpty, ids.count == inventory.MediaSources.count,
+                  ids.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                  Set(ids).count == ids.count else {
+                let reason: ResponseValidationDiagnostic.Reason
+                if inventory.MediaSources.isEmpty { reason = .emptySources }
+                else if ids.count != inventory.MediaSources.count { reason = .missingSourceID }
+                else if ids.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                    reason = .blankSourceID
+                } else { reason = .duplicateSourceID }
+                HTTPResponseDiagnostics.recordValidationFailure(
+                    reason, route: .playbackInventory, sourceCount: inventory.MediaSources.count
+                )
+                throw AppError.invalidResponse
+            }
+            // Placeholder item streams must not overwrite the real first
+            // source's language, codec, or quality facts.
+            let sources = inventory.MediaSources.filter { !Self.isUnavailablePlaceholder($0, itemID: id) }
+            guard !sources.isEmpty else {
+                HTTPResponseDiagnostics.recordValidationFailure(
+                    .unavailablePlaceholder, route: .playbackInventory, sourceCount: inventory.MediaSources.count
+                )
+                PlozzLog.playback.error("The server returned an unavailable-source placeholder.")
+                throw StreamingQualityError.noStreams
+            }
+            item.versions = Self.versions(from: sources)
+            await probeDescriptors.remember(itemID: id, sources: sources)
         }
         return item
     }
@@ -1465,19 +1473,11 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         // rather than a quality-reducing re-encode.
         var didRemux = false
 
-        // Container-only remux to reach AVPlayer losslessly. Two cases:
-        //  1. True Dolby Vision: a DoVi MKV the server would direct-play only
-        //     reaches the on-device hybrid engine → HDR10. Remuxing to seekable
-        //     fMP4 HLS with the video **copied** (DoVi RPU/dvcC preserved, tagged
-        //     `dvh1`) reaches AVPlayer — the only tvOS engine that outputs true
-        //     Dolby Vision.
-        //  2. HEVC `hev1`: AVPlayer can't render HEVC tagged `hev1` (audio plays,
-        //     black screen). Jellyfin's fMP4 remux re-tags the copied bitstream to
-        //     `hvc1` (`-c copy -tag:v hvc1`), fixing it with no re-encode.
-        // Both route to AVPlayer automatically via `isTranscoding`. Best-effort: if
-        // the remux fails or the server offers no stream URL, fall back to direct
-        // play (the router then sends `hev1` to the on-device engine as a net).
-        if streaming == nil, !forceTranscode, Self.shouldRequestDoViRemux(source) || Self.shouldRequestHvc1Remux(source) {
+        // Native-only hosts still need container repair for DoVi MKV / hev1.
+        // Aether owns that repair locally; overriding its direct-play decision
+        // needlessly introduces another server negotiation and encoding session.
+        if !hybridEngineEnabled, streaming == nil, !forceTranscode,
+           Self.shouldRequestDoViRemux(source) || Self.shouldRequestHvc1Remux(source) {
             let selectedSourceID = source.Id ?? mediaSourceID
             if let remuxInfo = try? await client.playbackInfo(
                 userID: session.userID,
@@ -1627,6 +1627,23 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 ?? PlaybackRequest.sourceFileName(from: originalSource.Name)
         )
         request.burnedInSubtitleTrackID = source.burnedInSubtitleTrackID
+        request.chapters = MediaChapter.normalized((detail.Chapters ?? []).enumerated().compactMap { index, chapter -> MediaChapter? in
+            // Emby mixes skip boundaries into this array; those are not chapters.
+            let marker = chapter.MarkerType?.lowercased() ?? ""
+            guard marker.isEmpty || marker == "chapter" || marker == "none" else { return nil }
+            guard let ticks = chapter.StartPositionTicks else {
+                PlozzLog.playback.error("Ignoring Jellyfin/Emby chapter without a start position.")
+                return nil
+            }
+            return MediaChapter(
+                start: TimeInterval(ticks) / 10_000_000,
+                title: chapter.Name,
+                imageURL: chapter.ImageTag.flatMap { tag in
+                    guard !tag.isEmpty else { return nil }
+                    return client.chapterImageURL(itemID: detail.Id, index: index, tag: tag)
+                }
+            )
+        }, duration: originalSource.RunTimeTicks.map { TimeInterval($0) / 10_000_000 } ?? mappedItem.runtime)
         request.scrubStillSource = request.originalFileSource
         if let streaming {
             request.streamingOptions = streaming
@@ -1839,8 +1856,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     /// it reaches AVPlayer for true Dolby Vision. True only for a **Dolby Vision
     /// HEVC stream in a Matroska container with Apple-compatible audio** that the
     /// server currently wants to direct-play (no `TranscodingUrl`). Those are the
-    /// sources where a container-only remux (video copied) lifts the file from the
-    /// on-device hybrid engine's HDR10 ceiling to native DoVi, with no re-encode.
+    /// sources where a container-only remux lets a native-only host open the file.
+    /// Decoder-backed hosts handle the container locally and do not use this path.
     /// HEVC + Apple-compatible audio is required so the server can stream-copy both
     /// tracks; otherwise forcing direct-play off would trigger a wasteful transcode.
     static func shouldRequestDoViRemux(_ source: MediaSourceInfo) -> Bool {
@@ -1867,8 +1884,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     /// Whether to ask the server to remux (rather than direct-play) an HEVC source
-    /// tagged `hev1`. AVPlayer/VideoToolbox only decode HEVC tagged `hvc1`; `hev1`
-    /// (in-band parameter sets) plays audio with a **black screen**. Jellyfin's
+    /// tagged `hev1` on a native-only host. AVPlayer's direct-file path can play
+    /// audio without video for in-band parameter sets. Jellyfin's
     /// fMP4 HLS remux stream-copies the bitstream and re-tags it to `hvc1`
     /// (`-c copy -tag:v hvc1`) — lossless, no re-encode — which AVPlayer then
     /// renders. True only for a **`hev1` HEVC stream in an Apple/MP4-family
@@ -2135,7 +2152,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     // MARK: - Mapping
 
     private static func isUnavailablePlaceholder(_ source: MediaSourceInfo, itemID: String) -> Bool {
-        // Add-on bridges can encode a negative lookup as a nominal MKV source
+        // Compatible servers can encode a negative lookup as a nominal MKV source
         // with invented tracks instead of returning PlaybackInfo.ErrorCode.
         source.IsRemote == true && source.Id == itemID
             && source.Name?.hasPrefix("No streams · ") == true

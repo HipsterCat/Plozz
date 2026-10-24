@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import PlozzCoreUI
+@testable import PlozzCoreUI
 import SwiftUI
 import UIKit
 import Vision
@@ -38,6 +38,7 @@ final class ProfilePickerPresentationTests: XCTestCase {
             (.init(width: 390, height: 844), 3, .dark, true),
             (.init(width: 390, height: 844), 10, .dark, true),
             (.init(width: 320, height: 568), 12, .light, false),
+            (.init(width: 320, height: 568), 40, .dark, false),
             (.init(width: 768, height: 1024), 4, .light, true),
             (.init(width: 844, height: 390), 6, .pureBlack, false),
             (.init(width: 390, height: 844), 1, .light, false)
@@ -54,7 +55,7 @@ final class ProfilePickerPresentationTests: XCTestCase {
                 if count <= 4, size.height > 700 {
                     XCTAssertLessThanOrEqual(scroll.contentSize.height, scroll.bounds.height + 1)
                 }
-                if count == 12 {
+                if count >= 12 {
                     for _ in 0..<3 {
                         scroll.setContentOffset(CGPoint(x: 0, y: max(
                             0, scroll.contentSize.height - scroll.bounds.height
@@ -62,7 +63,7 @@ final class ProfilePickerPresentationTests: XCTestCase {
                         try await Task.sleep(for: .milliseconds(80))
                     }
                     let bottom = self.capture(window, name: "picker-many-bottom")
-                    XCTAssertTrue(try self.recognize(bottom).contains { $0.contains("Viewer 12") })
+                    XCTAssertTrue(try self.recognize(bottom).contains { $0.contains("Viewer \(count)") })
                 }
             }
         }
@@ -85,10 +86,26 @@ final class ProfilePickerPresentationTests: XCTestCase {
     }
 
     func testEntranceIsStaggeredSettlesWithoutOvershootAndHonorsReduceMotion() async throws {
-        XCTAssertEqual(PlozziOSProfilePickerEntrance.delay(at: 0), 0)
-        XCTAssertEqual(PlozziOSProfilePickerEntrance.delay(at: 1), 0.05)
-        XCTAssertEqual(PlozziOSProfilePickerEntrance.delay(at: 100), 0.3)
-        XCTAssertEqual(PlozziOSProfilePickerEntrance.initialScale, 0.94)
+        for count in [1, 3, 6, 8, 16, 40] {
+            XCTAssertEqual(PlozziOSProfilePickerEntrance.delay(at: 0, profileCount: count), 0)
+            let interval = PlozziOSProfilePickerEntrance.delay(at: 1, profileCount: count)
+            XCTAssertLessThanOrEqual(interval, 0.09)
+            if count <= 6 { XCTAssertEqual(interval, 0.09) }
+            for position in 1...(count + 1) {
+                let delay = PlozziOSProfilePickerEntrance.delay(at: position, profileCount: count)
+                let previous = PlozziOSProfilePickerEntrance.delay(at: position - 1, profileCount: count)
+                XCTAssertGreaterThan(delay, previous, "Even the Add tiles need distinct reveal slots.")
+                XCTAssertEqual(delay - previous, interval, accuracy: 0.001)
+            }
+            XCTAssertLessThanOrEqual(
+                PlozziOSProfilePickerEntrance.delay(at: count - 1, profileCount: count), 0.45 + 1e-9
+            )
+        }
+        XCTAssertEqual(PlozziOSProfilePickerEntrance.delay(at: 15, profileCount: 16), 0.45, accuracy: 0.001)
+        XCTAssertEqual(PlozziOSProfilePickerEntrance.delay(at: 17, profileCount: 16), 0.51, accuracy: 0.001)
+        XCTAssertEqual(PlozziOSProfilePickerEntrance.duration, 0.45)
+        XCTAssertEqual(PlozziOSProfilePickerEntrance.initialScale, 0.96)
+        XCTAssertEqual(PlozziOSProfilePickerEntrance.initialOffset, 8)
         let model = PickerMotionFixtureModel()
         try await withWindow(
             PickerMotionFixture(model: model), size: .init(width: 240, height: 360)
@@ -101,7 +118,7 @@ final class ProfilePickerPresentationTests: XCTestCase {
             let first = try self.brightness(entering, x: 70, y: 70)
             let last = try self.brightness(entering, x: 70, y: 190)
             XCTAssertGreaterThan(first, last + 20, "The first tile must lead the later tile.")
-            try await Task.sleep(for: .milliseconds(750))
+            try await Task.sleep(for: .seconds(2))
             let settled = self.capture(window, name: "picker-motion-settled")
             XCTAssertGreaterThan(try self.brightness(settled, x: 70, y: 70), 245)
             XCTAssertGreaterThan(try self.brightness(settled, x: 70, y: 190), 245)
@@ -121,30 +138,164 @@ final class ProfilePickerPresentationTests: XCTestCase {
     }
 
     func testProductionPickerActuallyAnimatesOnPresentation() async throws {
-        let profiles = (0..<6).map {
+        let progress = try await measureProductionEntrance(count: 6, isSwitcher: false)
+        XCTAssertLessThan(
+            progress.initial, progress.settled * 9 / 10,
+            "The launch cascade must remain visible after native presentation."
+        )
+        XCTAssertGreaterThan(progress.cascading, 1_000, "Some avatars must already be appearing.")
+        XCTAssertLessThan(progress.cascading, progress.settled * 9 / 10, "The cascade must not appear all at once.")
+        XCTAssertGreaterThan(
+            progress.oneSecond, progress.settled * 95 / 100,
+            "Six profiles must be substantially settled within one second of presentation."
+        )
+    }
+
+    func testSixteenProfilesSettleWithinOneSecond() async throws {
+        let progress = try await measureProductionEntrance(
+            count: 16, isSwitcher: false, size: .init(width: 768, height: 1024)
+        )
+        XCTAssertLessThan(progress.cascading, progress.settled * 9 / 10)
+        XCTAssertGreaterThan(
+            progress.oneSecond, progress.settled * 95 / 100,
+            "Larger households must not stretch the profile cascade beyond one second."
+        )
+    }
+
+    func testManualPickerStartsDuringNativePresentation() async throws {
+        let progress = try await measureProductionEntrance(count: 6, isSwitcher: true)
+        XCTAssertGreaterThan(
+            progress.initial, progress.settled / 5,
+            "Switching profiles must already be revealing avatars when the cover finishes opening."
+        )
+        XCTAssertLessThan(
+            progress.initial, progress.settled * 9 / 10,
+            "Starting sooner must not coalesce the whole cascade into an immediate reveal."
+        )
+        XCTAssertGreaterThan(progress.oneSecond, progress.settled * 95 / 100)
+    }
+
+    func testPINKeyCascadeRevealsInOrderAndHonorsReduceMotion() async throws {
+        for reduceMotion in [false, true] {
+            try await withWindow(
+                PINKeyMotionFixture(reduceMotion: reduceMotion),
+                size: .init(width: 240, height: 360)
+            ) { window in
+                try await Task.sleep(for: .milliseconds(reduceMotion ? 100 : 300))
+                let early = self.capture(window, name: "pin-keys-early-\(reduceMotion)", afterUpdates: false)
+                let first = try self.brightness(early, x: 70, y: 70)
+                let last = try self.brightness(early, x: 70, y: 190)
+                if reduceMotion {
+                    XCTAssertGreaterThan(first, 245)
+                    XCTAssertGreaterThan(last, 245)
+                } else {
+                    XCTAssertGreaterThan(first, last + 20)
+                    try await Task.sleep(for: .seconds(1))
+                    let settled = self.capture(window, name: "pin-keys-settled")
+                    XCTAssertGreaterThan(try self.brightness(settled, x: 70, y: 70), 245)
+                    XCTAssertGreaterThan(try self.brightness(settled, x: 70, y: 190), 245)
+                }
+            }
+        }
+    }
+
+    func testProfilePINLayoutFitsPhoneTabletAndAccessibleNames() async throws {
+        let cases: [(CGSize, DynamicTypeSize)] = [
+            (.init(width: 320, height: 568), .large),
+            (.init(width: 390, height: 844), .large),
+            (.init(width: 844, height: 390), .large),
+            (.init(width: 768, height: 1024), .large),
+            (.init(width: 1024, height: 768), .large),
+            (.init(width: 390, height: 844), .accessibility3)
+        ]
+        for (size, typeSize) in cases {
+            let model = ProfilePINLayoutFixtureModel()
+            try await withWindow(
+                ProfilePINLayoutFixture(model: model, usesLongName: typeSize.isAccessibilitySize)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .environment(\.themePalette, .dark)
+                    .environment(\.locale, Locale(identifier: "en"))
+                    .preferredColorScheme(.dark),
+                size: size
+            ) { window in
+                for availability in [PINEntryAvailability.checking, .available] {
+                    model.availability = availability
+                    try await Task.sleep(for: .milliseconds(750))
+                    let scroll = try XCTUnwrap(self.scrollViews(window).first)
+                    XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+                    let text = try self.recognize(self.capture(
+                        window, name: "profile-pin-\(Int(size.width))-\(typeSize)-\(availability)"
+                    ))
+                    XCTAssertTrue(text.contains { $0.contains("Alex") }, "\(text)")
+                    XCTAssertFalse(text.contains { $0.contains("…") }, "\(text)")
+                    if availability == .checking {
+                        XCTAssertFalse(text.contains { $0.contains("Plex PIN") }, "\(text)")
+                    }
+                    scroll.setContentOffset(CGPoint(
+                        x: 0, y: max(0, scroll.contentSize.height - scroll.bounds.height)
+                    ), animated: false)
+                    try await Task.sleep(for: .milliseconds(80))
+                    let bottomText = try self.recognize(self.capture(
+                        window, name: "profile-pin-bottom-\(Int(size.width))-\(typeSize)-\(availability)"
+                    ))
+                    XCTAssertTrue(bottomText.contains { $0 == "Cancel" },
+                                  "\(size), \(typeSize), \(availability): \(bottomText)")
+                    scroll.setContentOffset(.zero, animated: false)
+                }
+            }
+        }
+    }
+
+    private func measureProductionEntrance(
+        count: Int, isSwitcher: Bool, size: CGSize = .init(width: 390, height: 844)
+    ) async throws -> (initial: Int, cascading: Int, oneSecond: Int, settled: Int) {
+        let profiles = (0..<count).map {
             Profile(id: "motion-\($0)", name: "Viewer \($0)", avatarSymbol: "person.fill", colorIndex: 0)
         }
-        try await withWindow(
-            PlozziOSProfilePickerView(profiles: profiles, activeProfileID: profiles[0].id, onSelect: { _ in })
-                .environment(\.themePalette, .pureBlack)
-                .environment(\.gradientBackgroundsEnabled, false)
-                .preferredColorScheme(.dark),
-            size: .init(width: 390, height: 844)
-        ) { window in
-            try await Task.sleep(for: .milliseconds(80))
+        var result = (initial: 0, cascading: 0, oneSecond: 0, settled: 0)
+        try await withWindow(Color.black.ignoresSafeArea(), size: size) { window in
+            let picker = UIHostingController(rootView:
+                PlozziOSProfilePickerView(
+                    profiles: profiles, activeProfileID: profiles[0].id, onSelect: { _ in },
+                    onCancel: isSwitcher ? {} : nil
+                )
+                    .environment(\.themePalette, .pureBlack)
+                    .environment(\.gradientBackgroundsEnabled, false)
+                    .preferredColorScheme(.dark)
+            )
+            picker.modalPresentationStyle = .fullScreen
+            let presenter = try XCTUnwrap(window.rootViewController)
+            await withCheckedContinuation { continuation in
+                presenter.present(picker, animated: true) { continuation.resume() }
+            }
+            let start = ContinuousClock.now
             let entering = self.capture(window, name: "production-picker-entering", afterUpdates: false)
-            try await Task.sleep(for: .milliseconds(150))
+            try await Task.sleep(for: .milliseconds(400))
             let cascading = self.capture(window, name: "production-picker-cascading", afterUpdates: false)
-            try await Task.sleep(for: .milliseconds(700))
+            try await Task.sleep(until: start.advanced(by: .seconds(1)), clock: .continuous)
+            let oneSecond = self.capture(window, name: "production-picker-one-second", afterUpdates: false)
+            try await Task.sleep(until: start.advanced(by: .seconds(2.4)), clock: .continuous)
             let settled = self.capture(window, name: "production-picker-settled")
             let early = try self.redPixelCount(entering)
             let middle = try self.redPixelCount(cascading)
+            let nearEnd = try self.redPixelCount(oneSecond)
             let final = try self.redPixelCount(settled)
+            let samples: [String: Any] = [
+                "profileCount": count, "isSwitcher": isSwitcher,
+                "initialPixels": early, "cascadingPixels": middle,
+                "oneSecondPixels": nearEnd, "settledPixels": final
+            ]
+            let progress = XCTAttachment(
+                data: try JSONSerialization.data(withJSONObject: samples, options: [.sortedKeys]),
+                uniformTypeIdentifier: "public.json"
+            )
+            progress.name = "native-cascade-progress"
+            progress.lifetime = .keepAlways
+            self.add(progress)
             XCTAssertGreaterThan(final, 10_000, "The actual shared avatars must be rendered.")
-            XCTAssertLessThan(early, final * 9 / 10, "The production grid must reveal, not start fully visible.")
-            XCTAssertGreaterThan(middle, 1_000, "Some avatars must already be appearing.")
-            XCTAssertLessThan(middle, final * 9 / 10, "The cascade must not appear all at once.")
+            result = (early, middle, nearEnd, final)
         }
+        return result
     }
 
     private func renderPicker(
@@ -172,7 +323,7 @@ final class ProfilePickerPresentationTests: XCTestCase {
                 .preferredColorScheme(palette.isLight ? .light : .dark),
             size: size
         ) { window in
-            try await Task.sleep(for: .seconds(1))
+            try await Task.sleep(for: .seconds(3))
             try await inspect(window)
         }
     }
@@ -261,7 +412,8 @@ private struct PickerMotionFixture: View {
             ForEach([0, 6], id: \.self) { position in
                 Color.white.frame(width: 100, height: 100)
                     .modifier(PlozziOSProfilePickerEntrance(
-                        isPresented: model.isPresented, position: position, reduceMotion: reduceMotion
+                        isPresented: model.isPresented, position: position,
+                        profileCount: 7, reduceMotion: reduceMotion
                     ))
             }
         }
@@ -269,6 +421,47 @@ private struct PickerMotionFixture: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.black)
         .ignoresSafeArea()
+    }
+}
+
+private struct PINKeyMotionFixture: View {
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(spacing: 20) {
+            ForEach([0, 10], id: \.self) { position in
+                Color.white.frame(width: 100, height: 100)
+                    .modifier(PINKeyEntrance(enabled: true, position: position, reduceMotion: reduceMotion))
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.black)
+        .ignoresSafeArea()
+    }
+}
+
+@MainActor @Observable
+private final class ProfilePINLayoutFixtureModel {
+    var availability = PINEntryAvailability.checking
+}
+
+private struct ProfilePINLayoutFixture: View {
+    let model: ProfilePINLayoutFixtureModel
+    let usesLongName: Bool
+    @Namespace private var identity
+
+    var body: some View {
+        PINEntryScaffold(
+            title: "Plex PIN",
+            name: Text(verbatim: usesLongName ? "Alex with a longer profile name" : "Alex"),
+            availability: model.availability,
+            onSubmit: { _ in }, onCancel: {}
+        ) {
+            Circle().fill(.red).frame(width: 88, height: 88)
+        }
+        .environment(\.pinProfileTransition, PINProfileTransition(profileID: "alex", namespace: identity))
+        .background(.black)
     }
 }
 #endif

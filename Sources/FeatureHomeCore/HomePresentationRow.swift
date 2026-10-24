@@ -83,14 +83,57 @@ public struct HomePresentationRow: Identifiable, Equatable, Sendable {
             for var row in content.serverRows {
                 if let libraryID = row.definition.section.libraryID,
                    !visibility.isEnabled("\(row.definition.accountID):\(libraryID)") { continue }
-                row.items = row.items.filter { $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled) }
+                if !row.definition.section.isAccountWideHistory {
+                    row.items = row.items.filter { $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled) }
+                }
                 guard !row.items.isEmpty || row.isLoading || row.failure != nil else { continue }
                 available.append(Self(
                     choice: HomeRowChoice(serverRow: row.definition), source: .library(row.row)
                 ))
             }
         }
+        for var row in content.collectionRows {
+            guard let definition = visibility.collectionSections.first(where: {
+                $0.id == row.definition.id && $0.source == row.definition.source
+            }), definition.source.libraryKey.map(visibility.isEnabled) != false else { continue }
+            row.definition = definition
+            row.items = row.items.filter { $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled) }
+            available.append(Self(
+                choice: HomeRowChoice(collectionSection: definition), source: .library(row.row)
+            ))
+        }
         available += rows.filter { $0.kind == .libraries }.compactMap(entry)
+        for issue in content.sectionIssues where visibility.isHomeRowVisible(issue.choice) {
+            if let key = issue.choice.id.libraryKey, !visibility.isEnabled(key) { continue }
+            if let source = issue.choice.serverRow, let library = source.section.libraryID,
+               !visibility.isEnabled("\(source.accountID):\(library)") { continue }
+            if let section = issue.choice.collectionSection {
+                guard visibility.collectionSections.contains(where: {
+                    $0.id == section.id && $0.source == section.source
+                }), section.source.libraryKey.map(visibility.isEnabled) != false else { continue }
+            }
+            // Keep usable cached/partial content visible; its diagnostic remains in the editor.
+            var browseItem: MediaItem?
+            if let existing = available.first(where: { $0.id == issue.id }) {
+                switch existing.source {
+                case let .home(row):
+                    if !row.items.isEmpty || !row.libraries.isEmpty { continue }
+                    if row.kind == .continueWatching, !liveTV.recentChannels.isEmpty { continue }
+                case let .library(row):
+                    if !row.section.items.isEmpty || row.isLoading { continue }
+                    browseItem = row.browseItem
+                case .liveTV: continue
+                }
+            }
+            available.removeAll { $0.id == issue.id }
+            available.append(Self(choice: issue.choice, source: .library(.init(
+                section: LibrarySection(
+                    id: issue.id.presentationID, title: issue.choice.title,
+                    localizedTitle: issue.choice.localizedTitle, items: []
+                ),
+                isLoading: false, failure: nil, browseItem: browseItem, issue: issue
+            ))))
+        }
         let byID = Dictionary(available.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let ordered = visibility.rowSections(choices: available.map(\.choice)).enabled
         return ordered.compactMap { byID[$0] }

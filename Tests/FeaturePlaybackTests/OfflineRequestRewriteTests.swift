@@ -28,10 +28,7 @@ final class OfflineRequestRewriteTests: XCTestCase {
     private func route(_ request: PlaybackRequest) -> PlaybackEngineKind {
         EngineSelection.route(
             request: request,
-            forceTranscode: false,
-            plozzigenAvailable: true,
-            capabilities: .detected(),
-            subtitleRule: SubtitlePolicy.Rule())
+            plozzigenAvailable: true)
     }
 
     // MARK: prefers-local
@@ -119,22 +116,13 @@ final class OfflineRequestRewriteTests: XCTestCase {
         XCTAssertTrue(
             PlayerViewModel.shouldUseOfflineFastPath(
                 offlineItem: current,
-                requestedItemID: "episode-1",
-                forceTranscode: false
+                requestedItemID: "episode-1"
             )
         )
         XCTAssertFalse(
             PlayerViewModel.shouldUseOfflineFastPath(
                 offlineItem: current,
-                requestedItemID: "episode-2",
-                forceTranscode: false
-            )
-        )
-        XCTAssertFalse(
-            PlayerViewModel.shouldUseOfflineFastPath(
-                offlineItem: current,
-                requestedItemID: "episode-1",
-                forceTranscode: true
+                requestedItemID: "episode-2"
             )
         )
     }

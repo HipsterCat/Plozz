@@ -199,6 +199,8 @@ struct NativeGradientCardFill: UIViewRepresentable {
                     fade.type = .fade
                     fade.duration = 0.8
                     layer.add(fade, forKey: "gradientPalette")
+                } else {
+                    layer.removeAnimation(forKey: "gradientPalette")
                 }
                 self.image = image
                 layer.contents = image

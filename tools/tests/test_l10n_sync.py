@@ -50,6 +50,12 @@ def info_documents(*languages: str) -> dict[Path, dict]:
 
 
 class LanguageReleaseParityTests(unittest.TestCase):
+    def test_chapter_number_is_an_identifier_but_chapter_count_requires_plurals(self) -> None:
+        self.assertEqual(l10n_sync.plural_problems({"Chapter %lld": {}}), [])
+        problems = l10n_sync.plural_problems({"%lld chapters": {}})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("has no plural variations", problems[0])
+
     def test_source_preflight_preserves_structure_checks_but_defers_missing_translations(self):
         with tempfile.TemporaryDirectory() as directory:
             catalog = Path(directory) / "Localizable.xcstrings"

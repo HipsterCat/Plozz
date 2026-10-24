@@ -130,7 +130,7 @@ struct ProfileServerIdentityPromptView: View {
                         comment: "Button declining to pick a user, which leaves the server's own watchlist out of this profile."
                     )
                 }
-                .buttonStyle(SettingsFocusButtonStyle())
+                .plozzActionButton(role: .secondary)
             }
             #if os(tvOS)
             .focusSection()

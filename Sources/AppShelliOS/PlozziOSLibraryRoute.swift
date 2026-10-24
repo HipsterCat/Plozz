@@ -97,7 +97,8 @@ struct PlozziOSLibraryDestinationView: View {
                     containerKind: route.containerKind,
                     sourceAccountID: route.accountID,
                     browseScope: route.browseScope,
-                    settingsNamespace: appModel.profiles.activeNamespace
+                    settingsNamespace: appModel.profiles.activeNamespace,
+                    presentation: appModel.settings.libraryPresentation
                 ),
                 title: title,
                 provider: provider,

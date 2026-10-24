@@ -1,3 +1,4 @@
+import CoreModels
 import XCTest
 @testable import MediaTransportHTTP
 
@@ -65,6 +66,32 @@ final class PropfindXMLParserTests: XCTestCase {
         XCTAssertEqual(entry.contentLength, 123_456)
         XCTAssertEqual(entry.etag?.opaqueTag, "abc123")
         XCTAssertEqual(entry.contentType, "video/x-matroska")
+    }
+
+    func testNamespacePrefixVariantsPreserveIdenticalEntries() throws {
+        for prefix in ["D", "d", ""] {
+            let tag = prefix.isEmpty ? "" : prefix + ":"
+            let declaration = prefix.isEmpty ? "xmlns=\"DAV:\"" : "xmlns:\(prefix)=\"DAV:\""
+            let xml = """
+            <\(tag)multistatus \(declaration)>
+              <\(tag)response><\(tag)href>/dav/movies/</\(tag)href>
+                <\(tag)propstat><\(tag)prop><\(tag)resourcetype><\(tag)collection/></\(tag)resourcetype></\(tag)prop>
+                <\(tag)status>HTTP/1.1 200 OK</\(tag)status></\(tag)propstat>
+              </\(tag)response>
+              <\(tag)response><\(tag)href>/dav/movies/Tom%20&amp;%20Jerry.mp4</\(tag)href>
+                <\(tag)propstat><\(tag)prop><\(tag)getcontentlength>22149</\(tag)getcontentlength></\(tag)prop>
+                <\(tag)status>HTTP/1.1 200 OK</\(tag)status></\(tag)propstat>
+              </\(tag)response>
+            </\(tag)multistatus>
+            """
+            let entries = try PropfindXMLParser.parse(
+                data: data(xml), root: root, requestPath: "/dav/movies/"
+            )
+            XCTAssertEqual(entries.count, 1)
+            XCTAssertEqual(entries.first?.resolvedPath, "/dav/movies/Tom & Jerry.mp4")
+            XCTAssertEqual(entries.first?.contentLength, 22149)
+            XCTAssertEqual(entries.first?.isCollection, false)
+        }
     }
 
     func testParsesMixedAbsoluteAndRelativeHrefs() throws {
@@ -171,6 +198,79 @@ final class PropfindXMLParserTests: XCTestCase {
             requestPath: "/dav/movies"
         )
         XCTAssertEqual(entries.map(\.resolvedPath), ["/dav/movies/Present.mkv"])
+    }
+
+    func testNestedExtensionElementsCannotOverwriteResourceMetadata() throws {
+        let xml = """
+        <multistatus xmlns="DAV:"><response>
+          <href>/dav/movies/Movie.mkv</href>
+          <propstat><prop>
+            <getcontentlength>42</getcontentlength>
+            <getetag>"actual"</getetag>
+            <getlastmodified>Mon, 01 Jan 2024 00:00:00 GMT</getlastmodified>
+            <getcontenttype>video/x-matroska</getcontenttype>
+            <extension>
+              <response><href>/dav/movies/Fake.mkv</href></response>
+              <propstat><prop>
+                <resourcetype><collection/></resourcetype>
+                <getcontentlength>999</getcontentlength>
+                <getetag>"wrong"</getetag>
+                <getlastmodified>Tue, 02 Jan 2024 00:00:00 GMT</getlastmodified>
+                <getcontenttype>text/plain</getcontenttype>
+              </prop><status>HTTP/1.1 200 OK</status></propstat>
+            </extension>
+          </prop><status>HTTP/1.1 200 OK</status></propstat>
+        </response></multistatus>
+        """
+        let entries = try PropfindXMLParser.parse(
+            data: data(xml), root: root, requestPath: "/dav/movies"
+        )
+        XCTAssertEqual(entries.count, 1)
+        let entry = try XCTUnwrap(entries.first)
+        XCTAssertEqual(entry.resolvedPath, "/dav/movies/Movie.mkv")
+        XCTAssertFalse(entry.isCollection)
+        XCTAssertEqual(entry.contentLength, 42)
+        XCTAssertEqual(entry.etag?.rawValue, "\"actual\"")
+        XCTAssertEqual(entry.lastModified, HTTPDate.parse("Mon, 01 Jan 2024 00:00:00 GMT"))
+        XCTAssertEqual(entry.contentType, "video/x-matroska")
+    }
+
+    func testNestedCollectionCannotTurnFileIntoFolder() throws {
+        let xml = """
+        <multistatus xmlns="DAV:"><response>
+          <href>/dav/movies/Movie.mkv</href>
+          <propstat><prop><extension>
+            <resourcetype><collection/></resourcetype>
+          </extension></prop><status>HTTP/1.1 200 OK</status></propstat>
+        </response></multistatus>
+        """
+        let entries = try PropfindXMLParser.parse(
+            data: data(xml), root: root, requestPath: "/dav/movies"
+        )
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.isCollection, false)
+    }
+
+    func testCDATAValuesMatchOrdinaryTextForDataAndStreamParsing() throws {
+        let xml = """
+        <multistatus xmlns="DAV:"><response>
+          <href><![CDATA[/dav/movies/Movie%20%26%20TV.mkv]]></href>
+          <propstat><prop>
+            <getetag><![CDATA["part]]><![CDATA[&two"]]></getetag>
+            <getcontentlength><![CDATA[42]]></getcontentlength>
+          </prop><status><![CDATA[HTTP/1.1 200 OK]]></status></propstat>
+        </response></multistatus>
+        """
+        let body = data(xml)
+        let parsed = try PropfindXMLParser.parse(data: body, root: root, requestPath: "/dav/movies")
+        let streamed = try PropfindXMLParser.parse(
+            stream: InputStream(data: body), root: root, requestPath: "/dav/movies"
+        )
+        XCTAssertEqual(parsed, streamed)
+        XCTAssertEqual(parsed.count, 1)
+        XCTAssertEqual(parsed.first?.resolvedPath, "/dav/movies/Movie & TV.mkv")
+        XCTAssertEqual(parsed.first?.etag?.rawValue, "\"part&two\"")
+        XCTAssertEqual(parsed.first?.contentLength, 42)
     }
 
     func testMalformedXMLThrowsMalformedMultistatus() {

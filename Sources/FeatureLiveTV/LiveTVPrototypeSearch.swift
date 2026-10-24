@@ -1,7 +1,9 @@
-#if os(iOS)
 import PlozzCoreUI
 import FeatureLiveTVCore
 import SwiftUI
+
+#if os(iOS)
+import UIKit
 
 struct PrototypeSearchHeader: View {
     @Binding var query: String
@@ -11,65 +13,139 @@ struct PrototypeSearchHeader: View {
     let browse: () -> Void
     let close: () -> Void
     let focusChanged: (Bool) -> Void
-    @FocusState private var focused: Control?
-    @Environment(\.themePalette) private var palette
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private enum Control: Hashable { case query, clear }
+    var showsSummary = true
+    @State private var isEditing = false
+    @State private var dismissRequest = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PrototypeLayout.gap) {
-            HStack(spacing: PrototypeLayout.gap) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(palette.secondaryText)
-                    .accessibilityHidden(true)
-                TextField("Search channels", text: $query)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.search)
-                    .focused($focused, equals: .query)
-                    .accessibilityIdentifier("live-tv-search-field")
-                    .onSubmit {
-                        focused = nil
-                        browse()
+        VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
+            HStack(spacing: PrototypeLayout.smallGap) {
+                PrototypeMobileSearchField(
+                    query: $query, focusRequest: focusRequest, dismissRequest: dismissRequest,
+                    submit: browse,
+                    focusChanged: {
+                        isEditing = $0
+                        focusChanged($0)
                     }
-                if !query.isEmpty {
-                    Button {
+                )
+                .frame(height: 44)
+                if isEditing {
+                    Button("Cancel") {
+                        dismissRequest &+= 1
                         query = ""
-                        focused = .query
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        close()
                     }
-                    .accessibilityLabel("Clear search")
-                    .buttonStyle(PrototypeButtonStyle(surface: .control))
-                    .focused($focused, equals: .clear)
                 }
             }
-            .font(.title2.weight(.semibold))
-            .padding(PrototypeLayout.gap)
-            .background { PrototypeControlSurface() }
-
-            PrototypeSearchSummary(channelCount: channelCount, category: category)
-        }
-        .task(id: focusRequest) {
-            if !reduceMotion { try? await Task.sleep(for: .milliseconds(340)) }
-            guard !Task.isCancelled else { return }
-            focused = .query
-        }
-        .onChange(of: focused) { _, value in focusChanged(value != nil) }
-        #if os(tvOS)
-        .onMoveCommand { direction in
-            if direction == .down, focused != nil {
-                focused = nil
-                browse()
+            if showsSummary {
+                PrototypeSearchSummary(channelCount: channelCount, category: category)
             }
         }
-        .onExitCommand(perform: close)
-        #endif
+    }
+}
+
+private struct PrototypeMobileSearchField: UIViewRepresentable {
+    @Binding var query: String
+    @Environment(\.locale) private var locale
+    let focusRequest: Int
+    let dismissRequest: Int
+    let submit: () -> Void
+    let focusChanged: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UISearchTextField {
+        let field = UISearchTextField()
+        field.autocapitalizationType = .none
+        field.autocorrectionType = .no
+        field.returnKeyType = .search
+        field.accessibilityIdentifier = "live-tv-search-field"
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.textChanged), for: .editingChanged)
+        return field
+    }
+
+    func updateUIView(_ field: UISearchTextField, context: Context) {
+        context.coordinator.parent = self
+        let placeholder = LocalizedStringResource("Search", locale: locale)
+        field.placeholder = String(localized: placeholder) // l10n:content - UIKit boundary, refreshed with the current environment locale.
+        if field.text != query { field.text = query }
+        if dismissRequest > context.coordinator.dismissRequest {
+            context.coordinator.dismissRequest = dismissRequest
+            DispatchQueue.main.async { [weak field] in
+                field?.resignFirstResponder()
+            }
+        }
+        if focusRequest > context.coordinator.focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            DispatchQueue.main.async { [weak field] in
+                guard let field, field.window != nil else { return }
+                field.becomeFirstResponder()
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: PrototypeMobileSearchField
+        var focusRequest = 0
+        var dismissRequest = 0
+        init(_ parent: PrototypeMobileSearchField) { self.parent = parent }
+        @objc func textChanged(_ field: UISearchTextField) {
+            parent.query = field.text ?? ""
+        }
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            parent.focusChanged(true)
+        }
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            parent.focusChanged(false)
+        }
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            textField.resignFirstResponder()
+            parent.submit()
+            return true
+        }
+        func textFieldShouldClear(_ textField: UITextField) -> Bool {
+            parent.query = ""
+            return true
+        }
     }
 }
 #endif
 
-import SwiftUI
+struct PrototypeCategorySearchResults: View {
+    let categories: [LiveTVBrowseCategory]
+    let select: (String) -> Void
+    @Environment(\.themePalette) private var palette
+    #if os(tvOS)
+    @ScaledMetric(relativeTo: .headline) private var tileHeight: CGFloat = 128
+    #else
+    @ScaledMetric(relativeTo: .headline) private var tileHeight: CGFloat = 68
+    #endif
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
+            Text("Categories")
+                .font(.subheadline)
+                .foregroundStyle(palette.secondaryText)
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: PrototypeLayout.gap) {
+                    ForEach(categories) { category in
+                        PrototypeCategoryTile(name: category.name, count: category.channelCount) {
+                            select(category.name)
+                        }
+                        .frame(width: PrototypeCategoryTile.searchWidth)
+                        .accessibilityIdentifier("live-tv-search-category-\(category.name)")
+                    }
+                }
+                .padding(PrototypeLayout.gap)
+            }
+            .scrollIndicators(.hidden)
+            .frame(height: tileHeight + PrototypeLayout.gap * 4)
+            .padding(.horizontal, -PrototypeLayout.gap)
+        }
+        .accessibilityIdentifier("live-tv-search-categories")
+    }
+}
 
 private struct PrototypeSearchResultsKey: EnvironmentKey {
     static let defaultValue = false

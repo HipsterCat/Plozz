@@ -212,7 +212,7 @@ struct CastPanelView: View {
         // empty. Computed rather than measured: every row is exactly
         // `castRowHeight`, so there is nothing to find out. Floored so that
         // drilling into a short cast does not leave the biography in a letterbox.
-        .frame(height: metrics.isVertical ? verticalPanelHeight : nil)
+        .frame(height: metrics.isVertical ? verticalPanelHeight : nil, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .leading)
         // Measured AFTER the frames above, which is the whole point of it
         // sitting here rather than up beside the preference readers.
@@ -241,8 +241,7 @@ struct CastPanelView: View {
 
     private var verticalPanelHeight: CGFloat {
         let rows = CGFloat(people.count)
-        let natural = metrics.contentPadding * 2 + rows * metrics.castRowHeight
-            + max(rows - 1, 0) * 8
+        let natural = rows * metrics.castRowHeight + max(rows - 1, 0) * 8
         return min(max(natural, 260), metrics.cardHeight)
     }
 
@@ -435,7 +434,11 @@ struct CastPanelView: View {
 
     /// The narrow-card cast: a vertical list of rows.
     private var castList: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        FadingScrollView(
+            maxHeight: metrics.cardHeight,
+            fadeLength: metrics.contentPadding * 2,
+            verticalContentInset: 0
+        ) {
             LazyVStack(spacing: 8) {
                 ForEach(Array(people.enumerated()), id: \.element.id) { index, person in
                     Button { openDetail(person, at: index) } label: {
@@ -469,12 +472,6 @@ struct CastPanelView: View {
                     }
                 }
             }
-            // NO horizontal inset. These rows stand in the Info card's place when
-            // the tab switches, so their edges have to be its edges — and that
-            // card's glass runs to the strip's own edge. An inset here made the
-            // cast sit narrower than everything around it, which reads as the two
-            // tabs having different margins rather than as breathing room.
-            .padding(.vertical, metrics.contentPadding)
         }
     }
 

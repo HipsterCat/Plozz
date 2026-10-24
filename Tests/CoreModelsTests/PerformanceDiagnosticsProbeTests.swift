@@ -5,6 +5,57 @@ import XCTest
 
 @MainActor
 final class PerformanceDiagnosticsProbeTests: XCTestCase {
+    func testPerformancePlaybackJournalDisabled() async throws {
+        try await measurePlaybackJournal(enabled: false)
+    }
+
+    func testPerformancePlaybackJournalEnabled() async throws {
+        try await measurePlaybackJournal(enabled: true)
+    }
+
+    private func measurePlaybackJournal(enabled: Bool) async throws {
+        try PerformanceProbe.requireEnabled()
+        let scenario = enabled ? "playback-journal-enabled" : "playback-journal-disabled"
+        try await PerformanceProbe.measure(self, scenario: scenario) {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let url = directory.appendingPathComponent("journal.json")
+            let journal = enabled ? PlaybackDiagnosticJournal(url: url) : nil
+            let facts = PlaybackDiagnosticJournal.Facts(provider: .plex, engine: .plozzigen)
+            let events: [PlaybackDiagnosticJournal.Event] = [
+                .requested, .resolved, .loading, .loaded, .firstFrame,
+                .failed, .compatibilityRetry, .releaseStarted, .releaseFinished, .stopped
+            ]
+            var notifications = 0
+            let start = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<1_000 {
+                let session = UUID(), attempt = UUID()
+                for event in events {
+                    notifications += 1
+                    journal?.record(event, session: session, attempt: attempt, facts: facts, elapsed: 2)
+                }
+            }
+            let enqueueMicroseconds = Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000)
+            var retained = 0, discarded = 0, bytes = 0
+            if let journal {
+                await journal.flush()
+                let data = try Data(contentsOf: url)
+                let completed = try JSONDecoder().decode(PlaybackDiagnosticJournal.Journal.self, from: data)
+                retained = completed.entries.count
+                discarded = completed.discarded
+                bytes = data.count
+                XCTAssertEqual(retained + discarded, notifications)
+                XCTAssertGreaterThan(retained, 0)
+                XCTAssertLessThanOrEqual(retained, PlaybackDiagnosticJournal.maximumEntries)
+                XCTAssertLessThanOrEqual(bytes, PlaybackDiagnosticJournal.maximumBytes)
+            }
+            XCTAssertEqual(notifications, 10_000)
+            return ["notifications": notifications, "retained": retained, "discarded": discarded,
+                    "persistedBytes": bytes, "enqueueMicroseconds": enqueueMicroseconds]
+        }
+    }
+
     func testPerformanceDisabledOperations() async throws {
         try await measureOperations(enabled: false, scenario: "diagnostics-disabled")
     }

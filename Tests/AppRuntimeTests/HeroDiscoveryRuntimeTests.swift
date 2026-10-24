@@ -215,6 +215,7 @@ final class HeroDiscoveryRuntimeTests: XCTestCase {
     func testNoAccountsKeepDiscoveryNavigableWithoutGlobalOwnershipOrWatchState() async throws {
         var stale = external()
         stale.availability = .available
+        stale.hasRequestDownloadActivity = true
         stale.sourceAccountID = "another-profile"
         stale.locallyValidatedPlayableSource = true
         stale.isPlayed = true
@@ -229,6 +230,7 @@ final class HeroDiscoveryRuntimeTests: XCTestCase {
         let result = try XCTUnwrap(items.first)
         XCTAssertEqual(result.id, stale.id)
         XCTAssertEqual(result.availability, .unknown)
+        XCTAssertNil(result.hasRequestDownloadActivity)
         XCTAssertFalse(result.locallyValidatedPlayableSource)
         XCTAssertFalse(result.hasBeenPlayed)
         XCTAssertFalse(result.isPlayed)
@@ -431,6 +433,7 @@ final class HeroDiscoveryRuntimeTests: XCTestCase {
             ]
             var server = owned()
             server.title = "My Curated Title"
+            server.hasRequestDownloadActivity = true
             server.productionYear = 2001
             server.providerIDs = ["TMDB ID": "42", "Tvdb": "900"]
             let fixture = fixture(kind: kind, records: [server])
@@ -455,6 +458,7 @@ final class HeroDiscoveryRuntimeTests: XCTestCase {
             XCTAssertEqual(result.discoveryURLs, raw.discoveryURLs)
             XCTAssertTrue(result.locallyValidatedPlayableSource)
             XCTAssertNil(result.availability)
+            XCTAssertNil(result.hasRequestDownloadActivity)
             XCTAssertEqual(result.sources.first?.providerKind, kind)
             XCTAssertEqual(result.sources.first?.itemID, server.id)
         }

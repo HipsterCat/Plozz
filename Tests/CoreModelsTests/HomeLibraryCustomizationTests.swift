@@ -79,6 +79,36 @@ final class HomeLibraryVisibilityTests: XCTestCase {
 
     // MARK: - Continue Watching artwork treatment
 
+    func testContinueWatchingActionDefaultsToPlayForNewAndExistingProfiles() throws {
+        XCTAssertEqual(ContinueWatchingAction.default, .play)
+        XCTAssertEqual(HomeLibraryVisibility.default.continueWatchingAction, .play)
+        let legacy = try JSONDecoder().decode(
+            HomeLibraryVisibility.self,
+            from: Data(#"{"continueWatchingShowsSeriesArtwork":false,"disabledKeys":["account:library"]}"#.utf8)
+        )
+        XCTAssertEqual(legacy.continueWatchingAction, .play)
+        XCTAssertFalse(legacy.continueWatchingShowsSeriesArtwork)
+        XCTAssertEqual(legacy.disabledKeys, ["account:library"])
+    }
+
+    func testContinueWatchingActionRoundTripsIndependentlyOfPresentation() throws {
+        for action in ContinueWatchingAction.allCases {
+            for layout in ContinueWatchingCardLayout.allCases {
+                for details in ContinueWatchingPlaybackDetails.allCases {
+                    let original = HomeLibraryVisibility(
+                        continueWatchingShowsSeriesArtwork: false,
+                        continueWatchingLayout: layout, continueWatchingPlaybackDetails: details,
+                        continueWatchingAction: action
+                    )
+                    let restored = try JSONDecoder().decode(
+                        HomeLibraryVisibility.self, from: JSONEncoder().encode(original)
+                    )
+                    XCTAssertEqual(restored, original)
+                }
+            }
+        }
+    }
+
     func testContinueWatchingShowsSeriesArtworkDefaultsOn() {
         XCTAssertTrue(HomeLibraryVisibility.default.continueWatchingShowsSeriesArtwork)
         XCTAssertEqual(HomeLibraryVisibility.default.continueWatchingLayout, .landscape)
@@ -264,6 +294,27 @@ final class HomeLibraryVisibilityTests: XCTestCase {
 }
 
 final class HomeLibraryVisibilityStoreTests: XCTestCase {
+    @MainActor
+    func testContinueWatchingActionPersistsPerProfileAndSurvivesPresetChanges() throws {
+        let suite = "test.continueWatchingAction.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let primary = HomeLibraryVisibilityStore(defaults: defaults)
+        let other = HomeLibraryVisibilityStore(defaults: defaults, namespace: "other")
+        let model = HomeLibraryVisibilityModel(store: primary)
+        model.setContinueWatchingAction(.openDetails)
+        for preset: HomeRowCustomization.Defaults in [.matchServer, .combined, .custom] {
+            model.useRowDefaults(preset)
+            model.setGlobalRowEnabled(false, for: .continueWatching)
+            model.setGlobalRowEnabled(true, for: .continueWatching)
+            XCTAssertEqual(HomeLibraryVisibilityModel(store: primary).continueWatchingAction, .openDetails)
+            XCTAssertEqual(HomeLibraryVisibilityModel(store: other).continueWatchingAction, .play)
+        }
+        let restored = HomeLibraryVisibilityModel(store: primary)
+        restored.setContinueWatchingAction(.play)
+        XCTAssertEqual(primary.load().continueWatchingAction, .play)
+    }
+
     @MainActor
     func testContinueWatchingLayoutPersistsAndSwitchesWithItsProfile() {
         let suite = "test.portraitVisibility.\(UUID())"

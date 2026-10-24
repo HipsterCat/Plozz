@@ -10,6 +10,138 @@ import XCTest
 
 @MainActor
 final class ArtworkSettingsHostedTests: XCTestCase {
+    func testContentRatingExamplesRemainVisibleAcrossNativeFocusAndAppearance() async throws {
+        let suite = "ContentRatingFocusHosted.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = ContentRatingSettingsModel(store: ContentRatingSettingsStore(defaults: defaults))
+        for colorScheme in [ColorScheme.dark, .light] {
+            try await withScreen(
+                content: VStack(spacing: 30) {
+                    SettingsControlGroup { ContentRatingToggle(model: model) }
+                    Button("Another setting") {}
+                        .buttonStyle(SettingsFormButtonStyle())
+                }
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .environment(\.plozzShowsContentRatings, false),
+                colorScheme: colorScheme
+            ) { window in
+                let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+                let host = try XCTUnwrap(window.rootViewController as? ArtworkFocusRequesting)
+                let items = self.focusItems(in: window).sorted {
+                    ((try? self.nativeFrame($0, in: window).minY) ?? 0)
+                        < ((try? self.nativeFrame($1, in: window).minY) ?? 0)
+                }
+                XCTAssertEqual(items.count, 2, "The illustrative badges must never become focus targets.")
+                for showsRatings in [true, false] {
+                    model.showsRatings = showsRatings
+                    for index in 0..<2 {
+                        let target = try XCTUnwrap(items.indices.contains(index) ? items[index] : nil)
+                        host.artworkFocusTarget = target
+                        system.requestFocusUpdate(to: try XCTUnwrap(window.rootViewController))
+                        system.updateFocusIfNeeded()
+                        host.artworkFocusTarget = nil
+                        let text = try await self.capture(
+                            window, name: "rating-examples-\(colorScheme)-\(showsRatings)-focus-\(index)",
+                            includeMaster: true
+                        )
+                        XCTAssertTrue(system.focusedItem === target)
+                        XCTAssertTrue(text.contains("Show content ratings"), text)
+                        try self.assertRatingExampleInk(in: window)
+                    }
+                }
+            }
+        }
+    }
+
+    private func assertRatingExampleInk(in window: UIWindow) throws {
+        let title = try XCTUnwrap(collectionLabelFrames(
+            in: window, matchingText: "Show content ratings"
+        ).first).frame
+        let frame = CGRect(x: title.maxX + 5, y: title.midY - 15, width: 140, height: 30).integral
+        let crop = try XCTUnwrap(renderWindow(window).cgImage?.cropping(to: frame))
+        var pixels = [UInt8](repeating: 0, count: crop.width * crop.height)
+        try pixels.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(
+                data: bytes.baseAddress, width: crop.width, height: crop.height,
+                bitsPerComponent: 8, bytesPerRow: crop.width,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+        }
+        let background = Int(try XCTUnwrap(pixels.first))
+        func hasContrast(x: Int, y: Int) -> Bool {
+            abs(Int(pixels[y * crop.width + x]) - background) > 80
+        }
+        // Outlines have taller vertical strokes than the small glyphs. Single-letter
+        // OCR confuses the outlined R with B, so measure each badge's actual ink.
+        let columns = (0..<crop.width).filter { x in
+            (0..<crop.height).filter { hasContrast(x: x, y: $0) }.count >= 14
+        }
+        var edges: [ClosedRange<Int>] = []
+        for column in columns {
+            if let last = edges.last, last.upperBound + 1 == column {
+                edges[edges.count - 1] = last.lowerBound...column
+            } else {
+                edges.append(column...column)
+            }
+        }
+        XCTAssertEqual(edges.count, 4, "Both example badges must have two contrasting vertical outline edges.")
+        guard edges.count == 4 else { return }
+        for index in [0, 2] {
+            let left = edges[index].upperBound + 3
+            let right = edges[index + 1].lowerBound - 2
+            XCTAssertGreaterThan(right, left)
+            guard right > left else { return }
+            let ink = (left..<right).reduce(0) { count, x in
+                count + ((crop.height / 2 - 6)..<(crop.height / 2 + 6)).filter {
+                    hasContrast(x: x, y: $0)
+                }.count
+            }
+            XCTAssertGreaterThan(ink, 8, "Each outlined example must contain a visible rating glyph.")
+        }
+    }
+
+    func testContextualCardLabelControlsShowOnlyTheirScreenViews() async throws {
+        let suite = "ContextualCardLabelsHosted.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cards = makeCards(defaults: defaults)
+        for scope in CardCaptionSettingsScope.allCases {
+            try await withScreen(content:
+                SettingsControlGroup { CardCaptionSettingsControls(cards: cards, scope: scope) }
+                    .frame(width: SettingsFormMetrics.pageWidth)
+            ) { window in
+                let text = try await self.capture(window, name: "card-labels-\(scope)", includeMaster: true)
+                XCTAssertEqual(self.focusItems(in: window).count, scope.views.count)
+                for view in scope.views {
+                    XCTAssertTrue(text.contains(String(localized: view.displayName)), text)
+                }
+                for view in CardCaptionView.allCases where !scope.views.contains(view) {
+                    XCTAssertFalse(text.contains(String(localized: view.displayName)), text)
+                }
+            }
+        }
+    }
+
+    func testSharedPageBackButtonsShowOnlyChevronAndKeepNativeFocus() async throws {
+        for usesGlass in [false, true] {
+            try await withScreen(content:
+                SettingsPageHeader("Shared page")
+                    .environment(\.settingsPageBackButton, AnyView(SettingsBackButton(usesGlass: usesGlass) {}))
+                    .frame(width: SettingsFormMetrics.pageWidth)
+            ) { window in
+                let text = try await self.capture(window, name: "shared-back-chevron-\(usesGlass)", includeMaster: true)
+                XCTAssertTrue(text.contains("Shared page"), text)
+                XCTAssertFalse(text.contains("Back"), text)
+                let back = try self.backButton(beside: "Shared page", in: window)
+                let frame = try self.nativeFrame(back, in: window)
+                XCTAssertLessThan(frame.width, frame.height * 2, "The icon-only back button must remain compact.")
+                XCTAssertTrue(UIFocusSystem.focusSystem(for: window)?.focusedItem === back)
+            }
+        }
+    }
+
     func testContinueWatchingPreviewsUseSharedSelectionStyleAndReadableDetails() async throws {
         for showsCaptions in [false, true] {
             var captions = CardCaptionSettings.default
@@ -184,7 +316,8 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                     window, name: "settings-native-illustrated-rows-\(divider ? "spaced-divider" : "no-divider")",
                     includeMaster: true
                 )
-                for label in ["Back", "App default", "Customize by view", "Watched", "Unwatched", "Show unwatched episode count"] {
+                _ = try self.backButton(beside: "Cards", in: window)
+                for label in ["App default", "Customize by view", "Watched", "Unwatched", "Show unwatched episode count"] {
                     XCTAssertTrue(copy.contains(label), copy)
                 }
             }
@@ -255,7 +388,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                     window, name: "settings-native-long-copy-\(smallerTitle ? "smaller-title" : "current-title")",
                     includeMaster: true
                 )
-                XCTAssertTrue(copy.contains("Back"), copy)
+                _ = try self.backButton(beside: "Playback", in: window)
                 XCTAssertTrue(copy.contains(title), copy)
                 XCTAssertTrue(copy.contains(label), copy)
                 XCTAssertTrue(copy.contains(value), copy)
@@ -401,8 +534,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
     func testSegmentFocusOnlyPreviewsAndOnlySelectionUsesCheckmarkSpace() async throws {
         let state = SettingsScaleFixtureState()
         try await withScreen(content: SettingsScaleFixture(state: state).frame(width: 1000)) { window in
-            let labels = try self.collectionLabelFrames(in: window)
-            let compact = try XCTUnwrap(labels.first { $0.text == "Compact" })
+            let compact = try XCTUnwrap(self.collectionLabelFrames(in: window, matchingText: "Compact").first)
             let target = try XCTUnwrap(self.focusItems(in: window).first {
                 (try? self.nativeFrame($0, in: window).contains(CGPoint(x: compact.frame.midX, y: compact.frame.midY))) == true
             })
@@ -598,6 +730,12 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                     XCTAssertTrue(trailers.contains("Start muted"), trailers)
                 }
                 navigation.pop(animated: false)
+                let returnDeadline = ContinuousClock.now + .seconds(5)
+                while (navigation.awaitingFocus || system.focusedItem == nil),
+                      ContinuousClock.now < returnDeadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertFalse(navigation.awaitingFocus, "Wait for native return focus before blocking on OCR.")
                 let returned = try await self.capture(window, name: "hero-return-\(page.rawValue)", includeMaster: true)
                 if page != .titles {
                     XCTAssertTrue(returned.contains("On"), returned)
@@ -613,6 +751,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             }
             scroll.setContentOffset(.zero, animated: false)
             models.heroSettingsModel.settings.sources = [.featured, .watchlist]
+            models.heroSettingsModel.settings.setEnabled(.featured, enabled: true)
             let selected = try await self.capture(window, name: "hero-selected-source-summary", includeMaster: true)
             XCTAssertTrue(selected.contains("Discovery"), selected)
             XCTAssertTrue(selected.contains("Watchlist"), selected)
@@ -628,7 +767,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
 
     func testNestedDiscoveryReturnsToTitleSourcesWithoutPoppingTheHeroPage() async throws {
         let namespace = "HeroNestedHosted.\(UUID())"
-        let models = ProfileSettingsModel(namespace: namespace)
+        let models = ProfileSettingsModel(namespace: namespace, isSeerrConfigured: { true })
         defer {
             for key in UserDefaults.standard.dictionaryRepresentation().keys where key.contains(namespace) {
                 UserDefaults.standard.removeObject(forKey: key)
@@ -740,9 +879,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             XCTAssertTrue(kids.contains("Discovery is unavailable in Kids profiles"), kids)
             XCTAssertFalse(kids.contains("TMDB"), kids)
             XCTAssertFalse(kids.contains("Show provider labels"), kids)
-            XCTAssertEqual(try self.collectionLabelFrames(in: window).filter {
-                $0.text.trimmingCharacters(in: .letters.inverted) == "Back"
-            }.count, 1)
+            _ = try self.backButton(beside: "Discovery", in: window)
             XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
         }
     }
@@ -763,15 +900,9 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                 .environment(hero)
                 .environment(background)) { window in
                 _ = try await self.capture(window, name: "hero-empty-\(page.rawValue)", includeMaster: true)
-                let labels = try self.collectionLabelFrames(in: window).filter {
-                    $0.text.trimmingCharacters(in: .letters.inverted) == "Back"
-                }
-                XCTAssertEqual(labels.count, 1)
-                let label = try XCTUnwrap(labels.first)
+                let back = try self.backButton(beside: String(localized: page.title), in: window)
                 let focused = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem)
-                XCTAssertTrue(try self.nativeFrame(focused, in: window).contains(
-                    CGPoint(x: label.frame.midX, y: label.frame.midY)
-                ))
+                XCTAssertTrue(focused === back)
                 XCTAssertFalse(navigation.awaitingFocus)
             }
         }
@@ -875,29 +1006,32 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(250))
             _ = try await self.capture(window, name: "labels-before-top-scroll", includeMaster: true)
             let before = try self.collectionLabelFrames(in: window)
-            let back = try XCTUnwrap(before.first { $0.text.hasSuffix("Back") }, "\(before)")
             let title = try XCTUnwrap(before.first { $0.text == "Labels by view" })
-            let backCenter = CGPoint(x: back.frame.midX, y: back.frame.midY)
-            let backItem = try XCTUnwrap(self.focusItems(in: window).first {
-                (try? self.nativeFrame($0, in: window).contains(backCenter)) == true
-            })
+            let backItem = try self.backButton(beside: "Labels by view", in: window)
             let backControlFrame = try self.nativeFrame(backItem, in: window)
+            let beforeImage = self.renderWindow(window)
+            let titleInk = try self.textInkBounds(in: beforeImage, frame: title.frame)
+            let backInk = try self.textInkBounds(in: beforeImage,
+                                                frame: backControlFrame.insetBy(dx: 12, dy: 12))
             let viewport = scroll.convert(scroll.bounds, to: window)
             let innerTop = viewport.minY + scroll.adjustedContentInset.top
-            let distance = back.frame.minY - innerTop + 14
+            let distance = backInk.minY - innerTop + 14
             XCTAssertGreaterThan(distance, 20)
             scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: scroll.contentOffset.y + distance), animated: false)
             try await Task.sleep(for: .milliseconds(250))
             _ = try await self.capture(window, name: "labels-crossing-top-inset", includeMaster: true)
             let after = try self.collectionLabelFrames(in: window)
-            let scrolledBack = try XCTUnwrap(after.first { $0.text.hasSuffix("Back") },
-                                             "Back must remain readable across the top inset: viewport=\(viewport), offset=\(scroll.contentOffset), clips=\(scroll.clipsToBounds), text=\(after)")
             let scrolledTitle = try XCTUnwrap(after.first { $0.text == "Labels by view" })
-            XCTAssertLessThan(scrolledBack.frame.minY, innerTop - 8)
-            XCTAssertGreaterThan(scrolledBack.frame.height, back.frame.height * 0.85)
             let scrolledControlFrame = try self.nativeFrame(backItem, in: window)
+            let afterImage = self.renderWindow(window)
+            let scrolledTitleInk = try self.textInkBounds(in: afterImage, frame: scrolledTitle.frame)
+            let scrolledBackInk = try self.textInkBounds(in: afterImage,
+                                                        frame: scrolledControlFrame.insetBy(dx: 12, dy: 12))
+            XCTAssertLessThan(scrolledBackInk.minY, innerTop - 8)
+            XCTAssertGreaterThan(scrolledBackInk.height, backInk.height * 0.85,
+                                 "The back chevron must remain visible across the top inset.")
             XCTAssertEqual(backControlFrame.minY - scrolledControlFrame.minY, distance, accuracy: 1)
-            XCTAssertEqual(title.frame.minY - scrolledTitle.frame.minY, distance, accuracy: 3,
+            XCTAssertEqual(titleInk.minY - scrolledTitleInk.minY, distance, accuracy: 3,
                            "Neither Back nor the title should be pinned.")
             let text = try await self.capture(window, name: "labels-scrolling-through-top-inset", includeMaster: true)
             XCTAssertTrue(text.contains("Labels are visible in this view"), text)
@@ -963,7 +1097,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             let headingInk = try self.textInkBounds(in: self.renderWindow(window), frame: heading.frame)
             XCTAssertLessThan(headingInk.height, 60, "The shared page title must fit the available pane.")
             XCTAssertTrue(text.contains("Choose collections"), text)
-            XCTAssertTrue(text.contains("Back"), "The pane's Back label must remain legible: \(text)")
+            _ = try self.backButton(beside: "Choose collections", in: window)
             XCTAssertTrue(text.contains("Funny movies from year 2000"), text)
             XCTAssertTrue(text.contains("Personal collections"), text)
             let rows = self.focusItems(in: window)
@@ -1009,6 +1143,20 @@ final class ArtworkSettingsHostedTests: XCTestCase {
 
     private func nativeFocusedFrame(_ system: UIFocusSystem, in window: UIWindow) throws -> CGRect {
         try nativeFrame(XCTUnwrap(system.focusedItem), in: window)
+    }
+
+    private func backButton(beside title: String, in window: UIWindow) throws -> any UIFocusItem {
+        let heading = try XCTUnwrap(collectionLabelFrames(in: window, matchingText: title)
+            .min { $0.frame.minY < $1.frame.minY }).frame
+        let buttons = try focusItems(in: window).filter {
+            let frame = try nativeFrame($0, in: window)
+            // OCR can include the adjacent chevron in the heading's bounds.
+            return frame.midX < heading.minX && frame.minY < heading.maxY && frame.maxY > heading.minY
+        }
+        let frames = try focusItems(in: window).map { try nativeFrame($0, in: window) }
+        XCTAssertEqual(buttons.count, 1,
+                       "The page must have one native Back control beside \(heading). Items: \(frames)")
+        return try XCTUnwrap(buttons.first)
     }
 
     private func nativeFrame(_ item: any UIFocusItem, in window: UIWindow) throws -> CGRect {
@@ -1452,6 +1600,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             .environment(models.navigationStyleModel)
             .environment(models.transparencyModel)
             .environment(models.appLanguageModel)
+            .environment(models.contentRatingModel)
             try await withScreen(content: content) { window in
                 let text = try await self.capture(window, name: "artwork-appearance-providers-\(canManage)")
                 XCTAssertTrue(text.contains("Choose the posters, backgrounds, and logos you see"), text)
@@ -1708,6 +1857,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
         content: some View,
         topSafeArea: CGFloat = 0,
         bottomSafeArea: CGFloat = 0,
+        colorScheme: ColorScheme = .dark,
         inspect: (UIWindow) async throws -> Void
     ) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
@@ -1720,12 +1870,13 @@ final class ArtworkSettingsHostedTests: XCTestCase {
         let previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
-        window.overrideUserInterfaceStyle = .dark
+        window.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+        let palette = colorScheme == .dark ? ThemePalette.dark : .light
         let host = ArtworkFocusHost(rootView:
             content
-                .background(ThemePalette.dark.settingsBackground)
-                .environment(\.themePalette, .dark)
-                .environment(\.colorScheme, .dark)
+                .background(palette.settingsBackground)
+                .environment(\.themePalette, palette)
+                .environment(\.colorScheme, colorScheme)
                 .environment(\.locale, Locale(identifier: "en_US"))
         )
         host.additionalSafeAreaInsets.top = topSafeArea

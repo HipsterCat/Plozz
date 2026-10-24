@@ -89,7 +89,7 @@ struct SkipSegmentButton: View {
     private func ringFraction(for segment: MediaSegment) -> Double {
         if model.skipMode == .autoDelay, let deadline = model.autoSkipAtSeconds {
             let remaining = deadline - model.currentSeconds
-            return min(1, max(0, remaining / SkipIntrosMode.autoSkipDelay))
+            return min(1, max(0, remaining / model.automaticSkipDelay))
         }
         return segment.remainingFraction(at: model.currentSeconds)
     }

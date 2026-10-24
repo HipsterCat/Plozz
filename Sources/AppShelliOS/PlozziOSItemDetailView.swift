@@ -253,10 +253,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
             identitySources: identitySources
         )
         let discoveryStatusRefresh:
-            (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)?
+            (@Sendable (MediaItem) async -> MediaRequestAvailability?)?
         if isDiscoveryItem {
             discoveryStatusRefresh = { [seerService] item in
-                await seerService?.availability(for: item)
+                await seerService?.requestAvailability(for: item)
             }
         } else {
             discoveryStatusRefresh = nil
@@ -535,6 +535,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     onSelectVersion: {
                         selectVersion($0, for: versionTarget)
                     },
+                    loadVersions: viewModel.playbackVersionsLoader(for: versionTarget),
                     actionHandler: appModel.mediaItemActionHandler,
                     // Re-resolve the play target at FIRE time rather than using
                     // the one captured when the body was evaluated. A tap that
@@ -741,7 +742,9 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     item.hasPlayableLibraryTarget(
                         additionalSources: availableSources
                     ),
-                seerConnected: appModel.seerService.isConfigured
+                seerConnected: appModel.seerService.isConfigured,
+                releaseDate: item.releaseDate,
+                hasDownloadActivity: item.hasRequestDownloadActivity == true
             ),
             isRequesting: isRequesting,
             actingName: appModel.activeSeerrRequestActingName,
@@ -784,6 +787,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
     private func detailPlaybackOptions(
         for item: MediaItem
     ) -> DetailPlaybackOptions {
+        let item = viewModel.episodeWithEnrichedBadges(item)
         let available = availableSources
         let source = DetailPlaybackSelection.preferredSource(
             sourceOverride: sourceOverride,
@@ -929,7 +933,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 versions: versions,
                 selectedVersionID: versionID,
                 onSelectSource: selectSource,
-                onSelectVersion: { selectVersion($0, for: item) }
+                onSelectVersion: { selectVersion($0, for: item) },
+                loadVersions: viewModel.playbackVersionsLoader(for: item)
             )
         }
     }
@@ -1347,6 +1352,7 @@ private struct PlozziOSSourceVersionControls: View {
     let selectedVersionID: String?
     let onSelectSource: (String) -> Void
     let onSelectVersion: (String) -> Void
+    var loadVersions: MediaVersionInventoryLoader? = nil
     @State private var isVersionPickerPresented = false
 
     var body: some View {
@@ -1369,12 +1375,12 @@ private struct PlozziOSSourceVersionControls: View {
                 .buttonStyle(.bordered)
             }
 
-            if versions.count > 1, let selectedVersion {
+            if versions.count > 1 || loadVersions != nil {
                 Button {
                     isVersionPickerPresented = true
                 } label: {
                     Label {
-                        versionTitleText(selectedVersion.displayLabel)
+                        versionTitleText(selectedVersion?.displayLabel)
                     } icon: {
                         Image(systemName: "film.stack")
                     }
@@ -1385,12 +1391,20 @@ private struct PlozziOSSourceVersionControls: View {
                     attachmentAnchor: .rect(.bounds),
                     arrowEdge: .top
                 ) {
-                    PlozziOSVersionPickerPopover(
-                        versions: versions.sortedForPicker(),
-                        selectedVersionID: selectedVersion.id,
-                        onSelectVersion: onSelectVersion
-                    )
-                    .presentationCompactAdaptation(.popover)
+                    if let loadVersions {
+                        MediaVersionPicker(
+                            versions: versions, selectedVersionID: selectedVersionID,
+                            loadVersions: loadVersions, onSelect: onSelectVersion
+                        )
+                        .presentationCompactAdaptation(.popover)
+                    } else if let selectedVersion {
+                        PlozziOSVersionPickerPopover(
+                            versions: versions.sortedForPicker(),
+                            selectedVersionID: selectedVersion.id,
+                            onSelectVersion: onSelectVersion
+                        )
+                        .presentationCompactAdaptation(.popover)
+                    }
                 }
             }
         }
@@ -1475,6 +1489,15 @@ private struct PlozziOSRequestAction: View {
     let actingName: String?
     let onRequest: (MediaItem) -> Void
 
+    private var requestCTA: HeroCTA {
+        MediaItem.heroCTA(
+            availability: availability, downloadProgress: item.downloadProgress,
+            hasValidatedPlayableSource: item.hasPlayableLibraryTarget(), seerConnected: true,
+            releaseDate: item.releaseDate,
+            hasDownloadActivity: item.hasRequestDownloadActivity == true
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             switch availability {
@@ -1502,7 +1525,12 @@ private struct PlozziOSRequestAction: View {
                 Label("Requested — awaiting approval", systemImage: "clock")
                     .foregroundStyle(.orange)
             case .processing:
-                Label("Library Request Processing", systemImage: "arrow.down.circle")
+                Label(
+                    requestCTA == .awaitingRelease
+                        ? HeroCTA.awaitingRelease.requestStatusTitle : "Library Request Processing",
+                    systemImage: requestCTA == .awaitingRelease
+                        ? "calendar" : "arrow.down.circle"
+                )
                     .foregroundStyle(.blue)
             case .partiallyAvailable:
                 Label("Partially available", systemImage: "circle.lefthalf.filled")
@@ -3437,9 +3465,7 @@ private struct PlozziOSSeasonDownloadPrompt: Identifiable {
     /// awareness. Returns `nil` when the capacity can't be read.
     private static func freeSpaceText() -> String? {
         let url = URL.documentsDirectory
-        guard let values = try? url.resourceValues(
-            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-        ), let capacity = values.volumeAvailableCapacityForImportantUsage
+        guard let capacity = try? DownloadStorageCapacity.device.availableBytes(at: url)
         else {
             return nil
         }

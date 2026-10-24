@@ -101,6 +101,98 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertFalse(app.buttons["Huge"].exists)
     }
 
+    func testEpisodeCountToggleUpdatesBothWatchIndicatorPreviews() throws {
+        launch()
+        app.buttons["appearance-cards"].tap()
+        XCTAssertTrue(app.navigationBars["Cards"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["appearance-cards"].waitForNonExistence(timeout: 5))
+        let toggle = app.switches["unwatched-episode-count-toggle"]
+        reveal(toggle, fullyVisible: true)
+        let previews = ["watched", "unwatched"].map { app.buttons["watch-indicator-preview-\($0)"] }
+        reveal(previews[0], fullyVisible: true)
+        let enabled = try previews.map { try XCTUnwrap($0.screenshot().image.pngData()) }
+        tapNativeSwitch(toggle)
+        XCTAssertEqual(toggle.value as? String, "0")
+        let disabled = try previews.map { try XCTUnwrap($0.screenshot().image.pngData()) }
+        for index in previews.indices {
+            XCTAssertNotEqual(enabled[index], disabled[index], "Both preview styles must respond to the count toggle.")
+        }
+        tapNativeSwitch(toggle)
+        XCTAssertEqual(toggle.value as? String, "1")
+        for (index, preview) in previews.enumerated() {
+            XCTAssertEqual(try XCTUnwrap(preview.screenshot().image.pngData()), enabled[index])
+        }
+        capture("watch-count-previews")
+    }
+
+    func testEpisodeCountStyleChangesWithoutSelectingAnotherWatchIndicator() throws {
+        launch()
+        app.buttons["appearance-cards"].tap()
+        XCTAssertTrue(app.navigationBars["Cards"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["appearance-cards"].waitForNonExistence(timeout: 5))
+        let style = app.buttons["episode-count-style"]
+        reveal(style, fullyVisible: true)
+        let watched = app.buttons["watch-indicator-preview-watched"]
+        let wasSelected = watched.isSelected
+        for choice in ["Attached", "Floating"] {
+            style.tap()
+            let option = app.buttons["episode-count-style-\(choice.lowercased())"]
+            XCTAssertTrue(option.waitForExistence(timeout: 3), app.debugDescription)
+            option.tap()
+            XCTAssertTrue(style.staticTexts[choice].exists)
+            XCTAssertLessThan(style.staticTexts[choice].frame.height, 30, "The value must not wrap on a narrow phone.")
+            XCTAssertEqual(watched.isSelected, wasSelected)
+        }
+        let toggle = app.switches["unwatched-episode-count-toggle"]
+        tapNativeSwitch(toggle)
+        XCTAssertFalse(style.exists)
+        tapNativeSwitch(toggle)
+        XCTAssertTrue(style.staticTexts["Floating"].exists, "Hiding counts must retain the style.")
+        capture("episode-count-floating")
+    }
+
+    func testWatchIndicatorColorsStayInOneRowAndSelectionSurvivesNavigation() {
+        launch()
+        app.buttons["appearance-cards"].tap()
+        XCTAssertTrue(app.navigationBars["Cards"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["appearance-cards"].waitForNonExistence(timeout: 5))
+        let white = app.buttons["watch-indicator-color-white"]
+        reveal(white, fullyVisible: true)
+        XCTAssertTrue(white.isSelected)
+        let colors = ["white", "blue", "green", "yellow", "orange", "red", "pink", "purple"]
+        let buttons = colors.map { app.buttons["watch-indicator-color-\($0)"] }
+        XCTAssertEqual(app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "watch-indicator-color-"
+        )).count, 8)
+        let y = white.frame.midY
+        for button in buttons {
+            XCTAssertEqual(button.frame.midY, y, accuracy: 1, "The palette must never wrap.")
+            XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        }
+        let blue = buttons[1]
+        blue.tap()
+        XCTAssertTrue(blue.isSelected)
+        XCTAssertFalse(white.isSelected)
+        let purple = buttons[7]
+        if !purple.isHittable {
+            let rail = app.scrollViews.containing(.button, identifier: "watch-indicator-color-blue").firstMatch
+            rail.swipeLeft()
+        }
+        XCTAssertTrue(purple.isHittable)
+        purple.tap()
+        XCTAssertTrue(purple.isSelected)
+        XCTAssertFalse(blue.isSelected)
+        capture("watch-color-purple")
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(app.buttons["appearance-cards"].waitForExistence(timeout: 5))
+        app.buttons["appearance-cards"].tap()
+        XCTAssertTrue(app.navigationBars["Cards"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["appearance-cards"].waitForNonExistence(timeout: 5))
+        reveal(purple, fullyVisible: true)
+        XCTAssertTrue(purple.isSelected, "Returning must restore the selection and reveal it on the rail.")
+    }
+
     func testDisplaySizeIsLastInCardsAndRemainsAnIndependentMenu() {
         launch()
         XCTAssertFalse(app.buttons["appearance-display-size"].exists)
@@ -203,8 +295,8 @@ final class SettingsInteractionTests: XCTestCase {
         for title in ["Appearance", "Screens & Navigation"] {
             openSettingsPage(title)
             let children = title == "Appearance"
-                ? ["Theme", "Cards", "Artwork", "Spoiler Protection", "Circadian Mode"]
-                : ["Customize Home", "Navigation", "Detail Page"]
+                ? ["Theme", "Cards", "Artwork", "Circadian Mode"]
+                : ["Spoiler Protection", "Customize Home", "Customize Libraries", "Navigation", "Detail Page"]
             for child in children {
                 let row = button(child)
                 reveal(row)
@@ -216,6 +308,88 @@ final class SettingsInteractionTests: XCTestCase {
             }
             app.terminate()
         }
+    }
+
+    func testAllScreensToggleKeepsItsNativeActionBesideNavigation() {
+        openSettingsPage("Screens & Navigation")
+        let ratings = app.switches["show-content-ratings"]
+        XCTAssertTrue(ratings.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["ALL SCREENS"].exists)
+        let value = ratings.value as? String
+        tapNativeSwitch(ratings)
+        XCTAssertNotEqual(ratings.value as? String, value)
+        XCTAssertTrue(app.navigationBars["Screens & Navigation"].exists)
+        XCTAssertTrue(button("Spoiler Protection").exists)
+        capture("all-screens-ratings-off")
+        tapNativeSwitch(ratings)
+        XCTAssertEqual(ratings.value as? String, value)
+        button("Spoiler Protection").tap()
+        XCTAssertTrue(app.navigationBars["Spoiler Protection"].waitForExistence(timeout: 3))
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(ratings.waitForExistence(timeout: 3))
+        XCTAssertEqual(ratings.value as? String, value)
+    }
+
+    func testScreenCardLabelControlsShareCentralOverrides() {
+        openSettingsPage("Screens & Navigation")
+        let screens: [(String, [String])] = [
+            ("Customize Home", ["home", "continueWatchingPortrait"]),
+            ("Customize Libraries", ["recommended", "browse", "collections", "playlists", "continueWatchingPortrait"]),
+            ("Detail Page", ["episodes", "related", "extras"])
+        ]
+        for (title, views) in screens {
+            let link = button(title)
+            reveal(link)
+            link.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 3), app.debugDescription)
+            for view in views {
+                let row = app.buttons["card-label-view-\(view)"]
+                reveal(row)
+                if title == "Customize Libraries", view == "continueWatchingPortrait" {
+                    XCTAssertEqual(row.value as? String, "Off", "Home and Libraries must share this override.")
+                } else {
+                    selectCustomization(row, expecting: "Off")
+                }
+            }
+            XCTAssertFalse(app.buttons["card-label-view-filmography"].exists)
+            XCTAssertFalse(app.buttons["card-label-view-search"].exists)
+            capture("screen-card-labels-\(title)")
+            app.navigationBars[title].buttons["BackButton"].tap()
+        }
+        app.navigationBars["Screens & Navigation"].buttons["BackButton"].tap()
+        let appearance = categoryButton("Appearance")
+        reveal(appearance, settingsMenu: true)
+        appearance.tap()
+        app.buttons["appearance-cards"].tap()
+        let customize = app.buttons["card-label-customization"]
+        reveal(customize)
+        customize.tap()
+        for view in [
+            "home", "continueWatchingPortrait", "recommended", "browse", "collections", "playlists",
+            "related", "episodes", "extras"
+        ] {
+            let row = app.buttons["card-label-view-\(view)"]
+            reveal(row)
+            XCTAssertEqual(row.value as? String, "Off", "The central editor must show the contextual edit for \(view).")
+        }
+        let filmography = app.buttons["card-label-view-filmography"]
+        reveal(filmography)
+        XCTAssertEqual(filmography.value as? String, "On", "Unrelated views must be preserved.")
+        let episodes = app.buttons["card-label-view-episodes"]
+        reveal(episodes, towardTop: true)
+        selectCustomization(episodes, expecting: "On")
+        for title in ["Labels by view", "Cards", "Appearance"] {
+            app.navigationBars[title].buttons["BackButton"].tap()
+        }
+        let screenSettings = categoryButton("Screens & Navigation")
+        reveal(screenSettings, settingsMenu: true)
+        screenSettings.tap()
+        button("Detail Page").tap()
+        XCTAssertTrue(episodes.waitForExistence(timeout: 3))
+        XCTAssertEqual(episodes.value as? String, "On", "Central edits must flow back into the screen's controls.")
+        XCTAssertEqual(app.buttons["card-label-view-related"].value as? String, "Off")
+        XCTAssertEqual(app.buttons["card-label-view-extras"].value as? String, "Off")
+        capture("detail-labels-round-trip")
     }
 
     func testKidsLibrariesRemainGatedWithTheAlignedCategories() {
@@ -1150,6 +1324,36 @@ final class SettingsInteractionTests: XCTestCase {
         selectCustomization(labels, expecting: "Follow Appearance")
     }
 
+    func testContinueWatchingGroupedControlsKeepSelectionsIndependent() {
+        openSettingsPage("Customize Home")
+        app.buttons["home-section-home-continueWatching"].tap()
+        XCTAssertTrue(app.navigationBars["Continue Watching"].waitForExistence(timeout: 3))
+        let artwork = app.buttons["continue-watching-style-portraitPosters"]
+        let details = app.buttons["continue-watching-playback-details"]
+        let labels = app.buttons["card-label-view-continueWatchingPortrait"]
+        let merge = app.switches["home-merge-next-up"]
+        let action = app.buttons["continue-watching-action"]
+        reveal(artwork, fullyVisible: true)
+        artwork.tap()
+        XCTAssertLessThan(artwork.frame.maxY, details.frame.minY)
+        XCTAssertLessThan(details.frame.maxY, labels.frame.minY)
+        XCTAssertLessThan(labels.frame.maxY, merge.frame.minY)
+        XCTAssertLessThan(merge.frame.maxY, action.frame.minY)
+        selectCustomization(details, expecting: "Progress only")
+        selectCustomization(labels, expecting: "On")
+        let mergeBefore = merge.value as? String
+        selectCustomization(action, expecting: "Open detail page")
+        XCTAssertEqual(merge.value as? String, mergeBefore)
+        XCTAssertEqual(details.value as? String, "Progress only")
+        XCTAssertEqual(labels.value as? String, "On")
+        XCTAssertTrue(artwork.isSelected)
+        reveal(merge, fullyVisible: true)
+        tapNativeSwitch(merge)
+        XCTAssertNotEqual(merge.value as? String, mergeBefore)
+        XCTAssertEqual(action.value as? String, "Open detail page")
+        capture("continue-watching-grouped-controls")
+    }
+
     func testHeroSettingsNavigationKeepsProfileModelsAndEdits() {
         openSettingsPage("Customize Home")
         app.buttons["home-section-hero"].tap()
@@ -1230,15 +1434,16 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertLessThan(preset.frame.maxY, hero.frame.minY)
         XCTAssertGreaterThanOrEqual(preset.frame.minX, app.frame.minX + 20)
         XCTAssertLessThanOrEqual(preset.frame.maxX, app.frame.maxX - 20)
-        let add = app.navigationBars["Customize Home"].buttons["home-section-add"]
+        let add = app.buttons["home-section-add"]
         let reorder = app.navigationBars["Customize Home"].buttons["home-section-reorder"]
         XCTAssertTrue(add.isHittable, app.debugDescription)
         XCTAssertEqual(add.label, "Add section")
-        XCTAssertLessThanOrEqual(add.frame.width, 64, "The toolbar action must be an icon, not a labeled pill.")
-        XCTAssertLessThanOrEqual(add.frame.maxX, reorder.frame.minX + 1)
-        XCTAssertLessThanOrEqual(app.navigationBars["Customize Home"].staticTexts["Customize Home"].frame.maxX, add.frame.minX)
-        XCTAssertEqual(add.frame.midY, reorder.frame.midY, accuracy: 1)
-        XCTAssertLessThan(add.frame.maxY, preset.frame.minY)
+        XCTAssertEqual(add.frame.minX, hero.frame.minX, accuracy: 2)
+        XCTAssertEqual(add.frame.width, hero.frame.width, accuracy: 2)
+        XCTAssertGreaterThanOrEqual(add.frame.minY - hero.frame.maxY, 24)
+        XCTAssertGreaterThanOrEqual(app.buttons["home-section-home-continueWatching"].frame.minY - add.frame.maxY, 24)
+        XCTAssertFalse(app.navigationBars["Customize Home"].buttons["home-section-add"].exists,
+                       "The full-width action replaces the small toolbar icon.")
         XCTAssertTrue(reorder.isHittable, app.debugDescription)
         XCTAssertGreaterThan(reorder.frame.minX, app.frame.midX)
         XCTAssertTrue(app.buttons["home-section-add-bottom"].exists)
@@ -1276,11 +1481,11 @@ final class SettingsInteractionTests: XCTestCase {
         let same = app.buttons["Match server"]
         XCTAssertTrue(same.waitForExistence(timeout: 3), app.debugDescription)
         same.tap()
-        XCTAssertFalse(app.staticTexts["Replace your row arrangement?"].exists)
+        XCTAssertFalse(app.staticTexts["Replace your section arrangement?"].exists)
 
         preset.tap()
         app.buttons["Combined rows"].tap()
-        XCTAssertTrue(app.staticTexts["Replace your row arrangement?"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Replace your section arrangement?"].waitForExistence(timeout: 3))
         capture("home-row-preset-confirmation")
         if app.buttons["Cancel"].exists {
             app.buttons["Cancel"].tap()
@@ -1289,7 +1494,7 @@ final class SettingsInteractionTests: XCTestCase {
             XCTAssertTrue(dismissRegion.exists, app.debugDescription)
             dismissRegion.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.95)).tap()
         }
-        XCTAssertTrue(app.staticTexts["Replace your row arrangement?"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Replace your section arrangement?"].waitForNonExistence(timeout: 3))
         XCTAssertTrue(preset.label.contains("Match server") || preset.value as? String == "Match server")
 
         preset.tap()
@@ -1297,7 +1502,7 @@ final class SettingsInteractionTests: XCTestCase {
         let confirm = app.buttons["Combined rows"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 3), app.debugDescription)
         confirm.tap()
-        XCTAssertTrue(app.staticTexts["Replace your row arrangement?"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Replace your section arrangement?"].waitForNonExistence(timeout: 3))
         XCTAssertTrue(app.navigationBars["Customize Home"].exists)
         XCTAssertTrue(app.buttons["home-section-home-recentlyAdded"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["HIDDEN"].exists)
@@ -1311,7 +1516,12 @@ final class SettingsInteractionTests: XCTestCase {
         let heroY = hero.frame.minY
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).count, 0)
         let reorder = app.navigationBars["Customize Home"].buttons["home-section-reorder"]
-        reorder.tap()
+        let original = app.buttons["home-section-home-continueWatching"]
+        original.press(forDuration: 1)
+        let menu = app.collectionViews.buttons["Reorder"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.collectionViews.buttons["Remove section"].exists)
+        menu.tap()
         XCTAssertEqual(reorder.label, "Done")
         XCTAssertFalse(app.buttons["home-row-preset"].isEnabled)
         XCTAssertFalse(app.buttons["home-section-add"].isEnabled)
@@ -1360,7 +1570,11 @@ final class SettingsInteractionTests: XCTestCase {
             XCTAssertFalse(watching.exists)
             let add = app.buttons[identifier]
             reveal(add)
+            XCTAssertEqual(add.frame.width, app.frame.width - 48, accuracy: 2,
+                           "Both Add section actions must fill the page's content width.")
             add.tap()
+            XCTAssertTrue(app.buttons["home-add-collection"].label.contains("Create section"))
+            XCTAssertTrue(app.staticTexts["Available sections"].exists)
             let option = app.buttons["home-add-home-continueWatching"]
             XCTAssertTrue(option.waitForExistence(timeout: 3), app.debugDescription)
             option.tap()
@@ -1373,13 +1587,86 @@ final class SettingsInteractionTests: XCTestCase {
         }
     }
 
+    func testFeaturedCardIncludingMetadataAndBottomPaddingSelectsExactlyOnce() {
+        app.launchArguments = ["--featured-card-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        let card = app.buttons["Featured title"]
+        XCTAssertTrue(card.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(card.frame.width, min(440, max(220, app.windows.firstMatch.frame.width - 48)), accuracy: 1)
+        XCTAssertEqual(card.frame.height, card.frame.width * 1.125, accuracy: 1,
+                       "The touch target must cover the artwork's full height, not just its upper image.")
+        capture("featured-card-touch-target")
+        let count = app.staticTexts["featured-selection-count"]
+        for (index, point) in [
+            CGVector(dx: 0.5, dy: 0.15),
+            CGVector(dx: 0.5, dy: 0.75),
+            CGVector(dx: 0.5, dy: 0.90),
+            CGVector(dx: 0.85, dy: 0.96)
+        ].enumerated() {
+            card.coordinate(withNormalizedOffset: point).tap()
+            XCTAssertTrue(count.wait(for: \.label, toEqual: "\(index + 1)", timeout: 3),
+                          "The entire card must select exactly once at \(point): \(app.debugDescription)")
+        }
+        let following = app.staticTexts["featured-following-row"]
+        let initialY = following.frame.minY
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+            .press(forDuration: 0.05, thenDragTo:
+                card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+        XCTAssertLessThan(following.frame.minY, initialY - 80)
+        XCTAssertEqual(count.label, "4", "Scrolling must not activate the card.")
+    }
+
+    func testCollectionSelectionOpensEditorAndKeepsSettingsAcrossNestedNavigation() {
+        app.launchArguments = [
+            "--collection-settings-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"
+        ]
+        app.launch()
+        let add = app.buttons["home-section-add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), app.debugDescription)
+        add.tap()
+        app.buttons["home-add-collection"].tap()
+        let weekend = button("Weekend picks")
+        XCTAssertTrue(weekend.waitForExistence(timeout: 5), app.debugDescription)
+        weekend.tap()
+        XCTAssertTrue(app.navigationBars["Create section"].waitForExistence(timeout: 5), app.debugDescription)
+        let landscape = app.segmentedControls.buttons["Landscape"]
+        XCTAssertTrue(landscape.exists, app.debugDescription)
+        landscape.tap()
+        XCTAssertTrue(app.staticTexts["Orbit"].waitForExistence(timeout: 5), app.debugDescription)
+        capture("collection-section-created-from-picker")
+
+        let source = app.buttons["collection-section-source"]
+        reveal(source)
+        source.tap()
+        let favorites = button("Favorites")
+        XCTAssertTrue(favorites.waitForExistence(timeout: 5), app.debugDescription)
+        favorites.tap()
+        XCTAssertTrue(app.navigationBars["Create section"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Favorites"].exists, app.debugDescription)
+        XCTAssertTrue(landscape.isSelected)
+        let save = app.buttons["collection-section-save"]
+        reveal(save)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Add section"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Customize Home"].waitForExistence(timeout: 5))
+        let section = button("Favorites")
+        reveal(section)
+        section.tap()
+        XCTAssertTrue(app.navigationBars["Edit section"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(landscape.isSelected)
+        XCTAssertTrue(app.staticTexts["Orbit"].waitForExistence(timeout: 5))
+        capture("collection-section-reopened-after-saving")
+    }
+
     private func openSettingsPage(
         _ title: String, verifyTitleLayout: Bool = true, arguments: [String] = []
     ) {
         launch(settingsRoot: true, arguments: arguments)
         let parent: String? = switch title {
-        case "Customize Home", "Navigation", "Detail Page": "Screens & Navigation"
-        case "Theme", "Spoiler Protection", "Circadian Mode": "Appearance"
+        case "Customize Home", "Customize Libraries", "Navigation", "Detail Page", "Spoiler Protection":
+            "Screens & Navigation"
+        case "Theme", "Circadian Mode": "Appearance"
         default: nil
         }
         if let parent {

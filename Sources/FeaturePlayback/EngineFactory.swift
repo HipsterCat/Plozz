@@ -9,7 +9,7 @@ import CoreModels
 /// (AVPlayer) engine, and the composition root (`AppShell`, which *can* depend on
 /// `EnginePlozzigen`) injects a `makePlozzigen` closure that constructs the
 /// Plozzigen (AetherEngine) engine. The view model picks a
-/// ``CoreModels/PlaybackEngineKind`` via ``CoreModels/EngineRouter`` and calls the
+/// ``CoreModels/PlaybackEngineKind`` via `EngineSelection` and calls the
 /// matching closure here.
 ///
 /// The default value (``native``) supplies only the native engine, so existing

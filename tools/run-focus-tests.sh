@@ -34,7 +34,8 @@ BUILD_ARGS=(
   -destination "platform=tvOS Simulator,id=$PLOZZ_SIM_ID"
   -parallel-testing-enabled NO
   -derivedDataPath "${PLOZZ_FOCUS_DERIVED_DATA:-$PWD/.build/focus-shared-root-derived-data}"
-  "${PACKAGE_RESOLUTION_ARGS[@]}" "$@" CODE_SIGNING_ALLOWED=NO
+  # Hosted timing assertions exercise optimized code while retaining DEBUG test seams.
+  "${PACKAGE_RESOLUTION_ARGS[@]}" SWIFT_OPTIMIZATION_LEVEL=-O "$@" CODE_SIGNING_ALLOWED=NO
 )
 set +e
 python3 tools/run-bounded.py "${PLOZZ_FOCUS_BUILD_TIMEOUT:-2400}" "hosted focus build" -- \

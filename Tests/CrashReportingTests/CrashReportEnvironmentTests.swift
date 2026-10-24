@@ -1,4 +1,5 @@
 import XCTest
+import CoreModels
 @testable import CrashReporting
 
 /// Covers automatic build-channel tagging and the reporter lifecycle.
@@ -38,6 +39,36 @@ final class CrashReportEnvironmentTests: XCTestCase {
     }
 
     // MARK: - Reporter lifecycle
+
+    private final class ConsentStore: CrashReportingSettingsStoring, @unchecked Sendable {
+        var value: CrashReportingSettings?
+        init(_ value: CrashReportingSettings?) { self.value = value }
+        func load() -> CrashReportingSettings { value ?? .default }
+        func loadStored() -> CrashReportingSettings? { value }
+        func save(_ settings: CrashReportingSettings) { value = settings }
+    }
+
+    @MainActor
+    func testNewAndLegacyInstallsNeverStartReporterBeforeConsent() {
+        for previous: CrashReportingSettings? in [nil, .init(isEnabled: true), .init(isEnabled: false)] {
+            let consent = CrashReportingSettingsModel(store: ConsentStore(previous))
+            let spy = SpyReporter()
+            let controller = CrashReportingController(reporter: spy, isConfigured: true)
+            for channel in ["debug", "testflight", "production"] {
+                controller.apply(enabled: consent.isEnabled, context: context(channel))
+            }
+            XCTAssertTrue(spy.starts.isEmpty)
+            consent.isEnabled = false
+            controller.apply(enabled: consent.isEnabled, context: context("testflight"))
+            XCTAssertTrue(spy.starts.isEmpty)
+            consent.isEnabled = true
+            controller.apply(enabled: consent.isEnabled, context: context("testflight"))
+            XCTAssertEqual(spy.starts, ["testflight"])
+            consent.isEnabled = false
+            controller.apply(enabled: consent.isEnabled, context: context("testflight"))
+            XCTAssertEqual(spy.stops, 1)
+        }
+    }
 
     @MainActor
     private final class SpyReporter: CrashReporter {

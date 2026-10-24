@@ -17,6 +17,11 @@ final class PlexPINPresentationTests: XCTestCase {
         try await verifyPINPresentation(isChangingSelection: true)
     }
 
+    func testExpiredAccountRecoveryCancelDismissesOnlyProposedSelection() async throws {
+        try await verifyPINPresentation(isChangingSelection: true, expiredAccount: true)
+        try await verifyPINPresentation(isChangingSelection: false, expiredAccount: true)
+    }
+
     func testShellCannotFallBackToOwnerAfterHomeCredentialSourceChanges() async throws {
         try await verifyShellTokenDenial(afterCredentialReplacement: true)
     }
@@ -56,12 +61,16 @@ final class PlexPINPresentationTests: XCTestCase {
             return "FIXTURE-CLOUD"
         }
         app.plexHomeUsers.plexServerTokenResolve = { _, _, _ in "FIXTURE-SERVER" }
+        XCTAssertFalse(app.accountsProviders.profileShowsPINLock(
+            try XCTUnwrap(app.profiles.profiles.first { $0.id == disabled.id })
+        ))
         app.selectProfile(disabled.id)
         XCTAssertNil(app.plexHomeUsers.pendingPlexPINRequest)
         XCTAssertTrue(app.accountsProviders.activeAccountIDs.isEmpty)
         XCTAssertNil(app.accountsProviders.tokenResolver("plex"))
 
         app.setAccount("plex", enabled: true, for: disabled.id)
+        XCTAssertTrue(app.accountsProviders.profileShowsPINLock(app.profiles.activeProfile))
         XCTAssertEqual(app.plexHomeUsers.pendingPlexPINRequest?.accountID, "plex")
         XCTAssertNil(app.accountsProviders.provider(forAccountID: "plex"))
         await app.plexHomeUsers.waitForPlexPINRequirementCheck()
@@ -70,6 +79,7 @@ final class PlexPINPresentationTests: XCTestCase {
         XCTAssertEqual(app.accountsProviders.tokenResolver("plex"), "FIXTURE-SERVER")
 
         app.setAccount("plex", enabled: false, for: disabled.id)
+        XCTAssertFalse(app.accountsProviders.profileShowsPINLock(app.profiles.activeProfile))
         XCTAssertNil(app.plexHomeUsers.pendingPlexPINRequest)
         XCTAssertNil(app.plexHomeUsers.plexDiscoverTokens.token(for: "plex"))
         XCTAssertNil(app.accountsProviders.tokenResolver("plex"))
@@ -154,7 +164,7 @@ final class PlexPINPresentationTests: XCTestCase {
         XCTAssertEqual(app.profiles.activeProfile.homeUserBinding(forPlexAccount: accountID)?.homeUserID, "protected")
     }
 
-    private func verifyPINPresentation(isChangingSelection: Bool) async throws {
+    private func verifyPINPresentation(isChangingSelection: Bool, expiredAccount: Bool = false) async throws {
         let suite = "PlexPINPresentationTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -176,7 +186,8 @@ final class PlexPINPresentationTests: XCTestCase {
             switchProfile: { _ in XCTFail("The default profile has no alternate fallback.") }
         )
         model.plexHomeUsersFetch = { _, _ in
-            [PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true)]
+            if expiredAccount { throw AppError.unauthorized }
+            return [PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true)]
         }
         model.plexHomeUserSwitch = { _, _, _, _ in
             XCTFail("The PIN sheet must remain even if an owner-authorized switch would succeed.")
@@ -193,6 +204,10 @@ final class PlexPINPresentationTests: XCTestCase {
             model.ensurePlexIdentityForActiveProfile()
         }
         await model.waitForPlexPINRequirementCheck()
+        if expiredAccount {
+            XCTAssertEqual(model.plexPINEntryAvailability, .unavailable)
+            XCTAssertEqual(model.plexPINError, AppError.unauthorized.userMessage)
+        }
         let request = try XCTUnwrap(model.pendingPlexPINRequest)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)

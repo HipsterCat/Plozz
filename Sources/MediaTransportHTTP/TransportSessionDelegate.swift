@@ -110,7 +110,7 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
         let space = challenge.protectionSpace
         #if canImport(Security)
         guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust else {
-            completionHandler(isAnonymousMediaSession ? .cancelAuthenticationChallenge : .performDefaultHandling, nil)
+            completionHandler(unsupportedChallengeDisposition(space), nil)
             return
         }
         guard challengeMatchesOrigin(space) else {
@@ -168,7 +168,20 @@ final class TransportSessionDelegate: NSObject, URLSessionDataDelegate, @uncheck
             return
         }
 
-        completionHandler(.performDefaultHandling, nil)
+        completionHandler(unsupportedChallengeDisposition(space), nil)
+    }
+
+    func unsupportedChallengeDisposition(_ space: URLProtectionSpace) -> URLSession.AuthChallengeDisposition {
+        guard !isAnonymousMediaSession else { return .cancelAuthenticationChallenge }
+        if case .password = credential,
+           space.authenticationMethod == NSURLAuthenticationMethodNTLM
+            || space.authenticationMethod == NSURLAuthenticationMethodNegotiate {
+            // IIS can advertise Windows authentication before Basic. Decline
+            // the unsupported scheme so URLSession can offer Basic or Digest;
+            // their normal origin and immutable-policy checks still apply.
+            return .rejectProtectionSpace
+        }
+        return .performDefaultHandling
     }
 
     #if canImport(Security)

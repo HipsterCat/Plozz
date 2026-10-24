@@ -230,7 +230,9 @@ public final class CardCaptionSettingsStore: CardCaptionSettingsStoring, @unchec
     public func load() -> CardCaptionSettings {
         do {
             if let data = defaults.data(forKey: key) {
-                defaults.set(true, forKey: key + ".migrated")
+                if !defaults.bool(forKey: key + ".migrated") {
+                    defaults.set(true, forKey: key + ".migrated")
+                }
                 return try JSONDecoder().decode(CardCaptionSettings.self, from: data)
             }
             guard !defaults.bool(forKey: key + ".migrated") else { return .default }

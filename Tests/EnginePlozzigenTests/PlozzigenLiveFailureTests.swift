@@ -3,6 +3,7 @@ import XCTest
 import AetherEngine
 import AVFoundation
 import CoreModels
+@testable import FeaturePlayback
 @testable import EnginePlozzigen
 
 final class PlozzigenLiveFailureTests: XCTestCase {
@@ -98,13 +99,14 @@ final class PlozzigenLiveFailureTests: XCTestCase {
     @MainActor
     func testNativeCapturePreservesUnderlyingErrorsAndIsExplicitWhenNoItemExists() async {
         let error = NSError(domain: "CoreMediaErrorDomain", code: -12939)
-        let capture = PlozzigenNativeFailureCapture()
+        let capture = NativePlaybackFailureCapture()
         let absent = await capture.capture(item: nil, fallbackError: error)
         XCTAssertEqual(absent.nativeCapture, .noItem)
         XCTAssertEqual(absent.nativeErrors.map(\.code), [-12939])
         let item = AVPlayerItem(url: URL(fileURLWithPath: "/fixture"))
-        let result = await capture.capture(item: item, fallbackError: nil) { _ in
-            .init(nativeCapture: .captured, nativeErrors: PlaybackFailureEvidence.ErrorCode.chain(error),
+        let result = await capture.capture(item: item, fallbackError: nil, timeout: 0.5) { _ in
+            XCTAssertFalse(Thread.isMainThread)
+            return .init(nativeCapture: .captured, nativeErrors: PlaybackFailureEvidence.ErrorCode.chain(error),
                   nativeLogErrors: [.init(domain: "CoreMediaErrorDomain", code: -12312)])
         }
         XCTAssertEqual(result.nativeCapture, .captured)
@@ -114,7 +116,7 @@ final class PlozzigenLiveFailureTests: XCTestCase {
 
     @MainActor
     func testNativeCaptureTimesOutAndDoesNotAdmitUnlimitedBlockedReaders() async {
-        let capture = PlozzigenNativeFailureCapture()
+        let capture = NativePlaybackFailureCapture()
         let item = AVPlayerItem(url: URL(fileURLWithPath: "/fixture"))
         let release = DispatchSemaphore(value: 0)
         defer { release.signal(); release.signal() }

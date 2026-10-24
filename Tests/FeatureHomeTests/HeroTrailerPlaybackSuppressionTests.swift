@@ -1,12 +1,82 @@
 #if canImport(UIKit) && canImport(AVFoundation)
 import AVFoundation
 import CoreVideo
+import CoreModels
 import FeatureHomeCore
 import UIKit
 import XCTest
 
 @MainActor
 final class HeroTrailerPlaybackSuppressionTests: XCTestCase {
+    func testFeaturedCoordinatorPlaysResolvedTrailerAndWithdrawsOnScrollAway() async throws {
+        let url = try await makeVideo()
+        let controller = HeroTrailerController()
+        let coordinator = FeaturedTrailerCoordinator(settleDelay: .zero)
+        defer { coordinator.stop() }
+        let row = UUID()
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie).taggingSource("account")
+        coordinator.update(
+            rowID: row, item: item, scope: ObjectIdentifier(controller), priority: 0,
+            muted: false, controller: controller, resolve: { selected in
+                XCTAssertEqual(selected.sourceAccountID, "account")
+                XCTAssertEqual(selected.id, "movie")
+                return HeroTrailerSource(ownerItemID: selected.id, trailerItemID: "clip", url: url, duration: 30)
+            }
+        )
+        try await wait { controller.isPlaying && controller.player.currentTime().seconds > 0.1 }
+        XCTAssertTrue(controller.isClaimed(by: .featured, itemID: try XCTUnwrap(coordinator.playerItemID)))
+        XCTAssertFalse(controller.isMuted)
+        coordinator.withdraw(rowID: row)
+        XCTAssertNil(controller.player.currentItem)
+        XCTAssertFalse(controller.isFeaturedReserved)
+    }
+
+    func testFeaturedReservationRejectsHiddenHeroCommandsAndRestoresRecedePause() async throws {
+        let url = try await makeVideo()
+        let controller = HeroTrailerController()
+        defer { controller.stop() }
+        controller.setPaused(true)
+        let owner = UUID()
+        XCTAssertTrue(controller.reserveFeaturedSurface(owner: owner))
+        controller.play(itemID: "featured", resolvedURL: url, muted: true, featuredOwner: owner)
+        try await wait { controller.isPlaying }
+        let current = controller.player.currentItem
+        controller.stopHero()
+        controller.setPaused(true)
+        controller.setMuted(false)
+        controller.prepare(itemID: "late-hero", resolvedURL: url, muted: false)
+        controller.play(itemID: "late-hero", resolvedURL: url, muted: false)
+        controller.claimSurface(.home, itemID: "featured")
+        XCTAssertTrue(controller.player.currentItem === current)
+        XCTAssertTrue(controller.isMuted)
+        XCTAssertFalse(controller.isPaused)
+        controller.releaseFeaturedSurface(owner: UUID())
+        XCTAssertEqual(controller.currentItemID, "featured")
+        controller.releaseFeaturedSurface(owner: owner)
+        XCTAssertNil(controller.player.currentItem)
+        XCTAssertTrue(controller.isPaused, "The receded hero must not resume offscreen.")
+        XCTAssertFalse(controller.isFeaturedReserved)
+    }
+
+    func testFeaturedCannotOverrideFullPlaybackOrRestartAfterGlobalStop() async throws {
+        let url = try await makeVideo()
+        let controller = HeroTrailerController()
+        defer { controller.stop() }
+        let owner = UUID()
+        XCTAssertTrue(controller.reserveFeaturedSurface(owner: owner))
+        controller.prepare(itemID: "featured", resolvedURL: url, muted: true, featuredOwner: owner)
+        let fullPlayer = UUID()
+        controller.suspendForPlayback(owner: fullPlayer)
+        XCTAssertFalse(controller.reserveFeaturedSurface(owner: UUID()))
+        controller.startPrepared(featuredOwner: owner)
+        XCTAssertEqual(controller.player.rate, 0)
+        controller.stop()
+        controller.resumeAfterPlayback(owner: fullPlayer)
+        controller.play(itemID: "late", resolvedURL: url, muted: false, featuredOwner: owner)
+        XCTAssertNil(controller.currentItemID)
+        XCTAssertNil(controller.player.currentItem)
+    }
+
     func testDepartingDetailCannotStopTheSameTitlesNewerTrailerOwner() async throws {
         let url = try await makeVideo()
         let controller = HeroTrailerController()

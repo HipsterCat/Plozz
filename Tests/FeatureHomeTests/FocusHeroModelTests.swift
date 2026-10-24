@@ -11,6 +11,55 @@ import PlozzCoreUI
 /// backdrop steers off the picture the focused card already shows.
 @MainActor
 final class FocusHeroModelTests: XCTestCase {
+    func testCustomDetailsUseSpaceAboveTheActualRowAndVisibleNavigation() {
+        let bottom = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
+        for rowHeight: CGFloat in [340, 420, 608, 900] {
+            for top: CGFloat in [56, 84, 150, 220] {
+                XCTAssertEqual(
+                    FocusHeroLayout.availableDetailsHeight(
+                        columnOffset: FocusHeroLayout.columnOffset(rowHeight: rowHeight), minimumTop: top
+                    ),
+                    max(0, max(360, bottom - rowHeight) - 40 - top)
+                )
+            }
+        }
+        XCTAssertGreaterThan(
+            FocusHeroLayout.availableDetailsHeight(
+                columnOffset: FocusHeroLayout.columnOffset(rowHeight: 420), minimumTop: 56
+            ),
+            FocusHeroLayout.detailsFootprintHeight
+        )
+        XCTAssertEqual(FocusHeroLayout.availableDetailsHeight(columnOffset: -20, minimumTop: 56), 244)
+    }
+
+    func testNativeColumnFitUsesDestinationSizeWithoutAnimatingItsScale() {
+        let content = UIView(frame: CGRect(x: 0, y: 0, width: 1920, height: 320))
+        let motion = FocusHeroRowMotion()
+        motion.columnContent = content
+        motion.height = 608
+        motion.configureColumnFit(.init(minimumTop: 56, leading: 80, rowHeight: 608))
+        motion.recordColumnContentHeight(500)
+        XCTAssertEqual(content.transform.a, 264 / 500, accuracy: 0.001)
+        motion.height = 420
+        motion.configureColumnFit(.init(minimumTop: 56, leading: 80, rowHeight: 420))
+        XCTAssertEqual(content.transform.a, 452 / 500, accuracy: 0.001)
+        XCTAssertEqual(content.transform.tx, (80 - content.bounds.midX) * (1 - 452 / 500), accuracy: 0.001)
+        XCTAssertEqual(content.transform.ty, (320 - content.bounds.midY) * (1 - 452 / 500), accuracy: 0.001)
+        XCTAssertNil(content.layer.animationKeys())
+    }
+
+    func testLibraryHeaderClearanceIsReleasedBelowTheFirstRow() {
+        let visibility = ShowcaseNavigationVisibility()
+        let rows = ["first", "second"]
+        XCTAssertTrue(visibility.showsNavigation(in: rows))
+        visibility.focusedRowID = "second"
+        XCTAssertFalse(visibility.showsNavigation(in: rows))
+        visibility.focusedRowID = "first"
+        XCTAssertTrue(visibility.showsNavigation(in: rows))
+        visibility.focusedRowID = "removed"
+        XCTAssertTrue(visibility.showsNavigation(in: rows))
+    }
+
     private func item(_ id: String) -> MediaItem {
         MediaItem(id: id, title: id, kind: .movie)
     }

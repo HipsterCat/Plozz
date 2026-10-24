@@ -72,6 +72,15 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(result["appFrames"], [{"stackSamples": 20, "frame": "main (in FocusHost)"}])
                 self.assertEqual([row["stackSamples"] for row in result["backgroundAppFrames"]], [8, 7])
                 self.assertIn("include waiting", result["note"])
+                self.assertTrue(result["binaryImagesAvailable"])
+
+    def test_finalized_sample_can_explicitly_lack_the_binary_image_map(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.txt"
+            path.write_text(stack_sample().split("Binary Images:")[0] + "Binary images description not available\n")
+            result = performance.stack_sample_summary(path, 42)
+            self.assertFalse(result["binaryImagesAvailable"])
+            self.assertEqual(len(result["appFrames"]), 1)
 
     def test_stack_sample_rejects_wrong_process_truncation_and_missing_main_thread(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -252,7 +261,7 @@ class RunnerFailureTests(unittest.TestCase):
             self.assertEqual(json.loads((lane.output / "result.json").read_text())["status"], "failed")
 
     def test_profile_lifecycle_preserves_evidence_and_never_drives_without_recorder(self):
-        for failure in (None, "build", "identity", "readiness", "test", "early-exit",
+        for failure in (None, "detail-return", "missing-journal", "build", "identity", "readiness", "test", "early-exit",
                         "finalize", "summary", "process", "sample"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -266,7 +275,13 @@ class RunnerFailureTests(unittest.TestCase):
                     "CFBundleIdentifier": bundle, "CFBundleExecutable": "Wrong" if failure == "identity" else "FocusHost",
                 }))
                 args = argparse.Namespace(platform="tvOS", sim_id="owned", timeout=120, names=[],
-                                          operation="profile", template="Process Sample")
+                                          operation="profile", template="Process Sample",
+                                          workload="detail-return" if failure in ("detail-return", "missing-journal")
+                                          else "home-navigation")
+                if failure == "detail-return":
+                    journal = root / "data/Library/Caches/Plozz/playback-trace.log"
+                    journal.parent.mkdir(parents=True)
+                    journal.write_text("fixture focus journal\n")
                 lane = performance.Lane(root, args, ())
                 labels = []
                 class Recorder:
@@ -293,11 +308,18 @@ class RunnerFailureTests(unittest.TestCase):
                         raise performance.Failure("build failure")
                     if label == "navigation-test":
                         self.assertIsNone(recorder.returncode)
+                        expected = (
+                            "DetailReturnFocusRemoteTests/testProfilePopulatedShowcaseDetailReturns"
+                            if args.workload == "detail-return"
+                            else "ProductionHomeNavigationTests/testNavigateProductionHomeWithNativeCards"
+                        )
+                        self.assertIn("-only-testing:PlozzHomeRemoteTests/" + expected, argv)
                         if failure == "test":
                             raise performance.Failure("driver failure")
                     values = {
                         "fixture-launch": bundle + ": 42\n", "fixture-container": str(app),
                         "fixture-process": str(app / "FocusHost"),
+                        "fixture-data-container": str(root / "data"),
                         "fixture-final-process": "different" if failure == "process" else str(app / "FocusHost"),
                         "navigation-summary": json.dumps(summary(0 if failure == "summary" else 1)),
                     }
@@ -305,7 +327,7 @@ class RunnerFailureTests(unittest.TestCase):
                 with patch.object(lane, "command", side_effect=command), \
                         patch.object(performance.subprocess, "Popen", side_effect=spawn), \
                         patch.object(performance, "stop_owned") as stop:
-                    if failure:
+                    if failure and failure != "detail-return":
                         with self.assertRaises(performance.Failure):
                             lane.profile_navigation([])
                     else:
@@ -313,6 +335,12 @@ class RunnerFailureTests(unittest.TestCase):
                         self.assertEqual(result["pid"], 42)
                         self.assertTrue(result["stacks"]["mainThreadFrames"])
                         self.assertIn("--home-artwork-cache-namespace=" + lane.output.name, result["arguments"])
+                        self.assertEqual(result["workload"], args.workload)
+                        if args.workload == "detail-return":
+                            self.assertIn("--populated-home-return", result["arguments"])
+                            self.assertIn("--return-focus-trace", result["arguments"])
+                            self.assertEqual((lane.output / "navigation/handoff-journal.log").read_text(),
+                                             "fixture focus journal\n")
                     self.assertEqual(stop.call_count, int(failure == "test"))
                 self.assertEqual("fixture-terminate" in labels, failure not in ("build", "identity"))
                 self.assertEqual("navigation-test" in labels, failure not in ("build", "identity", "readiness"))

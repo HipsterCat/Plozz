@@ -34,17 +34,70 @@ final class PerformanceCrashContextTests: XCTestCase {
         XCTAssertNil(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics)?.context?[CrashPerformanceContext.key])
         diagnostics.start()
         let span = try XCTUnwrap(diagnostics.begin(.shareScan))
+        event.timestamp = Date()
         XCTAssertNotNil(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics)?.context?[CrashPerformanceContext.key])
         diagnostics.stop()
         span.finish(.failed)
         XCTAssertNil(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics)?.context?[CrashPerformanceContext.key])
         diagnostics.start()
         defer { diagnostics.stop() }
+        XCTAssertNil(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics)?.context?[CrashPerformanceContext.key])
+        event.timestamp = Date()
         let clean = try XCTUnwrap(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics))
         let active = clean.context?[CrashPerformanceContext.key]?["active"] as? [Any]
         let recent = clean.context?[CrashPerformanceContext.key]?["recent"] as? [Any]
         XCTAssertEqual(active?.count, 0)
         XCTAssertEqual(recent?.count, 0)
+    }
+
+    func testReplayedCrashDoesNotReceiveRelaunchOperationsOrKeepUnattributedContext() throws {
+        let event = Event(level: .fatal)
+        event.timestamp = Date().addingTimeInterval(-60)
+        event.context = [CrashPerformanceContext.key: context()]
+        let exception = Exception(value: "SIGABRT", type: "Crash")
+        event.exceptions = [exception]
+        let diagnostics = PerformanceDiagnostics()
+        diagnostics.start()
+        defer { diagnostics.stop() }
+        let span = try XCTUnwrap(diagnostics.begin(.homeLoad, provider: .plex))
+        defer { span.finish(.cancelled) }
+
+        let clean = try XCTUnwrap(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics))
+        XCTAssertTrue(clean === event)
+        XCTAssertEqual(clean.level, .fatal)
+        XCTAssertEqual(clean.exceptions?.count, 1)
+        XCTAssertNil(clean.context?[CrashPerformanceContext.key])
+        XCTAssertEqual(diagnostics.snapshot()?.active.count, 1)
+    }
+
+    func testUnknownOrFutureEventTimeDoesNotReceiveCurrentOperations() throws {
+        let diagnostics = PerformanceDiagnostics()
+        diagnostics.start()
+        defer { diagnostics.stop() }
+        let span = try XCTUnwrap(diagnostics.begin(.serverRequest))
+        defer { span.finish(.cancelled) }
+
+        for timestamp: Date? in [nil, Date().addingTimeInterval(60)] {
+            let event = Event(level: .error)
+            event.timestamp = timestamp
+            event.context = [CrashPerformanceContext.key: context()]
+            let clean = try XCTUnwrap(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics))
+            XCTAssertTrue(clean === event)
+            XCTAssertNil(clean.context?[CrashPerformanceContext.key])
+        }
+    }
+
+    func testFatalReportWithSDKFallbackTimestampDoesNotReceiveRelaunchContext() throws {
+        let diagnostics = PerformanceDiagnostics()
+        diagnostics.start()
+        defer { diagnostics.stop() }
+        let span = try XCTUnwrap(diagnostics.begin(.homeLoad))
+        defer { span.finish(.cancelled) }
+        let event = Event(level: .fatal)
+        event.timestamp = Date()
+        let clean = try XCTUnwrap(SentryCrashReporter.prepareEvent(event, diagnostics: diagnostics))
+        XCTAssertNil(clean.context?[CrashPerformanceContext.key])
+        XCTAssertEqual(clean.level, .fatal)
     }
 
     func testStrictRedactionRebuildsOnlyTypedFieldsAndRemovesPrivatePayloads() throws {

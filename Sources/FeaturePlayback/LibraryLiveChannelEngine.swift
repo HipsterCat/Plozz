@@ -353,6 +353,10 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
     }
 
     public var supportsConcurrentPlayback: Bool { underlyingEngine.supportsConcurrentPlayback }
+    public var liveStartupBuffer: LivePlaybackBuffer {
+        guard hasSource, case .stream? = currentInput else { return .automatic }
+        return underlyingEngine.liveStartupBuffer
+    }
 
     public func configureLiveOutput(_ policy: LiveChannelOutputPolicy) {
         outputPolicy = policy

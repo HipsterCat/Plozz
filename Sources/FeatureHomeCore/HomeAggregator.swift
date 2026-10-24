@@ -168,6 +168,7 @@ public struct HomeAggregator: Sendable {
         /// inventory order. Empty blocks (no enabled/non-empty rows) are dropped.
         public var librarySections: [HomeLibrarySectionGroup]
         public var serverRows: [HomeServerRow]
+        public var collectionRows: [HomeCollectionRow]
 
         public init(
             continueWatching: [MediaItem] = [],
@@ -175,7 +176,8 @@ public struct HomeAggregator: Sendable {
             watchlist: [MediaItem] = [],
             libraries: [AggregatedLibrary] = [],
             librarySections: [HomeLibrarySectionGroup] = [],
-            serverRows: [HomeServerRow] = []
+            serverRows: [HomeServerRow] = [],
+            collectionRows: [HomeCollectionRow] = []
         ) {
             self.continueWatching = continueWatching
             self.latest = latest
@@ -183,11 +185,12 @@ public struct HomeAggregator: Sendable {
             self.libraries = libraries
             self.librarySections = librarySections
             self.serverRows = serverRows
+            self.collectionRows = collectionRows
         }
 
         public var isEmpty: Bool {
             continueWatching.isEmpty && latest.isEmpty && watchlist.isEmpty
-                && libraries.isEmpty && librarySections.isEmpty && serverRows.isEmpty
+                && libraries.isEmpty && librarySections.isEmpty && serverRows.isEmpty && collectionRows.isEmpty
         }
     }
 
@@ -335,6 +338,7 @@ public struct HomeAggregator: Sendable {
     private struct ServerBatchKey: Hashable {
         let accountIndex: Int
         let libraryID: String?
+        let isAccountWideHistory: Bool
     }
 
     private enum Request: Sendable {
@@ -342,12 +346,13 @@ public struct HomeAggregator: Sendable {
         case feed(Int, Feed, libraryIDs: [String]?)
         case library(Int, AggregatedLibrary, LibraryHomeRowKind)
         case server(Int, [HomeServerRowDefinition])
+        case collection(Int, CollectionSection)
 
         var lane: RequestLane {
             switch self {
             case .libraries: .global(.libraries)
             case .feed(_, let feed, _): .global(feed.row)
-            case .library, .server: .libraryRows
+            case .library, .server, .collection: .libraryRows
             }
         }
     }
@@ -357,6 +362,7 @@ public struct HomeAggregator: Sendable {
         case feed(Int, Feed, Result<[MediaItem], AppError>, LibraryLoadDiagnostic?)
         case library(String, LibraryHomeRowKind, Result<[LibrarySection], AppError>)
         case server([HomeRowID: Result<[MediaItem], AppError>])
+        case collection(String, Result<[MediaItem], AppError>)
     }
 
     private struct LibraryContent {
@@ -417,7 +423,7 @@ public struct HomeAggregator: Sendable {
         let started = clock.now
         let serverInfo = accounts.sourceServerInfo()
         let seriesIdentities = accounts.map { _ in SeriesIdentities() }
-        let scopedAccounts = Set(accounts.indices.filter { index in
+        let scopedDiscoveryAccounts = Set(accounts.indices.filter { index in
             forceLibraryScoping || visibility.disabledKeys.contains {
                 $0.hasPrefix("\(accounts[index].account.id):")
             }
@@ -427,7 +433,7 @@ public struct HomeAggregator: Sendable {
             await withTaskGroup(of: (RequestLane, Response).self) { group in
                 var requests = accounts.indices.map(Request.libraries)
                 for index in accounts.indices {
-                    for feed in Feed.allCases where feed == .watchlist || !scopedAccounts.contains(index) {
+                    for feed in Feed.allCases where feed != .latest || !scopedDiscoveryAccounts.contains(index) {
                         requests.append(.feed(index, feed, libraryIDs: nil))
                     }
                 }
@@ -442,6 +448,18 @@ public struct HomeAggregator: Sendable {
                         } != false
                 }
                 var serverRows: [HomeRowID: HomeServerRow] = [:]
+                let collectionDefinitions = visibility.collectionSections.filter {
+                    $0.source.serverUserID != nil
+                        && visibility.isHomeRowVisible(HomeRowChoice(collectionSection: $0))
+                        && $0.source.libraryKey.map(visibility.isEnabled) != false
+                        && accounts.contains(where: $0.source.matches)
+                }
+                var collectionRows: [String: HomeCollectionRow] = [:]
+                for definition in collectionDefinitions {
+                    guard let index = accounts.firstIndex(where: definition.source.matches) else { continue }
+                    collectionRows[definition.id] = .init(definition: definition, isLoading: true)
+                    requests.append(.collection(index, definition))
+                }
                 var serverBatches: [ServerBatchKey: [HomeServerRowDefinition]] = [:]
                 var batchOrder: [ServerBatchKey] = []
                 for definition in definitions {
@@ -449,7 +467,10 @@ public struct HomeAggregator: Sendable {
                         continue
                     }
                     serverRows[definition.id] = .init(definition: definition, isLoading: true)
-                    let key = ServerBatchKey(accountIndex: index, libraryID: definition.section.libraryID)
+                    let key = ServerBatchKey(
+                        accountIndex: index, libraryID: definition.section.libraryID,
+                        isAccountWideHistory: definition.section.isAccountWideHistory
+                    )
                     if serverBatches[key] == nil { batchOrder.append(key) }
                     serverBatches[key, default: []].append(definition)
                 }
@@ -501,12 +522,10 @@ public struct HomeAggregator: Sendable {
                             let visible = tagged.filter {
                                 !$0.library.isMusic && visibility.isVisibleOnHome($0.key)
                             }
-                            if scopedAccounts.contains(index) {
-                                for feed in [Feed.continueWatching, .latest] {
-                                    requests.append(.feed(index, feed, libraryIDs: visible.filter {
-                                        !$0.library.isServerCollectionDirectory
-                                    }.map(\.library.id)))
-                                }
+                            if scopedDiscoveryAccounts.contains(index) {
+                                requests.append(.feed(index, .latest, libraryIDs: visible.filter {
+                                    !$0.library.isServerCollectionDirectory
+                                }.map(\.library.id)))
                             }
                             if perLibraryLimit != nil {
                                 for library in visible where perLibrary[library.key] == nil {
@@ -522,17 +541,9 @@ public struct HomeAggregator: Sendable {
                             }
                         case let .failure(error):
                             perAccount[index].failures[.libraries] = error
-                            if scopedAccounts.contains(index) {
-                                if error != .cancelled {
-                                    perAccount[index].continueWatchingDiagnostic = .init(
-                                        provider: accounts[index].provider.kind, operation: .homeContinueWatching,
-                                        failures: [.init(section: .browse, error: error)]
-                                    )
-                                }
-                                for kind in [HomeRowKind.continueWatching, .recentlyAdded] {
-                                    perAccount[index].completed.insert(kind)
-                                    perAccount[index].failures[kind] = error
-                                }
+                            if scopedDiscoveryAccounts.contains(index) {
+                                perAccount[index].completed.insert(.recentlyAdded)
+                                perAccount[index].failures[.recentlyAdded] = error
                             }
                         }
                     case let .feed(index, feed, result, diagnostic):
@@ -565,6 +576,12 @@ public struct HomeAggregator: Sendable {
                             case let .success(items): serverRows[id]?.items = items
                             case let .failure(error): serverRows[id]?.failure = error
                             }
+                        }
+                    case let .collection(id, result):
+                        collectionRows[id]?.isLoading = false
+                        switch result {
+                        case let .success(items): collectionRows[id]?.items = items
+                        case let .failure(error): collectionRows[id]?.failure = error
                         }
                     }
                     // Refill before publication so drawing a completed row never stalls
@@ -605,6 +622,9 @@ public struct HomeAggregator: Sendable {
                                 serverInfo: { serverInfo[$0] }, identitySources: identitySources,
                                 sortByRecency: true
                             )
+                            PlozzLog.app.info(
+                                "Home history accounts=\(accounts.count) returned=\(perAccount.reduce(0) { $0 + $1.continueWatching.count }) curated=\(groups.reduce(0) { $0 + $1.count }) visible=\(content.continueWatching.count) failedAccounts=\(perAccount.filter { $0.failures[.continueWatching] != nil }.count)"
+                            )
                         case .recentlyAdded:
                             content.latest = mergedRow(
                                 from: groups, limit: latestLimit,
@@ -621,10 +641,17 @@ public struct HomeAggregator: Sendable {
                             "HomeAgg.rowReady row=\(row.rawValue) ms=\(elapsedMS(from: started, to: clock.now))")
                     }
                     content.librarySections = content.libraries.compactMap {
-                        guard let group = perLibrary[$0.key]?.group, !group.isEmpty else { return nil }
+                        guard let group = perLibrary[$0.key]?.group else { return nil }
+                        let explicitlySelected = group.sections.contains { section in
+                            visibility.rowCustomization?.shown.contains(
+                                .library(key: group.library.key, section: section.id)
+                            ) == true
+                        }
+                        guard !group.isEmpty || explicitlySelected else { return nil }
                         return group
                     }
                     content.serverRows = definitions.compactMap { serverRows[$0.id] }
+                    content.collectionRows = collectionDefinitions.compactMap { collectionRows[$0.id] }
                     merging?.finish(.succeeded, metrics: .init(
                         items: content.continueWatching.count + content.latest.count + content.watchlist.count,
                         rows: content.librarySections.reduce(0) { $0 + $1.sections.count } + content.serverRows.count
@@ -680,18 +707,19 @@ public struct HomeAggregator: Sendable {
                     case .continueWatching:
                         if visibility.mergesNextUpRows {
                             items = try await provider.continueWatching(
-                                limit: continueWatchingLimit, inLibraries: libraryIDs
+                                limit: continueWatchingLimit, inLibraries: nil
                             )
                         } else if let row = visibility.rowCustomization?.availableServerRows.first(where: {
                             $0.accountID == resolved.account.id && $0.section.kind == .continueWatching
+                                && $0.section.isAccountWideHistory
                         }) {
                             items = try await provider.serverHomeItems(
                                 section: row.section, limit: continueWatchingLimit,
-                                excludingLibraryIDs: excludedLibraries(visibility, accountID: resolved.account.id)
+                                excludingLibraryIDs: []
                             )
                         } else {
                             items = try await provider.homeContinueWatching(
-                                limit: continueWatchingLimit, inLibraries: libraryIDs,
+                                limit: continueWatchingLimit, inLibraries: nil,
                                 separateNextUp: visibility.separatesNextUp
                                     || visibility.rowCustomization?.resolvedDefaults?
                                         .fallbackAccountIDs.contains(resolved.account.id) == true
@@ -782,7 +810,7 @@ public struct HomeAggregator: Sendable {
                     }
                 }
                 return sections.filter {
-                    !$0.items.isEmpty && visibility.isHomeRowVisible(
+                    visibility.isHomeRowVisible(
                         HomeRowChoice(section: $0, library: library)
                     )
                 }.map { section in
@@ -792,6 +820,15 @@ public struct HomeAggregator: Sendable {
                     }
                     return section
                 }
+            })
+        case let .collection(index, definition):
+            let resolved = accounts[index]
+            return .collection(definition.id, await fetch("collection-section", from: resolved) {
+                let page = try await CollectionPreviewLoader.load(
+                    selection: definition.source, limit: perLibraryLimit,
+                    provider: resolved.provider, visibility: visibility
+                )
+                return page.items.filter { $0.kind == .movie || $0.kind == .series }
             })
         case let .server(index, definitions):
             let resolved = accounts[index]
@@ -808,7 +845,8 @@ public struct HomeAggregator: Sendable {
             }) {
                 await resolved.provider.serverHomeItems(
                     sections: definitions.map(\.section), limit: perLibraryLimit,
-                    excludingLibraryIDs: excludedLibraries(visibility, accountID: resolved.account.id)
+                    excludingLibraryIDs: definitions.allSatisfy { $0.section.isAccountWideHistory }
+                        ? [] : excludedLibraries(visibility, accountID: resolved.account.id)
                 )
             }
             var results: [HomeRowID: Result<[MediaItem], AppError>] = [:]
@@ -824,7 +862,8 @@ public struct HomeAggregator: Sendable {
                         let tagged = item.taggingSource(resolved.account.id)
                         return tagged.taggingLibrary(item.libraryID ?? definition.section.libraryID)
                     }.filter {
-                        $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled)
+                        definition.section.isAccountWideHistory
+                            || $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled)
                     }
                 }
             }

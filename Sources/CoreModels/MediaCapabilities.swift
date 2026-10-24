@@ -8,9 +8,10 @@ import AVFoundation
 
 // MARK: - MediaCapabilities
 //
-// The single source of truth for "what can the running Apple TV (and the
-// display / audio gear plugged into it) actually play?" Both providers consume
-// this so that direct-play / transcode decisions are made the same way:
+// Native decode and display/audio-output facts used by both providers.
+// Aether's input support is separate: PlozzigenMediaFormats owns the linked
+// decoder families, regardless of the selected hardware/software pipeline.
+// Native-only profiles and server conversion outputs consume these policies:
 //
 //   * `ProviderJellyfin.JellyfinCapabilityProfile` builds the Jellyfin
 //     `DeviceProfile` (DirectPlay/Codec profiles, `VideoRangeType`,
@@ -48,8 +49,7 @@ public struct MediaCapabilities: Sendable, Equatable {
 
     /// Hardware HEVC (H.265) decode. True on every Apple TV 4K.
     public var supportsHEVC: Bool
-    /// Hardware AV1 decode. Only the A15-class Apple TV 4K (3rd gen) on
-    /// tvOS 16+ advertises this.
+    /// Hardware AV1 decode reported by VideoToolbox on the running device.
     public var supportsAV1: Bool
 
     // MARK: Display HDR
@@ -60,10 +60,8 @@ public struct MediaCapabilities: Sendable, Equatable {
     public var supportsHLG: Bool
     /// The connected display accepts Dolby Vision.
     ///
-    /// **Policy:** Apple only supports Dolby Vision **Profile 5** (single-layer
-    /// IPT-PQ-C2) and **Profile 8** (single-layer cross-compatible). Profile 7
-    /// (dual-layer FEL/MEL, common in UHD Blu-ray rips) is **not** decodable and
-    /// must fall through to a transcode — see ``allowedHDRRanges``.
+    /// This describes native output, not Aether's input support. Aether owns
+    /// source-profile handling, including its optional dual-layer decoding.
     public var supportsDolbyVision: Bool
 
     // MARK: Audio output
@@ -74,10 +72,7 @@ public struct MediaCapabilities: Sendable, Equatable {
     public var maxOutputChannels: Int
     /// Dolby Atmos is reachable on the current route (E-AC-3 JOC / passthrough).
     public var supportsAtmos: Bool
-    /// The current route can passthrough DTS / DTS-HD bitstreams to an external
-    /// decoder (AV receiver). Apple TV cannot itself decode DTS, so this is the
-    /// **only** thing that makes DTS direct-play viable — see
-    /// ``allowedPassthroughAudioCodecs``.
+    /// Native output capability; Aether can decode DTS on-device independently.
     public var supportsDTSPassthrough: Bool
 
     public init(
@@ -107,9 +102,7 @@ public struct MediaCapabilities: Sendable, Equatable {
     public static let `default` = MediaCapabilities()
 
     /// Decodable by the bundled Plozzigen pipeline, including software fallbacks.
-    public static let plozzigenVideoCodecs = [
-        "h264", "hevc", "mpeg4", "vc1", "mpeg2video", "vp8", "vp9", "av1"
-    ]
+    public static let plozzigenVideoCodecs = PlozzigenMediaFormats.videoCodecs
 }
 
 // MARK: - Supporting value types
@@ -148,7 +141,7 @@ public enum PassthroughAudioCodec: String, Sendable, Equatable, CaseIterable {
 /// Video codecs eligible for direct play (native AVFoundation decode). H.264 is
 /// always present; HEVC/AV1 are gated on hardware support. `rawValue`s match the
 /// lowercase codec tokens both providers already use.
-public enum DirectPlayVideoCodec: String, Sendable, Equatable, CaseIterable {
+public enum DirectPlayVideoCodec: String, Codable, Sendable, Equatable, CaseIterable {
     case h264
     case hevc
     case av1

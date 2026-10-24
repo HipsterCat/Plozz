@@ -14,11 +14,11 @@
 #      entire graph — ~90% of it wasted.
 #   2. Redundant per-worktree work (dSYMs, index store, inactive archs).
 # Strategy:
-#   * Full sweep (no args, or every target): `xcodebuild test -scheme
-#     Plozz-Package` — one compile, one orchestration, every suite (CI gate).
+#   * Full sweep (no args, or every target): build Plozz-Package for testing,
+#     then execute its xctestrun without reopening the package graph.
 #   * Subset (any 1..N suites): synthesise an ephemeral SCOPED scheme whose
 #     build+test actions list exactly the requested test targets, then
-#     `xcodebuild test -scheme <scoped>`. Only those suites' dependency subtrees
+#     build that scheme for testing. Only those suites' dependency subtrees
 #     compile — e.g. `CoreModelsTests ProviderPlexTests` builds ~7 targets, not
 #     ~96. The scheme lives in the gitignored `.swiftpm/` and is removed on exit.
 #   * All builds also pass lean settings (no dSYM / no index store / active arch
@@ -343,6 +343,45 @@ has_verdict() {
   grep -qE '^[[:space:]]*\*\* TEST[A-Z ]* (SUCCEEDED|FAILED) \*\*' "$1" 2>/dev/null
 }
 
+# Running from the built manifest keeps SwiftPM graph refreshes from invalidating
+# test-bundle blueprints while Xcode 27 launches later bundles in a long matrix.
+_xcb_build_and_test() {
+  local result_dir="$1"; shift
+  local scheme="" previous="" arg
+  local test_args=(-collect-test-diagnostics never) manifests=()
+  for arg in "$@"; do
+    if [[ "$previous" == "-scheme" ]]; then scheme="$arg"; fi
+    case "$arg" in
+      -only-testing:*|-skip-testing:*) test_args+=("$arg") ;;
+    esac
+    previous="$arg"
+  done
+  if [[ -z "$scheme" ]]; then
+    echo "run-tests.sh: missing scheme for build-for-testing." >&2
+    return 1
+  fi
+  xcodebuild build-for-testing "$@" \
+    -resultBundlePath "$result_dir/Build.xcresult" \
+    -destination "platform=tvOS Simulator,id=$PLOZZ_SIM_ID" \
+    -parallel-testing-enabled "$PARALLEL" \
+    -derivedDataPath "$PLOZZ_DERIVED_DATA" \
+    "${PACKAGE_RESOLUTION_ARGS[@]}" "${LEAN_SETTINGS[@]}" \
+    CODE_SIGNING_ALLOWED=NO || return $?
+
+  for arg in "$PLOZZ_DERIVED_DATA/Build/Products/${scheme}_"*.xctestrun; do
+    [[ ! -f "$arg" ]] || manifests+=("$arg")
+  done
+  if [[ ${#manifests[@]} -ne 1 ]]; then
+    echo "run-tests.sh: expected exactly one built xctestrun for $scheme; found ${#manifests[@]}." >&2
+    return 1
+  fi
+  xcodebuild test-without-building -xctestrun "${manifests[0]}" \
+    -destination "platform=tvOS Simulator,id=$PLOZZ_SIM_ID" \
+    -parallel-testing-enabled "$PARALLEL" \
+    -resultBundlePath "$result_dir/Test.xcresult" \
+    "${test_args[@]}"
+}
+
 # _xcb_once <log> <xcb-arg>...  -> runs one xcodebuild test invocation with a
 # no-progress watchdog. Returns xcodebuild's exit status, or 124 if the watchdog
 # killed it for making no progress for PLOZZ_HANG_SECS.
@@ -354,15 +393,7 @@ _xcb_once() {
   result_bundle="$result_dir/Test.xcresult"
   : > "$log"
   : > "$summary"
-  xcodebuild test \
-    "$@" \
-    -resultBundlePath "$result_bundle" \
-    -destination "platform=tvOS Simulator,id=$PLOZZ_SIM_ID" \
-    -parallel-testing-enabled "$PARALLEL" \
-    -derivedDataPath "$PLOZZ_DERIVED_DATA" \
-    "${PACKAGE_RESOLUTION_ARGS[@]}" \
-    "${LEAN_SETTINGS[@]}" \
-    CODE_SIGNING_ALLOWED=NO > "$log" 2>&1 &
+  _xcb_build_and_test "$result_dir" "$@" > "$log" 2>&1 &
   local xcb_pid=$!
 
   # Live-stream the summary lines so the run always shows progress (never a
@@ -427,8 +458,7 @@ _xcb_once() {
   # long after the build actually finished. kill_tree reaps tail -F + grep too.
   kill_tree "$tail_pid"
   wait "$tail_pid" 2>/dev/null || true
-  if [[ $hung -eq 1 ]] && ! has_verdict "$log" \
-     && [[ $(reported_bundles_count "$log") -eq 0 ]]; then
+  if [[ $hung -eq 1 ]]; then
     return 124
   fi
   echo "run-tests.sh: result bundle: $result_bundle"
@@ -439,7 +469,7 @@ _xcb_once() {
     return 1
   fi
   python3 tools/xcresult-summary.py verdict "$summary" || return 1
-  if [[ $reaped_after_verdict -eq 1 || $hung -eq 1 ]]; then
+  if [[ $reaped_after_verdict -eq 1 ]]; then
     [[ ${EXPECTED_BUNDLES:-0} -gt 0 ]] \
       && [[ $(reported_bundles_count "$log") -ge ${EXPECTED_BUNDLES} ]] && return 0
     echo "run-tests.sh: FAILURE — the interrupted run did not report every requested bundle." >&2

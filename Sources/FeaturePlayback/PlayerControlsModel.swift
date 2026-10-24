@@ -197,6 +197,7 @@ public final class InfoCardModel {
     /// Arrives with the item, so it needs no request of its own — and the tab
     /// hides itself when this is empty rather than opening an empty card.
     public var cast: [MediaPerson] = []   // l10n:content — media metadata from the server
+    public var chapters: [MediaChapter] = []
     /// The account the item came from, so a person can be looked up on the server
     /// that actually knows their id. Person ids are per-server, so this cannot be
     /// inferred later.
@@ -710,6 +711,14 @@ public final class PlayerControlsModel {
     /// button is surfaced, auto-skipped after a delay, or skipped instantly.
     public var skipMode: SkipIntrosMode {
         skipModes.mode(for: activeSkipSegment?.kind ?? .credits)
+    }
+
+    public var automaticSkipDelay: TimeInterval {
+        skipModes.delay(for: activeSkipSegment?.kind ?? .credits)
+    }
+
+    public var automaticUpNextDelay: TimeInterval {
+        skipModes.delay(for: .credits)
     }
 
     /// In `.autoDelay`, the playback position (seconds) at which the active

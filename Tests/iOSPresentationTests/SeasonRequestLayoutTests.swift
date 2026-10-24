@@ -11,6 +11,31 @@ import XCTest
 
 @MainActor
 final class SeasonRequestLayoutTests: XCTestCase {
+    func testMovieHeroShowsTheCompleteUnreleasedRequestStatus() throws {
+        let movie = MediaItem(
+            id: "future-movie", title: "Future Movie", kind: .movie,
+            releaseDate: MediaItem.calendarDayReleaseDate(from: "2099-10-20"),
+            availability: .processing, locallyValidatedPlayableSource: false
+        )
+        let button = PlozziOSHeroRequestButton(item: movie, request: .init(
+            cta: movie.heroCTA(seerConnected: true), isRequesting: false,
+            actingName: nil, onRequest: { _ in XCTFail("A status must not submit a request") }
+        ))
+        .environment(\.locale, Locale(identifier: "en"))
+        .environment(\.themePalette, ThemePalette.dark)
+        .environment(\.colorScheme, .dark)
+        for width in [CGFloat(276), 720] {
+            let image = try capture(button, width: width, name: "unreleased-movie-request-\(Int(width))pt")
+            let recognition = VNRecognizeTextRequest()
+            recognition.recognitionLevel = .accurate
+            recognition.recognitionLanguages = ["en-US"]
+            try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([recognition])
+            let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+            XCTAssertTrue(text.contains("Requested") && text.contains("Unreleased"), text)
+            XCTAssertLessThanOrEqual(size(button, width: width).width, width + 0.5)
+        }
+    }
+
     func testAdaptiveHeroRetainsPresentedVersionMenuWhileMetadataChanges() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),

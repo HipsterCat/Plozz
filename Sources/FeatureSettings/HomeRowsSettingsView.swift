@@ -3,11 +3,12 @@ import SwiftUI
 import CoreModels
 import PlozzCoreUI
 
-/// The shared section editor adapts existing row feeds without changing their identities.
+/// Shared section placement and content-first collection editing.
 public struct HomeRowsSettingsView: View {
     public let libraries: [AggregatedLibrary]
     public let accounts: [ResolvedAccount]
     public let visibility: HomeLibraryVisibilityModel
+    public let spoilerSettings: SpoilerSettings
     @Environment(HeroSettingsModel.self) private var hero
     @Environment(HeroBackgroundSettingsModel.self) private var heroBackground
     @Environment(CardStyleSettingsModel.self) private var cards
@@ -19,18 +20,23 @@ public struct HomeRowsSettingsView: View {
 
     public init(
         libraries: [AggregatedLibrary], accounts: [ResolvedAccount],
-        visibility: HomeLibraryVisibilityModel
+        visibility: HomeLibraryVisibilityModel, spoilerSettings: SpoilerSettings = .default
     ) {
-        self.init(libraries: libraries, accounts: accounts, visibility: visibility, inventory: HomeSectionCatalogModel())
+        self.init(
+            libraries: libraries, accounts: accounts, visibility: visibility,
+            inventory: HomeSectionCatalogModel(), spoilerSettings: spoilerSettings
+        )
     }
 
     init(
         libraries: [AggregatedLibrary], accounts: [ResolvedAccount],
-        visibility: HomeLibraryVisibilityModel, inventory: HomeSectionCatalogModel
+        visibility: HomeLibraryVisibilityModel, inventory: HomeSectionCatalogModel,
+        spoilerSettings: SpoilerSettings = .default
     ) {
         self.libraries = libraries
         self.accounts = accounts
         self.visibility = visibility
+        self.spoilerSettings = spoilerSettings
         _inventory = State(initialValue: inventory)
     }
 
@@ -39,12 +45,29 @@ public struct HomeRowsSettingsView: View {
     }
 
     private var isReordering: Bool { reorderSession != nil }
+    private var sectionIssues: [HomeSectionIssue] {
+        visibility.sectionDiagnostics.issues(accounts: accounts, visibility: visibility.visibility)
+    }
 
     private var currentCatalog: HomeSectionCatalog {
         inventory.currentCatalog(libraries: libraries, accounts: accounts, visibility: visibility)
     }
 
     public var body: some View {
+        ScrollViewReader { scroll in
+            editor
+                #if os(iOS)
+                .task(id: reorderSession?.initialElement) {
+                    guard let target = reorderSession?.initialElement else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    scroll.scrollTo(target)
+                }
+                #endif
+        }
+    }
+
+    private var editor: some View {
         HomeEditorPage(title: Text("Customize Home")) {
             #if os(tvOS)
             HStack(spacing: SettingsFormMetrics.controlSpacing) {
@@ -73,6 +96,13 @@ public struct HomeRowsSettingsView: View {
             .accessibilityIdentifier("home-section-hero")
             .disabled(isReordering)
 
+            SettingsSectionGroup("Card labels") {
+                CardCaptionSettingsControls(cards: cards, scope: .home)
+            }
+            .disabled(isReordering)
+
+            addSectionButton(identifier: "home-section-add")
+
             let catalog = reorderSession?.catalog ?? currentCatalog
             let arrangement = reorderSession?.visibility ?? visibility.visibility
             let sections = catalog.sections(in: arrangement)
@@ -89,14 +119,15 @@ public struct HomeRowsSettingsView: View {
                             editError = nil
                         } catch { editError = (error as? AppError) ?? .invalidResponse }
                     },
+                    initialElement: reorderSession?.initialElement,
                     row: { id in
                         let choice = byID[id]
                         return .init(
                             title: choice?.homeEditorTitle ?? Text("Section"),
                             symbolName: "rectangle.grid.1x2",
-                            providerKind: choice?.library?.providerKind ?? choice?.serverRow?.providerKind,
+                            providerKind: choice?.homeEditorProvider(in: accounts),
                             mediaShareTransport: choice?.library?.transportKind,
-                            subtitle: choice?.homeEditorSource,
+                            subtitle: choice?.homeEditorSource(in: accounts),
                             providerMarkInSubtitle: true
                         )
                     },
@@ -112,16 +143,28 @@ public struct HomeRowsSettingsView: View {
                 ForEach(sections.enabled, id: \.self) { id in
                     if let choice = choices.first(where: { $0.id == id }) {
                         HomeEditorLink {
-                            HomeSectionSettingsView(
-                                choice: choice, inventory: inventory, visibility: visibility,
-                                libraries: libraries, accounts: accounts
-                            )
-                            .environment(cards)
+                            if let section = choice.collectionSection {
+                                CollectionSectionSettingsView(
+                                    section: section, inventory: inventory, visibility: visibility,
+                                    libraries: libraries, accounts: accounts, spoilerSettings: spoilerSettings
+                                )
+                                .environment(cards)
+                            } else {
+                                HomeSectionSettingsView(
+                                    choice: choice, inventory: inventory, visibility: visibility,
+                                    libraries: libraries, accounts: accounts
+                                )
+                                .environment(cards)
+                            }
                         } label: {
-                            HomeSectionChoiceLabel(choice: choice)
+                            HomeSectionChoiceLabel(choice: choice, accounts: accounts)
                         }
                         .accessibilityIdentifier("home-section-\(id.presentationID)")
                         .contextMenu {
+                            Button("Reorder", systemImage: "arrow.up.arrow.down") {
+                                beginReordering(at: id)
+                            }
+                            .disabled(sections.enabled.count < 2)
                             Button("Remove section", systemImage: "minus.circle", role: .destructive) {
                                 do {
                                     try visibility.setHomeSectionVisible(false, id: id, catalog: currentCatalog)
@@ -129,7 +172,13 @@ public struct HomeRowsSettingsView: View {
                                 } catch { editError = (error as? AppError) ?? .invalidResponse }
                             }
                         }
+                        if let issue = sectionIssues.first(where: { $0.id == id }) {
+                            sectionStatus(issue)
+                        }
                     }
+                }
+                ForEach(sectionIssues.filter { !sections.enabled.contains($0.id) }) { issue in
+                    sectionStatus(issue)
                 }
             }
             addSectionButton(identifier: "home-section-add-bottom")
@@ -144,14 +193,6 @@ public struct HomeRowsSettingsView: View {
         #if os(iOS)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                SettingsPageLink {
-                    addSectionDestination
-                } label: {
-                    Label("Add section", systemImage: "plus")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(isReordering)
-                .accessibilityIdentifier("home-section-add")
                 reorderButton
             }
         }
@@ -169,39 +210,23 @@ public struct HomeRowsSettingsView: View {
     }
 
     private var editorControls: some View {
-        #if os(tvOS)
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 16) { controls }
-                .fixedSize(horizontal: true, vertical: false)
-            VStack(alignment: .leading, spacing: 8) { controls }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .focusSection()
-        #else
-        controls
+        HomeRowPresetPicker(visibility: visibility)
+            .id(ObjectIdentifier(visibility))
+            .disabled(isReordering)
             .frame(maxWidth: .infinity, alignment: .leading)
-        #endif
-    }
-
-    private var controls: some View {
-        Group {
-            HomeRowPresetPicker(visibility: visibility)
-                .id(ObjectIdentifier(visibility))
-                .disabled(isReordering)
             #if os(tvOS)
-            addSectionButton(identifier: "home-section-add")
+            .focusSection()
             #endif
-        }
     }
 
     private var reorderButton: some View {
         Button {
             if isReordering {
                 reorderSession = nil
+                isLifting = false
             } else {
-                reorderSession = HomeSectionReorderSession(catalog: currentCatalog, visibility: visibility.visibility)
+                beginReordering()
             }
-            isLifting = false
         } label: {
             if isReordering { Text("Done").fixedSize(horizontal: false, vertical: true) }
             else { Text("Reorder").fixedSize(horizontal: false, vertical: true) }
@@ -213,21 +238,54 @@ public struct HomeRowsSettingsView: View {
         #endif
     }
 
+    private func beginReordering(at element: HomeRowID? = nil) {
+        let catalog = currentCatalog
+        if let element, !catalog.sections(in: visibility.visibility).enabled.contains(element) {
+            editError = .notFound
+            return
+        }
+        reorderSession = HomeSectionReorderSession(
+            catalog: catalog, visibility: visibility.visibility, initialElement: element
+        )
+        #if os(tvOS)
+        isLifting = element != nil
+        #else
+        isLifting = false
+        #endif
+        editError = nil
+    }
+
+    private func sectionStatus(_ issue: HomeSectionIssue) -> some View {
+        HomeSectionStatusView(issue: issue) {
+            Task {
+                await visibility.sectionDiagnostics.retry(accounts: accounts, visibility: visibility.visibility)
+            }
+        }
+        .padding(.vertical, SettingsFormMetrics.navigationRowSpacing)
+        .disabled(visibility.sectionDiagnostics.isLoading)
+    }
+
     private func addSectionButton(identifier: String) -> some View {
         SettingsPageLink {
             addSectionDestination
         } label: {
-            Text("Add section").fixedSize(horizontal: false, vertical: true)
+            Label("Add section", systemImage: "plus")
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
         }
         .plozzActionButton(role: .secondary)
+        .buttonBorderShape(.capsule)
         .disabled(isReordering)
         .accessibilityIdentifier(identifier)
+        .padding(.vertical, PlozzTheme.Spacing.medium)
     }
 
     private var addSectionDestination: some View {
         HomeAddSectionView(
-            inventory: inventory, visibility: visibility, libraries: libraries, accounts: accounts
+            inventory: inventory, visibility: visibility, libraries: libraries, accounts: accounts,
+            spoilerSettings: spoilerSettings
         )
+        .environment(cards)
     }
 
     private var heroTitle: Text {
@@ -251,11 +309,13 @@ public struct HomeRowsSettingsView: View {
 @MainActor
 struct HomeSectionReorderSession {
     let catalog: HomeSectionCatalog
+    let initialElement: HomeRowID?
     private(set) var visibility: HomeLibraryVisibility
 
-    init(catalog: HomeSectionCatalog, visibility: HomeLibraryVisibility) {
+    init(catalog: HomeSectionCatalog, visibility: HomeLibraryVisibility, initialElement: HomeRowID? = nil) {
         self.catalog = catalog
         self.visibility = visibility
+        self.initialElement = initialElement
     }
 
     mutating func move(_ order: [HomeRowID], savingTo model: HomeLibraryVisibilityModel) throws {

@@ -5,6 +5,30 @@ import ProviderIPTV
 import XCTest
 
 final class IPTVGuideIntegrationTests: XCTestCase {
+    func testAccountGuideSkipsUnusableChannelsAndSelectsDeviceLanguageText() async throws {
+        let language = LanguageMatch.deviceLanguageCode ?? "en"
+        let programmes = try await ManagedProviderRegistry.iptvGuideLoader(
+            Data("""
+            <tv>
+              <channel><display-name>Unusable declaration</display-name></channel>
+              <programme channel="news" start="19700101000140" stop="19700101000820">
+                <title>Default title</title><title lang="\(language)">Selected title</title>
+                <sub-title lang="\(language)">Selected episode</sub-title><sub-title/>
+                <desc lang="\(language)">Selected synopsis</desc><desc/>
+                <title lang="zxx">Other title</title>
+              </programme>
+            </tv>
+            """.utf8),
+            XCTUnwrap(URL(string: "https://provider.test/guide.xml")),
+            [.init(id: "account-channel", name: "News", guideID: "news")],
+            Date(timeIntervalSince1970: 100), Date(timeIntervalSince1970: 500)
+        )
+        XCTAssertEqual(programmes.map(\.channelID), ["account-channel"])
+        XCTAssertEqual(programmes.first?.title, LanguageMatch.deviceLanguageCode == nil ? "Default title" : "Selected title")
+        XCTAssertEqual(programmes.first?.subtitle, "Selected episode")
+        XCTAssertEqual(programmes.first?.overview, "Selected synopsis")
+    }
+
     func testAccountGuideAcceptsProgrammeOnlyXMLTVAndColonOffsets() async throws {
         let programmes = try await ManagedProviderRegistry.iptvGuideLoader(
             Data("""

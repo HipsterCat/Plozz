@@ -8,6 +8,133 @@ import XCTest
 
 @MainActor
 final class LiveHLSDesignHostedTests: XCTestCase {
+    func testLivePlaybackButtonMatchesOnDemandWithMenuOpen() async throws {
+        try await comparePlaybackButtons(menuOpen: true)
+    }
+
+    func testLivePlaybackButtonMatchesOnDemandWhenFocused() async throws {
+        try await comparePlaybackButtons(menuOpen: false)
+    }
+
+    private func comparePlaybackButtons(menuOpen: Bool) async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.makeKeyAndVisible()
+        let input = LiveChannelInput.stream(url: try XCTUnwrap(URL(string: "https://fixture.invalid/live.m3u8")), httpHeaders: [:])
+        let tracks = LiveChannelPlayerModel(engine: try PlozzigenVideoEngine(), input: input)
+        defer {
+            PlayerScreenshotHook.pendingPanel = nil
+            LiveChannelScreenshotHook.pendingSurface = nil
+            tracks.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+
+        for backdrop in [Color.black, .white] {
+            let model = PlayerControlsModel()
+            model.controlsVisible = true
+            model.duration = 3600
+            model.currentSeconds = 600
+            model.engineCapabilities = [.videoZoom]
+            PlayerScreenshotHook.pendingPanel = menuOpen ? .playback : nil
+            host.rootView = AnyView(
+                PlayerControls(model: model, palette: .dark, actions: .init(), onExitToSurface: {})
+                    .environment(\.plozzReducePanelGlass, false)
+                    .environment(\.colorScheme, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                    .background(backdrop)
+            )
+            try await Task.sleep(for: .milliseconds(1800))
+            let referenceFrame = try XCTUnwrap(model.subtitleLayout.frame(for: .trackControls))
+            try assertFocus(window, controls: referenceFrame, menuOpen: menuOpen)
+            let reference = try buttonSnapshot(window, frame: referenceFrame, name: "vod-menu-\(menuOpen)-\(backdrop)")
+
+            LiveChannelScreenshotHook.pendingSurface = menuOpen ? .playback : nil
+            host.rootView = AnyView(
+                LiveHLSDesignFixture(
+                    input: input, tracks: tracks, showsDiagnostics: false,
+                    canGoLive: false, backdrop: backdrop, initialFocus: .playback
+                )
+                    .tint(ThemePalette.dark.accent)
+                    .environment(\.playerCardMetrics, .tv)
+                    .environment(\.plozzReducePanelGlass, false)
+                    .environment(\.themePalette, .dark)
+                    .environment(\.colorScheme, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            try await Task.sleep(for: .milliseconds(1800))
+            let liveFrame = try XCTUnwrap(tracks.subtitles.controlsLayout.frame(for: .trackControls))
+            try assertFocus(window, controls: liveFrame, menuOpen: menuOpen)
+            let live = try buttonSnapshot(window, frame: liveFrame, name: "live-menu-\(menuOpen)-\(backdrop)")
+            XCTAssertEqual(live.darkPixels, reference.darkPixels, accuracy: 100,
+                           "The selected Live TV glyph must retain the same contrast as on-demand playback.")
+            XCTAssertEqual(live.meanLuminance, reference.meanLuminance, accuracy: 0.08,
+                           "The Live TV guide's accent must not recolor native playback buttons.")
+        }
+    }
+
+    private func assertFocus(_ window: UIWindow, controls: CGRect, menuOpen: Bool) throws {
+        let item = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+        var environment: (any UIFocusEnvironment)? = item
+        var focusFrame: CGRect?
+        while let current = environment {
+            if let container = current.focusItemContainer {
+                focusFrame = container.coordinateSpace.convert(item.frame, to: window)
+                break
+            }
+            environment = current.parentFocusEnvironment
+        }
+        let frame = try XCTUnwrap(focusFrame)
+        if menuOpen {
+            XCTAssertLessThan(frame.maxY, controls.minY, "Native focus must enter the menu above the buttons.")
+        } else {
+            XCTAssertTrue(controls.contains(CGPoint(x: frame.midX, y: frame.midY)),
+                          "Compare the same native focus highlight on both playback buttons.")
+        }
+    }
+
+    private func buttonSnapshot(
+        _ window: UIWindow, frame: CGRect, name: String
+    ) throws -> (darkPixels: Double, meanLuminance: Double) {
+        window.layoutIfNeeded()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.preferredRange = .standard
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let crop = try XCTUnwrap(image.cgImage?.cropping(to: CGRect(
+            x: frame.minX + 24, y: frame.midY - 18, width: 48, height: 36
+        ).integral))
+        var bytes = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+        try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(
+                data: buffer.baseAddress, width: crop.width, height: crop.height,
+                bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+        }
+        let luminance = stride(from: 0, to: bytes.count, by: 4).map {
+            (Double(bytes[$0]) * 0.2126 + Double(bytes[$0 + 1]) * 0.7152 + Double(bytes[$0 + 2]) * 0.0722) / 255
+        }
+        return (
+            Double(luminance.filter { $0 < 0.25 }.count),
+            luminance.reduce(0, +) / Double(luminance.count)
+        )
+    }
+
     func testLiveWindowAndDiagnosticsRemainVisible() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)
@@ -58,12 +185,15 @@ private struct LiveHLSDesignFixture: View {
     let input: LiveChannelInput
     let tracks: LiveChannelPlayerModel
     let showsDiagnostics: Bool
+    var canGoLive = true
+    var backdrop = Color(white: 0.08)
+    var initialFocus: LiveChannelControl = .timeline
     private let now = Date()
     @FocusState private var focus: LiveChannelControl?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Color(white: 0.08)
+            backdrop
             LiveChannelOverlay(
                 title: "Sample Channel", logoURL: nil, plozzChannelID: nil, channelID: "sample",
                 input: input,
@@ -73,7 +203,7 @@ private struct LiveHLSDesignFixture: View {
                     .init(title: "Weather", start: now.addingTimeInterval(-1800), end: now.addingTimeInterval(-900))
                 ],
                 libraryItem: nil, openLibraryItem: nil, phase: .playing,
-                isAtLiveEdge: false, behindLiveSeconds: 1200, canPause: true, canGoLive: true,
+                isAtLiveEdge: false, behindLiveSeconds: 1200, canPause: true, canGoLive: canGoLive,
                 seekWindowSeconds: 3600, onSeekBy: { _ in }, onSeekBehindLive: { _ in },
                 focus: $focus, onClose: {}, onPrevious: {}, onPlayPause: {}, onGoLive: {}, onNext: {},
                 onMultiview: {}, guideContent: nil, pendingGuideOpen: false, consumeGuideOpen: {},
@@ -88,6 +218,12 @@ private struct LiveHLSDesignFixture: View {
         }
         .ignoresSafeArea()
         .onAppear { focus = .timeline }
+        .task {
+            guard initialFocus != .timeline else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            focus = initialFocus
+        }
     }
 
     private var diagnostics: PlaybackDiagnostics {

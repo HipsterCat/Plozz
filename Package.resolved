@@ -1,12 +1,12 @@
 {
-  "originHash" : "d0fdfc231d92f6eb67e55e905ab9c8b69e1d4e1f77e4012cc46cbc1dc0e6d9ae",
+  "originHash" : "0bea60939117fedf40ca7caa2126c116d48d8c34cd65568496c32a0eb884dbec",
   "pins" : [
     {
       "identity" : "aetherengine",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/brandomoore/AetherEngine",
       "state" : {
-        "revision" : "86af70ddfe7bcde27e06356dc7aa81e8997d43c4"
+        "revision" : "5fe2d42d68524dcfbcfacf07cbefe5b28b618155"
       }
     },
     {
@@ -50,7 +50,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/thatcube/SMBClient.git",
       "state" : {
-        "revision" : "2c383ad5e5a7b3063160f6a0d00190c57e295cc3"
+        "revision" : "5d5bceb6fa0833c98b0eecc676609c9476bd9423"
       }
     },
     {

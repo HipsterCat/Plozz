@@ -5,15 +5,19 @@ import Foundation
 
 /// Native log getters can block in the media service. Never wait for them on the
 /// UI actor, or admit unlimited readers when that service stops responding.
-final class PlozzigenNativeFailureCapture: @unchecked Sendable {
-    static let shared = PlozzigenNativeFailureCapture()
+public final class NativePlaybackFailureCapture: @unchecked Sendable {
+    public static let shared = NativePlaybackFailureCapture()
     private let lock = NSLock()
     private var running = 0
 
+    public func capture(item: AVPlayerItem?, fallbackError: NSError?) async -> PlaybackFailureEvidence {
+        await capture(item: item, fallbackError: fallbackError, timeout: 0.5)
+    }
+
     func capture(
         item: AVPlayerItem?, fallbackError: NSError?,
-        timeout: TimeInterval = 0.5,
-        read: @escaping @Sendable (AVPlayerItem) -> PlaybackFailureEvidence = { PlozzigenNativeFailureCapture.read($0) }
+        timeout: TimeInterval,
+        read: @escaping @Sendable (AVPlayerItem) -> PlaybackFailureEvidence = { NativePlaybackFailureCapture.read($0) }
     ) async -> PlaybackFailureEvidence {
         guard let item else {
             return .init(nativeCapture: .noItem, nativeErrors: PlaybackFailureEvidence.ErrorCode.chain(fallbackError))
@@ -38,7 +42,7 @@ final class PlozzigenNativeFailureCapture: @unchecked Sendable {
                     lock.withLock { running -= 1 }
                     completion.finish(evidence)
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
                     completion.finish(.init(
                         nativeCapture: .timedOut, nativeErrors: PlaybackFailureEvidence.ErrorCode.chain(fallbackError)
                     ))
@@ -50,12 +54,32 @@ final class PlozzigenNativeFailureCapture: @unchecked Sendable {
     }
 
     static func read(_ item: AVPlayerItem) -> PlaybackFailureEvidence {
-        .init(
+        let status: PlaybackFailureEvidence.NativeStatus
+        switch item.status {
+        case .unknown: status = .unknown
+        case .readyToPlay: status = .ready
+        case .failed: status = .failed
+        @unknown default: status = .unknown
+        }
+        func number(_ value: Double) -> Int? {
+            guard value.isFinite, value >= 0, value <= 9_007_199_254_740_991 else { return nil }
+            return Int(value)
+        }
+        let access = item.accessLog()?.events.last.map {
+            PlaybackFailureEvidence.NativeAccess(
+                requests: $0.numberOfMediaRequests, bytesTransferred: Int(exactly: $0.numberOfBytesTransferred),
+                stalls: $0.numberOfStalls, transferMilliseconds: number($0.transferDuration * 1_000),
+                startupMilliseconds: number($0.startupTime * 1_000),
+                observedBitrate: number($0.observedBitrate), indicatedBitrate: number($0.indicatedBitrate)
+            )
+        }
+        return .init(
             nativeCapture: .captured,
             nativeErrors: PlaybackFailureEvidence.ErrorCode.chain(item.error as NSError?),
             nativeLogErrors: (item.errorLog()?.events.suffix(4) ?? []).map {
                 .init(domain: $0.errorDomain, code: $0.errorStatusCode)
-            }.filter(\.isValid)
+            }.filter(\.isValid),
+            nativeStatus: status, nativeAccess: access
         )
     }
 

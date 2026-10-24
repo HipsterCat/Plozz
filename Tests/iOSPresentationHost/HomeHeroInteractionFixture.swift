@@ -2,10 +2,70 @@ import CoreModels
 import PlozzCoreUI
 import FeatureAuth
 import FeatureHomeCore
+import HeroUI
 import Observation
 import SwiftUI
 import UIKit
 @testable import AppShelliOS
+
+struct FeaturedCardInteractionFixture: View {
+    @State private var controller = HeroTrailerController()
+    @State private var coordinator = FeaturedTrailerCoordinator()
+    @State private var selections = 0
+    @State private var actions = HeroInteractionActions()
+    private static let artworkURL = URL(string: "https://featured.invalid/artwork.png")!
+    private static let logoURL = URL(string: "https://featured.invalid/logo.png")!
+
+    init() {
+        for (url, size, logo) in [
+            (Self.artworkURL, CGSize(width: 600, height: 338), false),
+            (Self.logoURL, CGSize(width: 300, height: 70), true)
+        ] {
+            let image = UIGraphicsImageRenderer(size: size).image { context in
+                if logo {
+                    ("FEATURED" as NSString).draw(at: CGPoint(x: 8, y: 8), withAttributes: [
+                        .font: UIFont.boldSystemFont(ofSize: 44), .foregroundColor: UIColor.black
+                    ])
+                } else {
+                    UIColor(white: 0.3, alpha: 1).setFill()
+                    context.fill(CGRect(origin: .zero, size: size))
+                }
+            }
+            guard let data = image.pngData(), let cache = ArtworkSession.shared.configuration.urlCache,
+                  let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: [
+                    "Content-Type": "image/png", "Cache-Control": "max-age=86400"
+                  ]) else { fatalError("Could not prepare Featured card artwork") }
+            cache.storeCachedResponse(CachedURLResponse(response: response, data: data), for: URLRequest(url: url))
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            FeaturedMediaRow(
+                title: Text("Featured"), items: [
+                    MediaItem(id: "featured-touch", title: "Featured title", kind: .movie,
+                              productionYear: 2026, officialRating: "PG", genres: ["Adventure"],
+                              backdropURL: Self.artworkURL, logoURL: Self.logoURL,
+                              allowsTitleBasedMetadataMatching: false)
+                ],
+                scope: ObjectIdentifier(controller), coordinator: coordinator, controller: controller,
+                settings: .default, resolver: { _ in nil }, isActive: false,
+                onSelect: { _ in selections += 1 }
+            )
+            Text("Following row").accessibilityIdentifier("featured-following-row")
+            Color.clear.frame(height: 1_000)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Text(verbatim: "\(selections)")
+                .accessibilityIdentifier("featured-selection-count")
+                .allowsHitTesting(false)
+        }
+        .environment(\.themePalette, .light)
+        .environment(\.mediaItemActionHandler, actions)
+        .environment(\.plozzMetrics, .touch(density: .standard))
+        .preferredColorScheme(.light)
+    }
+}
 
 struct HomeHeroInteractionFixture: View {
     private var colorScheme: ColorScheme {

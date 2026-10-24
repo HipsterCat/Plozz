@@ -173,6 +173,7 @@ final class LiveTVSourcesRuntimeHostedTests: XCTestCase {
         NotificationCenter.default.post(name: .plozzLiveTVPortableStateDidApply, object: fixture.profileID)
         try await waitUntil {
             runtime.isCurrent && runtime.catalog.imports.configuration.servers == configuration.servers
+                && runtime.catalog.catalog.channels.count == 1
         }
         XCTAssertEqual(runtime.authorityID, identity)
         XCTAssertEqual(runtime.catalog.catalog.channels.count, 1)
@@ -248,12 +249,12 @@ final class LiveTVSourcesRuntimeHostedTests: XCTestCase {
         fixture.show()
         try await waitUntil { fixture.state.runtime?.isCurrent == true }
         let runtime = try XCTUnwrap(fixture.state.runtime)
+        try await waitUntil { fixture.navigationIsSettled(atDepth: 1) }
         fixture.state.path = [1]
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitUntil { fixture.navigationIsSettled(atDepth: 2) }
         XCTAssertTrue(runtime.isCurrent)
         fixture.state.path = []
-        try await waitUntil { runtime.isCurrent }
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitUntil { fixture.navigationIsSettled(atDepth: 1) }
         XCTAssertTrue(runtime.isCurrent)
         XCTAssertNil(runtime.catalog.issue)
     }
@@ -440,6 +441,16 @@ final class LiveTVSourcesRuntimeHostedTests: XCTestCase {
             .environment(\.themePalette, palette)
             .environment(\.colorScheme, palette.isLight ? .light : .dark))
             window.makeKeyAndVisible()
+        }
+
+        func navigationIsSettled(atDepth depth: Int) -> Bool {
+            func navigation(in controller: UIViewController) -> UINavigationController? {
+                if let controller = controller as? UINavigationController { return controller }
+                return controller.children.lazy.compactMap { navigation(in: $0) }.first
+            }
+            window.layoutIfNeeded()
+            guard let root = window.rootViewController, let controller = navigation(in: root) else { return false }
+            return controller.viewControllers.count == depth && controller.transitionCoordinator == nil
         }
 
         func close() {

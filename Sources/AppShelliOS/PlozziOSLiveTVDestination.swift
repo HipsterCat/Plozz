@@ -111,8 +111,6 @@ struct PlozziOSLiveTVDestination: View {
             homeModel: HomeLiveTVRuntime.model(profileID: profileID),
             homeAuthorizationID: HomeLiveTVRuntime.authorizationID(profileID: profileID, accounts: accountsProviders),
             onOpenTitle: navigateToItem.map { navigator in { navigator($0) } },
-            // The guide draws its own top row (browse controls and this), in
-            // place of the navigation bar, which is hidden below.
             topBarAccessory: AnyView(PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings))
         ) { playback in
             LiveChannelPlayerView(
@@ -120,9 +118,13 @@ struct PlozziOSLiveTVDestination: View {
                 title: playback.channel.name,
                 input: playback.input,
                 logoURL: playback.channel.logoURL,
+                plozzChannelMood: playback.channel.plozzChannelMood,
                 makeEngine: {
                     runtime.makeEngine(
-                        engine: try PlozzigenVideoEngine(authenticatedHTTPResolver: playback.authenticatedHTTPResolver),
+                        engine: try PlozzigenVideoEngine(
+                            authenticatedHTTPResolver: playback.authenticatedHTTPResolver,
+                            liveBufferPreference: { LivePlaybackBufferStore().load() }
+                        ),
                         onCompleted: { [profiles, profileID, preferencesNamespace,
                                         completeLibraryChannelPlayback, weak runtime] item, token in
                             try Task.checkCancellation()
@@ -213,7 +215,6 @@ struct PlozziOSLiveTVDestination: View {
             orientation: playbackOrientation
         )
         .toolbar(isExpanded ? .hidden : .visible, for: .tabBar)
-        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             network.start()
         }
@@ -268,6 +269,7 @@ struct PlozziOSLiveTVSourcesDestination: View {
     let didConfigurePlaylist: () -> Void
     var isPresented = true
     var isProfileAuthorized: @MainActor () -> Bool = { true }
+    var settingsPreferences: AnyView? = nil
 
     var body: some View {
         LiveTVCatalogStorageView(load: { try LiveTVCatalogStorage.cache(profileID: profileID) }) { cache in
@@ -279,7 +281,8 @@ struct PlozziOSLiveTVSourcesDestination: View {
                 ) { runtime in
                     PlozziOSLiveTVSourcesContent(
                         runtime: runtime, library: library, accounts: accountsProviders,
-                        connectServer: connectServer, didConfigurePlaylist: didConfigurePlaylist
+                        connectServer: connectServer, didConfigurePlaylist: didConfigurePlaylist,
+                        settingsPreferences: settingsPreferences
                     )
                 }
             }
@@ -296,30 +299,20 @@ private struct PlozziOSLiveTVSourcesContent: View {
     let accounts: AccountsProvidersModel
     let connectServer: (() -> Void)?
     let didConfigurePlaylist: () -> Void
+    var settingsPreferences: AnyView? = nil
     @State private var managesChannels = false
     @State private var scansChannels = false
     @State private var scanOfferSourceID: String?
 
     var body: some View {
-        SettingsPageScroll {
-            LiveTVSourcesView(
-                store: runtime.store, catalog: runtime.catalog, presentation: .settingsPane,
-                serverChoices: accounts.liveTVServerChoices,
-                serverProviderResolver: accounts.liveTVProviderResolver(),
-                connectServer: connectServer, didConfigurePlaylist: didConfigurePlaylist,
-                createChannel: { managesChannels = true },
-                scanChannels: { scansChannels = true },
-                scanCoordinator: runtime.scanBinding.coordinator,
-                didImportPlaylist: { scanOfferSourceID = $0 }
-            )
-            if let scanOfferSourceID, runtime.isPresentationCurrent {
-                LiveTVScanImportOffer(
-                    coordinator: runtime.scanBinding.coordinator, sourceID: scanOfferSourceID,
-                    skip: { self.scanOfferSourceID = nil }
-                )
+        Group {
+            if settingsPreferences != nil {
+                sourceContent
+            } else {
+                SettingsPageScroll { sourceContent }
+                    .navigationTitle("Sources")
             }
         }
-        .navigationTitle("Sources")
         .navigationDestination(isPresented: $managesChannels) {
             if runtime.isPresentationCurrent {
                 LibraryChannelManagementView(
@@ -345,6 +338,30 @@ private struct PlozziOSLiveTVSourcesContent: View {
             managesChannels = false
             scansChannels = false
             scanOfferSourceID = nil
+        }
+    }
+
+    private var sourceContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            LiveTVSourcesView(
+                store: runtime.store, catalog: runtime.catalog, presentation: .settingsPane,
+                serverChoices: accounts.liveTVServerChoices,
+                serverProviderResolver: accounts.liveTVProviderResolver(),
+                connectServer: connectServer, didConfigurePlaylist: didConfigurePlaylist,
+                createChannel: { managesChannels = true },
+                scanChannels: { scansChannels = true },
+                scanCoordinator: runtime.scanBinding.coordinator,
+                didImportPlaylist: { scanOfferSourceID = $0 },
+                settingsPreferences: settingsPreferences,
+                automaticChannels: library.automaticChannelsPresentation,
+                customChannelCount: library.service.visibleDefinitions.filter { !$0.isAutomatic }.count
+            )
+            if let scanOfferSourceID, runtime.isPresentationCurrent {
+                LiveTVScanImportOffer(
+                    coordinator: runtime.scanBinding.coordinator, sourceID: scanOfferSourceID,
+                    skip: { self.scanOfferSourceID = nil }
+                )
+            }
         }
     }
 }

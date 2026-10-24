@@ -6,6 +6,8 @@ public struct ResponseDecodingDiagnostic: Equatable, Sendable {
         case movieRecommendations, libraryHubs, other
         case collectionCandidates, collectionLibraryScope, collectionMembers
         case continueWatching, continueWatchingItems, continueWatchingHub, onDeck
+        case resumeItems, nextUp
+        case itemDetail, playbackInventory, serverDiscovery
     }
     public enum Payload: String, Sendable { case empty, object, array, scalar, nonJSON }
     public enum Reason: String, Sendable { case missingKey, wrongType, nullValue, corruptedData, other }
@@ -53,7 +55,11 @@ public struct ResponseDecodingDiagnostic: Equatable, Sendable {
             "TotalRecordCount", "UserData", "MediaSources", "MediaStreams", "ProviderIds",
             "RunTimeTicks", "Size", "IndexNumber", "ParentIndexNumber", "ProductionYear",
             "MediaContainer", "Metadata", "Hub", "Directory", "ratingKey", "key", "type",
-            "title", "size", "totalSize", "offset", "viewOffset", "duration"
+            "title", "size", "totalSize", "offset", "viewOffset", "duration",
+            "ErrorCode", "PlaySessionId", "Container", "Protocol", "Path", "IsRemote", "Bitrate",
+            "SupportsDirectPlay", "SupportsDirectStream", "SupportsTranscoding",
+            "Index", "Codec", "Language", "Width", "Height", "Channels", "SampleRate",
+            "Media", "Part", "Stream"
         ]
         path = keys.isEmpty ? "<root>" : keys.prefix(24).map {
             if let index = $0.intValue, $0.stringValue == "Index \(index)" { return "[\(index)]" }
@@ -115,6 +121,52 @@ public struct ResponseStatusDiagnostic: Equatable, Sendable {
     public init(route: ResponseDecodingDiagnostic.Route, httpStatus: Int) {
         self.route = route
         self.httpStatus = httpStatus
+    }
+}
+
+public struct ResponseRequestDiagnostic: Equatable, Sendable {
+    public let route: ResponseDecodingDiagnostic.Route
+    public let method: String
+    public let elapsedMilliseconds: Int
+    public let httpStatus: Int?
+    public let urlErrorCode: Int?
+    public let bytes: Int
+    public let format: PlaybackFailureDiagnostic.Format
+    public let requestTimeoutMilliseconds: Int
+    public let resourceTimeoutMilliseconds: Int
+
+    public init(
+        route: ResponseDecodingDiagnostic.Route, method: String, elapsedMilliseconds: Int,
+        httpStatus: Int?, urlErrorCode: Int?, bytes: Int, format: PlaybackFailureDiagnostic.Format,
+        requestTimeoutMilliseconds: Int, resourceTimeoutMilliseconds: Int
+    ) {
+        self.route = route
+        self.method = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"].contains(method) ? method : "other"
+        self.elapsedMilliseconds = max(0, elapsedMilliseconds)
+        self.httpStatus = httpStatus
+        self.urlErrorCode = urlErrorCode
+        self.bytes = max(0, bytes)
+        self.format = format
+        self.requestTimeoutMilliseconds = max(0, requestTimeoutMilliseconds)
+        self.resourceTimeoutMilliseconds = max(0, resourceTimeoutMilliseconds)
+    }
+}
+
+public struct ResponseValidationDiagnostic: Equatable, Sendable {
+    public enum Reason: String, Sendable {
+        case emptySources, missingSourceID, blankSourceID, duplicateSourceID, unavailablePlaceholder
+        case serverRejected, missingMetadata
+        case itemIDMismatch, itemKindMismatch, accountMismatch
+    }
+
+    public let route: ResponseDecodingDiagnostic.Route
+    public let reason: Reason
+    public let sourceCount: Int?
+
+    public init(route: ResponseDecodingDiagnostic.Route, reason: Reason, sourceCount: Int? = nil) {
+        self.route = route
+        self.reason = reason
+        self.sourceCount = sourceCount.map { max(0, $0) }
     }
 }
 

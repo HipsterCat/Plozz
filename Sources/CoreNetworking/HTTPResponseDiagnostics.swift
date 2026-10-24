@@ -12,6 +12,8 @@ public enum HTTPResponseDiagnostics {
         public let paging: [LibraryPagingDiagnostic]
         public let transport: [ResponseTransportDiagnostic]
         public let http: [ResponseStatusDiagnostic]
+        public let requests: [ResponseRequestDiagnostic]
+        public let validation: [ResponseValidationDiagnostic]
 
         public var isCancelled: Bool {
             guard case .failure(let error) = result else { return false }
@@ -29,12 +31,16 @@ public enum HTTPResponseDiagnostics {
         let recorder = Recorder()
         return await $recorder.withValue(recorder) {
             do {
-                return CapturedResult(result: .success(try await operation()), responses: [], paging: [], transport: [], http: [])
+                return CapturedResult(
+                    result: .success(try await operation()), responses: [], paging: [], transport: [], http: [],
+                    requests: [], validation: []
+                )
             } catch {
                 let evidence = recorder.snapshot()
                 return CapturedResult(
                     result: .failure(error), responses: evidence.responses, paging: evidence.paging,
-                    transport: evidence.transport, http: evidence.http
+                    transport: evidence.transport, http: evidence.http,
+                    requests: evidence.requests, validation: evidence.validation
                 )
             }
         }
@@ -42,6 +48,19 @@ public enum HTTPResponseDiagnostics {
 
     public static func recordPagingFailure(_ diagnostic: LibraryPagingDiagnostic) {
         recorder?.append(diagnostic)
+    }
+
+    public static var isCapturing: Bool { recorder != nil }
+
+    public static func recordRequest(_ diagnostic: ResponseRequestDiagnostic) {
+        recorder?.append(diagnostic)
+    }
+
+    public static func recordValidationFailure(
+        _ reason: ResponseValidationDiagnostic.Reason,
+        route: ResponseDecodingDiagnostic.Route, sourceCount: Int? = nil
+    ) {
+        recorder?.append(ResponseValidationDiagnostic(route: route, reason: reason, sourceCount: sourceCount))
     }
 
     public static func recordHTTPFailure(status: Int) {
@@ -75,6 +94,22 @@ public enum HTTPResponseDiagnostics {
         private var paging: [LibraryPagingDiagnostic] = []
         private var transport: [ResponseTransportDiagnostic] = []
         private var http: [ResponseStatusDiagnostic] = []
+        private var requests: [ResponseRequestDiagnostic] = []
+        private var validation: [ResponseValidationDiagnostic] = []
+
+        func append(_ diagnostic: ResponseRequestDiagnostic) {
+            lock.lock()
+            defer { lock.unlock() }
+            requests.append(diagnostic)
+            if requests.count > 4 { requests.removeFirst() }
+        }
+
+        func append(_ diagnostic: ResponseValidationDiagnostic) {
+            lock.lock()
+            defer { lock.unlock() }
+            validation.append(diagnostic)
+            if validation.count > 4 { validation.removeFirst() }
+        }
 
         func append(_ response: ResponseDecodingDiagnostic) {
             lock.lock()
@@ -99,11 +134,12 @@ public enum HTTPResponseDiagnostics {
 
         func snapshot() -> (
             responses: [ResponseDecodingDiagnostic], paging: [LibraryPagingDiagnostic],
-            transport: [ResponseTransportDiagnostic], http: [ResponseStatusDiagnostic]
+            transport: [ResponseTransportDiagnostic], http: [ResponseStatusDiagnostic],
+            requests: [ResponseRequestDiagnostic], validation: [ResponseValidationDiagnostic]
         ) {
             lock.lock()
             defer { lock.unlock() }
-            return (responses, paging, transport, http)
+            return (responses, paging, transport, http, requests, validation)
         }
 
         func append(_ diagnostic: ResponseStatusDiagnostic) {

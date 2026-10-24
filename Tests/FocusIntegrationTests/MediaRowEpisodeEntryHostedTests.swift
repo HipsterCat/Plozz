@@ -11,6 +11,117 @@ import Vision
 #if os(tvOS)
 @MainActor
 final class MediaRowEpisodeEntryHostedTests: XCTestCase {
+    func testLoadedEpisodesReplaceThePlaceholderWithoutLeavingTheHero() async throws {
+        try await assertUnfocusedEpisodeLoad(entranceEnabledBeforeData: false)
+    }
+
+    func testReadyPhaseAfterLayoutRevealsEpisodesWithoutNavigation() async throws {
+        try await assertUnfocusedEpisodeLoad(entranceEnabledBeforeData: true)
+    }
+
+    private func assertUnfocusedEpisodeLoad(entranceEnabledBeforeData: Bool) async throws {
+        let image = try await seedImage()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        defer { previous?.makeKeyAndVisible() }
+        for style in [CardFocusStyle.highlight, .system] {
+            let model = EpisodeEntryFixture()
+            model.focusStyle = style
+            model.entryEnabled = entranceEnabledBeforeData
+            let host = EpisodeEntryHost(model: model)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            host.view.layoutIfNeeded()
+            await waitUntil { model.appeared && host.heroIsFocused }
+            model.items = (0..<1000).map {
+                MediaItem(id: "episode-\($0)", title: "Episode \($0)", kind: .episode,
+                          episodeNumber: $0 + 1, posterURL: image)
+            }
+            // Item layout, authoritative completion, and entrance focus permission
+            // arrive independently; none should need a remote event to settle.
+            try await Task.sleep(for: .milliseconds(400))
+            model.phase = .ready
+            try await Task.sleep(for: .milliseconds(400))
+            model.entryEnabled = true
+            try await Task.sleep(for: .seconds(1))
+            XCTAssertTrue(host.heroIsFocused, "Loading must not take focus away from Play.")
+            XCTAssertTrue(model.events.isEmpty, "No remote input or focus handoff is needed to render episodes.")
+            let rendered = screenshot(window)
+            let text = VNRecognizeTextRequest()
+            text.recognitionLevel = .accurate
+            text.recognitionLanguages = ["en-US"]
+            try VNImageRequestHandler(cgImage: XCTUnwrap(rendered.cgImage)).perform([text])
+            XCTAssertFalse(text.results?.contains {
+                $0.topCandidates(1).first?.string.contains("Loading episodes") == true
+            } == true, "\(style): a loaded row must retire its placeholder without a focus event.")
+            _ = try recognizedText("Episode 998", in: rendered)
+            capture(window, system: try XCTUnwrap(UIFocusSystem.focusSystem(for: window)),
+                    name: "episode-preview-ready-without-navigation-\(style)")
+        }
+    }
+
+    func testLoadingRowRevealsTheSamePageGradientInItsGutters() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = EpisodeEntryFixture()
+        let host = EpisodeEntryHost(model: model)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        host.row.view.backgroundColor = .clear
+        let background = UIHostingController(rootView: AmbientGradientBackground(
+            palette: .dark, tint: [.red, .orange, .purple, .blue]
+        ).transaction { $0.disablesAnimations = true })
+        host.addChild(background)
+        background.view.frame = host.view.bounds
+        host.view.insertSubview(background.view, at: 0)
+        background.didMove(toParent: host)
+        await waitUntil { model.appeared && host.heroIsFocused }
+        let image = try await seedImage()
+        model.items = (0..<4).map {
+            MediaItem(id: "episode-\($0)", title: "Episode \($0)", kind: .episode, posterURL: image)
+        }
+        for palette in [ThemePalette.dark, .pureBlack, .light] {
+            model.palette = palette
+            for tint: [Color] in [[.red, .orange, .purple, .blue], [.green, .cyan, .yellow, .mint]] {
+                background.rootView = AmbientGradientBackground(palette: palette, tint: tint)
+                    .transaction { $0.disablesAnimations = true }
+                for phase in [MediaRowEpisodeEntry.Phase.loading, .empty, .failed] {
+                    model.phase = phase
+                    try await Task.sleep(for: .milliseconds(100))
+                    let loading = screenshot(window)
+                    host.row.view.isHidden = true
+                    let page = screenshot(window)
+                    host.row.view.isHidden = false
+                    var samples = [CGPoint(x: 10, y: 340), CGPoint(x: 10, y: 480), CGPoint(x: 10, y: 700)]
+                    if phase != .loading { samples.append(CGPoint(x: 1_000, y: 400)) }
+                    for point in samples {
+                        let actual = try pixel(loading, x: Int(point.x), y: Int(point.y))
+                        let expected = try pixel(page, x: Int(point.x), y: Int(point.y))
+                        for channel in 0..<3 {
+                            XCTAssertEqual(Int(actual[channel]), Int(expected[channel]), accuracy: 2,
+                                           "\(palette)/\(phase): reveal the page, not a rail-wide fill or hidden episode.")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     func testCaptionSamplingDistinguishesAnimationFromAJump() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -798,6 +909,7 @@ private final class EpisodeEntryFixture {
     var entryEnabled = true
     var resumeTarget = "episode-998"
     var focusStyle = CardFocusStyle.highlight
+    var palette = ThemePalette.dark
     var pinnedSidebarActive = false
     var navigationInset: CGFloat = 0
     @ObservationIgnored var appeared = false
@@ -824,6 +936,7 @@ private struct EpisodeEntryFixtureView: View {
         )
         .frame(height: 520)
         .environment(\.plozzCardFocusStyle, model.focusStyle)
+        .environment(\.themePalette, model.palette)
         .environment(\.plozzCardCaptionView, .episodes)
         .preferredColorScheme(.dark)
         .environment(\.plozzPinnedSidebarActive, model.pinnedSidebarActive)

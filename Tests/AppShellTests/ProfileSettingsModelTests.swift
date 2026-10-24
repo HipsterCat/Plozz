@@ -10,6 +10,52 @@ import CoreModels
 /// as immutable and never rebuilt.
 @MainActor
 final class ProfileSettingsModelTests: XCTestCase {
+    func testContentRatingVisibilityChangesWithTheActiveProfile() {
+        let first = "ContentRatings.first.\(UUID())"
+        let second = "ContentRatings.second.\(UUID())"
+        defer {
+            for namespace in [first, second] {
+                UserDefaults.standard.removeObject(forKey: SettingsKey.scoped(
+                    ContentRatingSettingsStore.storageKey, namespace: namespace
+                ))
+            }
+        }
+        let model = ProfileSettingsModel(namespace: first)
+        XCTAssertTrue(model.contentRatingModel.showsRatings)
+        model.contentRatingModel.showsRatings = false
+        model.rebuild(namespace: second)
+        XCTAssertTrue(model.contentRatingModel.showsRatings)
+        model.rebuild(namespace: first)
+        XCTAssertFalse(model.contentRatingModel.showsRatings)
+    }
+
+    func testRebuildingKeepsAutomaticDiscoveryAndExplicitChoicesProfileScoped() {
+        let first = "Discovery.first.\(UUID())"
+        let second = "Discovery.second.\(UUID())"
+        defer {
+            for namespace in [first, second] {
+                UserDefaults.standard.removeObject(forKey: SettingsKey.scoped("com.plozz.heroSettings", namespace: namespace))
+            }
+        }
+        var configured = false
+        let model = ProfileSettingsModel(namespace: first, isSeerrConfigured: { configured })
+        XCTAssertFalse(model.heroSettingsModel.effectiveSettings.isEnabled(.featured))
+        configured = true
+        XCTAssertTrue(model.heroSettingsModel.effectiveSettings.isEnabled(.featured))
+        model.heroSettingsModel.settings.setEnabled(.featured, enabled: false)
+        model.rebuild(namespace: second)
+        XCTAssertTrue(model.heroSettingsModel.effectiveSettings.isEnabled(.featured))
+        configured = false
+        XCTAssertFalse(model.heroSettingsModel.effectiveSettings.isEnabled(.featured))
+        model.heroSettingsModel.settings.setEnabled(.featured, enabled: true)
+        model.rebuild(namespace: first)
+        configured = true
+        XCTAssertFalse(model.heroSettingsModel.effectiveSettings.isEnabled(.featured))
+        model.rebuild(namespace: second)
+        configured = false
+        XCTAssertTrue(model.heroSettingsModel.effectiveSettings.isEnabled(.featured))
+    }
+
     func testRebuildingKeepsTheLiveDiscoveryPolicyIncludingPreviouslyRetainedModels() {
         var isKids = false
         let model = ProfileSettingsModel(namespace: "policy-a", allowsDiscovery: { !isKids })
@@ -54,6 +100,7 @@ final class ProfileSettingsModelTests: XCTestCase {
         let model = ProfileSettingsModel(namespace: "ns-a")
 
         let before: [ObjectIdentifier] = [
+            ObjectIdentifier(model.contentRatingModel),
             ObjectIdentifier(model.appLanguageModel),
             ObjectIdentifier(model.subtitleBehaviorModel),
             ObjectIdentifier(model.subtitleStyleModel),
@@ -74,11 +121,12 @@ final class ProfileSettingsModelTests: XCTestCase {
             ObjectIdentifier(model.heroSettingsModel),
             ObjectIdentifier(model.nightShiftModel),
         ]
-        XCTAssertEqual(before.count, 19, "Expected 19 per-profile sub-models")
+        XCTAssertEqual(before.count, 20, "Expected 20 per-profile sub-models")
 
         model.rebuild(namespace: "ns-b")
 
         let after: [ObjectIdentifier] = [
+            ObjectIdentifier(model.contentRatingModel),
             ObjectIdentifier(model.appLanguageModel),
             ObjectIdentifier(model.subtitleBehaviorModel),
             ObjectIdentifier(model.subtitleStyleModel),
@@ -153,12 +201,32 @@ final class ProfileSettingsModelTests: XCTestCase {
         XCTAssertTrue(model.navigationStyleModel.preventsAccidentalExit)
     }
 
+    func testRebuildScopesDetailZoomToTheActiveProfile() {
+        let first = "DetailZoom.first.\(UUID().uuidString)"
+        let second = "DetailZoom.second.\(UUID().uuidString)"
+        defer {
+            for namespace in [first, second] {
+                UserDefaults.standard.removeObject(forKey: SettingsKey.scoped(
+                    NavigationStyleSettingsStore.detailZoomStorageKey, namespace: namespace
+                ))
+            }
+        }
+        let model = ProfileSettingsModel(namespace: first)
+        XCTAssertFalse(model.navigationStyleModel.detailZoomEnabled)
+        model.navigationStyleModel.detailZoomEnabled = true
+        model.rebuild(namespace: second)
+        XCTAssertFalse(model.navigationStyleModel.detailZoomEnabled)
+        model.rebuild(namespace: first)
+        XCTAssertTrue(model.navigationStyleModel.detailZoomEnabled)
+    }
+
     func testHomeLayoutSelectionSurvivesProfileSwitchWithoutChangingNavigation() {
         let primary = "HomeLayout.primary.\(UUID().uuidString)"
         let other = "HomeLayout.other.\(UUID().uuidString)"
         defer {
             for namespace in [primary, other] {
                 UserDefaults.standard.removeObject(forKey: SettingsKey.scoped("com.plozz.heroSettings", namespace: namespace))
+                UserDefaults.standard.removeObject(forKey: SettingsKey.scoped(DetailPageSettingsStore.baseKey, namespace: namespace))
                 UserDefaults.standard.removeObject(forKey: SettingsKey.scoped(CardCaptionSettingsStore.storageKey, namespace: namespace))
                 UserDefaults.standard.removeObject(forKey: SettingsKey.scoped(CardCaptionSettingsStore.storageKey, namespace: namespace) + ".migrated")
             }
@@ -166,14 +234,23 @@ final class ProfileSettingsModelTests: XCTestCase {
         let model = ProfileSettingsModel(namespace: primary)
         let navigation = model.navigationStyleModel.style
         model.heroSettingsModel.settings.style = .followsFocus
+        model.heroSettingsModel.settings.logoSize = HeroLogoSize(rawValue: 3)
+        model.heroSettingsModel.settings.showcaseLogoSize = HeroLogoSize(rawValue: 8)
+        model.detailPageModel.settings.logoSize = HeroLogoSize(rawValue: 6)
         model.cardStyleModel.captions.setOverride(.show, for: .home)
 
         model.rebuild(namespace: other)
         XCTAssertEqual(model.heroSettingsModel.settings.style, .carousel)
+        XCTAssertEqual(model.heroSettingsModel.settings.logoSize, .default)
+        XCTAssertEqual(model.heroSettingsModel.settings.showcaseLogoSize, .default)
+        XCTAssertEqual(model.detailPageModel.settings.logoSize, .default)
         XCTAssertTrue(model.cardStyleModel.captions.showsLabels(in: .home))
         XCTAssertFalse(model.cardStyleModel.captions.showsLabels(in: .home, isShowcase: true))
         model.rebuild(namespace: primary)
         XCTAssertEqual(model.heroSettingsModel.settings.style, .followsFocus)
+        XCTAssertEqual(model.heroSettingsModel.settings.logoSize.rawValue, 3)
+        XCTAssertEqual(model.heroSettingsModel.settings.showcaseLogoSize.rawValue, 8)
+        XCTAssertEqual(model.detailPageModel.settings.logoSize.rawValue, 6)
         XCTAssertTrue(model.cardStyleModel.captions.showsLabels(in: .home))
         XCTAssertEqual(model.navigationStyleModel.style, navigation)
     }
@@ -182,6 +259,7 @@ final class ProfileSettingsModelTests: XCTestCase {
     /// (`subtitlePolicyModel`, `audioPolicyModel`, `heroSettingsModel`) are now
     /// injectable and preserved as-is, mirroring the other injected models.
     func testNewlyInjectableModelsArePreservedAndNotRebuilt() {
+        let injectedContentRatings = ContentRatingSettingsModel(store: ContentRatingSettingsStore(namespace: "seed"))
         let injectedSubtitlePolicy = SubtitlePolicyModel(store: SubtitlePolicyStore(namespace: "seed"))
         let injectedAudioPolicy = AudioPolicyModel(store: AudioPolicyStore(namespace: "seed"))
         let injectedHero = HeroSettingsModel(store: HeroSettingsStore(namespace: "seed"))
@@ -190,6 +268,7 @@ final class ProfileSettingsModelTests: XCTestCase {
             namespace: "ns-a",
             subtitlePolicyModel: injectedSubtitlePolicy,
             audioPolicyModel: injectedAudioPolicy,
+            contentRatingModel: injectedContentRatings,
             heroSettingsModel: injectedHero
         )
 
@@ -197,12 +276,14 @@ final class ProfileSettingsModelTests: XCTestCase {
         XCTAssertTrue(model.subtitlePolicyModel === injectedSubtitlePolicy)
         XCTAssertTrue(model.audioPolicyModel === injectedAudioPolicy)
         XCTAssertTrue(model.heroSettingsModel === injectedHero)
+        XCTAssertTrue(model.contentRatingModel === injectedContentRatings)
 
         // Rebuild is a no-op under injection: identities are preserved.
         model.rebuild(namespace: "ns-b")
         XCTAssertTrue(model.subtitlePolicyModel === injectedSubtitlePolicy)
         XCTAssertTrue(model.audioPolicyModel === injectedAudioPolicy)
         XCTAssertTrue(model.heroSettingsModel === injectedHero)
+        XCTAssertTrue(model.contentRatingModel === injectedContentRatings)
     }
 
     func testInjectedModelsAreNotRebuilt() {

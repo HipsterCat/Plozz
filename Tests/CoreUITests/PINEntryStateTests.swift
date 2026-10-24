@@ -12,6 +12,7 @@ final class PINEntryStateTests: XCTestCase {
         XCTAssertTrue(entry.isCommitting)
         entry.reset()
         XCTAssertEqual(entry.pin, "")
+        XCTAssertEqual(entry.submittedDigitCount, 0)
         XCTAssertFalse(entry.isCommitting)
         try await Task.sleep(for: .milliseconds(300))
 
@@ -21,6 +22,7 @@ final class PINEntryStateTests: XCTestCase {
             entry.appendDigit(String(digit)) { pin in
                 XCTAssertEqual(pin, "5678")
                 XCTAssertEqual(entry.pin, "")
+                XCTAssertEqual(entry.submittedDigitCount, 4, "Retain progress without retaining the entered PIN.")
                 XCTAssertFalse(entry.isCommitting)
                 submitted.fulfill()
             }

@@ -528,7 +528,7 @@ extension SiloProvider: SeriesResumeProviding, SeriesIdentityProviding {
 
 extension SiloProvider: WatchStateProviding, ResumeStateWriting, WatchlistProviding {
     public func setPlayed(_ played: Bool, itemID: String) async throws {
-        try await client.send("/watched/\(try SiloAPI.pathComponent(itemID))", method: played ? .put : .delete)
+        try await client.send("/watched/\(try SiloAPI.pathComponent(itemID))", method: played ? .post : .delete)
     }
 
     public func setResumePosition(_ seconds: TimeInterval, itemID: String, capturedAt: Date) async throws {

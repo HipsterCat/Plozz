@@ -1,9 +1,7 @@
 import Foundation
 import Observation
 
-/// Which release channel this build is running as. Used to pick a sensible
-/// default for privacy-sensitive plumbing (crash reporting) that captures beta
-/// feedback automatically while keeping the shipping App Store build opt-in.
+/// The release channel used to label diagnostic reports after explicit consent.
 ///
 /// Mirrors the environment detection in `CrashReporting.detectEnvironment()`,
 /// duplicated here because CoreModels sits below the CrashReporting module and
@@ -67,12 +65,8 @@ public enum AppReleaseChannel: Sendable {
 
 /// Opt-in consent for sending anonymised crash reports off-device.
 ///
-/// **Default depends on the release channel.** During beta (Debug + TestFlight)
-/// crash reporting defaults **ON** so tester crashes are captured without each
-/// person hunting for a toggle; the shipping **App Store build defaults OFF**
-/// (explicit opt-in). Either way, nothing is sent unless the build was also
-/// configured with a crash-reporting endpoint (DSN), and the user can flip the
-/// switch at any time — an explicit choice is always honoured over the default.
+/// All builds require the current consent choice before reporting can start.
+/// Legacy preferences are retained but cannot authorize reporting.
 ///
 /// This is an **app-wide / household** setting, deliberately NOT per-profile:
 /// crash reporting is about the app and the device, and a profile is non-secret
@@ -80,11 +74,15 @@ public enum AppReleaseChannel: Sendable {
 /// reasoning as the app-wide Transparency preference — see AGENTS.local.md
 /// "Per-profile vs app-wide settings").
 public struct CrashReportingSettings: Codable, Equatable, Sendable {
+    public static let currentConsentVersion = 1
+
     /// Whether the user has opted in to sending crash reports.
     public var isEnabled: Bool
+    public let consentVersion: Int?
 
-    public init(isEnabled: Bool = false) {
+    public init(isEnabled: Bool = false, consentVersion: Int? = nil) {
         self.isEnabled = isEnabled
+        self.consentVersion = consentVersion
     }
 
     /// Hand-written so older settings containing the retired manual device marker
@@ -92,6 +90,7 @@ public struct CrashReportingSettings: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        consentVersion = try container.decodeIfPresent(Int.self, forKey: .consentVersion)
     }
 
     public static let `default` = CrashReportingSettings()
@@ -140,23 +139,29 @@ public final class CrashReportingSettingsStore: CrashReportingSettingsStoring, @
 @MainActor
 @Observable
 public final class CrashReportingSettingsModel {
-    public var settings: CrashReportingSettings {
-        didSet { store.save(settings) }
+    public private(set) var settings: CrashReportingSettings
+
+    public var needsConsent: Bool {
+        settings.consentVersion != CrashReportingSettings.currentConsentVersion
+    }
+
+    public var isEnabled: Bool {
+        get { !needsConsent && settings.isEnabled }
+        set {
+            settings = CrashReportingSettings(
+                isEnabled: newValue,
+                consentVersion: CrashReportingSettings.currentConsentVersion
+            )
+            store.save(settings)
+        }
     }
 
     private let store: CrashReportingSettingsStoring
 
-    /// - Parameter defaultConsentWhenUnset: consent to assume when the user has
-    ///   made no explicit choice yet. Defaults to the release-channel default
-    ///   (beta → on, production → off). The default is **not** persisted, so a
-    ///   tester who upgrades a never-touched install from TestFlight to the App
-    ///   Store correctly reverts to opt-in.
     public init(
-        store: CrashReportingSettingsStoring = CrashReportingSettingsStore(),
-        defaultConsentWhenUnset: Bool = AppReleaseChannel.current.isBeta
+        store: CrashReportingSettingsStoring = CrashReportingSettingsStore()
     ) {
         self.store = store
-        self.settings = store.loadStored()
-            ?? CrashReportingSettings(isEnabled: defaultConsentWhenUnset)
+        self.settings = store.loadStored() ?? .default
     }
 }

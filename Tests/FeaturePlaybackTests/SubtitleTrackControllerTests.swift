@@ -63,6 +63,26 @@ final class SubtitleTrackControllerTests: XCTestCase {
 
     // MARK: - Subtitle OFF
 
+    func testAudioSelectionImportAndRestorationUseHostRouting() {
+        for action in 0..<3 {
+            let (sut, host, engine) = makeSUT(engineKind: .plozzigen)
+            let target = audio(4, language: "jpn")
+            engine.audioTracks = [audio(3, language: "eng", isDefault: true), target]
+            engine.currentAudioTrackID = 3
+            var routedIDs: [Int] = []
+            host.audioSelectionHandler = { routedIDs.append($0.id); return true }
+            sut.loadTrackOptions()
+            switch action {
+            case 0: sut.selectAudioOption(id: 4)
+            case 1: sut.queueImportedAudio(language: "jpn")
+            default:
+                _ = sut.restoreStreamSnapshot(.init(audio: target, primary: nil, secondary: nil))
+            }
+            XCTAssertEqual(routedIDs, [4])
+            XCTAssertEqual(engine.currentAudioTrackID, 3, "The host owns server-rendition replacement.")
+        }
+    }
+
     func testServerBurnInKeepsSelectionWithoutClientRenderingOrTimingControls() {
         for kind in [PlaybackEngineKind.native, .plozzigen] {
             let (sut, host, engine) = makeSUT(engineKind: kind)
@@ -562,6 +582,7 @@ private final class SpyTrackHost: SubtitleTrackControllerHost, SubtitleOverlayLo
     var rule = SubtitlePolicy.Rule()
 
     private(set) var recordedAudioLanguage: [String?] = []
+    var audioSelectionHandler: ((MediaTrack) -> Bool)?
     private(set) var recordedSubtitle: [RememberedSubtitleSelection?] = []
     private(set) var refreshDelayCalls = 0
     private(set) var swapCalls = 0
@@ -595,6 +616,11 @@ private final class SpyTrackHost: SubtitleTrackControllerHost, SubtitleOverlayLo
     func trackRememberedSubtitle(for item: MediaItem) -> RememberedSubtitleSelection? { remembered }
     func trackEffectiveSubtitleRule(for item: MediaItem) -> SubtitlePolicy.Rule { rule }
     func trackRecordAudioSelection(language: String?) { recordedAudioLanguage.append(language) }
+    func trackSelectAudioTrack(_ track: MediaTrack) -> Bool {
+        if let audioSelectionHandler { return audioSelectionHandler(track) }
+        engine.selectAudioTrack(track)
+        return true
+    }
     func trackRecordSubtitleSelection(_ selection: RememberedSubtitleSelection?) { recordedSubtitle.append(selection) }
     func trackRefreshSubtitleDelayAvailability() { refreshDelayCalls += 1 }
 

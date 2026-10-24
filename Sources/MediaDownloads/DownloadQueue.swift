@@ -15,6 +15,7 @@ public actor DownloadQueue {
     private let engine: any MediaDownloadEngine
     private let observer: any DownloadNetworkObserving
     private let fileManager: FileManager
+    private let storageCapacity: DownloadStorageCapacity
     private var policy: DownloadNetworkPolicy
     private let limiter: ConcurrencyLimiter
 
@@ -40,6 +41,7 @@ public actor DownloadQueue {
         policy: DownloadNetworkPolicy = .default,
         applicationIsActive: Bool = true,
         fileManager: FileManager = .default,
+        storageCapacity: DownloadStorageCapacity = .device,
         maxAttempts: Int = 3,
         backoff: @escaping @Sendable (Int) async -> Void = { attempt in
             let seconds = min(30, pow(2.0, Double(attempt)))
@@ -53,6 +55,7 @@ public actor DownloadQueue {
         self.policy = policy
         self.applicationIsActive = applicationIsActive
         self.fileManager = fileManager
+        self.storageCapacity = storageCapacity
         self.maxAttempts = max(1, maxAttempts)
         self.backoff = backoff
         self.limiter = ConcurrencyLimiter(limit: policy.maxConcurrentDownloads)
@@ -478,12 +481,10 @@ public actor DownloadQueue {
             withIntermediateDirectories: true
         )
         if let totalBytes = record.totalBytes,
-           let freeBytes = try? destination.deletingLastPathComponent()
-            .resourceValues(forKeys: [
-                .volumeAvailableCapacityKey
-            ])
-            .volumeAvailableCapacity,
-           max(0, totalBytes - record.bytesDownloaded) > Int64(freeBytes) {
+           let freeBytes = try? storageCapacity.availableBytes(
+                at: destination.deletingLastPathComponent()
+           ),
+           max(0, totalBytes - record.bytesDownloaded) > freeBytes {
             await setAttemptStatus(
                 identityKey: identityKey,
                 .failed,

@@ -74,6 +74,8 @@ public struct RootView: View {
     @State private var showSyncSend = false
     @State private var rootPresentation = RootPresentationCoordinator()
     @State private var startupNotesPrepared = false
+    @State private var startupLogoIntroCompleted = false
+    @State private var deferredStartupURL: URL?
     @State private var presentedSetupOffer: SyncPairingRendezvous?
     /// Home's view model, owned here because this is the highest view whose
     /// identity is genuinely stable for the signed-in session. Kept out of the
@@ -205,18 +207,10 @@ public struct RootView: View {
     /// Reconcile the crash reporter with the current opt-in consent. Safe to call
     /// repeatedly: starts on the first opt-in, stops on opt-out, no-op otherwise
     /// (and always a no-op when the build has no DSN).
-    ///
-    /// DEBUG: honours `PLOZZ_FORCE_CRASH_REPORTING=1` in the environment to force
-    /// the reporter on regardless of the persisted opt-in, so a crash-hunt build
-    /// can capture a backtrace without navigating Settings. Off by default (the
-    /// env var is unset in normal runs), so this changes no shipped behavior; it
-    /// still no-ops when the build has no DSN. Mirrors the env-gated PLZHFOCUS
-    /// diagnostics pattern.
     private func reconcileCrashReporting() {
-        let forced = ProcessInfo.processInfo.environment["PLOZZ_FORCE_CRASH_REPORTING"] == "1"
         crashReporting.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
         crashReporting.apply(
-            enabled: appState.crashReportingModel.settings.isEnabled || forced,
+            enabled: appState.crashReportingModel.isEnabled,
             context: makeCrashContext()
         )
     }
@@ -250,6 +244,7 @@ public struct RootView: View {
     }
 
     private var startupPresentationReady: Bool {
+        guard !showsStartupLogo else { return false }
         guard appState.canEnterApp, !appState.pendingStandaloneLiveTVEntry else { return false }
         guard appState.profileFlow.pendingSetupProfile == nil else { return false }
         guard case .ready = appState.state else { return false }
@@ -295,6 +290,7 @@ public struct RootView: View {
     }
 
     private var presentationRequests: [RootPresentationCoordinator.Destination] {
+        guard !showsStartupLogo else { return [] }
         var requests: [RootPresentationCoordinator.Destination] = []
         let flow = appState.profileFlow
         if flow.pendingLockedProfile != nil || flow.pendingParentalSwitch != nil
@@ -314,6 +310,7 @@ public struct RootView: View {
         if showSyncReceive || showSyncReceiveFromSettings { requests.append(.receiveSetup) }
         if showSyncErasure { requests.append(.syncErasure) }
         if providerSetupRouter.addressAccount != nil { requests.append(.serverAddresses) }
+        if providerSetupRouter.reauthenticationAccount != nil { requests.append(.accountRecovery) }
         if startupPresentationReady && nextFeatureIntroduction == nil && startupNotesPrepared,
            appState.cloudSyncUI.pendingServerPrompt != nil {
             requests.append(.newServer)
@@ -359,6 +356,8 @@ public struct RootView: View {
             showSyncErasure = false
         case .serverAddresses:
             providerSetupRouter.addressAccount = nil
+        case .accountRecovery:
+            providerSetupRouter.reauthenticationAccount = nil
         case .newServer:
             if rootPresentation.wasDismissedByUser { appState.clearPendingServerPrompt() }
         case nil:
@@ -458,6 +457,32 @@ public struct RootView: View {
                 )
                 .plozzDialogSurface()
             }
+        case .accountRecovery:
+            if let account = providerSetupRouter.reauthenticationAccount {
+                AccountReauthenticationView(
+                    model: appState.accountsProviders.makeAccountReauthentication(
+                        account: account,
+                        isAuthorized: {
+                            appState.isLiveTVProfileAuthorized
+                                && !appState.profileFlow.managementRequiresParentalPIN
+                        },
+                        onComplete: {
+                            providerSetupRouter.reauthenticationAccount = nil
+                            appState.plexHomeUsers.ensurePlexIdentityForActiveProfile()
+                        }
+                    ),
+                    onCancel: { providerSetupRouter.reauthenticationAccount = nil }
+                ) { model in
+                    AuthView(
+                        server: account.server, deviceID: model.deviceID, verificationOnly: true,
+                        onAuthenticated: model.complete,
+                        onCancel: {
+                            model.cancel()
+                            providerSetupRouter.reauthenticationAccount = nil
+                        }
+                    )
+                }
+            }
         case .newServer:
             if let descriptor = appState.cloudSyncUI.pendingServerPrompt {
                 VStack(spacing: 24) {
@@ -526,14 +551,65 @@ public struct RootView: View {
     }
 
     public var body: some View {
+        Group {
+            if needsDiagnosticConsent {
+                Group {
+                    if !startupLogoIntroCompleted {
+                        launchView
+                            .background { AppBackground(palette: resolvedPalette) }
+                    } else {
+                        CrashReportingConsentView { enabled in
+                            appState.crashReportingModel.isEnabled = enabled
+                        }
+                    }
+                }
+                .environment(\.themePalette, resolvedPalette)
+                .environment(\.colorScheme, resolvedPalette.isLight ? .light : .dark)
+                .background(ColorSchemeMirror { scheme in
+                    if systemColorScheme != scheme { systemColorScheme = scheme }
+                })
+            } else {
+                appContent
+                    .task(id: showsStartupLogo) {
+                        if !showsStartupLogo, let url = deferredStartupURL {
+                            deferredStartupURL = nil
+                            appState.handle(url: url)
+                        }
+                    }
+            }
+        }
+        .onOpenURL { url in
+            if needsDiagnosticConsent || showsStartupLogo {
+                deferredStartupURL = url
+            } else {
+                appState.handle(url: url)
+            }
+        }
+    }
+
+    private var needsDiagnosticConsent: Bool {
+        crashReporting.isConfigured && appState.crashReportingModel.needsConsent
+    }
+
+    private var showsStartupLogo: Bool {
+        !startupLogoIntroCompleted || appState.rootPresentationState == .launching
+    }
+
+    private var launchView: some View {
+        LaunchView { startupLogoIntroCompleted = true }
+    }
+
+    private var appContent: some View {
         let _ = plozzPrintChanges { Self._printChanges() }
         let requests = presentationRequests
         return ZStack {
-            // Profile setup outranks the global session machine. Add-user auth
+            // After the intro, profile setup outranks the global session machine. Add-user auth
             // temporarily moves that machine to `.onboarding`, but setup must
             // remain mounted underneath so its exact NavigationStack path
             // survives and the auth screen can behave as an overlay.
-            if appState.allowsStandalonePlayback && appState.profileFlow.isChoosingProfile {
+            if showsStartupLogo {
+                launchView
+            } else if appState.allowsStandalonePlayback && appState.profileFlow.isChoosingProfile {
                 // Standalone can resume profile confirmation without a server.
                 // A remembered locked profile must still be selected/unlocked
                 // before its confirmation or editor can appear.
@@ -552,7 +628,8 @@ public struct RootView: View {
             } else {
                 switch appState.rootPresentationState {
             case .launching:
-                LaunchView()
+                // Handled before profile routing so readiness cannot cut the wink short.
+                EmptyView()
 
             case let .onboarding(step, canReturnToApp):
                 OnboardingFlowView(
@@ -770,6 +847,7 @@ public struct RootView: View {
         }
         .modifier(AccountSetupOverlay(
             appState: appState, deviceColorScheme: systemColorScheme,
+            presentationEnabled: !showsStartupLogo,
             onAppearanceSelected: completeAppearanceIntroductions
         ))
         .background { AppBackground(palette: resolvedPalette) }
@@ -777,6 +855,7 @@ public struct RootView: View {
         .environment(\.managedProviderSetupRouter, providerSetupRouter)
         .onChange(of: appState.profilesModel.activeProfileID) { _, _ in
             providerSetupRouter.addressAccount = nil
+            providerSetupRouter.reauthenticationAccount = nil
         }
         .onChange(of: providerSetupRouter.request?.id) { _, _ in
             guard let request = providerSetupRouter.request else { return }
@@ -784,8 +863,15 @@ public struct RootView: View {
             appState.addAccount(provider: .iptv, playlist: request.playlist, iptvAccount: request.account)
         }
         .environment(\.gradientBackgroundsEnabled, appState.profileSettings.themeModel.gradientEnabled)
+        .environment(appState.profileSettings.contentRatingModel)
+        .environment(\.plozzShowsContentRatings, appState.profileSettings.contentRatingModel.showsRatings)
         .environment(\.familyGuidanceProvider, appState.familyGuidance)
         .environment(\.detailHeaderSettings, appState.profileSettings.detailPageModel)
+        .environment(appState.profileSettings.libraryPresentationModel)
+        .environment(\.libraryPresentationLoader, LibraryPresentationLoader(
+            settings: appState.profileSettings.libraryPresentationModel,
+            namespace: appState.profilesModel.activeNamespace
+        ))
         .environment(
             \.versionPickerAudioLanguage,
             appState.profileSettings.playbackModel.settings.audioLanguagePreference.explicitLanguageCode
@@ -811,7 +897,9 @@ public struct RootView: View {
         .environment(\.plozzArtworkProviders, appState.metadataProviderSettingsModel.settings)
         .environment(\.plozzCardFocusStyle, appState.profileSettings.cardStyleModel.focusStyle)
         .environment(\.plozzWatchStatusIndicator, appState.profileSettings.watchStatusIndicatorModel.indicator)
+        .environment(\.plozzWatchIndicatorColor, appState.profileSettings.watchStatusIndicatorModel.color)
         .environment(\.plozzShowsUnwatchedEpisodeCount, appState.profileSettings.watchStatusIndicatorModel.showsUnwatchedEpisodeCount)
+        .environment(\.plozzEpisodeCountBadgeStyle, appState.profileSettings.watchStatusIndicatorModel.episodeCountStyle)
         // Read by the corner mark on a card whose title isn't in the library:
         // connected turns "not yours" into "you can ask for this". Injected here
         // rather than passed down because the mark is drawn beneath every row,
@@ -895,10 +983,7 @@ public struct RootView: View {
             appState.drainWatchOutbox()
             reconcileCrashReporting()
         }
-        .onChange(of: appState.crashReportingModel.settings) { _, _ in
-            // Watches the whole value, not just `isEnabled`: flipping the
-            // maintainer marker changes the reporter's environment, and that only
-            // takes effect on a restart the controller performs from here.
+        .onChange(of: appState.crashReportingModel.isEnabled) { _, _ in
             reconcileCrashReporting()
         }
         .onReceive(NotificationCenter.default.publisher(for: MainThreadStallProbe.contextDidChange)) { _ in
@@ -952,7 +1037,6 @@ public struct RootView: View {
                 }
             )
         )
-        .onOpenURL { appState.handle(url: $0) }
         .externalPlayerSupport(
             context: { appState.externalPlaybackContext() },
             legacySettings: { appState.profileSettings.playbackModel.settings.externalPlayer },
@@ -1348,14 +1432,19 @@ private struct OnboardingPageContent: View {
 struct AccountSetupOverlay: ViewModifier {
     let appState: AppState
     let deviceColorScheme: ColorScheme
+    var presentationEnabled = true
     var onAppearanceSelected: (() -> Void)?
+
+    private var isPresented: Bool {
+        presentationEnabled && appState.presentsAccountSetupOverApp
+    }
 
     func body(content: Content) -> some View {
         content
-            .disabled(appState.presentsAccountSetupOverApp)
-            .accessibilityHidden(appState.presentsAccountSetupOverApp)
+            .disabled(isPresented)
+            .accessibilityHidden(isPresented)
             .overlay {
-                if appState.presentsAccountSetupOverApp {
+                if isPresented {
                     ZStack {
                         AppBackground(palette: ThemePalette.palette(
                             for: appState.profileSettings.themeModel.theme,
@@ -1563,7 +1652,7 @@ private struct ProfileAccessGateView: View {
                     sequenceStep: expectsTwoPINs
                         ? .init(current: 1, total: 2)
                         : nil,
-                    onSubmit: { appState.profileFlow.submitProfileLockPIN($0) },
+                    onSubmit: { await appState.profileFlow.submitProfileLockPIN($0) },
                     onCancel: { appState.profileFlow.cancelProfileLockPrompt() }
                 )
                 .id("profile-pin")
@@ -1633,45 +1722,64 @@ private struct PlexPINEntryView: View {
 
     var body: some View {
         let pendingRequest = appState.plexHomeUsers.pendingPlexPINRequest
-        return PINEntryScaffold(
-            title: "Enter your Plex PIN",
-            name: Text(verbatim: userName),
-            errorMessage: appState.plexHomeUsers.plexPINError,
-            isSubmitting: appState.plexHomeUsers.isSubmittingPlexPIN,
-            availability: pendingRequest == nil ? .checking : appState.plexHomeUsers.plexPINEntryAvailability,
-            onRetry: {
-                guard let pendingRequest, appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest else { return }
-                appState.plexHomeUsers.retryPlexPINRequirement()
-            },
-            sequenceStep: sequenceStep,
-            onSubmit: { pin in
-                guard appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest,
-                      appState.plexHomeUsers.plexPINEntryAvailability == .available else { return }
-                PlozzLog.auth.debug("PIN auto-submit at 4 digits")
-                onSubmit(pin)
-            },
-            onCancel: {
-                guard let pendingRequest, appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest else { return }
-                onCancel()
-            }
-        ) {
-            PINBadge {
-                if let url = avatarURLString.flatMap(URL.init(string:)) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case let .success(image):
-                            image.resizable().scaledToFill()
-                        default:
+        ZStack {
+            if appState.plexHomeUsers.plexPINEntryAvailability == .unavailable {
+                PlexAccountRecoveryView(
+                    name: userName,
+                    message: appState.plexHomeUsers.plexPINError ?? ProfileLockCopy.plexSwitchFailed,
+                    signIn: appState.plexHomeUsers.plexReauthentication,
+                    onSignIn: { appState.plexHomeUsers.beginPlexReauthentication() },
+                    onRetry: { appState.plexHomeUsers.retryPlexPINRequirement() },
+                    onCancel: onCancel,
+                    onCancelSignIn: { appState.plexHomeUsers.cancelPlexReauthentication() }
+                )
+            } else {
+                PINEntryScaffold(
+                    title: "Enter your Plex PIN",
+                    name: Text(verbatim: userName),
+                    showsLock: true,
+                    errorMessage: appState.plexHomeUsers.plexPINError,
+                    isSubmitting: appState.plexHomeUsers.isSubmittingPlexPIN,
+                    availability: pendingRequest == nil
+                        ? .checking : appState.plexHomeUsers.plexPINEntryAvailability,
+                    onRetry: {
+                        guard let pendingRequest, appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest
+                        else { return }
+                        appState.plexHomeUsers.retryPlexPINRequirement()
+                    },
+                    sequenceStep: sequenceStep,
+                    onSubmit: { pin in
+                        guard appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest,
+                            appState.plexHomeUsers.plexPINEntryAvailability == .available
+                        else { return }
+                        PlozzLog.auth.debug("PIN auto-submit at 4 digits")
+                        onSubmit(pin)
+                    },
+                    onCancel: {
+                        guard let pendingRequest, appState.plexHomeUsers.pendingPlexPINRequest == pendingRequest
+                        else { return }
+                        onCancel()
+                    }
+                ) {
+                    PINBadge {
+                        if let url = avatarURLString.flatMap(URL.init(string:)) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case let .success(image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    PlexPINFallbackGlyph()
+                                }
+                            }
+                        } else {
                             PlexPINFallbackGlyph()
                         }
                     }
-                } else {
-                    PlexPINFallbackGlyph()
+                    .frame(width: PINLayout.badgeSize, height: PINLayout.badgeSize)
                 }
+                .id([pendingRequest?.id, pendingRequest?.accountID, pendingRequest?.homeUserID])
             }
-            .frame(width: PINLayout.badgeSize, height: PINLayout.badgeSize)
         }
-        .id([pendingRequest?.id, pendingRequest?.accountID, pendingRequest?.homeUserID])
         .onChange(of: pendingRequest?.id) { _, newValue in
             // Both a successful switch and a cancelled proposal dismiss the cover.
             if newValue == nil, dismissOnSuccess {
@@ -1693,13 +1801,16 @@ private struct PlexPINFallbackGlyph: View {
 
 /// Brief splash while we check for a stored session.
 private struct LaunchView: View {
+    var onIntroCompleted: (() -> Void)? = nil
+
     var body: some View {
         VStack {
-            PlozzStartupLogo()
+            PlozzStartupLogo(onIntroCompleted: onIntroCompleted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Loading"))
+        .accessibilityIdentifier("startup-logo")
     }
 }
 

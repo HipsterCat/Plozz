@@ -11,7 +11,8 @@ import FeatureAuthCore
 public struct AuthView: View {
     private let server: MediaServer
     private let deviceID: String
-    private let onAuthenticated: (UserSession) -> Void
+    private let onAuthenticated: (UserSession) throws -> Void
+    private let verificationOnly: Bool
     private let onCancel: () -> Void
 
     @State private var showingPasswordSignIn = false
@@ -19,11 +20,13 @@ public struct AuthView: View {
     public init(
         server: MediaServer,
         deviceID: String,
-        onAuthenticated: @escaping (UserSession) -> Void,
+        verificationOnly: Bool = false,
+        onAuthenticated: @escaping (UserSession) throws -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.server = server
         self.deviceID = deviceID
+        self.verificationOnly = verificationOnly
         self.onAuthenticated = onAuthenticated
         self.onCancel = onCancel
     }
@@ -31,7 +34,10 @@ public struct AuthView: View {
 
     public var body: some View {
         if server.provider == .silo {
-            SiloSignInView(server: server, deviceID: deviceID, onAuthenticated: onAuthenticated, onCancel: onCancel)
+            SiloSignInView(
+                server: server, deviceID: deviceID, verificationOnly: verificationOnly,
+                onAuthenticated: onAuthenticated, onCancel: onCancel
+            )
         } else if server.provider == .emby {
             PasswordSignInView(
                 viewModel: PasswordSignInViewModel(

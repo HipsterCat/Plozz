@@ -2,6 +2,33 @@ import XCTest
 @testable import CoreModels
 
 final class NetworkMediaSourcesTests: XCTestCase {
+    func testOriginAndEndpointShareExactHostValidation() throws {
+        for host in [" Media.Example ", "[FE80::1]", "127.0.0.1", "B\u{00DC}CHER.example", "server."] {
+            let endpoint = try MediaShareEndpoint(
+                transport: .webDAV, host: host, options: .webDAV(WebDAVTransportOptions())
+            )
+            let origin = try NetworkOrigin(scheme: "HTTPS", host: host)
+            XCTAssertEqual(origin.host, endpoint.host)
+            XCTAssertEqual(origin.scheme, "https")
+            XCTAssertEqual(origin.port, 443)
+            XCTAssertEqual(try NetworkOrigin(scheme: "http", host: host).port, 80)
+        }
+        for host in ["", "[]", "user@server", "server/path", "server\\path",
+                     "server?query", "server#fragment", "two hosts", "two\nhosts", "two\u{00A0}hosts"] {
+            XCTAssertThrowsError(try NetworkOrigin(scheme: "https", host: host)) { error in
+                XCTAssertEqual(error as? MediaSourceModelError, .invalidHost)
+            }
+        }
+        for port in [0, -1, 65_536] {
+            XCTAssertThrowsError(try NetworkOrigin(scheme: "https", host: "server", port: port)) { error in
+                XCTAssertEqual(error as? MediaSourceModelError, .invalidPort)
+            }
+        }
+        XCTAssertThrowsError(try NetworkOrigin(scheme: "ftp", host: "server")) { error in
+            XCTAssertEqual(error as? MediaSourceModelError, .unsupportedScheme)
+        }
+    }
+
     private let revision = CredentialRevision(
         rawValue: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
     )

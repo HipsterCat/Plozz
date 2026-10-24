@@ -5,18 +5,24 @@ import SwiftUI
 
 struct LiveTVSourceAccessGate<Content: View>: View {
     let model: LiveTVSourceManagementModel
-    @ViewBuilder let content: () -> Content
+    var unrestrictedContent: AnyView? = nil
+    @ViewBuilder let content: (@escaping @MainActor () -> Bool) -> Content
     @Environment(ProfilesModel.self) private var profiles: ProfilesModel?
 
     var body: some View {
         if let profiles {
-            LiveTVProfileSourceAccessGate(model: model, profiles: profiles) { _ in content() }
-        } else {
-            ContentUnavailableView(
-                "Profile settings unavailable",
-                systemImage: "lock",
-                description: Text("Return to Live TV and reopen Sources.")
+            LiveTVProfileSourceAccessGate(
+                model: model, profiles: profiles, unrestrictedContent: unrestrictedContent, content: content
             )
+        } else {
+            VStack(alignment: .leading, spacing: 24) {
+                ContentUnavailableView(
+                    "Profile settings unavailable",
+                    systemImage: "lock",
+                    description: Text("Return to Live TV and reopen Sources.")
+                )
+                unrestrictedContent
+            }
         }
     }
 }
@@ -41,16 +47,20 @@ struct LiveTVLibraryChannelAccessGate<Content: View>: View {
 private struct LiveTVProfileSourceAccessGate<Content: View>: View {
     let model: LiveTVSourceManagementModel?
     @State private var access: LiveTVSourceManagementAccess
+    let unrestrictedContent: AnyView?
     @ViewBuilder let content: (@escaping @MainActor () -> Bool) -> Content
     @SettingsPageDismiss private var dismiss
+    @State private var unlocking = false
 
     init(
         model: LiveTVSourceManagementModel?,
         profiles: ProfilesModel,
+        unrestrictedContent: AnyView? = nil,
         @ViewBuilder content: @escaping (@escaping @MainActor () -> Bool) -> Content
     ) {
         self.model = model
         _access = State(initialValue: LiveTVSourceManagementAccess(profiles: profiles))
+        self.unrestrictedContent = unrestrictedContent
         self.content = content
     }
 
@@ -58,23 +68,43 @@ private struct LiveTVProfileSourceAccessGate<Content: View>: View {
         Group {
             if access.canManage {
                 content { [weak access] in access?.canManage ?? false }
-            } else {
-                PINEntryScaffold(
-                    title: KidsProfileCopy.parentalPINEnter,
-                    name: Text(KidsProfileCopy.parentalPIN),
-                    errorMessage: access.errorMessage,
-                    onSubmit: { access.unlock($0) },
-                    onCancel: { dismiss() }
-                ) {
-                    PINBadge {
-                        Image(systemName: "figure.and.child.holdinghands")
-                            .font(.system(size: PINLayout.badgeSize * 0.45, weight: .semibold))
+            } else if let unrestrictedContent {
+                VStack(alignment: .leading, spacing: 24) {
+                    SettingsSectionGroup("TV sources") {
+                        Button("Unlock TV sources", systemImage: "lock") { unlocking = true }
+                            .buttonStyle(SettingsFormButtonStyle())
+                            .accessibilityIdentifier("live-tv-unlock-sources")
                     }
+                    unrestrictedContent
                 }
+            } else {
+                unlockForm
             }
         }
+        .settingsPageDestination(isPresented: $unlocking) { unlockForm }
         .onAppear {
             model?.authorizeMutations { [weak access] in access?.canManage ?? false }
+        }
+    }
+
+    private var unlockForm: some View {
+        PINEntryScaffold(
+            title: KidsProfileCopy.parentalPINEnter,
+            name: Text(KidsProfileCopy.parentalPIN),
+            errorMessage: access.errorMessage,
+            onSubmit: {
+                access.unlock($0)
+                if access.canManage { unlocking = false }
+            },
+            onCancel: {
+                if unrestrictedContent != nil { unlocking = false }
+                else { dismiss() }
+            }
+        ) {
+            PINBadge {
+                Image(systemName: "figure.and.child.holdinghands")
+                    .font(.system(size: PINLayout.badgeSize * 0.45, weight: .semibold))
+            }
         }
     }
 }

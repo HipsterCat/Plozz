@@ -63,6 +63,8 @@ public struct LiftableReorderList<Element: Hashable>: View {
     @Binding private var isLifting: Bool
     private let onChange: (OrderedVisibilityList.Sections<Element>) -> Void
     private let onRemove: ((Element) -> Void)?
+    private let initialElement: Element?
+    @AccessibilityFocusState private var accessibilityFocusedElement: Element?
 
     /// The element currently "lifted" for reordering (nil = none lifted).
     @State private var liftedElement: Element?
@@ -81,6 +83,7 @@ public struct LiftableReorderList<Element: Hashable>: View {
         requiredEnabled: Set<Element> = [],
         allowsHiding: Bool = true,
         onRemove: ((Element) -> Void)? = nil,
+        initialElement: Element? = nil,
         row: @escaping (Element) -> Row,
         onChange: @escaping (OrderedVisibilityList.Sections<Element>) -> Void
     ) {
@@ -93,6 +96,14 @@ public struct LiftableReorderList<Element: Hashable>: View {
         self.row = row
         self.onChange = onChange
         self.onRemove = onRemove
+        let target = initialElement.flatMap { sections.combined.contains($0) ? $0 : nil }
+        self.initialElement = target
+        #if os(tvOS)
+        _liftedElement = State(initialValue: target)
+        _liftedSections = State(initialValue: target == nil ? nil : sections)
+        _pinnedFocusTarget = State(initialValue: target)
+        _focusRestoreTarget = State(initialValue: target)
+        #endif
     }
 
     #if os(tvOS)
@@ -105,7 +116,7 @@ public struct LiftableReorderList<Element: Hashable>: View {
         ) { direction, _ in
             stepLiftedRow(up: direction == .up)
         }
-        .onChange(of: liftedElement != nil || pinnedFocusTarget != nil) { _, active in
+        .onChange(of: liftedElement != nil || pinnedFocusTarget != nil, initial: true) { _, active in
             isLifting = active
         }
         .task(id: focusRestoreRevision) {
@@ -252,6 +263,12 @@ public struct LiftableReorderList<Element: Hashable>: View {
         .environment(\.editMode, .constant(.active))
         .environment(\.defaultMinListRowHeight, 0)
         .frame(height: items.reduce(0) { $0 + height(for: $1) })
+        .task {
+            guard let initialElement else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            accessibilityFocusedElement = initialElement
+        }
     }
 
     @ViewBuilder
@@ -307,6 +324,8 @@ public struct LiftableReorderList<Element: Hashable>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
+            .id(element)
+            .accessibilityFocused($accessibilityFocusedElement, equals: element)
             .contextMenu { rowMenu(element) }
         case .divider:
             Text(disabledSectionTitle)

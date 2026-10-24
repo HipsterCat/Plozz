@@ -4,8 +4,105 @@ Mobile customization lists apply the shared native switch style to both standard
 sections and grouped cards. Enabled switches keep the system green appearance
 instead of inheriting the page's monochrome navigation tint.
 
-The Settings screen and its detail pages. Profile-aware, integration-aware,
-and the single place caption customization lives.
+The Settings screen and its detail pages. Profile-aware and integration-aware.
+
+**Appearance** owns global visual styling: theme, cards, artwork, display size,
+and Circadian Mode. **Screens & Navigation → All screens** contains shared
+visibility and navigation preferences, including Spoiler Protection and the
+profile-wide **Show content ratings** switch, on by default.
+Its label includes small, noninteractive PG-13 and R examples using the actual
+classification badge style; the examples stay visible when the switch is off.
+The label adapts to narrow widths and accessibility text sizes. This controls
+Home/detail badges, featured-card metadata, title-information classifications,
+and exported Top Shelf classifications, not review scores or parental restrictions.
+On tvOS, the example lettering and outlines follow the native row's focus
+foreground so they remain visible on its inverted focused surface.
+
+Home, Libraries, and Detail Page expose the same card-label choices as
+Appearance → Cards → Customize by view. These are additional controls over the
+existing profile-scoped `CardCaptionSettings`, not independent preferences.
+Home exposes Home rows and Continue Watching; Libraries exposes Recommended,
+Browse, collections, playlists, and the shared Continue Watching choice.
+Detail Page exposes episodes, related titles, and extras. Central presets still
+replace all overrides; contextual edits preserve other views. Screen-specific
+sizing stays with its screen, while overall display size stays in Appearance.
+
+Live TV settings exposes TV sources and the automatic Plozz channels switch on
+the root page. Sources have a regular Add source header action and reuse the
+shared fading scroll container above four entries. Guide/browsing preferences
+remain owned here; the shell composes them with the retained source/library
+runtime through `LiveTVSettingsSources`, without a FeatureSettings/FeatureLiveTV
+dependency cycle. Source authorization does not gate ordinary view preferences.
+See [Live TV settings](../../docs/live-tv-prototype.md) for navigation and overflow behavior.
+
+Server sign-ins offer **Sign In Again** without removing the saved account.
+Plex, Jellyfin, Emby, and Silo share the same guarded recovery contract; IPTV
+uses **Edit connection**. Failed library authentication routes to that exact
+account rather than the add-another-user flow. A network failure remains Retry,
+and Connection addresses stays available for managed servers that moved.
+
+Diagnostic reporting requires an explicit device-wide choice on every build
+channel. `CrashReportingConsentView` appears before first-time setup or normal
+startup when the build has a reporting endpoint and the current consent version
+has not been answered. Existing users, including prior opt-ins and opt-outs, are
+asked once after this migration; reporting stays off until they choose to share.
+Either choice continues setup and survives relaunch and profile switching.
+Help & Diagnostics can change it later. Consent is not synced or transferred.
+The prompt and its primary Share Diagnostics and secondary Don't Share actions
+use the shared Settings card above a separate bottom privacy footer, with
+48-point content insets on tvOS and the standard card insets on mobile.
+Its GitHub-marked link opens the repository
+on mobile or a scannable QR sheet on Apple TV; opening it does not grant consent.
+
+On tvOS, Video buffer and Live TV buffer use the shared `SettingsMenuRow`: one
+compact row showing the current value, with choices in the native menu and help
+text below. Opening, focusing, or cancelling the menu does not save a choice;
+Select does. Mobile retains its native pickers. These remain independent,
+device-local preferences with Automatic as the default.
+
+**Screens & Navigation → Navigation → Zoom when opening titles** is a tvOS-only,
+profile-scoped opt-in. Off uses native page opening and closing; on restores the
+cinematic artwork transition. The hero's staged content reveal is shared by both
+modes, without waiting for backdrop artwork when zoom is off.
+It defaults off for both new and existing profiles,
+stays local to the device, and still respects Reduce Motion.
+
+Home hero, Showcase (TV), Recommended Page (TV), and Detail Page have independent
+profile-scoped **Logo size** controls. Thirteen stops span 0.5x to 1.5x, with finer
+adjustments around the unchanged 1x default, marked at the center. Previously
+saved intermediate sizes keep their exact scale until adjusted.
+These areas also have independent **Text size** controls:
+eleven stops with a centered default. Apple TV spans 0.75x to 1.5x (24pt
+descriptions by default, 18–36pt overall); mobile retains 0.75x to 1.25x.
+They scale title fallbacks, metadata, descriptions, and the corresponding badge
+icons, padding, and borders together, not actions, cards, or menus.
+On Apple TV, Detail text sizing also controls episode titles and synopses beneath
+the artwork. Detail hero descriptions are capped at four lines; Home may gain
+one line when enlarged. Mobile retains its existing line limits, with
+scrim coverage extended upward to suit the enlarged content. Showcase and
+Recommended retain their available space: if needed, logo and text fit down
+together while preserving their requested proportions and saved preferences.
+TV reuses the shared Settings stepper's remote/focus behavior in two single-line
+rows, with short stepped tracks and a larger center tick marking the default.
+Labels, ticks, and adjustment glyphs share a vertical center; there is no Default
+caption or Reset button. VoiceOver still announces the default value.
+Long labels can wrap rather than shrink. Home and Showcase update their existing
+layout-choice previews live instead of adding a second preview to the control.
+Recommended retains its 320-point-wide preview. Detail Page uses a 400-by-300
+preview showing the hero, right-side credits, and episode captions scaling
+together. Both retain the shared group inset and inner corner radius.
+The complete preview-and-controls group is one native tvOS focus section, so
+vertical navigation reaches the size controls even from the preview's side.
+Artwork shares the layout picker's backdrop: Showcase fades in from the right,
+while Home and detail previews use edge-to-edge artwork.
+Mobile Home keeps native sliders beside their labels and one stacked preview.
+No artwork lookup is needed for these fictional previews.
+
+Detail Page theme music offers Low, Medium, and High volume; the Background mode
+owns Off. Older silent theme-music preferences migrate to Background Off without
+changing Home or trailer settings, with Low ready for the next explicit opt-in.
+On tvOS, the selected Background option supplies its own explanation rather than
+repeating it in a section footer.
 
 On tvOS, profile Appearance, Profile Lock setup, and Parental PIN setup use the
 workspace's full-width destination layout, like subtitle styling. Their
@@ -29,11 +126,52 @@ tvOS's swipe-up expansion and retains the same two item limits.
 Playback > Advanced also contains **Dolby Vision FEL (experimental)** on TV,
 iPhone and iPad. This is a profile-scoped, default-off preference, unlike the
 device-wide external-player choice. It applies to new built-in on-demand sessions
-and travels through profile settings transfer. The helper explains the added
-GPU/memory cost and loss of Atmos objects and DTS:X height audio on the FEL route.
+and travels through profile settings transfer. The helper explains the memory
+cost, possible stuttering and loss of overhead sound on the FEL route.
+Audio still plays, including TrueHD and DTS. FEL also decodes otherwise directly
+compatible E-AC-3/JOC spatial audio to channel-based PCM.
 Live playback, shared players and muted previews do not opt in.
 See [playback engines](../../docs/playback-engines.md#dolby-vision-fel) for eligibility
 and output limits.
+
+**Remember audio language per series** stores only the selected language, not a
+specific audio track or format. Its label needs no explanatory footer.
+
+On TV, related control groups can share one section heading through
+`SettingsConnectedControlGroups`: an 8pt gap and tighter 8pt facing corners keep
+them connected, while the section's outer corners retain the standard radius.
+Audio language controls share the first group and spatial audio the second.
+Autoplay switches share a group, separate from the Up Next card and its
+conditional timing control. These use the existing surfaces and native controls,
+without an enclosing card or changing the independent settings.
+
+**Skip intros, credits & more** uses one profile-scoped master switch on both
+platforms. Turning it off hides configuration without clearing behavior, timing,
+content selections, per-marker overrides, or community-marker consent. Behavior
+chooses a manual skip button or automatic skipping; only automatic behavior
+reveals **Skip after**, from Immediately through 30 seconds in one-second steps.
+The default delayed skip remains five seconds. Movies, TV Shows, and Anime can
+be enabled independently, using the existing audio/subtitle content classifier.
+Disabling a category suppresses skip prompts and automatic skips, not the
+independent Up Next or autoplay preferences. Advanced per-marker choices retain
+independent Off/manual/automatic behavior and timing. Existing saved modes,
+including mixed immediate/delayed marker overrides, migrate without changing
+their playback behavior. Community-marker attribution and identifier sharing
+appear as a short caption attached to its switch, without a separate section
+footer.
+
+The **Spatial audio (height channel support)** switch is available on tvOS 26 and later. Its
+profile-scoped `trueHDAtmosEnabled` preference defaults on, preserves saved Off
+choices and travels through profile transfer. It applies to new supported
+on-demand sessions, not live streams, shared players or muted previews. The
+helper identifies TrueHD Atmos and DTS:X as inputs and discloses lossy conversion
+to Apple spatial audio. Format names describe compatibility, not certification,
+lossless passthrough, or patent clearance.
+FEL retains channel PCM even when Spatial audio is on. Unsupported platforms
+keep ordinary channel playback; directly compatible spatial audio is unaffected.
+Feature descriptions use neutral spatial-audio wording; track
+metadata, diagnostics and legal notices retain accurate format and dependency names.
+See [spatial audio](../../docs/playback-engines.md#spatial-audio) for limitations.
 
 Playback > Advanced > External player is a device-only, default-off preference
 shared by all profiles on that device. It stays inside Playback rather than
@@ -91,6 +229,19 @@ watch history and planning-list behavior are documented in
 
 ## Responsibility
 
+- **Customize Libraries** lives in Screens & Navigation on TV and mobile.
+  Library Navigation comes first, including the first Down move from Back on TV.
+  The Recommended Page controls follow it; headings and helper copy name the
+  library's page explicitly rather than implying suggested settings.
+  The Libraries list opens each library's Recommended Page Rows editor.
+  The TV logo control reuses `HeroLogoSizeControl` with one Showcase preview.
+  Library tabs share an arrangement across the profile; each library separately
+  owns its Recommended row arrangement. Both editors use `LiftableReorderList`,
+  its Hidden divider, native focus/drag behavior, and scoped reset actions.
+  `LibraryPresentationLoading` connects the settings UI to the existing browse
+  and discovery pipeline through AppRuntime, without a feature-to-feature
+  dependency. Identity changes cancel pending discovery and replace row editors.
+  These choices never disable a library or alter its Home rows.
 - **Libraries** owns profile-wide library availability. Mobile Customize Home
   does not duplicate its Enabled controls: the Home editor manages section presentation,
   and Hero source selection uses the enabled library inventory. Discovering
@@ -106,23 +257,63 @@ watch history and planning-list behavior are documented in
   with a trailing native menu capsule and a divider, not another section card.
   TV gives this control row additional vertical separation from the header and sections.
   It scrolls with the content and stacks at large text sizes when needed.
-  An accessible + action remains beside Reorder/Done in the native toolbar.
-  TV keeps its labeled Add section beside Preset. A second, labeled
-  Add section action follows the list. Reorder/Done switches to
+  Full-width Add section actions bracket the editable sections
+  on both platforms, after the page-level Preset and Home layout controls and
+  again below the list. A centered plus-and-label, native capsule button style,
+  and extra vertical spacing distinguish these actions from the editable rows.
+  Mobile keeps Reorder/Done in the native toolbar rather
+  than duplicating Add section as a small icon. Reorder/Done switches to
   native movement controls with no Hidden drop zone; Hero stays
   pinned and cannot move. Its editable row carries a subtle pin rather than a
   lock, without a “Pinned at top” subtitle in either editing mode.
   On TV, the single-line title is “Home layout: Hero” or “Home layout: Showcase”,
   reflecting the active layout and opening the Home layout settings page.
   Mobile uses the shared page inset without extra gutters.
-  Add section offers available existing rows not already shown. Removing a
+  Add section separates **Create section** from **Available sections** not already
+  shown. Creation starts with a library collection; the editor identifies that
+  source as Content and its presentation as Layout. Section names the configurable
+  Home area, row its horizontal layout, and collection its source grouping
+  (see [Home terminology](../../CONTEXT.md)). Choose a source collection first,
+  then edit its name and Posters, Landscape or Featured presentation with the layout control immediately above a real-title
+  preview. The preview uses the existing artwork preferences and spoiler protection.
+  Each navigation destination explicitly forwards the active profile's card settings,
+  including Add section's nested creation destination; iOS navigation does not
+  inherit dependencies injected only into the preceding page.
+  Save places a new independently configured row before Libraries; the ordinary
+  arranger can move it anywhere among the movable rows. Editing never changes
+  the collection on the server. Preview loading is bounded and retains server order;
+  filtering and combining multiple sources are not yet supported. Removing a
   section hides it without erasing its configuration or disabling its libraries.
-  Section context menus also offer removal. Reorder menus include Move to top
+  Holding a normal section opens Reorder and Remove section. Reorder keeps the
+  selected section as the movement target: TV lifts and focuses it immediately;
+  mobile exposes native drag handles without losing its position. Collection
+  subtitles resolve their server mark from the current account even without a
+  discovered library. The collection chooser also shows the active account's
+  provider mark beside each library's second-line server label, including personal
+  collection sources. Featured previews share the live card's artwork, logo and
+  metadata layout without starting playback in Settings. Reorder menus include Move to top
   and Move to bottom within the movable sections, never above Home layout.
   On TV, picked-up rows retain native focus during rapid directional presses
   and held Up/Down; reaching an edge does not move focus out of the list.
+  Home's latest section warnings also appear here with Details and Retry.
+  These are transient results fenced by profile, account, effective viewer,
+  credentials, and the loaded Home settings; catalog discovery is not treated
+  as evidence that the actual Home content request succeeded.
   Continue Watching owns its merge and artwork controls. Hero owns its sources
   and presentation, including the existing TV Home Layout/Showcase options.
+  **Center button action** on TV and **When tapping an item** on iPhone/iPad
+  select **Play** or **Open detail page** for Home's movie/episode cards.
+  Play remains the default for fresh and existing profiles. The choice uses the
+  existing profile-scoped Home settings store and profile transfer; it does not
+  change artwork or Live TV shortcuts.
+  On Apple TV this setting controls the center button only; the remote's
+  Play/Pause button always starts the focused Continue Watching movie or episode.
+  Helper text below the control describes Play/Pause, with its filled circular
+  symbol, as an additional way to play the focused item without promising immediate
+  playback. VoiceOver reads the button name without repeating the symbol.
+  The section editor shows the three artwork choices first, followed by a shared
+  settings group for Playback details and Labels, then a group for Merge Next Up
+  and selection behavior. The shared containers own insets and separators.
   Continue Watching offers three native preview choices: Artwork + logo,
   Thumbnail, and Poster. Simple fabricated illustrations distinguish a backdrop
   with an overlaid logo, an unbranded scene, and portrait poster artwork without
@@ -236,6 +427,11 @@ watch history and planning-list behavior are documented in
   the storage cost and excludes Apple's native player without naming internal
   engines or explaining when settings take effect. This is
   independent of profile preferences and metadata/artwork cache budgets.
+- `LivePlaybackBufferControl` — the neighboring **Live TV buffer** uses the same
+  native controls and remains independent of Video buffer. Automatic preserves
+  the engine defaults; 10, 20, 30 and 45 seconds trade live delay and potentially
+  slower channel changes for buffering resilience. This device-local preference
+  is excluded from profile transfer and does not change scheduled library channels.
 - `HeroSettingsControls` — Hero keeps content selection, watched filtering, item
   count, and automatic changes together, shared by TV and mobile. **Ratings** and
   **Trailers** each show their current On/Off state and open their detailed
@@ -277,7 +473,17 @@ watch history and planning-list behavior are documented in
 - `CardAppearanceControls` — the independent **Show unwatched episode count**
   toggle lives beside Watched Indicator on both platforms. It defaults on,
   persists per profile, and transfers/syncs with that profile without changing
-  its watched/unwatched style.
+  its watched/unwatched style. Both previews show a sample count on the
+  in-progress series when enabled; toggling it updates the previews immediately
+  without removing the separate watched check or unwatched flag examples.
+  **Episode count style** offers Attached or Floating while counts are enabled;
+  it is profile-scoped, transfers with the profile, and never changes watch marks.
+  Turning counts off retains the style. Existing profiles keep their previous
+  placement on upgrade; both previews then follow this independent choice.
+  The eight watch-mark colors appear as one horizontal swatch row below the
+  indicator previews. White remains the default; changes update the previews
+  immediately and persist/transfer per profile. Narrow mobile layouts scroll
+  horizontally instead of wrapping or shrinking the 44pt controls.
 - `SettingsView` / `SettingsWorkspace` — tvOS shows one centered page at a time.
   The root contains profile identity and the category list, without a preview pane.
   Categories and ordinary descendants share `SettingsFormMetrics.pageWidth`;

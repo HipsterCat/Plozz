@@ -198,10 +198,10 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         for card in cards { XCTAssertTrue(card.waitForExistence(timeout: 5)) }
         XCTAssertEqual(cards[2].label, "Enable Plozz channels")
         XCTAssertFalse(app.buttons["Create channel"].exists)
-        let sizes = cards.map { card in
-            let scale = card.hasFocus ? 1.025 : 1.0
-            return CGSize(width: card.frame.width / scale, height: card.frame.height / scale)
-        }
+        guard focus(cards[1], in: app) else { return }
+        let firstSize = cards[0].frame.size
+        guard focus(cards[0], in: app) else { return }
+        let sizes = [firstSize] + cards.dropFirst().map { $0.frame.size }
         for size in sizes.dropFirst() {
             XCTAssertEqual(size.width, sizes[0].width, accuracy: 2)
             XCTAssertEqual(size.height, sizes[0].height, accuracy: 2)
@@ -455,7 +455,9 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
             let identifier = button.identifier.isEmpty ? button.label : button.identifier
             let focusedCell = app.cells.containing(.button, identifier: identifier)
                 .allElementsBoundByIndex.contains(where: \.hasFocus)
-            if button.hasFocus || focusedCell {
+            let focusedDescendant = button.descendants(matching: .any)
+                .matching(NSPredicate(format: "hasFocus == true")).firstMatch.exists
+            if button.hasFocus || focusedCell || focusedDescendant {
                 return true
             }
             let focused = app.descendants(matching: .any).allElementsBoundByIndex.first(where: \.hasFocus)

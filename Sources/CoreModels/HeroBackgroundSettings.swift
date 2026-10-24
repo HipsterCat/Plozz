@@ -148,9 +148,11 @@ public final class HeroBackgroundSettingsStore: HeroBackgroundSettingsStoring, @
     private let defaults: UserDefaults
     private let key: String
     private let legacyThemeMusicKey: String
+    private let namespace: String?
 
     public init(defaults: UserDefaults = .standard, namespace: String? = nil) {
         self.defaults = defaults
+        self.namespace = namespace
         self.key = SettingsKey.scoped("com.plozz.heroBackgroundSettings", namespace: namespace)
         self.legacyThemeMusicKey = SettingsKey.scoped(
             "com.plozz.themeMusicSettings",
@@ -159,23 +161,31 @@ public final class HeroBackgroundSettingsStore: HeroBackgroundSettingsStoring, @
     }
 
     public func load() -> HeroBackgroundSettings {
-        guard let data = defaults.data(forKey: key),
-              let decoded = try? JSONDecoder().decode(HeroBackgroundSettings.self, from: data)
-        else {
+        let themeMusic = defaults.data(forKey: legacyThemeMusicKey).flatMap {
+            try? JSONDecoder().decode(ThemeMusicSettings.self, from: $0)
+        }
+        var settings: HeroBackgroundSettings
+        if let data = defaults.data(forKey: key),
+           let decoded = try? JSONDecoder().decode(HeroBackgroundSettings.self, from: data) {
+            settings = decoded
+        } else {
             // One-time upgrade migration: preserve a profile that already opted
             // into theme music instead of silently switching it to the new
             // default (muted trailer).
-            if let legacyData = defaults.data(forKey: legacyThemeMusicKey),
-               let legacy = try? JSONDecoder().decode(
-                   ThemeMusicSettings.self,
-                   from: legacyData
-               ),
-               legacy.isEnabled {
-                return HeroBackgroundSettings(detailMode: .themeMusic)
-            }
-            return .default
+            settings = themeMusic?.isEnabled == true
+                ? HeroBackgroundSettings(detailMode: .themeMusic) : .default
         }
-        return decoded
+        if var themeMusic, themeMusic.volume == .off {
+            if settings.detailMode == .themeMusic {
+                settings.detailMode = .off
+            }
+            // Persist silence before restoring an audible level for a future opt-in.
+            save(settings)
+            themeMusic.isEnabled = false
+            themeMusic.volume = ThemeMusicSettings.default.volume
+            ThemeMusicSettingsStore(defaults: defaults, namespace: namespace).save(themeMusic)
+        }
+        return settings
     }
 
     public func save(_ settings: HeroBackgroundSettings) {

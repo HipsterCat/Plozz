@@ -58,6 +58,8 @@ public struct DetailHeaderMetadataRow: View {
     private let badges: [MediaBadge]
     private let familyGuidanceAge: Double?
     @State private var showsDetails = false
+    @Environment(\.metadataTextScale) private var textScale
+    @ScaledMetric(relativeTo: .caption) private var chevronFontSize: CGFloat = 12
 
     public init(ratings: [ExternalRating], badges: [MediaBadge], familyGuidanceAge: Double? = nil) {
         self.ratings = ratings
@@ -129,6 +131,7 @@ public struct DetailHeaderMetadataRow: View {
                         }
                     }
                 }
+                .environment(\.metadataTextScale, 1)
             }
         }
     }
@@ -150,7 +153,7 @@ public struct DetailHeaderMetadataRow: View {
     private func metadataLine(
         ratingCount: Int, badgeCount: Int, showsDisclosure: Bool = true
     ) -> some View {
-        WrappingHStackLayout(spacing: 12, lineSpacing: 8) {
+        WrappingHStackLayout(spacing: 12 * textScale, lineSpacing: 8 * textScale) {
             if let familyGuidanceAge {
                 FamilyGuidanceAgeBadge(age: familyGuidanceAge)
             }
@@ -167,7 +170,7 @@ public struct DetailHeaderMetadataRow: View {
 
     private var disclosureChevron: some View {
         Image(systemName: "chevron.forward")
-            .font(.caption.weight(.semibold))
+            .font(textScale == 1 ? .caption.weight(.semibold) : .system(size: chevronFontSize * textScale, weight: .semibold))
             .plozzForeground(.secondary)
             .accessibilityLabel(Text(detailsTitle))
     }

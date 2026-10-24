@@ -47,20 +47,9 @@ targets:
       - NavigationRailFixture.swift
       - MultiviewFixture.swift
     dependencies:
-      - package: Plozz
-        product: FeatureLiveTV
-      - package: Plozz
-        product: FeatureLiveTVCore
-      - package: Plozz
-        product: CoreModels
-      - package: Plozz
-        product: FeatureSettings
+      # Match the app-hosted tests: overlapping roots can shadow Apple's CoreUI framework.
       - package: Plozz
         product: AppShell
-      - package: Plozz
-        product: PlozzCoreUI
-      - package: Plozz
-        product: FeaturePlayback
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.SearchTestHost
@@ -75,13 +64,7 @@ targets:
     dependencies:
       - target: LiveTVSearchFixture
       - package: Plozz
-        product: FeatureLiveTV
-      - package: Plozz
-        product: FeatureLiveTVCore
-      - package: Plozz
-        product: FeaturePlayback
-      - package: Plozz
-        product: CoreNetworking
+        product: AppShell
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.SearchFocusTests

@@ -14,6 +14,8 @@ import SwiftUI
 public struct FadingScrollView<Content: View>: View {
     private let maxHeight: CGFloat
     private let fadeLength: CGFloat
+    private let verticalContentInset: CGFloat
+    private let fadesTop: Bool
     private let content: Content
     private let space = "FadingScrollView"
 
@@ -25,18 +27,26 @@ public struct FadingScrollView<Content: View>: View {
     ///   - maxHeight: The tallest the scroll area grows before it scrolls.
     ///     Shorter content lays out at its natural height (no empty filler).
     ///   - fadeLength: The height of each edge's fade band, in points.
+    ///   - verticalContentInset: Room for row focus effects; use zero when the
+    ///     surrounding layout already owns the gap to neighboring controls.
+    ///   - fadesTop: Whether to fade hidden content above the viewport. A caller
+    ///     can defer this until interaction when it positions an opening row.
     public init(
         maxHeight: CGFloat = 620,
         fadeLength: CGFloat = 34,
+        verticalContentInset: CGFloat = 8,
+        fadesTop: Bool = true,
         @ViewBuilder content: () -> Content
     ) {
         self.maxHeight = maxHeight
         self.fadeLength = fadeLength
+        self.verticalContentInset = verticalContentInset
+        self.fadesTop = fadesTop
         self.content = content()
     }
 
     private var overflowing: Bool { contentHeight > viewportHeight + 1 }
-    private var showTopFade: Bool { overflowing && scrolled > 2 }
+    private var showTopFade: Bool { fadesTop && overflowing && scrolled > 2 }
     private var showBottomFade: Bool {
         overflowing && (scrolled + viewportHeight) < (contentHeight - 2)
     }
@@ -49,7 +59,7 @@ public struct FadingScrollView<Content: View>: View {
             // A little vertical breathing room so the first/last row's focus
             // highlight sits inside the frame rather than flush against the fade.
             content
-                .padding(.vertical, 8)
+                .padding(.vertical, verticalContentInset)
                 .background(
                     GeometryReader { proxy in
                         Color.clear.preference(

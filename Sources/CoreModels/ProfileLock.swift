@@ -99,6 +99,20 @@ public struct ProfileLock: Codable, Hashable, Sendable {
         return Self.constantTimeEquals(candidate, verifier)
     }
 
+    public func matchesOffMainActor(pin: String) async -> Bool {
+        let verification = Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return false }
+            let matches = self.matches(pin: pin)
+            return matches && !Task.isCancelled
+        }
+        let matches = await withTaskCancellationHandler {
+            await verification.value
+        } onCancel: {
+            verification.cancel()
+        }
+        return matches && !Task.isCancelled
+    }
+
     /// `iterations` rounds of SHA-256 over the salt and PIN.
     static func derive(pin: String, salt: String, iterations: Int) -> String {
         // Seed with salt || pin, then re-hash the digest. Re-hashing a

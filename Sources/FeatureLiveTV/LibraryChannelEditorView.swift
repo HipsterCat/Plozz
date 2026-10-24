@@ -35,11 +35,11 @@ private struct LibraryChannelEditorContent: View {
     @Bindable var model: LibraryChannelEditorModel
     let prepareLibraries: (@MainActor () async throws -> Void)?
     @State private var action: Task<Void, Never>?
-    @Environment(\.dismiss) private var dismiss
+    @SettingsPageDismiss private var dismiss
 
     var body: some View {
         LiveTVSettingsPage(title: model.editingChannelID == nil ? "Create custom channel" : "Edit custom channel") {
-            LibraryChannelRecipeFields(recipe: $model.recipe, genres: $model.genres)
+            LibraryChannelRecipeFields(recipe: $model.recipe)
                 .disabled(model.isWorking)
             LibraryChannelLibraryFields(
                 choices: model.service.libraryChoices, selection: $model.recipe.libraries
@@ -70,7 +70,7 @@ private struct LibraryChannelEditorContent: View {
                         Label("Save channel", systemImage: "checkmark")
                     }
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .buttonStyle(SettingsFormButtonStyle())
                 .disabled(model.isWorking)
                 .accessibilityIdentifier("library-channel-preview-save")
             } footer: {
@@ -84,30 +84,51 @@ private struct LibraryChannelEditorContent: View {
 
 private struct LibraryChannelRecipeFields: View {
     @Binding var recipe: LibraryChannelRecipe
-    @Binding var genres: String
+
     var body: some View {
         SettingsSectionGroup("Channel") {
             TextField("Channel name", text: $recipe.name)
-            Picker("Icon", selection: $recipe.symbol) {
-                Label("TV", systemImage: "tv").tag("tv")
-                Label("Movies", systemImage: "film").tag("film")
-                Label("Comedy", systemImage: "theatermasks").tag("theatermasks")
-                Label("Favorites", systemImage: "star").tag("star")
-            }
-            Picker("Order", selection: $recipe.ordering) {
-                ForEach(LibraryChannelOrdering.allCases, id: \.self) { order in
-                    Text(order.title).tag(order)
+                .settingsFormRowLayout()
+                .accessibilityIdentifier("library-channel-name")
+            Menu {
+                Picker("Icon", selection: $recipe.symbol) {
+                    Label("TV", systemImage: "tv").tag("tv")
+                    Label("Movies", systemImage: "film").tag("film")
+                    Label("Comedy", systemImage: "theatermasks").tag("theatermasks")
+                    Label("Favorites", systemImage: "star").tag("star")
                 }
+            } label: {
+                SettingsMenuLabel("Icon", value: iconTitle)
             }
+            .menuStyle(.button)
+            .buttonStyle(SettingsFormButtonStyle())
+            .accessibilityIdentifier("library-channel-icon")
+            Menu {
+                Picker("Order", selection: $recipe.ordering) {
+                    ForEach(LibraryChannelOrdering.allCases, id: \.self) { order in
+                        Text(order.title).tag(order)
+                    }
+                }
+            } label: {
+                SettingsMenuLabel("Order", value: recipe.ordering.title)
+            }
+            .menuStyle(.button)
+            .buttonStyle(SettingsFormButtonStyle())
+            .accessibilityIdentifier("library-channel-order")
             Toggle("Movies", isOn: $recipe.includesMovies)
+                .accessibilityIdentifier("library-channel-movies")
             Toggle("Episodes", isOn: $recipe.includesEpisodes)
                 .disabled(recipe.ordering == .movies)
-            Button("Comedy preset") {
-                genres = "Comedy"
-                recipe.ordering = .roundRobin
-                recipe.includesEpisodes = true
-            }
-            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .accessibilityIdentifier("library-channel-episodes")
+        }
+    }
+
+    private var iconTitle: LocalizedStringResource {
+        switch recipe.symbol {
+        case "film": "Movies"
+        case "theatermasks": "Comedy"
+        case "star": "Favorites"
+        default: "TV"
         }
     }
 }
@@ -121,20 +142,15 @@ private struct LibraryChannelLibraryFields: View {
                 Text("No accessible Plex, Jellyfin or Emby libraries.")
             }
             ForEach(choices) { choice in
-                Button {
+                SettingsCheckableRow(
+                    title: Text(verbatim: choice.name), subtitle: Text(verbatim: choice.serverName),
+                    titleLineLimit: nil, isChecked: selection.contains(choice.reference),
+                    flushLeading: false, size: .contained
+                ) {
                     if selection.contains(choice.reference) { selection.removeAll { $0 == choice.reference } }
                     else { selection.append(choice.reference) }
-                } label: {
-                    HStack {
-                        Image(systemName: selection.contains(choice.reference) ? "checkmark.circle.fill" : "circle")
-                        VStack(alignment: .leading) {
-                            Text(choice.name)
-                            Text(choice.serverName).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
-                .accessibilityAddTraits(selection.contains(choice.reference) ? .isSelected : [])
+                .accessibilityIdentifier("library-channel-source-\(choice.id)")
             }
         }
     }
@@ -151,13 +167,19 @@ private struct LibraryChannelRuleFields: View {
     var body: some View {
         SettingsSectionGroup("Rules") {
             TextField("Include movie or show titles", text: $includes)
+                .settingsFormRowLayout()
             TextField("Exclude movie or show titles", text: $excludes)
+                .settingsFormRowLayout()
             TextField("Genres", text: $genres)
+                .settingsFormRowLayout()
             TextField("Allowed ratings", text: $ratings)
+                .settingsFormRowLayout()
             Toggle("Include unrated titles", isOn: $includeUnrated)
             TextField("Scheduling timezone", text: $timeZoneID)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .settingsFormRowLayout()
             TextField("Schedule seed", text: $seed)
+                .settingsFormRowLayout()
                 #if os(iOS)
                 .keyboardType(.numberPad)
                 #endif
@@ -392,15 +414,62 @@ private struct LibraryChannelAutomaticLineupView: View {
     var body: some View {
         if !channels.isEmpty {
             SettingsSectionGroup("Generated channels") {
-                ForEach(channels) { channel in
-                    Label {
-                        Text(channel.revisions.last?.recipe.name ?? "")
-                    } icon: {
-                        Image(systemName: channel.revisions.last?.recipe.symbol ?? "tv")
+                #if os(tvOS)
+                let inset: CGFloat = 8
+                let rowHeight = SettingsRowMetrics.minHeight(.primary)
+                    + 2 * SettingsRowMetrics.verticalPadding(.primary)
+                FadingScrollView(
+                    maxHeight: inset + 4.5 * rowHeight + 4 * SettingsRowMetrics.formRowSpacing,
+                    fadeLength: 12,
+                    verticalContentInset: inset
+                ) {
+                    VStack(spacing: SettingsRowMetrics.formRowSpacing) {
+                        channelRows
                     }
-                    .accessibilityIdentifier("live-tv-generated-channel-\(channel.id.uuidString)")
                 }
+                .focusSection()
+                .accessibilityIdentifier("live-tv-generated-lineup")
+                #else
+                channelRows
+                #endif
             }
+        }
+    }
+
+    private var channelRows: some View {
+        ForEach(channels) { channel in
+            LibraryChannelGeneratedRow(channel: channel)
+        }
+    }
+}
+
+private struct LibraryChannelGeneratedRow: View {
+    let channel: LibraryChannelDefinition
+    #if os(tvOS)
+    @FocusState private var focused: Bool
+    #endif
+
+    var body: some View {
+        Group {
+            #if os(tvOS)
+            SettingsFocusRow(isFocused: focused, size: .contained) {
+                label.settingsFormRowLayout()
+            }
+            .focusable()
+            .focused($focused)
+            #else
+            label
+            #endif
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("live-tv-generated-channel-\(channel.id.uuidString)")
+    }
+
+    private var label: some View {
+        Label {
+            Text(verbatim: channel.revisions.last?.recipe.name ?? "")
+        } icon: {
+            Image(systemName: channel.revisions.last?.recipe.symbol ?? "tv")
         }
     }
 }
@@ -414,23 +483,27 @@ private struct LibraryChannelCustomSection: View {
 
     var body: some View {
         SettingsSectionGroup("Custom channels") {
-            NavigationLink {
+            SettingsPageLink {
                 LibraryChannelEditorView(
                     service: service, prepareLibraries: prepareLibraries, canManage: canManage)
             } label: {
-                SettingsRowLabel(icon: "plus", title: "Create custom channel")
+                SettingsDisclosureLabel {
+                    Label("Create custom channel", systemImage: "plus")
+                }
             }
-            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+            .buttonStyle(SettingsFormButtonStyle())
             .accessibilityIdentifier("live-tv-create-custom-channel")
             ForEach(channels) { channel in
-                NavigationLink {
+                SettingsPageLink {
                     LibraryChannelEditorView(
                         service: service, editingChannelID: channel.id,
                         prepareLibraries: prepareLibraries, canManage: canManage)
                 } label: {
-                    SettingsRowLabel(icon: nil, title: Text(channel.revisions.last?.recipe.name ?? ""))
+                    SettingsDisclosureLabel {
+                        Text(verbatim: channel.revisions.last?.recipe.name ?? "")
+                    }
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .buttonStyle(SettingsFormButtonStyle())
                 .accessibilityIdentifier("live-tv-custom-channel-\(channel.id.uuidString)")
                 .contextMenu {
                     Button("Delete channel", role: .destructive) {

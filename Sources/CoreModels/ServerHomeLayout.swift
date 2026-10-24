@@ -54,6 +54,10 @@ public struct ServerHomeSection: Codable, Hashable, Identifiable, Sendable {
     public var libraryID: String?
     public var includesNextUp: Bool
 
+    public var isAccountWideHistory: Bool {
+        libraryID == nil && (kind == .continueWatching || kind == .nextUp)
+    }
+
     public init(
         id: String, kind: Kind, title: String? = nil, libraryID: String? = nil,
         includesNextUp: Bool = false

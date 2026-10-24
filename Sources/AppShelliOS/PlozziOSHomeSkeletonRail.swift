@@ -86,6 +86,7 @@ struct PlozziOSHomeSkeletonScreen: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     let heroActive: Bool
+    var logoSize: HeroLogoSize = .default
     var showsPosterCaptions: Bool = CardCaptionSettings.default.showsLabels
     var continueWatchingLayout: ContinueWatchingCardLayout = .landscape
     var continueWatchingShowsSeriesArtwork = true
@@ -96,7 +97,8 @@ struct PlozziOSHomeSkeletonScreen: View {
             PlozziOSHomeHeroSkeleton(
                 style: horizontalSizeClass == .compact
                     ? .compactPortrait
-                    : .landscape
+                    : .landscape,
+                logoSize: logoSize
             )
         } rows: {
             PlozziOSHomeSkeletonRail(
@@ -129,6 +131,7 @@ struct PlozziOSHomeHeroSkeleton: View {
     @Environment(\.plozziOSHeroContainerHeight) private var heroContainerHeight
 
     let style: HeroArtworkStyle
+    var logoSize: HeroLogoSize = .default
 
     private var isCompact: Bool { style == .compactPortrait }
 
@@ -152,7 +155,7 @@ struct PlozziOSHomeHeroSkeleton: View {
                 column
                     // The SAME placement the real foreground uses — not a copy of
                     // its numbers. See `PlozziOSHeroForegroundPlacement`.
-                    .plozziOSHeroForegroundPlacement(style: style)
+                    .plozziOSHeroForegroundPlacement(style: style, logoSize: logoSize)
             }
             .shimmering()
             .accessibilityHidden(true)

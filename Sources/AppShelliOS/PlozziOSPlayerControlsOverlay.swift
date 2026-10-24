@@ -793,6 +793,7 @@ struct PlozziOSPlayerTransport<PlaybackControls: View>: View {
                     countdownRemaining: viewModel.controls.upNextCard.advanceAtSeconds.map {
                         max($0 - viewModel.controls.currentSeconds, 0)
                     },
+                    countdownDuration: viewModel.controls.automaticUpNextDelay,
                     onPlay: { viewModel.playEpisode(info.episode) },
                     onDismiss: { viewModel.dismissUpNextCard() }
                 )
@@ -1407,6 +1408,7 @@ private struct PlozziOSUpNextCard: View {
     let info: UpNextInfo
     let artworkPolicy: ArtworkPresentationPolicy
     let countdownRemaining: TimeInterval?
+    let countdownDuration: TimeInterval
     let onPlay: () -> Void
     let onDismiss: () -> Void
     @Environment(\.plozzMetrics) private var metrics
@@ -1497,7 +1499,7 @@ private struct PlozziOSUpNextCard: View {
             Circle()
                 .stroke(Color.primary.opacity(0.25), lineWidth: 3)
             Circle()
-                .trim(from: 0, to: min(max(remaining / SkipIntrosMode.autoSkipDelay, 0), 1))
+                .trim(from: 0, to: min(max(remaining / max(countdownDuration, 1), 0), 1))
                 .stroke(Color.primary, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             Text(Int(ceil(remaining)), format: .number)

@@ -54,8 +54,8 @@ enum EngineFailurePolicy {
     ///   - isNetworkFile: the source is a typed network file (SMB/WebDAV) — only
     ///     Plozzigen may reinterpret it; native URL loaders must never touch it.
     ///   - isTranscoding: the current attempt is already a server transcode.
-    ///   - hasExternalAudio: the source pairs a separate audio track (adaptive) —
-    ///     only the hybrid engine can mux it, so a native swap would play silent.
+    ///   - hasExternalAudio: a native AVComposition pairs separate trailer audio;
+    ///     Aether's single-source input must not replace that composition.
     ///   - resume: the position to resume the retry at.
     ///   - state: the once-only guards, mutated as each branch fires.
     static func decide(
@@ -82,11 +82,9 @@ enum EngineFailurePolicy {
             return .retryFreshNetworkFile(resume: resume)
         }
 
-        // 1b) Direct play failed on the chosen engine → try the other engine once.
-        //     Skipped for an adaptive source (separate audio track): only the
-        //     hybrid engine can mux it, so swapping to native would play silent
-        //     video. Also skipped when the only alternate is native AVPlayer and
-        //     the source is a typed network file.
+        // Retain one compatibility recovery, not a second format router.
+        // Native asset exceptions are chosen before load; this recovery is not
+        // available to transcodes and never admits a typed network file.
         if !isTranscoding, !state.hasTriedAlternateEngine, !hasExternalAudio,
            let alternate = alternateEngineKind,
            !(alternate == .native && isNetworkFile) {
@@ -215,16 +213,13 @@ final class EngineHandoffCoordinator {
         self.initialStyle = initialStyle
         self.watchdogTimeout = watchdogTimeout
 
-        // Boot directly on the engine the hand-off already resolved, so an
-        // adopted prefetch skips the native→Plozzigen swap entirely — no
-        // mid-bring-up engine switch, no SDR-drop→DV-resync, one loading
-        // indicator. Falls back to native when there's no adopted decision
-        // (fresh launch) or Plozzigen isn't linked.
-        if let adopted, adopted.engineKind == .plozzigen,
+        // Use the primary owner immediately; a pre-resolved native exception
+        // does not construct an unused Aether session.
+        if adopted?.engineKind != .native,
            let makePlozzigen = engineFactory.makePlozzigen, let plozzigen = makePlozzigen() {
             self.engine = plozzigen
             self.currentEngineKind = .plozzigen
-            HandoffDiagnostics.emit("engine BOOT plozzigen (adopted; no native→plozzigen swap)")
+            HandoffDiagnostics.emit("engine BOOT plozzigen")
         } else {
             self.engine = engineFactory.makeNative(initialStyle)
             self.currentEngineKind = .native
@@ -243,9 +238,8 @@ final class EngineHandoffCoordinator {
     ) -> (engine: any VideoEngine, kind: PlaybackEngineKind) {
         switch kind {
         case .hybrid, .plozzigen:
-            // Plozzigen is the sole on-device decode engine. `.hybrid` is the
-            // router's abstract "needs on-device decode" signal; it resolves here
-            // to Plozzigen (the former backing engine is retired).
+            // `.hybrid` is a retained compatibility value, no longer emitted
+            // by EngineSelection.
             if let makePlozzigen = engineFactory.makePlozzigen, let engine = makePlozzigen() {
                 return (engine, .plozzigen)
             }
@@ -258,6 +252,7 @@ final class EngineHandoffCoordinator {
     private func clearEngineCallbacks() {
         engine.onProgress = nil
         engine.onFailure = nil
+        engine.onDiagnosticPhaseChanged = nil
         engine.onEnded = nil
         engine.onTracksChanged = nil
         engine.onProbedSourceFactsChanged = nil

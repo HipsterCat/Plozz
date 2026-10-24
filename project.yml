@@ -471,6 +471,7 @@ targets:
       - path: Tests/FocusHost
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureFixture.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationFixture.swift
+      - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchFixture.swift
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
       - path: Tests/FeatureLiveTVRemoteTests/NavigationRailFixture.swift
@@ -505,8 +506,10 @@ targets:
     platform: iOS
     sources:
       - path: Tests/iOSPresentationHost
+      - path: Tests/FeatureLiveTVRemoteTests/SourceOnboardingFixture.swift
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureFixture.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationFixture.swift
+      - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchFixture.swift
       - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
       - path: Tests/SubtitlePresentationSupport/Fixtures/four-three.mp4
         buildPhase: resources
@@ -554,6 +557,9 @@ targets:
     platform: iOS
     sources:
       - path: Tests/iOSPresentationTests
+      - path: Tests/FeatureLiveTVTests/LiveTVGuideRowLayoutTests.swift
+      - path: Tests/CoreModelsTests/SettingsHydrationTests.swift
+      - path: Tests/CoreModelsTests/ProfileLockPresentationTests.swift
       - path: Tests/FeaturePlaybackTests/SubtitleOverlayGeometryTests.swift
       - path: Tests/FocusIntegrationTests/LiveTVSourcesRuntimeHostedTests.swift
       - path: Tests/FocusIntegrationTests/PINRequirementPresentationTests.swift
@@ -588,6 +594,7 @@ targets:
       - path: Tests/iOSInteractionTests
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureInteractionTests.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
+      - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchInteractionTests.swift
       - path: Tests/HomeRemoteTests/ServerAddressNavigationInteractionTests.swift
     settings:
       base:
@@ -605,6 +612,7 @@ targets:
       - path: Tests/HomeRemoteTests
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureInteractionTests.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
+      - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchInteractionTests.swift
       - path: Sources/FeatureHomeCore/LibraryTraversalEvidence.swift
     settings:
       base:

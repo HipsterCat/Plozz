@@ -4,6 +4,30 @@ import Foundation
 import XCTest
 
 final class TopShelfMetadataTests: XCTestCase {
+    func testContentRatingPreferenceKeepsReviewsAndOriginalMetadata() {
+        let raw = "FR/Tous publics avec avertissement"
+        let item = MediaItem(
+            id: "film", title: "Fixture", kind: .movie,
+            officialRating: raw,
+            ratings: [.init(source: .imdb, value: 8, scale: .outOfTen)]
+        )
+        var snapshot = TopShelfSnapshot.Item(id: item.id, title: item.title)
+        TopShelfMetadata.apply(
+            to: &snapshot, item: item, details: nil,
+            spoilerSettings: .default, locale: Locale(identifier: "en"), showsContentRatings: true
+        )
+        XCTAssertTrue(snapshot.namedAttributes?.contains {
+            $0.name == "Content Rating" && $0.values == [raw]
+        } ?? false)
+        TopShelfMetadata.apply(
+            to: &snapshot, item: item, details: nil,
+            spoilerSettings: .default, locale: Locale(identifier: "en"), showsContentRatings: false
+        )
+        XCTAssertFalse(snapshot.namedAttributes?.contains { $0.name == "Content Rating" } ?? true)
+        XCTAssertTrue(snapshot.namedAttributes?.contains { $0.name == "Ratings" } ?? false)
+        XCTAssertEqual(item.officialRating, "FR/Tous publics avec avertissement")
+    }
+
     func testFullMetadataPreservesResumeStateAndUsesNativeFields() throws {
         let row = MediaItem(
             id: "1", title: "Curated title", kind: .movie, runtime: 7200, resumePosition: 3600,

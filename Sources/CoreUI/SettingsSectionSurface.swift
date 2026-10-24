@@ -1,7 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-#if os(iOS)
 public struct SettingsMenuLabel: View {
     private let title: LocalizedStringResource
     private let value: LocalizedStringResource
@@ -25,7 +24,6 @@ public struct SettingsMenuLabel: View {
         }
     }
 }
-#endif
 
 /// A drill-in label inside a settings group; the group owns its content insets.
 public struct SettingsDisclosureLabel<Title: View, Value: View>: View {

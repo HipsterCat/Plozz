@@ -330,8 +330,7 @@ final class JellyfinLibraryScopingTests: XCTestCase {
 
         let items = try await provider.continueWatching(limit: 10, inLibraries: [])
         XCTAssertTrue(items.isEmpty, "Hiding every library must yield an empty row")
-        XCTAssertEqual(stub.sentPaths, ["/System/Info/Public"],
-                       "An ordinary server's empty scope must not request history after capability discovery.")
+        XCTAssertTrue(stub.sentPaths.isEmpty, "An empty library scope must not make network requests.")
     }
 
     func testUnlimitedScopedContinueWatchingPagesWithinParentLibrary() async throws {

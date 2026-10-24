@@ -38,12 +38,12 @@ final class VideoPresentationView: UIView {
         setNeedsLayout()
     }
 
-    func update(zoom: PlayerVideoZoom, fitsInsideSafeArea: Bool = false) {
-        let ratio = engine?.videoAspectRatio
+    func update(zoom: PlayerVideoZoom, aspectRatio: Double? = nil, fitsInsideSafeArea: Bool = false) {
+        let ratio = aspectRatio ?? engine?.videoAspectRatio
         let needsUpdate = self.fitsInsideSafeArea != fitsInsideSafeArea
-            || aspectRatio != ratio || self.zoom != zoom
+            || self.aspectRatio != ratio || self.zoom != zoom
         self.zoom = zoom
-        aspectRatio = ratio
+        self.aspectRatio = ratio
         self.fitsInsideSafeArea = fitsInsideSafeArea
         guard needsUpdate || fitBounds != resolvedFitBounds else { return }
         setNeedsLayout()

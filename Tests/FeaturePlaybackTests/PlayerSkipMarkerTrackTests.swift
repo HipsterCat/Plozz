@@ -97,6 +97,318 @@ final class PlayerSkipMarkerTrackTests: XCTestCase {
         }
     }
 
+    func testBoundaryCornersSoftenTheSliverAndItsNeighborWithoutExceedingTheirBounds() {
+        for height in [CGFloat(8), 12, 20] {
+            for (widthFraction, radiusFraction) in [
+                (CGFloat(0.05), CGFloat(0.0625)), (0.25, 0.3125), (0.5, 0.625),
+                (0.75, 0.9375), (1, 1), (2, 1)
+            ] {
+                let narrowWidth = height * widthFraction
+                let narrow = SkipMarkerTrackLayout.cornerSize(
+                    sectionWidth: narrowWidth, neighborWidth: 200, height: height
+                )
+                let wide = SkipMarkerTrackLayout.cornerSize(
+                    sectionWidth: 200, neighborWidth: narrowWidth, height: height
+                )
+                XCTAssertEqual(narrow.height, height / 2 * radiusFraction, accuracy: 0.000001)
+                XCTAssertEqual(narrow.width, min(narrowWidth, height) / 2, accuracy: 0.000001)
+                XCTAssertEqual(narrow.height, wide.height, "Facing corners meet the gap at the same height.")
+                XCTAssertEqual(wide.width, wide.height, "The wider section has room for a circular corner.")
+            }
+        }
+    }
+
+    func testFocusedCornersPreserveSliverProportionsAndRoundTheWiderSideMore() {
+        let restingHeight: CGFloat = 12
+        for (sectionWidth, neighborWidth) in [(CGFloat(4.8), CGFloat(200)), (200, 4.8), (4.8, 4.8)] {
+            let resting = SkipMarkerTrackLayout.cornerSize(
+                sectionWidth: sectionWidth, neighborWidth: neighborWidth, height: restingHeight
+            )
+            for height in [CGFloat(12), 14, 16, 18, 20] {
+                let expanded = SkipMarkerTrackLayout.cornerSize(
+                    sectionWidth: sectionWidth, neighborWidth: neighborWidth,
+                    height: height, referenceHeight: restingHeight
+                )
+                let extra: CGFloat = sectionWidth > neighborWidth ? (height - restingHeight) * 3 / 16 : 0
+                XCTAssertEqual(expanded.width, resting.width + extra)
+                XCTAssertEqual(expanded.height, resting.height * height / restingHeight + extra, accuracy: 0.000001)
+                XCTAssertLessThanOrEqual(expanded.width, min(sectionWidth, height) / 2)
+                XCTAssertLessThanOrEqual(expanded.height, height / 2)
+            }
+        }
+    }
+
+    func testExtraWiderCornerRoundingTapersAtEqualWidthsAndStopsAtFullRounding() {
+        XCTAssertEqual(
+            SkipMarkerTrackLayout.cornerSize(sectionWidth: 200, neighborWidth: 4.8, height: 20, referenceHeight: 12),
+            CGSize(width: 4.5, height: 6.5)
+        )
+        let almostEqual = SkipMarkerTrackLayout.cornerSize(
+            sectionWidth: 5, neighborWidth: 4.8, height: 20, referenceHeight: 12
+        )
+        XCTAssertEqual(almostEqual.width, 2.5)
+        XCTAssertEqual(almostEqual.height, 5.1, accuracy: 0.000001)
+        XCTAssertEqual(
+            SkipMarkerTrackLayout.cornerSize(sectionWidth: 200, neighborWidth: 40, height: 20, referenceHeight: 12),
+            CGSize(width: 10, height: 10)
+        )
+    }
+
+    func testTightGapsGainOnePointAtRestAndKeepTwoAtFocusFromTheWiderNeighbor() throws {
+        for (ranges, narrowIndex) in [
+            ([0.02..<0.25], 0), ([0.4..<0.42], 1), ([0.5..<0.98], 2)
+        ] {
+            for (height, extra) in [
+                (CGFloat(12), CGFloat(1)), (14, 1.25), (16, 1.5), (18, 1.75), (20, 2)
+            ] {
+                let size = CGSize(width: 320, height: height)
+                let original = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size)
+                let focused = SkipMarkerTrackLayout.segmentedSections(
+                    ranges: ranges, size: size, restingHeight: 12
+                )
+                var expected = original
+                if narrowIndex > 0 {
+                    expected[narrowIndex - 1].size.width -= extra
+                }
+                if narrowIndex < original.count - 1 {
+                    expected[narrowIndex + 1].origin.x += extra
+                    expected[narrowIndex + 1].size.width -= extra
+                }
+                XCTAssertEqual(focused, expected)
+                XCTAssertEqual(focused[narrowIndex], original[narrowIndex],
+                               "The tiny piece must keep its size and position.")
+                for index in original.indices.dropLast() {
+                    let boundary = (original[index].maxX + original[index + 1].minX) / 2
+                    XCTAssertLessThan(focused[index].maxX, boundary)
+                    XCTAssertGreaterThan(focused[index + 1].minX, boundary)
+                }
+            }
+        }
+    }
+
+    func testFocusedOpticalSpacingPreservesRoomyEqualAndDenselyPackedSections() {
+        let size = CGSize(width: 320, height: 20)
+        for ranges in [[0.125..<0.875], [0.25..<0.5, 0.75..<1]] {
+            XCTAssertEqual(
+                SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size, restingHeight: 12),
+                SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size)
+            )
+        }
+        let equalRanges = [0.25..<0.5, 0.75..<1]
+        let smallSize = CGSize(width: 16, height: 20)
+        let equalOriginal = SkipMarkerTrackLayout.segmentedSections(ranges: equalRanges, size: smallSize)
+        let equalFocused = SkipMarkerTrackLayout.segmentedSections(
+            ranges: equalRanges, size: smallSize, restingHeight: 12
+        )
+        XCTAssertEqual(equalFocused[1], equalOriginal[1])
+        XCTAssertEqual(equalFocused[2], equalOriginal[2],
+                       "Neither equally narrow side should pay for extra spacing.")
+        let ranges = [0.4..<0.405, 0.425..<0.43]
+        let original = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size)
+        let focused = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size, restingHeight: 12)
+        XCTAssertEqual(focused.count, original.count)
+        XCTAssertEqual(focused[1], original[1])
+        XCTAssertEqual(focused[3], original[3])
+        for index in original.indices {
+            XCTAssertGreaterThanOrEqual(focused[index].width, original[index].width / 2 - 0.000001,
+                                        "Even a section paying for both gaps must retain at least half its width.")
+            if index < original.count - 1 {
+                XCTAssertLessThan(focused[index].maxX, focused[index + 1].minX)
+            }
+        }
+    }
+
+    func testFocusedOpticalSpacingTapersOutAtFullyRoundedJoins() {
+        let size = CGSize(width: 320, height: 20)
+        for (start, extra) in [(10.0, 2.0), (14, 2), (16, 1.25), (17, 0.625), (18, 0), (24, 0)] {
+            let ranges = [(start / 320)..<0.5]
+            let original = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size)
+            let focused = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size, restingHeight: 12)
+            XCTAssertEqual(focused[0], original[0])
+            XCTAssertEqual(focused[1].minX - original[1].minX, extra, accuracy: 0.000001)
+            XCTAssertEqual(focused[1].maxX, original[1].maxX, accuracy: 0.000001)
+            XCTAssertEqual(focused[2], original[2])
+        }
+    }
+
+    func testFocusedNarrowJoinsLeaveOpticalSpaceAndPreserveEverySection() throws {
+        let size = CGSize(width: 320, height: 20)
+        for ranges in [[0.02..<0.25], [0.4..<0.42], [0.5..<0.98]] {
+            let sections = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size)
+            let narrowIndex = try XCTUnwrap(sections.firstIndex { $0.width < 12 })
+            let radius = sections[narrowIndex].width / 2 * 1.25
+            let unscaled = SkipMarkerTrackLayout.maskPath(ranges: ranges, size: size)
+            let expanded = SkipMarkerTrackLayout.maskPath(
+                ranges: ranges, size: size, restingHeight: 12
+            )
+            let unscaledFrame = try pixels(
+                unscaled.fill(.white).frame(width: size.width, height: size.height).background(.black)
+            )
+            let frame = try pixels(
+                expanded.fill(.white).frame(width: size.width, height: size.height).background(.black)
+            )
+            for index in [narrowIndex - 1, narrowIndex + 1] where sections.indices.contains(index) {
+                let section = sections[index]
+                let minX = index < narrowIndex ? section.maxX - radius : section.minX
+                let maxX = index < narrowIndex ? section.maxX : section.minX + radius
+                let cornerHeight = Int(ceil(radius * size.height / 12))
+                for rows in [0..<cornerHeight, (Int(size.height) - cornerHeight)..<Int(size.height)] {
+                    var unscaledCoverage = 0
+                    var expandedCoverage = 0
+                    for x in Int(floor(minX))..<Int(ceil(maxX)) {
+                        for y in rows {
+                            unscaledCoverage += Int(unscaledFrame.red(x: x, y: y))
+                            expandedCoverage += Int(frame.red(x: x, y: y))
+                        }
+                    }
+                    XCTAssertLessThan(expandedCoverage, unscaledCoverage,
+                                      "Focused joins must leave more visible picture beside the sliver.")
+                }
+            }
+            for section in sections {
+                XCTAssertEqual(frame.red(x: Int(section.midX), y: 10), 255,
+                               "Focus must preserve every section.")
+            }
+            for index in sections.indices.dropLast() {
+                let x = Int((sections[index].maxX + sections[index + 1].minX) / 2)
+                for y in 0..<Int(size.height) {
+                    XCTAssertEqual(frame.red(x: x, y: y), 0, "The original time boundary must stay fully transparent.")
+                }
+            }
+        }
+    }
+
+    func testTVSpacingPreservesMaximumRoomyRoundingAtRestAndFocus() throws {
+        for (height, ranges) in [
+            (CGFloat(12), [0.125..<0.875]), (20, [0.125..<0.875])
+        ] {
+            let size = CGSize(width: 320, height: height)
+            let original = SkipMarkerTrackLayout.maskPath(ranges: ranges, size: size)
+            let referenced = SkipMarkerTrackLayout.maskPath(
+                ranges: ranges, size: size, restingHeight: 12
+            )
+            XCTAssertEqual(
+                try pixels(original.fill(.white).frame(width: size.width, height: height).background(.black)).bytes,
+                try pixels(referenced.fill(.white).frame(width: size.width, height: height).background(.black)).bytes
+            )
+        }
+    }
+
+    func testRestingSpacingPreservesTheTinyPieceAndItsCornerCurves() throws {
+        let size = CGSize(width: 320, height: 12)
+        for ranges in [[0.02..<0.25], [0.4..<0.42], [0.5..<0.98]] {
+            let sections = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size)
+            let tiny = try XCTUnwrap(sections.first { $0.width < 12 })
+            let original = SkipMarkerTrackLayout.maskPath(ranges: ranges, size: size)
+            let spaced = SkipMarkerTrackLayout.maskPath(ranges: ranges, size: size, restingHeight: 12)
+            let before = try pixels(original.fill(.white).frame(width: 320, height: 12).background(.black))
+            let after = try pixels(spaced.fill(.white).frame(width: 320, height: 12).background(.black))
+            for x in Int(floor(tiny.minX))..<Int(ceil(tiny.maxX)) {
+                for y in 0..<12 {
+                    XCTAssertEqual(before.rgb(x: x, y: y), after.rgb(x: x, y: y),
+                                   "The wider neighbor pays for resting space without changing the tiny piece.")
+                }
+            }
+        }
+    }
+
+    func testNarrowOpeningMiddleAndEndingJoinsStaySoftWithoutMovingTheCuts() throws {
+        let height: CGFloat = 20
+        for (start, end, filledPixels, gapPixels) in [
+            (5.0, 90.0, [7, 8], [4, 5]),
+            (230.0, 315.0, [311, 312], [314, 315]),
+            (156.0, 164.0, [152, 167], [155, 156, 163, 164])
+        ] {
+            let range = (start / 320)..<(end / 320)
+            let mask = SkipMarkerTrackLayout.maskPath(ranges: [range], size: CGSize(width: 320, height: height))
+            let frame = try pixels(
+                PlayerSkipMarkerTrack(
+                    segments: [.init(kind: .intro, start: start, end: end)], duration: 320, height: height
+                )
+                .frame(width: 320, height: 44).background(.black)
+            )
+            for x in filledPixels {
+                XCTAssertEqual(frame.red(x: x, y: 13), 255,
+                               "A narrow neighboring section must constrain this side of the cut too.")
+            }
+            for x in gapPixels {
+                for y in 12..<32 {
+                    XCTAssertEqual(frame.red(x: x, y: y), 0)
+                }
+            }
+            for section in SkipMarkerTrackLayout.segmentedSections(
+                ranges: [range], size: CGSize(width: 320, height: height)
+            ) {
+                XCTAssertTrue(mask.contains(CGPoint(x: section.midX, y: height / 2)),
+                              "No short section is erased or shifted.")
+            }
+        }
+    }
+
+    func testShortOpeningAndEndingPiecesKeepSymmetricRoundedCorners() throws {
+        let size = CGSize(width: 320, height: 20)
+        for ranges in [[0.025..<0.5], [0.5..<0.975]] {
+            let sections = SkipMarkerTrackLayout.segmentedSections(ranges: ranges, size: size)
+            let section = try XCTUnwrap(sections.first { $0.width < size.height })
+            let mask = SkipMarkerTrackLayout.maskPath(ranges: ranges, size: size)
+            let actual = try pixels(mask.fill(.white).frame(width: size.width, height: size.height).background(.black))
+            for offset in 0..<Int(section.width) {
+                let left = Int(section.minX) + offset
+                let right = Int(section.maxX) - 1 - offset
+                for y in 0..<Int(size.height) {
+                    // Antialiased coverage can differ by one 8-bit step at mirrored curve edges.
+                    for channel in 0..<3 {
+                        XCTAssertEqual(
+                            Int(actual.rgb(x: left, y: y)[channel]), Int(actual.rgb(x: right, y: y)[channel]),
+                            accuracy: 1, "The short end piece needs symmetric inner and outer corners at \(left),\(y)."
+                        )
+                        XCTAssertEqual(
+                            Int(actual.rgb(x: left, y: y)[channel]),
+                            Int(actual.rgb(x: left, y: Int(size.height) - 1 - y)[channel]),
+                            accuracy: 1, "The short end piece needs symmetric top and bottom corners at \(left),\(y)."
+                        )
+                    }
+                }
+            }
+        }
+        let mask = SkipMarkerTrackLayout.maskPath(ranges: [0.025..<0.5], size: size)
+        XCTAssertFalse(mask.contains(CGPoint(x: 10.5, y: 0.5)),
+                       "The adjoining long section must keep visibly soft corners, not a nearly square cut.")
+        XCTAssertTrue(mask.contains(CGPoint(x: 10.5, y: 10)))
+    }
+
+    func testRoomySectionsAndMobileSuppressionKeepTheOriginalRoundedMask() throws {
+        for height in [CGFloat(8), 12, 20] {
+            for (ranges, minimumWidth) in [
+                ([Range<Double>](), CGFloat(0)),
+                ([0..<1], 0),
+                ([0.125..<0.875], 0),
+                ([0.01..<0.5, 0.6..<0.61], 20)
+            ] {
+                let size = CGSize(width: 320, height: height)
+                var reference = Path()
+                for section in SkipMarkerTrackLayout.segmentedSections(
+                    ranges: ranges, size: size, minimumSectionWidth: minimumWidth
+                ) {
+                    let radius = min(section.width, section.height) / 2
+                    reference.addRoundedRect(in: section, cornerSize: CGSize(width: radius, height: radius))
+                }
+                let actual = SkipMarkerTrackLayout.maskPath(
+                    ranges: ranges, size: size, minimumSectionWidth: minimumWidth
+                )
+                XCTAssertEqual(
+                    try pixels(actual.fill(.white).frame(width: 320, height: height).background(.black)).bytes,
+                    try pixels(reference.fill(.white).frame(width: 320, height: height).background(.black)).bytes
+                )
+            }
+        }
+        for size in [
+            CGSize.zero, CGSize(width: CGFloat.infinity, height: 20), CGSize(width: 320, height: CGFloat.nan)
+        ] {
+            XCTAssertTrue(SkipMarkerTrackLayout.maskPath(ranges: [0.1..<0.2], size: size).isEmpty)
+        }
+    }
+
     func testDefaultMaskHasFullHeightTransparentGapsButNoInternalTexture() throws {
         XCTAssertEqual(PlayerScrubTrackSurface.glassBackingOpacity, 0.10)
         for height in [CGFloat(12), 20] {

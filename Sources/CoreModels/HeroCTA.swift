@@ -23,10 +23,20 @@ public enum HeroCTA: Equatable, Sendable {
     /// (`pending`) or approved and still searching (`processing` with no active
     /// queue item). Shown as a "Requested" status.
     case requested
+    /// An approved request for a future release, without library or queue evidence.
+    case awaitingRelease
     /// No Play/Request button: a featured title that isn't owned and can't be
     /// requested because Seerr isn't connected. The slide still shows in the
     /// carousel; it just offers no primary action.
     case unavailable
+
+    public var requestStatusTitle: LocalizedStringResource {
+        self == .awaitingRelease ? "Requested · Unreleased" : "Requested"
+    }
+
+    public var requestStatusSystemImage: String {
+        self == .awaitingRelease ? "calendar" : "clock"
+    }
 }
 
 public struct MediaOwnershipPresentation: Equatable, Sendable {
@@ -61,12 +71,17 @@ public extension MediaItem {
     }
 
     /// The hero primary CTA for this item given the current Seerr connection.
-    func heroCTA(seerConnected: Bool) -> HeroCTA {
+    func heroCTA(
+        seerConnected: Bool, now: Date = Date(), calendar: Calendar = .current
+    ) -> HeroCTA {
         Self.heroCTA(
             availability: availability,
             downloadProgress: downloadProgress,
             hasValidatedPlayableSource: hasPlayableLibraryTarget(),
-            seerConnected: seerConnected
+            seerConnected: seerConnected,
+            releaseDate: releaseDate,
+            hasDownloadActivity: hasRequestDownloadActivity == true,
+            now: now, calendar: calendar
         )
     }
 
@@ -132,7 +147,11 @@ public extension MediaItem {
         availability: MediaAvailabilityStatus?,
         downloadProgress: Double?,
         hasValidatedPlayableSource: Bool,
-        seerConnected: Bool
+        seerConnected: Bool,
+        releaseDate: Date? = nil,
+        hasDownloadActivity: Bool = false,
+        now: Date = Date(),
+        calendar: Calendar = .current
     ) -> HeroCTA {
         if hasValidatedPlayableSource { return .play }
         guard seerConnected else { return .unavailable }
@@ -142,6 +161,12 @@ public extension MediaItem {
         case .processing:
             if let downloadProgress {
                 return .downloading(progress: downloadProgress)
+            }
+            if !hasDownloadActivity,
+               SeasonEpisodeAvailability.scheduled(
+                   airDate: releaseDate, now: now, calendar: calendar
+               ) == .unaired {
+                return .awaitingRelease
             }
             return .requested
         case .none, .unknown, .deleted, .available, .partiallyAvailable:

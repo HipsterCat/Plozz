@@ -40,10 +40,11 @@ final class PlayerSkipMarkerHostedTests: XCTestCase {
             for performance in [false, true] {
                 for focused in [false, true] {
                     let background = Color(red: 0.15, green: 0.35, blue: 0.6)
-                    let model = showTracks(
+                    let model = showTrack(
                         in: window, focused: focused, performance: performance,
                         background: background
                     )
+                    let unmarked = try await render(in: window)
                     model.skipSegments.segments = [.init(kind: .intro, start: 12.5, end: 87.5)]
                     let frame = try await render(in: window)
                     let top = focused ? 580 : 584
@@ -57,7 +58,7 @@ final class PlayerSkipMarkerHostedTests: XCTestCase {
                             for channel in 0..<3 {
                                 XCTAssertEqual(
                                     Int(frame.colorAtPixel(x, y)[channel]),
-                                    Int(frame.colorAtPixel(x, y - frame.pixel(100))[channel]), accuracy: 1,
+                                    Int(unmarked.colorAtPixel(x, y)[channel]), accuracy: 1,
                                                "The sections retain the original played, buffered, and unplayed fills. flat=\(performance) focused=\(focused)")
                             }
                         }
@@ -69,6 +70,50 @@ final class PlayerSkipMarkerHostedTests: XCTestCase {
                     model.skipSegments.segments = [.init(kind: .intro, start: 40, end: 60)]
                     let crossing = try await render(in: window)
                     XCTAssertEqual(crossing.color(832, 590), [255, 255, 255], "A boundary never cuts through the playhead.")
+                }
+            }
+        }
+    }
+
+    func testTinyOpeningSectionUsesSoftMatchingCornersAndKeepsRoomyJoinsRounded() async throws {
+        try await withWindow { window in
+            for performance in [false, true] {
+                for focused in [false, true] {
+                    let background = Color(red: 0.15, green: 0.35, blue: 0.6)
+                    let model = showTrack(
+                        in: window, focused: focused, performance: performance, background: background
+                    )
+                    model.skipSegments.segments = [.init(kind: .intro, start: 0.5, end: 25)]
+                    let frame = try await render(in: window)
+                    let top = focused ? 580 : 584
+                    let widerSectionStart = focused ? 330 : 329
+                    XCTAssertNotEqual(frame.color(widerSectionStart + 2, top + 1), frame.color(widerSectionStart + 2, 450),
+                                      "The wide section must not use an oversized cap beside the tiny opening.")
+                    XCTAssertEqual(frame.color(widerSectionStart, top), frame.color(widerSectionStart, 450),
+                                   "The constrained join must still have a visibly rounded top corner.")
+                    if focused {
+                        XCTAssertEqual(frame.color(widerSectionStart, top + 1), frame.color(widerSectionStart, 450),
+                                       "Focus must grow the corner curve vertically instead of leaving it boxy.")
+                        let backdrop = frame.color(widerSectionStart + 1, 450)
+                        let corner = frame.color(widerSectionStart + 1, top + 1)
+                        let solid = frame.color(widerSectionStart + 1, 590)
+                        for channel in 0..<3 {
+                            XCTAssertLessThan(
+                                2 * (Int(corner[channel]) - Int(backdrop[channel])),
+                                Int(solid[channel]) - Int(backdrop[channel]),
+                                "The wider corner should reveal more picture than track at its outer curve."
+                            )
+                        }
+                    }
+                    for y in frame.pixels(top..<(focused ? 600 : 596)) {
+                        for x in frame.pixels(326..<widerSectionStart) {
+                            XCTAssertEqual(frame.colorAtPixel(x, y), frame.colorAtPixel(x, frame.pixel(450)))
+                        }
+                    }
+                    XCTAssertEqual(frame.color(643, top), frame.color(643, 450),
+                                   "The other intro boundary still has room for maximum rounding.")
+                    XCTAssertNotEqual(frame.color(643, 590), frame.color(643, 450))
+                    attach(frame.image, name: "Soft matching opening cut - \(performance ? "flat" : "glass") - \(focused ? "focused" : "normal")")
                 }
             }
         }
@@ -94,31 +139,22 @@ final class PlayerSkipMarkerHostedTests: XCTestCase {
         try await body(window)
     }
 
-    private func showTracks(
+    private func showTrack(
         in window: UIWindow, focused: Bool, performance: Bool,
         background: Color
     ) -> PlayerControlsModel {
-        func makeModel() -> PlayerControlsModel {
-            let model = PlayerControlsModel()
-            model.duration = 100
-            model.currentSeconds = 40
-            model.bufferedSeconds = 60
-            model.controlsVisible = true
-            model.controlBarVisible = !focused
-            return model
-        }
-        let plain = makeModel()
-        let marked = makeModel()
+        let marked = PlayerControlsModel()
+        marked.duration = 100
+        marked.currentSeconds = 40
+        marked.bufferedSeconds = 60
+        marked.controlsVisible = true
+        marked.controlBarVisible = !focused
         let host = UIHostingController(rootView:
             background
                 .overlay {
-                    // Both adaptive materials must be compared in the same frame.
-                    VStack(spacing: 56) {
-                        ScrubBar(model: plain, palette: .dark)
-                            .frame(width: 1280, height: 44)
-                        ScrubBar(model: marked, palette: .dark)
-                            .frame(width: 1280, height: 44)
-                    }
+                    ScrubBar(model: marked, palette: .dark)
+                        .frame(width: 1280, height: 44)
+                        .offset(y: 50)
                 }
                 .ignoresSafeArea()
                 .environment(\.colorScheme, .dark)
@@ -149,7 +185,7 @@ final class PlayerSkipMarkerHostedTests: XCTestCase {
     private func capture(in window: UIWindow) throws -> Frame {
         let format = UIGraphicsImageRendererFormat()
         format.scale = window.screen.scale
-        format.preferredRange = .standard
+        format.preferredRange = .extended
         let snapshot = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
             XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
         }

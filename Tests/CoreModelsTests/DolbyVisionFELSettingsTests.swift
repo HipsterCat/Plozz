@@ -11,23 +11,19 @@ final class DolbyVisionFELSettingsTests: XCTestCase {
         ] {
             let settings = try JSONDecoder().decode(PlaybackSettings.self, from: Data(payload.utf8))
             XCTAssertFalse(settings.dolbyVisionFELEnabled)
-            XCTAssertTrue(settings.trueHDAtmosEnabled)
         }
     }
 
-    func testFELAndSpatialAudioChoicesRoundTripIndependently() throws {
+    func testFELChoicesRoundTripWithoutChangingOtherAudioPreferences() throws {
         for enabled in [false, true] {
-            for atmosEnabled in [false, true] {
-                let settings = PlaybackSettings(
-                    audioLanguagePreference: .language("ja"),
-                    trueHDAtmosEnabled: atmosEnabled,
-                    dolbyVisionFELEnabled: enabled
-                )
-                XCTAssertEqual(
-                    try JSONDecoder().decode(PlaybackSettings.self, from: JSONEncoder().encode(settings)),
-                    settings
-                )
-            }
+            let settings = PlaybackSettings(
+                audioLanguagePreference: .language("ja"),
+                dolbyVisionFELEnabled: enabled
+            )
+            XCTAssertEqual(
+                try JSONDecoder().decode(PlaybackSettings.self, from: JSONEncoder().encode(settings)),
+                settings
+            )
         }
     }
 
@@ -43,7 +39,7 @@ final class DolbyVisionFELSettingsTests: XCTestCase {
 
         XCTAssertFalse(PlaybackSettingsModel(store: primaryStore).settings.dolbyVisionFELEnabled)
         XCTAssertTrue(PlaybackSettingsModel(store: guestStore).settings.dolbyVisionFELEnabled)
-        XCTAssertTrue(guestStore.load().trueHDAtmosEnabled)
+        XCTAssertTrue(guestStore.load().rememberAudioTrackPerSeries)
 
         let snapshot = ProfileSettingsTransfer.capture(namespace: "guest", defaults: defaults)
         ProfileSettingsTransfer.apply(snapshot, namespace: "restored", defaults: defaults)

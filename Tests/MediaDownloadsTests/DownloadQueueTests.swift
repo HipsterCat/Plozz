@@ -918,4 +918,119 @@ final class DownloadQueueTests: XCTestCase {
         let final = await registry.record(forKey: second.identityKey)
         XCTAssertEqual(final?.status, .failed)
     }
+
+    #if !os(tvOS)
+    func testDownloadUsesReclaimableCapacityWhenRawFreeSpaceIsTooSmall() async throws {
+        let capacity = DownloadStorageCapacity { _, key in
+            key == .volumeAvailableCapacityForImportantUsageKey
+                ? 96_080_000_000
+                : 1_000_000_000
+        }
+        try await assertStoragePreflight(
+            totalBytes: 10_000_000_000,
+            capacity: capacity,
+            expectedStatus: .completed
+        )
+    }
+    #endif
+
+    func testInsufficientCapacityRejectsDownloadBeforeStartingTransfer() async throws {
+        try await assertStoragePreflight(
+            totalBytes: 10_000_000_000,
+            capacity: DownloadStorageCapacity { _, _ in 9_999_999_999 },
+            expectedStatus: .failed
+        )
+    }
+
+    func testDownloadThatExactlyFitsAvailableCapacityIsAdmitted() async throws {
+        try await assertStoragePreflight(
+            totalBytes: 10_000_000_000,
+            capacity: DownloadStorageCapacity { _, _ in 10_000_000_000 },
+            expectedStatus: .completed
+        )
+    }
+
+    func testResumedDownloadChecksOnlyRemainingBytes() async throws {
+        try await assertStoragePreflight(
+            totalBytes: 10_000_000_000,
+            bytesDownloaded: 8_000_000_000,
+            capacity: DownloadStorageCapacity { _, _ in 2_000_000_000 },
+            expectedStatus: .completed
+        )
+    }
+
+    func testResumedDownloadRejectsInsufficientRemainingCapacity() async throws {
+        try await assertStoragePreflight(
+            totalBytes: 10_000_000_000,
+            bytesDownloaded: 8_000_000_000,
+            capacity: DownloadStorageCapacity { _, _ in 1_999_999_999 },
+            expectedStatus: .failed
+        )
+    }
+
+    func testUnknownDownloadSizeDoesNotReportInsufficientStorage() async throws {
+        try await assertStoragePreflight(
+            totalBytes: nil,
+            capacity: DownloadStorageCapacity { _, _ in 0 },
+            expectedStatus: .completed
+        )
+    }
+
+    func testUnknownCapacityDoesNotReportInsufficientStorage() async throws {
+        try await assertStoragePreflight(
+            totalBytes: 10_000_000_000,
+            capacity: DownloadStorageCapacity { _, _ in nil },
+            expectedStatus: .completed
+        )
+    }
+
+    private func assertStoragePreflight(
+        totalBytes: Int64?,
+        bytesDownloaded: Int64 = 0,
+        capacity: DownloadStorageCapacity,
+        expectedStatus: DownloadStatus,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let registry = DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
+        let directory = DownloadTestFactory.tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storage = FixedDownloadStorageLocator(root: directory)
+        var record = try DownloadTestFactory.record(
+            bytesDownloaded: bytesDownloaded,
+            totalBytes: totalBytes
+        )
+        record.sourceKind = .managedHTTP
+        record.directShareSource = nil
+        record.managedHTTPSource = ManagedHTTPDownloadSource(
+            provider: .emby, accountID: "account-1", itemID: "movie-1"
+        )
+        _ = try await registry.beginDownload(record)
+        let destinationFolder = try storage.pinnedFolderURL(forKey: record.identityKey)
+        let engine = CountingDownloadEngine()
+        let queue = DownloadQueue(
+            registry: registry,
+            storage: storage,
+            engine: engine,
+            storageCapacity: DownloadStorageCapacity { url, _ in
+                XCTAssertEqual(url, destinationFolder, file: file, line: line)
+                return try capacity.availableBytes(at: url)
+            },
+            maxAttempts: 1
+        )
+
+        await queue.resumeInterrupted()
+        await queue.drainForTesting()
+
+        let final = await registry.record(forKey: record.identityKey)
+        let calls = await engine.callCount()
+        XCTAssertEqual(final?.status, expectedStatus, file: file, line: line)
+        XCTAssertEqual(calls, expectedStatus == .completed ? 1 : 0, file: file, line: line)
+        XCTAssertEqual(
+            final?.failureReason,
+            expectedStatus == .failed ? "Not enough device storage" : nil,
+            file: file,
+            line: line
+        )
+    }
 }

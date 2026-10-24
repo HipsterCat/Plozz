@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreModels
 import FeaturePlayback
+import EnginePlozzigen
 import Foundation
 import XCTest
 
@@ -14,7 +15,15 @@ final class StreamingBufferingHostedTests: XCTestCase {
         try await exercise(pauseBeforeStarting: true, rate: 1.25)
     }
 
-    private func exercise(pauseBeforeStarting: Bool, rate: Double) async throws {
+    func testAetherServerHLSRecoversFromAnEncoderSegmentGap() async throws {
+        try await exercise(pauseBeforeStarting: false, rate: 1, useAether: true)
+    }
+
+    func testAetherServerHLSPreservesPauseAndSpeedAcrossAnEncoderSegmentGap() async throws {
+        try await exercise(pauseBeforeStarting: true, rate: 1.25, useAether: true)
+    }
+
+    private func exercise(pauseBeforeStarting: Bool, rate: Double, useAether: Bool = false) async throws {
         let initialization = try XCTUnwrap(Bundle(for: Self.self).url(
             forResource: "iptv-init", withExtension: "mp4", subdirectory: "Fixtures"
         ))
@@ -54,7 +63,7 @@ final class StreamingBufferingHostedTests: XCTestCase {
         }
         addTeardownBlock { await server.stop() }
         let origin = try await server.start()
-        let engine = NativeVideoEngine(startsMuted: true)
+        let engine: any VideoEngine = useAether ? try PlozzigenVideoEngine() : NativeVideoEngine(startsMuted: true)
         defer { engine.stop() }
         var request = PlaybackRequest(
             item: .init(id: "paced-transcode", title: "Paced transcode", kind: .movie, runtime: 36),
@@ -64,7 +73,8 @@ final class StreamingBufferingHostedTests: XCTestCase {
         request.streamingOptions = .init(quality: .low)
         let started = ContinuousClock.now
         await engine.load(request: request, startPosition: 0)
-        let player = try XCTUnwrap(engine.underlyingPlayer)
+        let player = try XCTUnwrap(engine.nowPlayingPlayer)
+        player.isMuted = true
         if pauseBeforeStarting {
             engine.pause()
             engine.setPlaybackSpeed(rate)
@@ -72,7 +82,7 @@ final class StreamingBufferingHostedTests: XCTestCase {
             XCTAssertEqual(player.rate, 0)
             engine.play()
         }
-        XCTAssertTrue(player.automaticallyWaitsToMinimizeStalling)
+        if !useAether { XCTAssertTrue(player.automaticallyWaitsToMinimizeStalling) }
         let item = try XCTUnwrap(player.currentItem)
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA

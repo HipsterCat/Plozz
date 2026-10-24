@@ -29,6 +29,20 @@ final class ProfileLockTests: XCTestCase {
 
     // MARK: Verification
 
+    func testAsynchronousVerificationPreservesVerifierAndRejectsCancellation() async throws {
+        let lock = try XCTUnwrap(ProfileLock.make(pin: "4821", iterations: fastIterations))
+        let accepted = await lock.matchesOffMainActor(pin: "4821")
+        let rejected = await lock.matchesOffMainActor(pin: "0000")
+        XCTAssertTrue(accepted)
+        XCTAssertFalse(rejected)
+        let attempt = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await lock.matchesOffMainActor(pin: "4821")
+        }
+        let cancelled = await attempt.value
+        XCTAssertFalse(cancelled)
+    }
+
     func testCorrectPINMatches() throws {
         let lock = try XCTUnwrap(ProfileLock.make(pin: "4821", iterations: fastIterations))
         XCTAssertTrue(lock.matches(pin: "4821"))

@@ -1,6 +1,7 @@
 #if os(iOS)
 import CoreModels
 import PlozzCoreUI
+import FeatureAuth
 import FeatureSyncSetup
 import SwiftUI
 import UIKit
@@ -10,6 +11,26 @@ import XCTest
 
 @MainActor
 final class ServerSetupPresentationTests: XCTestCase {
+    func testAccountRecoveryKeepsCancelReachableWithLargeTextOnSmallScreens() async throws {
+        for size in [CGSize(width: 320, height: 568), CGSize(width: 568, height: 320)] {
+            let image = try await render(
+                PlexAccountRecoveryView(
+                    name: "Viewer", message: AppError.unauthorized.userMessage, signIn: nil,
+                    onSignIn: {}, onRetry: {}, onCancel: {}, onCancelSignIn: {}
+                )
+                .environment(\.dynamicTypeSize, .accessibility5),
+                size: size, light: false
+            ) { window in
+                let scroll = try XCTUnwrap(self.scrollViews(in: window).first)
+                XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+                try await self.scrollToBottom(scroll, in: window)
+            }
+            let text = try recognize(image).joined(separator: " ")
+            XCTAssertTrue(text.contains("Cancel"), "Recovery must keep a visible way back: \(text)")
+            attach(image, name: "Large-text account recovery \(size)")
+        }
+    }
+
     func testCompleteCodeFitsNarrowPhoneAtLargestTextSize() async throws {
         for palette in [ThemePalette.dark, .light] {
             let image = try await render(

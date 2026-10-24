@@ -315,6 +315,7 @@ struct PlozziOSLibraryGridView: View {
             }
         }
         .task { await viewModel.loadFirstPageIfNeeded() }
+        .task(id: viewModel.availableContentModes) { await viewModel.reconcileContentMode() }
         .background {
             LibraryAlphabetFeedback(letter: viewModel.alphabet.jumpingTo, message: viewModel.alphabet.message)
         }
@@ -345,7 +346,14 @@ struct PlozziOSLibraryGridView: View {
                 .frame(maxWidth: .infinity, minHeight: 220)
         case .empty:
             ContentUnavailableView("No recommendations in this library", systemImage: "sparkles")
-        case .loaded(let sections):
+        case .loaded(let loaded):
+            let sections = viewModel.visibleRecommendedRows(loaded)
+            if sections.isEmpty {
+                ContentUnavailableView(
+                    "No visible rows", systemImage: "rectangle.grid.1x2",
+                    description: Text("Show rows in Settings > Screens & Navigation > Customize Libraries.")
+                )
+            }
             VStack(alignment: .leading, spacing: PlozziOSMediaRailLayout.sectionSpacing) {
                 ForEach(sections) { section in
                     PlozziOSLibraryRecommendationRow(

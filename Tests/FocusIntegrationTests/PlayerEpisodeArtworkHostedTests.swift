@@ -498,6 +498,15 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                 try await self.waitUntil {
                     (system.focusedItem as? PlayerEpisodeNativeCell)?.accessibilityLabel == playing.title
                 }
+                let collection = try XCTUnwrap(self.scrollView(in: window) as? UICollectionView)
+                let coordinator = try XCTUnwrap(collection.delegate as? PlayerEpisodeNativeRow.Coordinator)
+                model.target = nil
+                try await self.waitUntil {
+                    model.observedFocus == .button(.episodes) && coordinator.focusAnimations == 0
+                }
+                XCTAssertNotNil(system.focusedItem)
+                XCTAssertFalse(system.focusedItem is PlayerEpisodeNativeCell,
+                               "A deferred episode request must not steal focus back from Browse.")
             }
         }
     }
@@ -927,6 +936,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         try await waitUntil {
             model.appliedFocusRequestID == model.focusRequestID
                 && model.observedFocus == .button(.episodes) && focusSystem.focusedItem != nil
+                && !(focusSystem.focusedItem is PlayerEpisodeNativeCell)
         }
         try await body(model, window)
     }
@@ -1008,6 +1018,7 @@ private struct ProductionEpisodeFixture: View {
                     .onDisappear { model.panelDisappearances += 1 }
             }
         }
+        .defaultFocus($focus, .button(.episodes), priority: .userInitiated)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .environment(\.plozzCardFocusStyle, .system)

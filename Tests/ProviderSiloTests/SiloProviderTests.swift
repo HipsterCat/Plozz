@@ -467,7 +467,7 @@ final class SiloProviderTests: XCTestCase {
     XCTAssertEqual(item.ratings.first?.displayValue, "0.0")
   }
 
-  func credential() throws -> SiloCredential {
+  func credential(profileToken: String? = nil) throws -> SiloCredential {
     let tokens = try JSONDecoder().decode(
       SiloTokenPair.self,
       from: Data(
@@ -480,7 +480,7 @@ final class SiloProviderTests: XCTestCase {
         """
         {"id":"profile1","name":"Viewer","has_pin":false,"is_child":false}
         """.utf8))
-    return SiloCredential(tokens: tokens, profile: profile, profileToken: nil)
+    return SiloCredential(tokens: tokens, profile: profile, profileToken: profileToken)
   }
 
   func context(_ token: String) -> ProviderResolutionContext {

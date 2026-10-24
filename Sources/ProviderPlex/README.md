@@ -44,6 +44,13 @@ first-class backends; co-equal with `ProviderJellyfin`.
   rewrites the stored admin account's token; per-user tokens live in a
   short-lived override map.
 
+## Playback chapters
+
+Playback detail requests opt into `includeChapters=1` and carry the server's
+item-level chapter starts, titles, and optional images in `PlaybackRequest`.
+Millisecond offsets become seconds; missing and invalid starts are omitted.
+Ordinary browsing requests do not add this chapter query.
+
 ## Episode identity and order
 
 Full item metadata requests include GUIDs and preferences. The series'
@@ -234,7 +241,12 @@ Tests: `PlexStreamingQualityTests` and `StreamingPlaybackTests`.
 
 ## Original-file playback versus downloads
 
-Native playback, Plozzigen's local-remux source, and scrub-frame extraction use
+Aether-enabled direct-play negotiation uses `PlozzigenMediaFormats`, including
+linked software-decoded video/audio families rather than only native formats.
+The selected rendition still controls playback; an original-file descriptor is
+not permission to bypass conversion or quality limits.
+
+Original-file playback and scrub-frame extraction use
 the original `/library/parts/...` URL without `download=1`. Only the explicit
 offline-download source includes that flag. Reusing the download URL for player
 buffering can make Plex's activity dashboard show transient download tasks.
@@ -242,7 +254,7 @@ Both variants retain the same selected media part, credential-free locator,
 original bytes, and current-account authentication. This does not change engine
 selection, quality limits, or server-transcode negotiation.
 
-Tests: `ProviderPlexTests` covers MKV local remux, native MP4 playback, scrubbing,
+Tests: `ProviderPlexTests` covers MKV and MP4 original-file playback, scrubbing,
 selected media versions, and the separately preserved offline-download URL.
 
 ## Playback session reporting

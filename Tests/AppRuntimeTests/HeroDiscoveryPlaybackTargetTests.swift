@@ -82,7 +82,8 @@ final class HeroDiscoveryPlaybackTargetTests: XCTestCase {
             let raw = MediaItem(
                 id: selected.id, title: "Provider movie", kind: .movie,
                 resumePosition: 123, playedPercentage: 0.2, hasBeenPlayed: true,
-                discoverySources: [.anilist], versions: [version], isFavorite: true,
+                discoverySources: [.anilist], hasRequestDownloadActivity: true,
+                versions: [version], isFavorite: true,
                 selectedVersionID: version.id, lastPlayedAt: Date(timeIntervalSince1970: 50)
             )
             let projected = try XCTUnwrap(HeroDiscoveryPlaybackTarget.project(
@@ -93,6 +94,7 @@ final class HeroDiscoveryPlaybackTargetTests: XCTestCase {
             XCTAssertEqual(projected.discoverySources, [.tmdb, .tvmaze])
             XCTAssertEqual(projected.discoveryURLs, ["tmdb": original.discoveryURLs["tmdb"]!])
             XCTAssertEqual(projected.title, raw.title)
+            XCTAssertNil(projected.hasRequestDownloadActivity)
             XCTAssertEqual(projected.providerIDs, raw.providerIDs, "Sparse same-physical payloads need not repeat catalog IDs.")
             XCTAssertEqual(projected.resumePosition, raw.resumePosition)
             XCTAssertEqual(projected.playedPercentage, raw.playedPercentage)

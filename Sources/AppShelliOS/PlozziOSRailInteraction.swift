@@ -11,8 +11,7 @@ import CoreModels
 enum PlozziOSRailInteraction {
     /// Push the item's detail page. The default for browse rails.
     case openDetail
-    /// Resume playback. Continue Watching only, matching tvOS, where pressing a
-    /// resume card has always played rather than opening a page.
+    /// Resume playback. The default Continue Watching action on both platforms.
     case play
 }
 

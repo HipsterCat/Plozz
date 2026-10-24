@@ -4,6 +4,8 @@ import Foundation
 ///
 /// The feature is a lock; the PIN is the credential people create/change/remove.
 public enum ProfileLockCopy {
+    public static let profileChanged: LocalizedStringResource = "This profile changed. Choose it again."
+
     public static let title = LocalizedStringResource(
         "settings.profileLock.title",
         defaultValue: "Profile Lock",

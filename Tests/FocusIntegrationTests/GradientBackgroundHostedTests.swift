@@ -3,11 +3,164 @@ import Observation
 import SwiftUI
 import TVUIKit
 import UIKit
+import Vision
 import XCTest
+@testable import AppShell
 @testable import PlozzCoreUI
+import FeatureLiveTV
+import FeatureLiveTVCore
 
 @MainActor
 final class GradientBackgroundHostedTests: XCTestCase {
+    func testLiveTVSetupSharesOneBackdropWithNativeTopNavigationAndCards() async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let host = GradientFocusHost(rootView: AnyView(EmptyView()))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let namespace = "LiveTVSetupGradient.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        let library = LibraryChannelService(
+            profileID: namespace, store: GradientEmptyLibraryChannels(),
+            snapshotStore: LibraryChannelSnapshotStore(databaseURL: nil)
+        )
+        try await library.load()
+        let approval = LiveTVSourceApprovalContext(
+            profile: Profile(id: namespace, name: "Fixture"), parentalPIN: nil, activeAccountIDs: []
+        )
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            UserDefaults.standard.removePersistentDomain(forName: namespace)
+        }
+        for (name, palette) in [("dark", ThemePalette.dark), ("black", .pureBlack), ("light", .light)] {
+            for (gradient, reduced) in [(true, false), (false, false), (true, true)] {
+                host.rootView = AnyView(
+                    NativeTopBarNavigation(
+                        destinations: [.home, .liveTV, .search], selection: .constant(.liveTV),
+                        preventsAccidentalExit: false,
+                        content: { destination, active in
+                            guard destination == .liveTV else { return AnyView(Color.clear) }
+                            return AnyView(LiveTVPrototypeView(
+                                isActive: active, usesNativeFullscreen: true,
+                                sourceStore: GradientEmptyLiveTVSources(),
+                                profileID: namespace, preferencesNamespace: namespace,
+                                libraryService: library,
+                                libraryHistory: LibraryChannelHistorySettings(defaults: defaults),
+                                sourceApprovalContext: { approval }
+                            ) { _ in Color.black })
+                        },
+                        label: { AnyView(Text(verbatim: $0.storageValue)) }
+                    )
+                    .background { AppBackground(palette: palette) }
+                    .environment(\.themePalette, palette)
+                    .environment(\.colorScheme, palette.isLight ? .light : .dark)
+                    .environment(\.gradientBackgroundsEnabled, gradient)
+                    .environment(\.plozzReduceTransparency, reduced)
+                    .environment(\.locale, Locale(identifier: "en"))
+                    .transaction { $0.disablesAnimations = true }
+                )
+                window.layoutIfNeeded()
+                try await Task.sleep(for: .seconds(1))
+                let image = try capture(window)
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "live-tv-setup-\(name)-gradient-\(gradient)-reduced-\(reduced)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                let renderer = ImageRenderer(content:
+                    SettingsPageBackground()
+                        .frame(width: 1920, height: 1080)
+                        .environment(\.themePalette, palette)
+                        .environment(\.gradientBackgroundsEnabled, gradient)
+                        .environment(\.colorScheme, palette.isLight ? .light : .dark)
+                )
+                let reference = try XCTUnwrap(renderer.uiImage)
+                for x in [CGFloat(80), 1840] {
+                    for y in stride(from: CGFloat(140), through: 1000, by: 20) {
+                        let point = CGPoint(x: x, y: y)
+                        let actual = try pixel(image, at: point)
+                        let expected = try pixel(reference, at: point)
+                        for channel in 0..<3 {
+                            XCTAssertLessThanOrEqual(abs(actual[channel] - expected[channel]), 3,
+                                "\(name), gradient=\(gradient), reduced=\(reduced), \(point): \(actual) vs \(expected)")
+                        }
+                    }
+                }
+                let cards = nativeCards(in: window)
+                XCTAssertEqual(cards.count, 3, "Setup must use the shared native detail-card controls.")
+                if name == "dark", gradient, !reduced {
+                    let server = try XCTUnwrap(cards.sorted {
+                        $0.convert($0.bounds, to: window).minX < $1.convert($1.bounds, to: window).minX
+                    }.dropFirst().first)
+                    let cgImage = try XCTUnwrap(image.cgImage)
+                    let scale = CGFloat(cgImage.width) / window.bounds.width
+                    let frame = server.contentView.convert(server.contentView.bounds, to: window)
+                    let crop = try XCTUnwrap(cgImage.cropping(to: frame
+                        .applying(CGAffineTransform(scaleX: scale, y: scale))))
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.recognitionLanguages = ["en"]
+                    try VNImageRequestHandler(cgImage: crop).perform([request])
+                    let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                        .joined(separator: " ")
+                    XCTAssertTrue(text.contains("Live TV from Jellyfin, Emby, or Plex."), text)
+                    XCTAssertFalse(text.localizedCaseInsensitiveContains("guide only"), text)
+                }
+                let cardRenderer = ImageRenderer(content:
+                    SettingsPageBackground()
+                        .overlay {
+                            if gradient && !reduced {
+                                (palette.isLight ? Color.black : .white).opacity(0.05)
+                            } else {
+                                palette.raised.fill
+                            }
+                        }
+                        .frame(width: 1920, height: 1080)
+                        .environment(\.themePalette, palette)
+                        .environment(\.gradientBackgroundsEnabled, gradient)
+                        .environment(\.colorScheme, palette.isLight ? .light : .dark)
+                )
+                let cardReference = try XCTUnwrap(cardRenderer.uiImage)
+                for card in cards where !card.isFocused {
+                    let point = card.contentView.convert(CGPoint(
+                        x: card.contentView.bounds.width * 0.9,
+                        y: card.contentView.bounds.height * 0.65
+                    ), to: window)
+                    let actual = try pixel(image, at: point)
+                    let expected = try pixel(cardReference, at: point)
+                    for channel in 0..<3 {
+                        XCTAssertLessThanOrEqual(abs(actual[channel] - expected[channel]), 3,
+                            "Card \(name), gradient=\(gradient), reduced=\(reduced): \(actual) vs \(expected)")
+                    }
+                }
+                let focus = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+                let restingFocus = try XCTUnwrap(focus.focusedItem as? UIView)
+                for card in cards {
+                    host.target = card
+                    focus.requestFocusUpdate(to: host)
+                    focus.updateFocusIfNeeded()
+                    try await Task.sleep(for: .milliseconds(100))
+                    XCTAssertTrue(card.isFocused, "Every setup action must accept native focus.")
+                }
+                host.target = restingFocus
+                focus.requestFocusUpdate(to: host)
+                focus.updateFocusIfNeeded()
+                try await Task.sleep(for: .milliseconds(150))
+                XCTAssertTrue(restingFocus.isFocused)
+                host.target = nil
+            }
+        }
+    }
+
     func testPINPadKeepsItsFocusAndSharedSurfaceAcrossThemeChanges() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)
@@ -442,6 +595,20 @@ final class GradientBackgroundHostedTests: XCTestCase {
         let inactive = try pixel(capture(window), at: CGPoint(x: 600, y: 400))
         XCTAssertLessThan(abs(inactive[0] - inactive[2]), 15, "Hidden Home must drop its artwork tint.")
         XCTAssertNotEqual(card.cardBackgroundColor, tintedCard)
+
+        let restoreToken = UUID()
+        let session = TVDetailEntranceSession()
+        DetailTransitionNavigation.beginSourceRestore(in: window, token: restoreToken, session: session)
+        defer { DetailTransitionNavigation.endSourceRestore(token: restoreToken) }
+        state.visible = true
+        try await Task.sleep(for: .seconds(DetailEntranceTiming().reverse + 0.04))
+        let returned = try pixel(capture(window), at: CGPoint(x: 600, y: 400))
+        XCTAssertNil(fill.layer.animation(forKey: "gradientPalette"),
+                     "Native cards must not continue a stock-to-artwork fade after returning.")
+        for (actual, expected) in zip(returned, red) {
+            XCTAssertEqual(actual, expected, accuracy: 2,
+                           "Returning Home must restore its palette before the transition cover lifts.")
+        }
     }
 
     private func capture(_ window: UIWindow) throws -> UIImage {
@@ -522,6 +689,28 @@ final class GradientBackgroundHostedTests: XCTestCase {
             context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
         }
         return bytes.prefix(3).map(Int.init)
+    }
+}
+
+private struct GradientEmptyLiveTVSources: LiveTVSourcesStoring {
+    func load() throws -> LiveTVSourcesConfiguration { .empty }
+    func save(_ configuration: LiveTVSourcesConfiguration) throws {
+        XCTFail("Appearance coverage must not mutate Live TV sources.")
+    }
+}
+
+private struct GradientEmptyLibraryChannels: LibraryChannelDefinitionStoring {
+    func load() throws -> [LibraryChannelDefinition] { [] }
+    func save(_ definitions: [LibraryChannelDefinition]) throws {
+        XCTAssertTrue(definitions.isEmpty, "Appearance coverage must not create library channels.")
+    }
+}
+
+@MainActor
+private final class GradientFocusHost: UIHostingController<AnyView> {
+    weak var target: UIView?
+    override var preferredFocusEnvironments: [any UIFocusEnvironment] {
+        target.map { [$0] } ?? super.preferredFocusEnvironments
     }
 }
 

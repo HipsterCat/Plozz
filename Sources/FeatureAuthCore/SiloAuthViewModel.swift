@@ -37,7 +37,7 @@ public final class SiloAuthViewModel {
     private let deviceID: String
     private let service: SiloAuthentication
     private let verificationOnly: Bool
-    private let onAuthenticated: (UserSession) -> Void
+    private let onAuthenticated: (UserSession) throws -> Void
     private var flow: Task<Void, Never>?
     private var generation = UUID()
     private var tokens: SiloTokenPair?
@@ -48,7 +48,7 @@ public final class SiloAuthViewModel {
 
     public init(server: MediaServer, deviceID: String, service: SiloAuthentication? = nil,
                 diagnostics: SiloSetupDiagnostics = .shared, verificationOnly: Bool = false,
-                onAuthenticated: @escaping (UserSession) -> Void) {
+                onAuthenticated: @escaping (UserSession) throws -> Void) {
         self.server = server
         self.deviceID = deviceID
         self.service = service ?? SiloAuthentication(baseURL: server.baseURL)
@@ -250,10 +250,10 @@ public final class SiloAuthViewModel {
                 )
                 try Task.checkCancellation()
                 guard generation == current else { return }
+                try onAuthenticated(session)
                 self.tokens = nil
                 availableProfiles = []
                 reportFailure = nil
-                onAuthenticated(session)
             } catch SiloAuthenticationError.incorrectPIN {
                 guard generation == current, !Task.isCancelled else { return }
                 pinError = "That profile PIN did not match. Try again."

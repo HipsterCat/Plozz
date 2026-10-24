@@ -83,13 +83,22 @@ struct EpisodeRowEntryPlaceholder: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.plozzCardFocusStyle) private var focusStyle
     @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
+    @Environment(\.detailHeaderSettings) private var detailSettings
+    @Environment(\.plozzAppTextScale) private var appTextScale
     private let metrics = PlozzMetrics.standard
+    private var textScale: CGFloat {
+        #if os(tvOS)
+        PlozzTypography.scale(local: detailSettings?.settings.textSize.scale ?? 1, app: appTextScale)
+        #else
+        1
+        #endif
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             artwork
             if showsStatus || !captionsHidden {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 10 * textScale) {
                     Group {
                         if showsStatus {
                             switch phase {
@@ -101,25 +110,25 @@ struct EpisodeRowEntryPlaceholder: View {
                                 Text("Unable to load episodes")
                             }
                         } else {
-                            Capsule().fill(palette.fill).frame(width: 250, height: 20)
+                            Capsule().fill(palette.fill).frame(width: 250, height: 20 * textScale)
                         }
                     }
-                    .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
+                    .font(.system(size: PlozzTypography.episodeTitle.scaled(by: textScale).pointSize, weight: .semibold))
                     .foregroundStyle(palette.primaryText)
                     .lineLimit(1)
-                    .frame(height: metrics.cardTitleFontSize * 1.25, alignment: .leading)
-                    Capsule().fill(palette.fill).frame(width: 440, height: 15)
-                    Capsule().fill(palette.fill).frame(width: 390, height: 15)
+                    .frame(height: PlozzTypography.episodeTitle.scaled(by: textScale).pointSize * 1.25, alignment: .leading)
+                    Capsule().fill(palette.fill).frame(width: 440, height: 15 * textScale)
+                    Capsule().fill(palette.fill).frame(width: 390, height: 15 * textScale)
                     Group {
                         if showsStatus && phase == .failed {
                             Label("Retry", systemImage: "arrow.clockwise")
-                                .font(.system(size: 20))
+                                .font(.system(size: PlozzTypography.episodeDescription.scaled(by: textScale).pointSize))
                                 .foregroundStyle(palette.secondaryText)
                         } else {
-                            Capsule().fill(palette.fill).frame(width: 310, height: 15)
+                            Capsule().fill(palette.fill).frame(width: 310, height: 15 * textScale)
                         }
                     }
-                    .frame(height: 24, alignment: .leading)
+                    .frame(height: 24 * textScale, alignment: .leading)
                 }
                 .padding(.top, metrics.landscapeCaptionTopSpacing + metrics.focusCaptionPush)
                 .offset(y: reduceMotion || isFocused ? 0 : -metrics.focusCaptionPush)

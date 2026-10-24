@@ -117,7 +117,7 @@ struct PlozziOSProfileSetupView: View {
 
     private var plexPINBinding: Binding<PlexHomeUsersModel.PlexPINRequest?> {
         Binding(
-            get: { appModel.plexHomeUsers.pendingPlexPINRequest },
+            get: { appModel.plexPINRequestForAppPresentation },
             set: { if $0 == nil { appModel.plexHomeUsers.dismissPlexPINIfPresented() } }
         )
     }
@@ -150,23 +150,13 @@ struct PlozziOSServerIdentityPromptView: View {
 
     var body: some View {
         NavigationStack {
-            PlozziOSPlexHomeUserSettingsView(appModel: appModel, account: account)
-                .navigationTitle("Who are you on \(account.server.name)?")
-                .navigationBarTitleDisplayMode(.inline)
+            PlozziOSPlexHomeUserSettingsView(
+                appModel: appModel, account: account, onDecline: onDecline
+            )
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done", action: onFinish)
-                    }
-                    // Declining has to be sayable, not inferred. Closing the
-                    // sheet means "I'm done here"; only this says "don't read
-                    // this server's watchlist".
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(action: onDecline) {
-                            Text(
-                                "Don't use this server's watchlist",
-                                comment: "Button declining to pick a user, which leaves the server's own watchlist out of this profile."
-                            )
-                        }
+                            .disabled(appModel.inlinePlexPINRequest != nil)
                     }
                 }
         }

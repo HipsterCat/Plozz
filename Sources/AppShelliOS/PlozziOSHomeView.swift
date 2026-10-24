@@ -97,6 +97,8 @@ struct PlozziOSHomeView: View {
     @Environment(HeroTrailerController.self) private var trailerController
     private let viewModel: HomeViewModel
     @State private var featuredItems: [MediaItem] = []
+    @State private var featuredTrailers = FeaturedTrailerCoordinator()
+    @State private var homeIsScrolling = false
     @State private var featuredConfiguration: HeroConfigurationKey?
     @State private var featuredDisabledLibraryKeys: Set<String> = []
     @State private var heroItems: [MediaItem] = []
@@ -212,6 +214,7 @@ struct PlozziOSHomeView: View {
                         settings: appModel.settings.hero.effectiveSettings,
                         hasItems: false, recomputeComplete: false
                     ) != .hidden,
+                    logoSize: appModel.settings.hero.settings.logoSize,
                     showsPosterCaptions: appModel.settings.cardStyle.captions.showsLabels(in: .home),
                     continueWatchingLayout: appModel.settings.homeVisibility.continueWatchingLayout,
                     continueWatchingShowsSeriesArtwork: appModel.settings.homeVisibility.continueWatchingUsesSeriesArtwork,
@@ -330,12 +333,9 @@ struct PlozziOSHomeView: View {
                 for: .universalWatchlistCacheDidLoad
             )
         ) { _ in
-            // The cache is already in memory, and nobody is waiting for a press
-            // acknowledgement. Fold last-known ownership immediately rather than
-            // waiting for the interaction debounce used above.
             refreshHeroSourceEligibility()
             watchlistIntentRevision &+= 1
-            viewModel.refreshDurableWatchlist()
+            viewModel.scheduleDurableWatchlistRefresh()
         }
         .onReceive(
             NotificationCenter.default.publisher(
@@ -485,7 +485,7 @@ struct PlozziOSHomeView: View {
             case .hidden:
                 EmptyView()
             case .placeholder:
-                PlozziOSHomeHeroSkeleton(style: heroStyle)
+                PlozziOSHomeHeroSkeleton(style: heroStyle, logoSize: appModel.settings.hero.settings.logoSize)
             case .content:
                 PlozziOSHomeHeroCarousel(
                     items: displayHeroItems,
@@ -574,7 +574,27 @@ struct PlozziOSHomeView: View {
                     )
                 case let .library(row):
                         let section = row.section
-                        if let failure = row.failure {
+                        if let issue = row.issue {
+                            VStack(alignment: .leading) {
+                                HomeSectionStatusView(issue: issue) {
+                                    Task { await viewModel.load(showLoadingState: false) }
+                                }
+                                if let item = row.browseItem {
+                                    NavigationLink {
+                                        PlozziOSHomeCardDetail(
+                                            item: item,
+                                            fallbackProvider: item.sourceAccountID.flatMap {
+                                                appModel.accountsProviders.provider(forAccountID: $0)
+                                            }
+                                        )
+                                    } label: {
+                                        Text("See all")
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                            .disabled(viewModel.isRefreshing)
+                        } else if let failure = row.failure {
                             PlozziOSHomeRowFailure(
                                 title: section.displayName,
                                 error: failure, viewModel: viewModel
@@ -585,6 +605,12 @@ struct PlozziOSHomeView: View {
                                 style: section.style == .landscape ? .landscape : .poster,
                                 showsCaption: appModel.settings.cardStyle.captions.showsLabels(in: .home)
                             )
+                        } else if row.collectionCardStyle == .featured {
+                            PlozziOSFeaturedCollectionRail(
+                                row: row, appModel: appModel, scope: ObjectIdentifier(viewModel),
+                                coordinator: featuredTrailers, controller: trailerController,
+                                isActive: homeIsFrontmost && homeHasAppeared && !homeIsScrolling
+                            )
                         } else {
                             PlozziOSHomeMediaRail(
                                 title: section.displayName,
@@ -593,6 +619,7 @@ struct PlozziOSHomeView: View {
                                     ? .landscape
                                     : .poster,
                                 appModel: appModel,
+                                browseItem: row.browseItem,
                                 onNavigationInteraction:
                                     viewModel.noteHomeNavigationInteraction
                             )
@@ -602,6 +629,7 @@ struct PlozziOSHomeView: View {
         }
         return scroll
             .scrollClipDisabled()
+            .onScrollPhaseChange { _, phase in homeIsScrolling = phase != .idle }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y > trailerPauseThreshold
             } action: { _, isPastHalfHero in
@@ -609,11 +637,12 @@ struct PlozziOSHomeView: View {
                 heroPullModel.isVisible = !isPastHalfHero
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                let topOffset = geometry.contentOffset.y
-                    + geometry.contentInsets.top
-                return max(0, -topOffset)
-            } action: { _, pullDistance in
-                heroPullModel.update(pullDistance)
+                geometry.contentOffset.y + geometry.contentInsets.top
+            } action: { oldOffset, newOffset in
+                heroPullModel.update(max(0, -newOffset))
+                if oldOffset != newOffset {
+                    viewModel.noteHomeNavigationInteraction()
+                }
             }
             .task(id: heroLoadKey) {
                 await loadHero(from: heroContent)
@@ -647,7 +676,7 @@ struct PlozziOSHomeView: View {
     /// title's `availability` + `downloadProgress` back onto the matching hero
     /// item **in place**, so the request CTA tracks the server live
     /// (Request → "NN%" → Play) as a download progresses — mirroring tvOS. Only
-    /// the two status fields change; item ids and carousel order are untouched,
+    /// the request status fields change; item ids and carousel order are untouched,
     /// so the current slide, backdrop, and paging never reset. Polls fast while a
     /// request is still spinning up, then backs off.
     private func refreshFeaturedStatusLoop() async {
@@ -689,7 +718,7 @@ struct PlozziOSHomeView: View {
         let updates = await appModel.seerService.availabilityUpdates(for: heroItems)
         guard !Task.isCancelled, key == featuredStatusKey, !updates.isEmpty else { return }
         let statusByID = Dictionary(
-            updates.map { ($0.id, ($0.availability, $0.downloadProgress)) },
+            updates.map { ($0.id, $0) },
             uniquingKeysWith: { _, last in last }
         )
         foldFeaturedStatus(statusByID, into: &heroItems)
@@ -697,7 +726,7 @@ struct PlozziOSHomeView: View {
     }
 
     private func foldFeaturedStatus(
-        _ statusByID: [String: (MediaAvailabilityStatus?, Double?)],
+        _ statusByID: [String: MediaItem],
         into items: inout [MediaItem]
     ) {
         for index in items.indices {
@@ -710,14 +739,15 @@ struct PlozziOSHomeView: View {
             // time-boxed — once the grace window lapses, the authoritative lookup
             // wins, so a request that genuinely failed can't stay stuck on
             // "Requested" forever.
-            if heroRequestStatuses[id] != nil, !Self.isTracked(status.0) {
+            if heroRequestStatuses[id] != nil, !Self.isTracked(status.availability) {
                 let setAt = heroRequestStatusSetAt[id] ?? .distantPast
                 if Date().timeIntervalSince(setAt) < Self.heroRequestOverrideGrace {
                     continue
                 }
             }
-            guard items[index].availability != status.0
-                || items[index].downloadProgress != status.1 else {
+            guard items[index].availability != status.availability
+                || items[index].downloadProgress != status.downloadProgress
+                || items[index].hasRequestDownloadActivity != status.hasRequestDownloadActivity else {
                 // Even when nothing changed, an authoritative tracked/untracked
                 // lookup means the override has served its purpose — drop it so it
                 // can't linger and shield a later real change.
@@ -725,8 +755,9 @@ struct PlozziOSHomeView: View {
                 heroRequestStatusSetAt[id] = nil
                 continue
             }
-            items[index].availability = status.0
-            items[index].downloadProgress = status.1
+            items[index].availability = status.availability
+            items[index].downloadProgress = status.downloadProgress
+            items[index].hasRequestDownloadActivity = status.hasRequestDownloadActivity
             heroRequestStatuses[id] = nil
             heroRequestStatusSetAt[id] = nil
         }
@@ -1335,7 +1366,11 @@ struct PlozziOSHomeHeroCarousel: View {
                         model: pullModel,
                         style: style,
                         heroHeight: heroHeight,
-                        extendsArtwork: extendsArtwork
+                        extendsArtwork: extendsArtwork,
+                        scrimHeightScale: appModel.settings.hero.settings.textSize.scrimHeightScale(
+                            logoSize: appModel.settings.hero.settings.logoSize,
+                            descriptionLines: 2
+                        )
                     ) { pullScale in
                         ZStack {
                             if let dragTargetItem {
@@ -1431,7 +1466,7 @@ struct PlozziOSHomeHeroCarousel: View {
                     )
                     // Shared with the loading placeholder — see
                     // `PlozziOSHeroForegroundPlacement`.
-                    .plozziOSHeroForegroundPlacement(style: style)
+                    .plozziOSHeroForegroundPlacement(style: style, logoSize: appModel.settings.hero.settings.logoSize)
                     .animation(
                         .easeInOut(duration: 0.24),
                         value: currentItem.id
@@ -1757,7 +1792,9 @@ struct PlozziOSHomeHeroCarousel: View {
                 hasValidatedPlayableSource:
                     item.hasPlayableLibraryTarget(additionalSources: indexed),
                 seerConnected: appModel.seerService.isConfigured
-                    && appModel.seerService.hasRequestIdentity(for: item)
+                    && appModel.seerService.hasRequestIdentity(for: item),
+                releaseDate: item.releaseDate,
+                hasDownloadActivity: item.hasRequestDownloadActivity == true
             ),
             isRequesting: isRequesting,
             actingName: appModel.activeSeerrRequestActingName,
@@ -2060,6 +2097,7 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
     let style: HeroArtworkStyle
     let heroHeight: CGFloat
     var extendsArtwork: Bool = false
+    var scrimHeightScale: CGFloat = 1
     @ViewBuilder let backdrop: (CGFloat) -> Backdrop
 
     var body: some View {
@@ -2092,6 +2130,7 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
                 height: heroHeight,
                 extendsArtwork: extendsArtwork
             )
+            .environment(\.heroScrimHeightScale, scrimHeightScale)
         }
         // Masked BEFORE the pull offset, exactly as tvOS masks before its recede
         // lift. Applied after, the mask sits in the fixed parent space: the hero
@@ -2355,10 +2394,10 @@ private struct PlozziOSHomeRowView: View {
                     items: row.items,
                     style: cardStyle,
                     appModel: appModel,
-                    // Continue Watching is a resume affordance: pressing it should
-                    // carry on watching, which is what tvOS already did. The
-                    // context menu still reaches the detail page.
-                    interaction: row.kind == .continueWatching ? .play : .openDetail,
+                    interaction: row.playsOnSelect(
+                        continueWatchingAction: appModel.settings.homeVisibility.continueWatchingAction
+                    ) ? .play : .openDetail,
+                    showsResumeChip: row.kind == .continueWatching,
                     prefetchesArtwork: row.kind == .continueWatching,
                     pendingRemovalIDs: pendingWatchlistRemovalIDs,
                     loadingPlaceholderCount: row.kind == .watchlist
@@ -2431,7 +2470,41 @@ private struct PlozziOSHomeRowView: View {
 
 }
 
+private struct PlozziOSFeaturedCollectionRail: View {
+    let row: HomeLibrarySectionGroup.Row
+    let appModel: PlozziOSAppModel
+    let scope: ObjectIdentifier
+    let coordinator: FeaturedTrailerCoordinator
+    let controller: HeroTrailerController
+    let isActive: Bool
+    @State private var selection: MediaItem?
+
+    var body: some View {
+        FeaturedMediaRow(
+            title: row.section.displayName, items: row.section.items, scope: scope,
+            coordinator: coordinator, controller: controller,
+            settings: appModel.settings.heroBackground.settings,
+            resolver: appModel.heroTrailerResolver(),
+            isActive: isActive && selection == nil,
+            spoilers: appModel.settings.spoilers.settings,
+            onSeeAll: row.browseItem.map { item in { selection = item } },
+            onSelect: { selection = $0 }
+        )
+        .navigationDestination(item: $selection) { item in
+            PlozziOSHomeCardDetail(
+                item: item,
+                fallbackProvider: item.sourceAccountID.flatMap {
+                    appModel.accountsProviders.provider(forAccountID: $0)
+                }
+            )
+        }
+    }
+}
+
 struct PlozziOSHomeMediaRail: View {
+    #if DEBUG
+    static var artworkPrefetchSourceBuildCount = 0
+    #endif
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -2443,6 +2516,7 @@ struct PlozziOSHomeMediaRail: View {
     /// from the card's shape — a landscape rail is a presentation choice, not a
     /// promise that the row is Continue Watching.
     var interaction: PlozziOSRailInteraction = .openDetail
+    var showsResumeChip: Bool = false
     /// Continue Watching opts in because its backdrop + logo composition costs
     /// more than an ordinary card. Keeping this scoped avoids warming every Home
     /// rail at launch when per-library rows are enabled.
@@ -2453,7 +2527,9 @@ struct PlozziOSHomeMediaRail: View {
     /// item's own thumbnail.
     var showsSeriesArtwork: Bool = false
     var liveChannels: [HomeLiveTVChannel] = []
+    var browseItem: MediaItem? = nil
     var onNavigationInteraction: () -> Void = {}
+    @State private var isBrowsingCollection = false
     @State private var prefetchedIDs: Set<String> = []
     @State private var prefetchedPreviewIDs: Set<String> = []
     @State private var lastArtworkPrefetchIndex: Int?
@@ -2463,10 +2539,23 @@ struct PlozziOSHomeMediaRail: View {
 
     var body: some View {
         PlozziOSHomeRailLayout { rail(metrics: $0) }
+            .navigationDestination(isPresented: $isBrowsingCollection) {
+                if let browseItem {
+                    PlozziOSHomeCardDetail(item: browseItem, fallbackProvider: provider(for: browseItem))
+                }
+            }
     }
 
     private func rail(metrics: PlozzMetrics) -> some View {
-        PlozziOSMediaSection(title: title, artworkInset: cardStyle == .framed ? metrics.cardInset : 0) {
+        PlozziOSMediaSection(
+            title: title, artworkInset: cardStyle == .framed ? metrics.cardInset : 0,
+            onSeeAll: browseItem == nil ? nil : { isBrowsingCollection = true }
+        ) {
+            if browseItem != nil && items.isEmpty && loadingPlaceholderCount == 0 {
+                Text("No titles in this collection.")
+                    .plozzForeground(.secondary)
+                    .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass))
+            }
             ScrollView(.horizontal) {
                 LazyHStack(
                     alignment: .top,
@@ -2485,6 +2574,7 @@ struct PlozziOSHomeMediaRail: View {
                                 item: item,
                                 isLandscape: style == .landscape,
                                 interaction: interaction,
+                                showsResumeChip: showsResumeChip,
                                 showsSeriesArtwork: showsSeriesArtwork,
                                 isPendingRemoval: pendingRemovalIDs.contains(
                                     item.stablePresentationID
@@ -2569,17 +2659,18 @@ struct PlozziOSHomeMediaRail: View {
         return appModel.accountsProviders.primaryProvider
     }
 
-    private var artworkPrefetchIdentity: String {
-        [
-            style == .poster ? "poster" : "landscape",
-            showsSeriesArtwork ? "series" : "item",
-            prefetchesArtwork ? "prefetch" : "on-demand",
-            appModel.settings.spoilers.settings.isEnabled ? "spoilers" : "visible",
-            appModel.settings.spoilers.settings.mode.rawValue,
-            MediaRowView.uniqued(items)
-                .map { showsSeriesArtwork ? seriesArtworkSource(for: $0).identity : $0.stablePresentationID }
-                .joined(separator: "|"),
-        ].joined(separator: "\n")
+    private var artworkPrefetchIdentity: PlozziOSArtworkPrefetchIdentity? {
+        guard prefetchesArtwork else { return nil }
+        // Compare retained inputs instead of rebuilding metadata queries for the
+        // entire row during layout. Only the bounded lookahead needs those queries.
+        return PlozziOSArtworkPrefetchIdentity(
+            items: items,
+            isPortrait: style == .poster,
+            showsSeriesArtwork: showsSeriesArtwork,
+            spoilers: appModel.settings.spoilers.settings,
+            artwork: appModel.settings.cardStyle.artwork,
+            providers: appModel.metadataProviderSettingsModel.settings
+        )
     }
 
     private func resetArtworkPrefetch() {
@@ -2683,7 +2774,10 @@ struct PlozziOSHomeMediaRail: View {
     }
 
     private func seriesArtworkSource(for item: MediaItem) -> ContinueWatchingArtworkSource {
-        ContinueWatchingArtworkSource(
+        #if DEBUG
+        Self.artworkPrefetchSourceBuildCount += 1
+        #endif
+        return ContinueWatchingArtworkSource(
             item: item, style: style,
             policy: .init(
                 area: .continueWatching,
@@ -2701,6 +2795,15 @@ struct PlozziOSHomeMediaRail: View {
             artworkPrefetchTasks.track(task)
         }
     }
+}
+
+private struct PlozziOSArtworkPrefetchIdentity: Equatable {
+    let items: [MediaItem]
+    let isPortrait: Bool
+    let showsSeriesArtwork: Bool
+    let spoilers: SpoilerSettings
+    let artwork: ArtworkSettings
+    let providers: MetadataProviderSettings
 }
 
 private final class PlozziOSArtworkPrefetchTasks {
@@ -2729,6 +2832,7 @@ struct PlozziOSHomeMediaCard: View {
     let item: MediaItem
     let isLandscape: Bool
     var interaction: PlozziOSRailInteraction = .openDetail
+    var showsResumeChip: Bool = false
     var showsSeriesArtwork: Bool = false
     var isPendingRemoval: Bool = false
     let provider: (any MediaProvider)?
@@ -2738,8 +2842,7 @@ struct PlozziOSHomeMediaCard: View {
     var body: some View {
         let playsDirectly = interaction == .play && railPlay != nil && item.isPlayableNow
         Group {
-            // A Continue Watching card resumes; every other rail opens detail.
-            // Playing needs a handler installed by the page that owns the player,
+            // Direct play needs a handler installed by the page that owns the player,
             // and an item that is actually playable — a discovery/request stub has
             // nothing to run — so both fall back to the detail push rather than
             // opening a broken player.
@@ -2796,7 +2899,7 @@ struct PlozziOSHomeMediaCard: View {
             // The chip is requested explicitly rather than riding an implicit
             // "landscape means playable" rule, so presentation and behaviour stay
             // independently controlled.
-            showsResumeChip: isLandscape || interaction == .play,
+            showsResumeChip: showsResumeChip || isLandscape || interaction == .play,
             downloadState: liveDownloadRecord?.badgeState,
             // No visible "…" while browsing: the actions people actually reach for
             // live on the detail page, which is far more discoverable than a tiny

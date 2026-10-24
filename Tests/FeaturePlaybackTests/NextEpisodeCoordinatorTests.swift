@@ -542,11 +542,11 @@ private final class SpyNextEpisodeHost: NextEpisodeCoordinatorHost {
     var upNextBringUpStartedAt: Date? { bringUpStartedAt }
 
     func upNextResolveAndRoute(
-        itemID: String, mediaSourceID: String?, forceTranscode: Bool
+        item: MediaItem, forceTranscode: Bool
     ) async throws -> PlayerViewModel.PrefetchedPlayback {
         resolveCallCount += 1
-        resolvedItemIDs.append(itemID)
-        resolvedVersionIDs.append(mediaSourceID)
+        resolvedItemIDs.append(item.id)
+        resolvedVersionIDs.append(item.selectedVersionID)
         if let resolveError { throw resolveError }
         guard let resolveResult else { throw TestError.boom }
         return resolveResult

@@ -32,13 +32,19 @@ final class SubtitlePreviewControlsHostedTests: XCTestCase {
         let collapsedHeight = model.footerFrame.height
         var lastCenter: CGFloat?
         for control in [SubtitlePreviewControl.header, .background, .fileFormatting, .hdrBrightness] {
+            let previousFocus = UIFocusSystem(for: window)?.focusedItem.map(ObjectIdentifier.init)
             model.requested = control
             try await waitUntil {
                 model.focused == control && model.footerFrame.height > 220
+                    && UIFocusSystem(for: window)?.focusedItem.map(ObjectIdentifier.init) != previousFocus
                     && self.focusFrame(in: window).map(model.footerFrame.contains) == true
             }
             try await Task.sleep(for: .milliseconds(220))
             let focused = try XCTUnwrap(focusFrame(in: window))
+            let controlAttachment = XCTAttachment(image: DetailTransitionSnapshot.image(of: window))
+            controlAttachment.name = "Subtitle preview \(control), focus \(focused)"
+            controlAttachment.lifetime = .keepAlways
+            add(controlAttachment)
             XCTAssertTrue(model.footerFrame.contains(focused))
             if let lastCenter { XCTAssertGreaterThan(focused.midY, lastCenter) }
             lastCenter = focused.midY

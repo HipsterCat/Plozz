@@ -123,6 +123,7 @@ public enum SettingsRoute: Hashable {
     case myLibraries
     case appearance
     case customizeHome
+    case customizeLibraries
     case detailPage
     case nightShift
     case playback

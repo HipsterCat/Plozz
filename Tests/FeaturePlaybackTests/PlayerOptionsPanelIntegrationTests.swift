@@ -11,6 +11,15 @@ import XCTest
 final class PlayerOptionsPanelIntegrationTests: XCTestCase {
     private typealias Screen = PlayerControls.SubtitleScreen
 
+    func testChaptersUseTheBottomCardAndEnterOnTheirTab() {
+        let model = PlayerControlsModel()
+        XCTAssertTrue(PlayerControls.usesBottomCard(.chapters))
+        XCTAssertEqual(
+            PlayerOptionsPanel.preferredFocus(for: .chapters, subtitleScreen: .tracks, model: model),
+            .button(.chapters)
+        )
+    }
+
     func testEveryStyleScreenUsesTheSharedWidthAndHasTheCorrectParent() {
         let screens: [Screen] = [
             .style, .styleFont, .styleSystemFont, .styleOutline,

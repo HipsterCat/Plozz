@@ -140,6 +140,8 @@ struct UserViewsResponse: Decodable {
 struct ChapterInfoDto: Decodable {
     let StartPositionTicks: Int64?
     let MarkerType: String?
+    let Name: String?
+    let ImageTag: String?
 }
 
 struct BaseItemDto: Decodable {

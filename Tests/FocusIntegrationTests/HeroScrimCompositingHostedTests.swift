@@ -14,9 +14,14 @@ final class HeroScrimCompositingHostedTests: XCTestCase {
             window.isHidden = true
             window.rootViewController = nil
         }
-        for (light, pinned) in [(false, false), (false, true), (true, false), (true, true)] {
+        for (light, pinned, heightScale): (Bool, Bool, CGFloat) in [
+            (false, false, 1), (false, true, 1), (true, false, 1), (true, true, 1),
+            (false, false, 5.0 / 3.0), (false, true, 5.0 / 3.0),
+            (true, false, 5.0 / 3.0), (true, true, 5.0 / 3.0)
+        ] {
             model.light = light
             model.pinned = pinned
+            model.heightScale = heightScale
             for rightToLeft in [false, true] {
                 model.rightToLeft = rightToLeft
                 for size in [CGSize(width: 640, height: 360), CGSize(width: 1280, height: 720)] {
@@ -40,13 +45,40 @@ final class HeroScrimCompositingHostedTests: XCTestCase {
                             }
                         }
                     }
-                    let result = XCTAttachment(string: "cached scrim max=\(maximum), size=\(size), light=\(light), pinned=\(pinned), rtl=\(rightToLeft), originalLayers=\(originalLayers), cachedLayers=\(candidateLayers)")
+                    let result = XCTAttachment(string: "cached scrim max=\(maximum), size=\(size), light=\(light), pinned=\(pinned), heightScale=\(heightScale), rtl=\(rightToLeft), originalLayers=\(originalLayers), cachedLayers=\(candidateLayers)")
                     result.name = "Cached scrim pixel comparison"
                     result.lifetime = .keepAlways
                     add(result)
                     XCTAssertLessThanOrEqual(maximum, 2)
                 }
             }
+        }
+    }
+
+    func testLargerContentExtendsShadingUpwardAndRestoresDefaultPixels() async throws {
+        let model = ScrimFixture()
+        let window = try await makeWindow(model: model)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        for cached in [false, true] {
+            model.cached = cached
+            model.heightScale = 1
+            try await Task.sleep(for: .milliseconds(200))
+            let baseline = try pixels(window)
+            model.heightScale = 5.0 / 3.0
+            try await Task.sleep(for: .milliseconds(200))
+            let expanded = try pixels(window)
+            for (x, y) in [(32, 90), (32, 180), (320, 216)] {
+                let index = ((80 + y) * 1920 + 80 + x) * 4
+                let before = (0..<3).reduce(0) { $0 + Int(baseline[index + $1]) }
+                let after = (0..<3).reduce(0) { $0 + Int(expanded[index + $1]) }
+                XCTAssertLessThan(after, before - 3, "Coverage must extend upward, cached=\(cached)")
+            }
+            model.heightScale = 1
+            try await Task.sleep(for: .milliseconds(200))
+            XCTAssertEqual(try pixels(window), baseline)
         }
     }
 
@@ -133,6 +165,7 @@ private final class ScrimFixture {
     var light = false
     var rightToLeft = false
     var pinned = false
+    var heightScale: CGFloat = 1
     var size = CGSize(width: 640, height: 360)
 }
 
@@ -154,6 +187,7 @@ private struct ScrimFixtureView: View {
                 }
                 .environment(\.layoutDirection, model.rightToLeft ? .rightToLeft : .leftToRight)
                 .environment(\.plozzPinnedSidebarActive, model.pinned)
+                .environment(\.heroScrimHeightScale, model.heightScale)
             }
             .frame(width: model.size.width, height: model.size.height)
             .padding(.leading, 80)

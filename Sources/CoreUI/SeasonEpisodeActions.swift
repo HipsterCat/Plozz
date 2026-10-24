@@ -141,6 +141,7 @@ private struct SeasonEpisodeRequestStatusLabel: View {
         if state.status == .available { return "Available in Your Library" }
         if state.requestFailed || state.requestStatus == .failed { return "Library Request Failed" }
         if state.requestStatus == .declined { return "Library Request Declined" }
+        if state.isAwaitingRelease() { return state.statusTitle }
         if state.requestStatus == .pending || state.status == .pending { return "Requested for Your Library" }
         if state.requestStatus == .processing || state.status == .processing { return "Library Request Processing" }
         if state.requestStatus == .completed { return "Library Request Completed" }

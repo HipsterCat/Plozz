@@ -18,6 +18,10 @@ final class IPTVContinuityHostedTests: XCTestCase {
         try await exercise(fragmented: true, observationSeconds: 60)
     }
 
+    func testExplicitLiveCushionRetainsRealMediaBehindThePublishedEdge() async throws {
+        try await exercise(fragmented: true, buffer: .thirtySeconds)
+    }
+
     func testLongRollingHLSRenewsRepeatedSessionsAndPreservesPauseAcrossBackground() async throws {
         try await exercise(fragmented: true, fault: .longSession, observationSeconds: 330)
     }
@@ -89,9 +93,13 @@ final class IPTVContinuityHostedTests: XCTestCase {
     }
 
     private func exercise(
-        fragmented: Bool, fault: RollingIPTVSource.Fault = .none, observationSeconds: Int = 25
+        fragmented: Bool, fault: RollingIPTVSource.Fault = .none, observationSeconds: Int = 25,
+        buffer: LivePlaybackBuffer = .automatic
     ) async throws {
-        let source = try RollingIPTVSource(bundle: Bundle(for: Self.self), fragmented: fragmented, fault: fault)
+        let source = try RollingIPTVSource(
+            bundle: Bundle(for: Self.self), fragmented: fragmented, fault: fault,
+            windowSegments: buffer.seconds.map { Int($0 / 2) + 8 }
+        )
         XCTAssertGreaterThan(source.durationSeconds, observationSeconds + 30, "The source must not run out during observation.")
         let server = try IPTVTestHTTPServer(
             beforeBodyChunk: { try source.interruptConnectionIfNeeded() },
@@ -127,7 +135,7 @@ final class IPTVContinuityHostedTests: XCTestCase {
             return XCTFail("The real IPTV lease must own an authenticated relay.")
         }
         let url = try await provider.resolveHTTPResource(locator)
-        let engine = try PlozzigenVideoEngine()
+        let engine = try PlozzigenVideoEngine(liveBufferPreference: { buffer })
         let model = LiveChannelPlayerModel(
             engine: engine, channelID: channel.id, streamURL: url, isAudible: false, allowsDisplayMatching: false
         )
@@ -167,7 +175,9 @@ final class IPTVContinuityHostedTests: XCTestCase {
         var checkedGuide = false
         var pausedAt: ContinuousClock.Instant?
         var resumed = false
-        while ContinuousClock.now < (firstFrame.map { $0 + .seconds(observationSeconds) } ?? started + .seconds(30)) {
+        var liveDistances: [Double] = []
+        while ContinuousClock.now < (firstFrame.map { $0 + .seconds(observationSeconds) }
+            ?? started + .seconds(30 + (buffer.seconds ?? 0))) {
             if let item = engine.nowPlayingPlayer?.currentItem, capture?.0 !== item {
                 if let capture { capture.0.remove(capture.1) }
                 let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
@@ -195,6 +205,10 @@ final class IPTVContinuityHostedTests: XCTestCase {
             }
             let nextPosition = engine.liveSnapshot.position
             if firstFrame != nil { advancement += max(0, nextPosition - position) }
+            if firstFrame != nil, let player = engine.nowPlayingPlayer {
+                let distance = source.publishedEdgeSeconds - player.currentTime().seconds
+                if distance.isFinite { liveDistances.append(distance) }
+            }
             position = nextPosition
             if fault == .longSession, let firstFrame {
                 if pausedAt == nil, now >= firstFrame + .seconds(75) {
@@ -245,6 +259,17 @@ final class IPTVContinuityHostedTests: XCTestCase {
         XCTAssertEqual(model.manualRetryCount, 0)
         XCTAssertGreaterThan(changedFrames, observationSeconds * 5, "Require changing decoded images across the observation.")
         XCTAssertGreaterThan(advancement, Double(observationSeconds) * 0.72, "Playback must advance throughout observation.")
+        if let requested = buffer.seconds {
+            XCTAssertFalse(liveDistances.isEmpty)
+            let sorted = liveDistances.sorted()
+            if !sorted.isEmpty {
+                let median = sorted[sorted.count / 2]
+                XCTAssertGreaterThanOrEqual(median, requested - 4, "Measure real media distance, not just the option value.")
+                XCTAssertLessThan(median, requested + 8)
+                print("LIVE_BUFFER requested=\(requested) median_media_distance=\(median)")
+            }
+            XCTAssertTrue(model.isAtLiveEdge, "The intentional cushion must not appear as a user rewind.")
+        }
         let gapLimit: Duration = fault == .none || fault == .guide ? .seconds(3)
             : fault == .disconnect || fault == .longSession ? .seconds(12) : .seconds(8)
         XCTAssertLessThan(longestGap, gapLimit)
@@ -306,6 +331,8 @@ private final class RollingIPTVSource: @unchecked Sendable {
     private let mediaBytes: Int
     private let map: String?
     private let segments: [[String]]
+    private let windowSegments: Int
+    private var publishedEnd = 0
     private var base: URL?
     private var started: TimeInterval?
     private var opens = 0
@@ -316,9 +343,11 @@ private final class RollingIPTVSource: @unchecked Sendable {
     private var sequences: Set<Int> = []
     private var guideFailure: Int?
     var durationSeconds: Int { segments.count * 2 }
+    var publishedEdgeSeconds: Double { lock.withLock { Double(publishedEnd * 2) } }
 
-    init(bundle: Bundle, fragmented: Bool, fault: Fault) throws {
+    init(bundle: Bundle, fragmented: Bool, fault: Fault, windowSegments: Int? = nil) throws {
         self.fault = fault
+        self.windowSegments = windowSegments ?? (fault == .longSession ? 8 : 4)
         media = try XCTUnwrap(bundle.url(
             forResource: "live-continuity", withExtension: fragmented ? "mp4" : "ts", subdirectory: "Fixtures"
         ))
@@ -401,8 +430,8 @@ private final class RollingIPTVSource: @unchecked Sendable {
                     }
                 }
                 // AVPlayer reserves three segments as live holdback; pause needs a usable range beyond it.
-                let windowSegments = fault == .longSession ? 8 : 4
                 let end = min(segments.count, windowSegments + Int(elapsed / 2))
+                publishedEnd = end
                 let first = max(0, end - windowSegments)
                 sequences.insert(first)
                 var lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:2", "#EXT-X-MEDIA-SEQUENCE:\(first)"]

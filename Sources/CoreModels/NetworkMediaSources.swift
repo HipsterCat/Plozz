@@ -190,19 +190,17 @@ public struct MediaShareEndpoint: Hashable, Sendable {
         self.options = options
     }
 
-    private static func normalizedHost(_ value: String) throws -> String {
+    private static let forbiddenHostCharacters =
+        CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "@/\\?#"))
+
+    fileprivate static func normalizedHost(_ value: String) throws -> String {
         var host = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if host.hasPrefix("["), host.hasSuffix("]") {
             host.removeFirst()
             host.removeLast()
         }
         guard !host.isEmpty,
-              host.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
-              !host.contains("@"),
-              !host.contains("/"),
-              !host.contains("\\"),
-              !host.contains("?"),
-              !host.contains("#") else {
+              host.rangeOfCharacter(from: forbiddenHostCharacters) == nil else {
             throw MediaSourceModelError.invalidHost
         }
         return host.lowercased()
@@ -493,16 +491,7 @@ public struct NetworkOrigin: Hashable, Sendable {
             throw MediaSourceModelError.unsupportedScheme
         }
         self.scheme = normalizedScheme
-        self.host = try MediaShareEndpoint(
-            transport: .webDAV,
-            host: host,
-            port: port,
-            options: .webDAV(
-                WebDAVTransportOptions(
-                    security: normalizedScheme == "https" ? .https : .anonymousHTTP
-                )
-            )
-        ).host
+        self.host = try MediaShareEndpoint.normalizedHost(host)
         self.port = try Self.effectivePort(scheme: normalizedScheme, port: port)
     }
 

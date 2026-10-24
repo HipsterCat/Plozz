@@ -21,6 +21,18 @@ and every provider/feature that talks to a remote server.
   Providers label known routes with closed-vocabulary values; the transport
   never copies URLs, query parameters, raw keys, payloads or decoder descriptions
   into the report. No additional requests or successful-response parsing is added.
+- `PlaybackPreparationDiagnostics` captures failed version preparation into the
+  existing recent-activity log (`format=plozz-preparation-1`). Each attempt records
+  its provider/operation, up to four request timings with configured timeout
+  budgets, status, byte count, response-format category and numeric URL error,
+  plus bounded decode and inventory-validation evidence. Address-discovery probes
+  are distinguished from item-detail and source-inventory requests. Successful attempts
+  discard their evidence; cancellation is not reported as a failure. There are
+  no additional requests, retries, timeout changes or raw response retention.
+  The record contains no server address, credentials, item/account ID or title.
+  Users can reproduce once and use **Help & Diagnostics → Send Recent Activity
+  to Developer** with their existing crash-reporting consent. This is an explicit
+  user-submitted attachment, not a new automatic Sentry event or upload permission.
 - `ServerURLNormalizer`: turns user-typed addresses (with/without scheme,
   trailing slash, port) into a well-formed `URL` for both Jellyfin and Plex.
 - `ProviderIconLoader`: best-effort, origin-only `/favicon.ico` requests for
@@ -45,7 +57,9 @@ and every provider/feature that talks to a remote server.
   Ordinary successful traffic confirms reachability without extending the
   selection's lifetime indefinitely; returning to LAN remains discoverable.
   `ServerAddressHTTPClient` blocks cross-origin redirects and retries a failed
-  GET once on another approved route, never an uncertain mutation. Authentication
+  GET once on another approved route, never an uncertain mutation. Probe-capable
+  GETs opt out with `Endpoint.allowsAutomaticAddressRetry = false`: a timeout
+  cannot establish that the first server operation stopped. Authentication
   failures are not connection failures. A preflight resolution failure preserves
   proof that a one-time exchange was not transmitted.
   `AlternateAddressHTTPIntegrationTests` uses loopback TCP listeners and the

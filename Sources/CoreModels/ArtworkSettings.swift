@@ -246,7 +246,9 @@ public final class ArtworkSettingsStore: ArtworkSettingsStoring, @unchecked Send
         do {
             if let data = defaults.data(forKey: key) {
                 let settings = try JSONDecoder().decode(ArtworkSettings.self, from: data)
-                defaults.set(true, forKey: key + ".migrated")
+                if !defaults.bool(forKey: key + ".migrated") {
+                    defaults.set(true, forKey: key + ".migrated")
+                }
                 return settings
             }
             guard !defaults.bool(forKey: key + ".migrated") else { return .default }

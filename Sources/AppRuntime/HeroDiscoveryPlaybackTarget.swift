@@ -116,6 +116,7 @@ public enum HeroDiscoveryPlaybackTarget {
         target.additionalSourceAccountIDs = []
         target.availability = nil
         target.downloadProgress = nil
+        target.hasRequestDownloadActivity = nil
         target.libraryID = resolved.libraryID ?? verifiedSource?.libraryID
             ?? (isOriginalCopy ? original.libraryID : nil)
         // Even a retained version can synthesize a foreign physical source during

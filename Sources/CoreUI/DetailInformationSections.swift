@@ -49,6 +49,7 @@ public struct DetailInformationSections: View {
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzCardFocusStyle) private var cardFocusStyle
     @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
+    @Environment(\.plozzShowsContentRatings) private var showsContentRatings
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
 
     public init(
@@ -839,7 +840,7 @@ public struct DetailInformationSections: View {
         if let runtime = item.runtime?.runtimeBadgeText {
             facts.append(InformationFact(id: "runtime", label: "Runtime", value: runtime))
         }
-        if let rating = nonempty(item.officialRating) {
+        if showsContentRatings, let rating = nonempty(item.officialRating) {
             facts.append(InformationFact(id: "content-rating", label: "Content Rating", value: rating))
         }
         if let originalTitle = nonempty(item.originalTitle), originalTitle != item.title {

@@ -3,6 +3,7 @@ import UIKit
 import PlozzCoreUI
 import CoreModels
 import FeaturePlayback
+import FeatureSettings
 
 @main
 struct FocusHostApp: App {
@@ -10,6 +11,10 @@ struct FocusHostApp: App {
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("--reorder-input-fixture") {
                 ReorderInputFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--home-section-warning-fixture") {
+                HomeSectionWarningFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--home-section-editor-fixture") {
+                HomeSectionsEditorFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--playback-failure-fixture") {
                 PlaybackFailureFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--setup-picker-fixture") {
@@ -24,10 +29,16 @@ struct FocusHostApp: App {
                 PlaybackReadAheadFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--iptv-organization-fixture") {
                 IPTVOrganizationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--category-search-fixture") {
+                LiveTVCategorySearchFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--sync-erasure-fixture") {
                 SyncErasureRemoteFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--preview-introduction-fixture") {
                 LiveTVPreviewIntroductionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--sources-navigation-fixture") {
+                LiveTVSourcesNavigationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--channel-settings-fixture") {
+                LibraryChannelSettingsFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--view-customization-fixture") {
                 ViewCustomizationFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--iptv-setup-fixture") {
@@ -64,6 +75,8 @@ struct FocusHostApp: App {
                 CastFocusFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--guide-navigation-fixture") {
                 GuideNavigationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--channel-identity-fixture") {
+                PlozzChannelIdentityFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--library-channel-actions") {
                 LibraryChannelActionsFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--navigation-fixture") {
@@ -84,6 +97,48 @@ struct FocusHostApp: App {
                 Color.black
             }
         }
+    }
+}
+
+private struct HomeSectionWarningFixture: View {
+    @State private var retries = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 30) {
+            HomeSectionStatusView(issue: .init(
+                choice: .init(
+                    id: .server(accountID: "fixture", section: "picks"),
+                    title: "Top picks", isProviderDefault: true
+                ),
+                reason: .failed(.serverUnreachable),
+                serverName: "Living room server", providerKind: .jellyfin
+            )) { retries += 1 }
+            Text(verbatim: "Retries: \(retries)")
+                .accessibilityIdentifier("section-warning-retries")
+        }
+        .padding(80)
+    }
+}
+
+private struct HomeSectionsEditorFixture: View {
+    @State private var visibility: HomeLibraryVisibilityModel
+
+    init() {
+        let visibility = HomeLibraryVisibilityModel(
+            store: HomeLibraryVisibilityStore(namespace: "home-section-remote-fixture")
+        )
+        visibility.useRowDefaults(.combined)
+        _visibility = State(initialValue: visibility)
+    }
+
+    var body: some View {
+        NavigationStack {
+            HomeRowsSettingsView(libraries: [], accounts: [], visibility: visibility)
+                .frame(width: SettingsFormMetrics.pageWidth)
+        }
+        .environment(HeroSettingsModel(store: InMemoryHeroSettingsStore()))
+        .environment(HeroBackgroundSettingsModel(store: InMemoryHeroBackgroundSettingsStore()))
+        .environment(CardStyleSettingsModel())
     }
 }
 

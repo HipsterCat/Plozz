@@ -53,7 +53,9 @@ struct HomeTab: View {
     /// only to hand to the Top Shelf publisher: that snapshot crosses into
     /// another process, so its titles have to be resolved on this side.
     @Environment(\.locale) private var locale
+    @Environment(LibraryPresentationSettingsModel.self) private var libraryPresentation
     @Environment(\.plozzArtworkPolicy) private var artworkPolicy
+    @Environment(\.plozzShowsContentRatings) private var showsContentRatings
     @Environment(\.mediaItemActionHandler) private var mediaItemActionHandler
     /// The rail's chrome model, present only under ``NavigationStyle/rail``. This
     /// stack reports its depth so the rail steps aside on a detail page.
@@ -231,6 +233,7 @@ struct HomeTab: View {
                 identitySources: identitySources,
                 currentVisibility: { homeVisibility.visibility },
                 prepareVisibility: { await homeVisibility.prepareServerDefaults(accounts: accounts) },
+                sectionDiagnostics: homeVisibility.sectionDiagnostics,
                 pendingWatchMutations: pendingWatchMutations,
                 recentlyAppliedRecency: appliedWatchRecency,
                 mediaItemActionHandler: mediaItemActionHandler,
@@ -245,6 +248,7 @@ struct HomeTab: View {
                         latest: latest,
                         locale: locale,
                         spoilerSettings: SpoilerSettingsStore(namespace: libraryPreferencesNamespace).load(),
+                        showsContentRatings: ContentRatingSettingsStore(namespace: libraryPreferencesNamespace).load(),
                         resolveMetadata: { item in
                             guard let accountID = item.sourceAccountID else { return item }
                             return try await TopShelfItemResolver.resolve(
@@ -344,16 +348,10 @@ struct HomeTab: View {
                         Task { @MainActor in
                             await heroTrailerController.captureHandoffFrame()
                         }
-                        // Keep the live player handoff, but never make navigation
-                        // or the first animation frame wait for video decoding.
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            navigate(item)
-                        }
-                    } else {
-                        navigate(item)
                     }
+                    // Frame capture must not delay navigation. The shared router
+                    // suppresses native motion only for an opted-in zoom.
+                    navigate(item)
                 },
                 onPlayItem: { requestPlay($0) },
                 onSelectLibrary: { library in
@@ -416,7 +414,8 @@ struct HomeTab: View {
                     containerID: library.id,
                     containerKind: library.kind,
                     sourceAccountID: browse.sourceAccountID,
-                    settingsNamespace: libraryPreferencesNamespace
+                    settingsNamespace: libraryPreferencesNamespace,
+                    presentation: libraryPresentation
                 ),
                 title: library.displayName,
                 spoilerSettings: spoilerSettings,
@@ -455,7 +454,8 @@ struct HomeTab: View {
                     containerKind: .unknown,
                     sortKeySuffix: AllLibrariesBrowse.sortKeySuffix,
                     sourceAccountID: nil,
-                    settingsNamespace: libraryPreferencesNamespace
+                    settingsNamespace: libraryPreferencesNamespace,
+                    presentation: libraryPresentation
                 ),
                 title: Text(AllLibrariesBrowse.title),
                 spoilerSettings: spoilerSettings,
@@ -479,6 +479,7 @@ struct HomeTab: View {
         let _ = PlozzBodyRate.tick("HomeTab")
         NavigationStack(path: $path) {
             rootContent
+            .modifier(NavigationRailRootContentInset())
             .navigationDestination(for: MediaLibrary.self) { library in
                 libraryBrowse(for: library)
             }
@@ -489,6 +490,9 @@ struct HomeTab: View {
             }
             .onChange(of: pendingTitleRoute) { _, _ in consumePendingTitleRoute() }
             .onChange(of: artworkPolicy.forArea(.topShelf).identity) { _, _ in
+                if case .home = root { sharedHomeViewModel.publishCurrentContent() }
+            }
+            .onChange(of: showsContentRatings) { _, _ in
                 if case .home = root { sharedHomeViewModel.publishCurrentContent() }
             }
             .onChange(of: isActiveTab, initial: true) { _, _ in consumePendingTitleRoute() }
@@ -659,6 +663,7 @@ struct HomeTab: View {
             // Watching and was silently dropped in every pushed detail page.
             .mediaItemNavigator { navigate($0, asOwnSubject: $0.kind == .episode) }
         }
+        .cinematicDetailNavigation(path: $path)
         // Under the rail, a pushed page is a detail page — report the depth so the
         // chrome steps aside and the title page is full-bleed. No-op under the two
         // native tab styles, which install no chrome model.
@@ -1122,7 +1127,7 @@ struct HomeTab: View {
             continueWatchingSnapshot: { runtime.continueWatchingForDetail },
             ratingsProvider: ratingsProvider,
             detailMetadataResolver: { await DetailMetadataResolver.household.resolve($0) },
-            discoveryStatusRefresh: { await seer.availability(for: $0) },
+            discoveryStatusRefresh: { await seer.requestAvailability(for: $0) },
             loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
                 makeRelatedTitlesLoader(

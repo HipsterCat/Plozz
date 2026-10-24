@@ -6,7 +6,7 @@ import Observation
 final class RootPresentationCoordinator {
     enum Destination: Hashable {
         case accessGate, serverIdentity, profileLock, introduction, releaseNotes
-        case profileAppearance, sendSetup, receiveSetup, syncErasure, serverAddresses, newServer
+        case profileAppearance, sendSetup, receiveSetup, syncErasure, serverAddresses, accountRecovery, newServer
     }
 
     private(set) var active: Destination?

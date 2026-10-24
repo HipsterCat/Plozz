@@ -218,10 +218,7 @@ public struct PlozzMetrics: Equatable, Sendable {
     ) -> CGSize {
         switch style {
         case .poster:
-            return CGSize(
-                width: posterWidth,
-                height: showsSeriesArtwork ? posterWidth / playbackDetails.cardAspectRatio : posterHeight
-            )
+            return CGSize(width: posterWidth, height: posterHeight)
         case .landscape:
             if showsSeriesArtwork {
                 return CGSize(

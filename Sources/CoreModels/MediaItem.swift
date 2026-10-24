@@ -369,6 +369,9 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// the hero draw a live progress bar for a requested title without importing
     /// the Seerr module. Transient/live — not part of a title's identity.
     public var downloadProgress: Double?
+    /// Request-service queue evidence, including queued items with no measurable
+    /// progress. `nil` means this snapshot did not include queue information.
+    public var hasRequestDownloadActivity: Bool?
 
     /// Source-of-truth technical facts about the underlying file (resolution,
     /// HDR/Dolby Vision range, audio codec/channels, …) when the provider reports
@@ -560,6 +563,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         availability: MediaAvailabilityStatus? = nil,
         locallyValidatedPlayableSource: Bool = true,
         downloadProgress: Double? = nil,
+        hasRequestDownloadActivity: Bool? = nil,
         mediaInfo: MediaSourceMetadata? = nil,
         sourceAccountID: String? = nil,
         artworkSourceAccountID: String? = nil,
@@ -631,6 +635,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.availability = availability
         self.locallyValidatedPlayableSource = locallyValidatedPlayableSource
         self.downloadProgress = downloadProgress
+        self.hasRequestDownloadActivity = hasRequestDownloadActivity
         self.mediaInfo = mediaInfo
         self.sourceAccountID = sourceAccountID
         self.artworkSourceAccountIDsByURL = artworkSourceAccountIDsByURL
@@ -680,7 +685,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         case allowsTitleBasedMetadataMatching
         case artworkSelections, mediaInfo
         case availability, locallyValidatedPlayableSource
-        case downloadProgress
+        case downloadProgress, hasRequestDownloadActivity
         case sourceAccountID, artworkSourceAccountIDsByURL, artworkMetadataSourcesByURL
         case additionalSourceAccountIDs, versions, edition, isMergedTitle, isFavorite
         case sources, rejectedSourceIDs, lastPlayedAt, libraryID
@@ -798,6 +803,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
                 !(guidTail == id || (guidTail != nil && isBareDiscoverID))
         }
         downloadProgress = try container.decodeIfPresent(Double.self, forKey: .downloadProgress)
+        hasRequestDownloadActivity = try container.decodeIfPresent(Bool.self, forKey: .hasRequestDownloadActivity)
         mediaInfo = try container.decodeIfPresent(MediaSourceMetadata.self, forKey: .mediaInfo)
         sourceAccountID = try container.decodeIfPresent(String.self, forKey: .sourceAccountID)
         artworkLookupSubject = try container.decodeIfPresent(ArtworkLookupSubject.self, forKey: .artworkLookupSubject)

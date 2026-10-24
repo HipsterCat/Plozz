@@ -33,7 +33,8 @@ enum SkipMarkerTrackLayout {
     }
 
     static func segmentedSections(
-        ranges: [Range<Double>], size: CGSize, minimumSectionWidth: CGFloat = 0
+        ranges: [Range<Double>], size: CGSize, minimumSectionWidth: CGFloat = 0,
+        restingHeight: CGFloat? = nil
     ) -> [CGRect] {
         guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return [] }
         var boundaries: [CGFloat] = [0]
@@ -64,11 +65,118 @@ enum SkipMarkerTrackLayout {
                 (boundaries[index + 1] - boundaries[index]) / 4
             ))
         }
-        return boundaries.indices.dropLast().map { index in
+        let sections = boundaries.indices.dropLast().map { index in
             let start = boundaries[index] + halfGaps[index]
             let end = boundaries[index + 1] - halfGaps[index + 1]
             return CGRect(x: start, y: 0, width: end - start, height: size.height)
         }
+        guard let restingHeight else { return sections }
+        let maximumExtraGap = min(2, 1 + max(0, size.height - restingHeight) / 8)
+        var spaced = sections
+        for index in sections.indices.dropLast() {
+            let left = sections[index]
+            let right = sections[index + 1]
+            let wider = max(left.width, right.width)
+            let narrower = min(left.width, right.width)
+            let corner = cornerSize(sectionWidth: wider, neighborWidth: narrower, height: size.height)
+            // Add optical space only on the wider side; leave fully rounded joins alone.
+            let extra = min(
+                maximumExtraGap, size.height / 2 - corner.width,
+                wider / 4, (wider - narrower) / 2
+            )
+            if left.width < right.width {
+                spaced[index + 1].origin.x += extra
+                spaced[index + 1].size.width -= extra
+            } else if right.width < left.width {
+                spaced[index].size.width -= extra
+            }
+        }
+        return spaced
+    }
+
+    static func cornerSize(
+        sectionWidth: CGFloat, neighborWidth: CGFloat, height: CGFloat, referenceHeight: CGFloat? = nil
+    ) -> CGSize {
+        let availableRadius = min(sectionWidth, neighborWidth) / 2 * 1.25
+        let radius = min(height / 2, availableRadius)
+        let reference = referenceHeight ?? height
+        // Grow the vertical curve with focus instead of stretching a nearly square middle.
+        let verticalRadius = min(reference / 2, availableRadius) * (height / reference)
+        let extra = sectionWidth > neighborWidth
+            ? min(1.5, max(0, height - reference) * 3 / 16, (sectionWidth - neighborWidth) / 2)
+            : 0
+        return CGSize(
+            width: min(sectionWidth / 2, height / 2, radius + extra),
+            height: min(height / 2, verticalRadius + extra)
+        )
+    }
+
+    static func maskPath(
+        ranges: [Range<Double>], size: CGSize, minimumSectionWidth: CGFloat = 0,
+        restingHeight: CGFloat? = nil
+    ) -> Path {
+        let sections = segmentedSections(
+            ranges: ranges, size: size, minimumSectionWidth: minimumSectionWidth, restingHeight: restingHeight
+        )
+        var mask = Path()
+        for index in sections.indices {
+            let section = sections[index]
+            let leading = cornerSize(
+                sectionWidth: section.width,
+                neighborWidth: index == 0 ? section.width : sections[index - 1].width,
+                height: section.height, referenceHeight: restingHeight
+            )
+            let trailing = cornerSize(
+                sectionWidth: section.width,
+                neighborWidth: index == sections.count - 1 ? section.width : sections[index + 1].width,
+                height: section.height, referenceHeight: restingHeight
+            )
+            if leading == trailing {
+                mask.addRoundedRect(in: section, cornerSize: leading)
+            } else {
+                mask.addPath(sectionPath(section, leading: leading, trailing: trailing))
+            }
+        }
+        return mask
+    }
+
+    private static func sectionPath(_ rect: CGRect, leading: CGSize, trailing: CGSize) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + leading.width, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - trailing.width, y: rect.minY))
+        path.addArc(
+            center: .zero, radius: 1, startAngle: .degrees(-90), endAngle: .zero, clockwise: false,
+            transform: CGAffineTransform(
+                a: trailing.width, b: 0, c: 0, d: trailing.height,
+                tx: rect.maxX - trailing.width, ty: rect.minY + trailing.height
+            )
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - trailing.height))
+        path.addArc(
+            center: .zero, radius: 1, startAngle: .zero, endAngle: .degrees(90), clockwise: false,
+            transform: CGAffineTransform(
+                a: trailing.width, b: 0, c: 0, d: trailing.height,
+                tx: rect.maxX - trailing.width, ty: rect.maxY - trailing.height
+            )
+        )
+        path.addLine(to: CGPoint(x: rect.minX + leading.width, y: rect.maxY))
+        path.addArc(
+            center: .zero, radius: 1, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false,
+            transform: CGAffineTransform(
+                a: leading.width, b: 0, c: 0, d: leading.height,
+                tx: rect.minX + leading.width, ty: rect.maxY - leading.height
+            )
+        )
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + leading.height))
+        path.addArc(
+            center: .zero, radius: 1, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false,
+            transform: CGAffineTransform(
+                a: leading.width, b: 0, c: 0, d: leading.height,
+                tx: rect.minX + leading.width, ty: rect.minY + leading.height
+            )
+        )
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -78,18 +186,15 @@ struct PlayerSkipMarkerTrack: View, Equatable {
     let duration: TimeInterval
     let height: CGFloat
     var minimumSectionWidth: CGFloat = 0
+    var restingHeight: CGFloat? = nil
 
     var body: some View {
         let ranges = SkipMarkerTrackLayout.ranges(segments: segments, duration: duration)
         Canvas { context, size in
-            guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return }
-            var mask = Path()
-            for section in SkipMarkerTrackLayout.segmentedSections(
-                ranges: ranges, size: size, minimumSectionWidth: minimumSectionWidth
-            ) {
-                let radius = min(section.width, section.height) / 2
-                mask.addRoundedRect(in: section, cornerSize: CGSize(width: radius, height: radius))
-            }
+            let mask = SkipMarkerTrackLayout.maskPath(
+                ranges: ranges, size: size, minimumSectionWidth: minimumSectionWidth,
+                restingHeight: restingHeight
+            )
             context.fill(mask, with: .color(.white))
         }
         .frame(height: height)

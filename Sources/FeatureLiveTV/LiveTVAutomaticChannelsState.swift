@@ -103,24 +103,12 @@ struct LiveTVAutomaticChannelsSection: View {
     let state: LiveTVAutomaticChannelsState
     let canManage: @MainActor () -> Bool
     @State private var action = LiveTVAutomaticChannelsAction()
-    @State private var update: Task<Void, Never>?
 
     var body: some View {
         SettingsSectionGroup("Automatic lineup") {
-            Toggle(isOn: Binding(
-                get: { state.enabled },
-                set: { enabled in
-                    update = Task {
-                        await action.setEnabled(enabled, state: state, canManage: canManage)
-                    }
-                }
-            )) {
-                Text("Enable Plozz channels")
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .disabled(action.isUpdating || (state.isWorking && !state.enabled))
-            .accessibilityIdentifier("live-tv-automatic-enabled")
+            LiveTVAutomaticChannelsToggle(
+                state: state, canManage: canManage, action: action
+            )
             LiveTVAutomaticChannelsStatusView(state: state)
             if (state.enabled || state.issue != nil), !state.isWorking {
                 Button {
@@ -137,6 +125,67 @@ struct LiveTVAutomaticChannelsSection: View {
                 .accessibilityIdentifier("live-tv-automatic-retry")
             }
         }
+    }
+}
+
+struct LiveTVAutomaticChannelsOverview: View {
+    let state: LiveTVAutomaticChannelsState
+    let customChannelCount: Int
+    let canManage: @MainActor () -> Bool
+    let manage: () -> Void
+    @State private var action = LiveTVAutomaticChannelsAction()
+
+    var body: some View {
+        SettingsSectionGroup("Plozz channels") {
+            LiveTVAutomaticChannelsToggle(
+                state: state, canManage: canManage, action: action
+            )
+            if state.isWorking || state.issue != nil || !state.unavailableSources.isEmpty {
+                LiveTVAutomaticChannelsStatusView(state: state)
+            }
+            Button(action: manage) {
+                SettingsRowLabel(icon: "sparkles.tv", title: "Manage channels", secondary: {
+                    if state.enabled {
+                        Text("\(state.channelCount) automatic channels")
+                            .settingsRowSecondary()
+                    }
+                    if customChannelCount > 0 {
+                        Text("\(customChannelCount) custom channels")
+                            .settingsRowSecondary()
+                    }
+                }, trailing: {
+                    Image(systemName: "chevron.forward")
+                        .font(.caption.weight(.semibold))
+                        .settingsRowSecondary()
+                })
+            }
+            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+            .accessibilityIdentifier("live-tv-manage-library-channels")
+        }
+    }
+}
+
+private struct LiveTVAutomaticChannelsToggle: View {
+    let state: LiveTVAutomaticChannelsState
+    let canManage: @MainActor () -> Bool
+    let action: LiveTVAutomaticChannelsAction
+    @State private var update: Task<Void, Never>?
+
+    var body: some View {
+        Toggle(isOn: Binding(
+            get: { state.enabled },
+            set: { enabled in
+                update = Task {
+                    await action.setEnabled(enabled, state: state, canManage: canManage)
+                }
+            }
+        )) {
+            Text("Auto-create channels from your libraries")
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .disabled(action.isUpdating || (state.isWorking && !state.enabled))
+        .accessibilityIdentifier("live-tv-automatic-enabled")
         .onDisappear { update?.cancel(); update = nil }
     }
 }

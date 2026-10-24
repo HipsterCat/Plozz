@@ -204,6 +204,23 @@ public struct URLSessionHTTPClient: HTTPClient {
     /// throw), so callers that need the error body/status can inspect them.
     public func sendRaw(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
         var request = try Self.makeRequest(endpoint, baseURL: baseURL)
+        let started = HTTPResponseDiagnostics.isCapturing ? ProcessInfo.processInfo.systemUptime : nil
+        var capturedStatus: Int?
+        var capturedNetworkCode: Int?
+        var capturedBytes = 0
+        var capturedFormat = PlaybackFailureDiagnostic.Format.unknown
+        defer {
+            if let started {
+                HTTPResponseDiagnostics.recordRequest(ResponseRequestDiagnostic(
+                    route: HTTPResponseDiagnostics.route, method: endpoint.method.rawValue,
+                    elapsedMilliseconds: Int((ProcessInfo.processInfo.systemUptime - started) * 1_000),
+                    httpStatus: capturedStatus, urlErrorCode: capturedNetworkCode,
+                    bytes: capturedBytes, format: capturedFormat,
+                    requestTimeoutMilliseconds: Int(session.configuration.timeoutIntervalForRequest * 1_000),
+                    resourceTimeoutMilliseconds: Int(session.configuration.timeoutIntervalForResource * 1_000)
+                ))
+            }
+        }
         if endpoint.reportsUndeliveredRequests { request.cachePolicy = .reloadIgnoringLocalCacheData }
         let delivery = endpoint.reportsUndeliveredRequests ? HTTPRequestDeliveryEvidence() : nil
 
@@ -229,6 +246,7 @@ public struct URLSessionHTTPClient: HTTPClient {
                 (data, response) = try await session.data(for: request, delegate: delegate)
             }
         } catch let urlError as URLError {
+            capturedNetworkCode = urlError.errorCode
             HTTPResponseDiagnostics.recordTransportFailure(urlError)
             diagnostic?.finish(
                 urlError.code == .cancelled ? .cancelled : .failed,
@@ -250,6 +268,9 @@ public struct URLSessionHTTPClient: HTTPClient {
             diagnostic?.finish(.failed)
             throw AppError.invalidResponse
         }
+        capturedStatus = http.statusCode
+        capturedBytes = data.count
+        capturedFormat = data.isEmpty ? .empty : .init(mimeType: http.mimeType)
         diagnostic?.finish(
             (200...299).contains(http.statusCode) ? .succeeded : .failed,
             metrics: .init(bytes: data.count), httpStatus: http.statusCode

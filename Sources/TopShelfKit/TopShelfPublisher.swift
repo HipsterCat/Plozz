@@ -45,6 +45,7 @@ public enum TopShelfPublisher {
         latest: [MediaItem],
         locale: Locale? = nil,
         spoilerSettings: SpoilerSettings = .default,
+        showsContentRatings: Bool = true,
         resolveMetadata: MetadataResolver? = nil,
         resolveArtwork: ArtworkResolver? = nil,
         resolveBackdrop: ArtworkResolver? = nil
@@ -54,6 +55,7 @@ public enum TopShelfPublisher {
             await makeSnapshot(
                 continueWatching: continueWatching, latest: latest, settings: settings,
                 locale: locale, spoilerSettings: spoilerSettings,
+                showsContentRatings: showsContentRatings,
                 resolveMetadata: resolveMetadata,
                 resolveArtwork: resolveArtwork, resolveBackdrop: resolveBackdrop
             )
@@ -82,6 +84,7 @@ public enum TopShelfPublisher {
         settings: TopShelfSettings = .default,
         locale: Locale? = nil,
         spoilerSettings: SpoilerSettings = .default,
+        showsContentRatings: Bool = true,
         resolveMetadata: MetadataResolver? = nil,
         resolveArtwork: ArtworkResolver? = nil,
         resolveBackdrop: ArtworkResolver? = nil
@@ -119,6 +122,7 @@ public enum TopShelfPublisher {
             from: resumeItems,
             compositeProgress: true, usesFullScreen: settings.usesFullScreen,
             spoilerSettings: spoilerSettings, locale: locale, metadata: metadata,
+            showsContentRatings: showsContentRatings,
             resolveArtwork: resolveArtwork, resolveBackdrop: resolveBackdrop
         )
         if !resume.isEmpty {
@@ -130,6 +134,7 @@ public enum TopShelfPublisher {
         let recent = await items(
             from: recentItems, usesFullScreen: settings.usesFullScreen,
             spoilerSettings: spoilerSettings, locale: locale, metadata: metadata,
+            showsContentRatings: showsContentRatings,
             resolveArtwork: resolveArtwork, resolveBackdrop: resolveBackdrop
         )
         if !recent.isEmpty {
@@ -175,6 +180,7 @@ public enum TopShelfPublisher {
         spoilerSettings: SpoilerSettings,
         locale: Locale?,
         metadata: [String: MediaItem],
+        showsContentRatings: Bool,
         resolveArtwork: ArtworkResolver? = nil,
         resolveBackdrop: ArtworkResolver? = nil
     ) async -> [TopShelfSnapshot.Item] {
@@ -243,7 +249,7 @@ public enum TopShelfPublisher {
             if usesFullScreen {
                 TopShelfMetadata.apply(
                     to: &snapshot, item: item, details: metadata[artworkID],
-                    spoilerSettings: spoilerSettings, locale: locale
+                    spoilerSettings: spoilerSettings, locale: locale, showsContentRatings: showsContentRatings
                 )
             }
             result.append(snapshot)

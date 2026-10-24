@@ -170,6 +170,15 @@ final class HTTPResponseDiagnosticsTests: XCTestCase {
         guard case .failure(let error) = captured.result else { return XCTFail("Expected transport failure") }
         XCTAssertEqual(error as? AppError, .serverUnreachable)
         XCTAssertEqual(captured.transport, [.init(route: .collectionLibraryScope, urlErrorCode: -1001)])
+        let request = try XCTUnwrap(captured.requests.first)
+        XCTAssertEqual(request.route, .collectionLibraryScope)
+        XCTAssertEqual(request.method, "GET")
+        XCTAssertEqual(request.urlErrorCode, -1001)
+        XCTAssertNil(request.httpStatus)
+        XCTAssertEqual(request.bytes, 0)
+        XCTAssertGreaterThanOrEqual(request.elapsedMilliseconds, 0)
+        XCTAssertEqual(request.requestTimeoutMilliseconds, Int(configuration.timeoutIntervalForRequest * 1_000))
+        XCTAssertEqual(request.resourceTimeoutMilliseconds, Int(configuration.timeoutIntervalForResource * 1_000))
     }
 
     func testHTTPStatusesAreBoundedAndRecoveredFailuresAreDiscarded() async throws {
@@ -212,6 +221,40 @@ final class HTTPResponseDiagnosticsTests: XCTestCase {
         guard case .failure(let error) = captured.result else { return XCTFail("Expected HTTP failure") }
         XCTAssertEqual(error as? AppError, .invalidResponse)
         XCTAssertEqual(captured.http, [.init(route: .continueWatchingHub, httpStatus: 503)])
+        let request = try XCTUnwrap(captured.requests.first)
+        XCTAssertEqual(request.route, .continueWatchingHub)
+        XCTAssertEqual(request.httpStatus, 503)
+        XCTAssertNil(request.urlErrorCode)
+        XCTAssertEqual(request.bytes, Data("private response".utf8).count)
+    }
+
+    func testRequestAndValidationEvidenceIsBoundedAndDiscardedOnSuccess() async throws {
+        let request = ResponseRequestDiagnostic(
+            route: .playbackInventory, method: "private-method", elapsedMilliseconds: 125,
+            httpStatus: 200, urlErrorCode: nil, bytes: 30, format: .json,
+            requestTimeoutMilliseconds: 10_000, resourceTimeoutMilliseconds: 12_000
+        )
+        let failed = await HTTPResponseDiagnostics.capture { () async throws -> Int in
+            for _ in 0..<7 {
+                HTTPResponseDiagnostics.recordRequest(request)
+                HTTPResponseDiagnostics.recordValidationFailure(
+                    .duplicateSourceID, route: .playbackInventory, sourceCount: 2
+                )
+            }
+            throw AppError.invalidResponse
+        }
+        XCTAssertEqual(failed.requests.count, 4)
+        XCTAssertEqual(failed.requests.first?.method, "other")
+        XCTAssertEqual(failed.validation.count, 4)
+        XCTAssertEqual(failed.validation.first?.reason, .duplicateSourceID)
+        let success = await HTTPResponseDiagnostics.capture {
+            HTTPResponseDiagnostics.recordRequest(request)
+            HTTPResponseDiagnostics.recordValidationFailure(.emptySources, route: .playbackInventory)
+            return 1
+        }
+        XCTAssertTrue(success.requests.isEmpty)
+        XCTAssertTrue(success.validation.isEmpty)
+        XCTAssertEqual(try success.result.get(), 1)
     }
 
     private final class StatusFailureURLProtocol: URLProtocol {

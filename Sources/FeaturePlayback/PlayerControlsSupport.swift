@@ -44,6 +44,7 @@ struct PanelBodyHeightKey: PreferenceKey {
 /// The scrub track: buffered + played fill, a knob, and a floating trickplay
 /// thumbnail positioned over the scrub head while scrubbing.
 struct ScrubBar: View {
+    private static let restingBarHeight: CGFloat = 12
     let model: PlayerControlsModel
     let palette: ThemePalette
     /// Horizontal distance from the scrub track's leading/trailing edge out to the
@@ -75,7 +76,7 @@ struct ScrubBar: View {
             // A thin line growing about its centre while sliding reads as arriving
             // from the wrong direction entirely.
             let focused = model.controlsVisible && (!model.controlBarVisible || model.controlBar.infoCardOpen)
-            let barHeight: CGFloat = focused ? 20 : 12
+            let barHeight: CGFloat = focused ? 20 : Self.restingBarHeight
             let knobWidth: CGFloat = focused ? 8 : 4
             let knobHeight: CGFloat = focused ? (model.isScrubbing ? 40 : 32) : barHeight
 
@@ -97,7 +98,8 @@ struct ScrubBar: View {
                 }
                 .mask {
                     PlayerSkipMarkerTrack(
-                        segments: model.skipSegments.segments, duration: model.duration, height: barHeight
+                        segments: model.skipSegments.segments, duration: model.duration, height: barHeight,
+                        restingHeight: Self.restingBarHeight
                     )
                     .equatable()
                 }

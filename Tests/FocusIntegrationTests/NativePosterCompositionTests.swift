@@ -155,6 +155,65 @@ final class NativePosterCompositionTests: XCTestCase {
 
     private var rotation = 0
 
+    func testPerformancePortraitReflectionPreparation() async throws {
+        try PerformanceProbe.requireEnabled()
+        let sources = (0..<12).map { source(index: $0, size: CGSize(width: 640, height: 960)) }
+        let coordinators = sources.map { _ in
+            NativeTVPoster<EmptyView>.Coordinator(focus: PlozzCardFocus().projectedValue, action: {})
+        }
+        try await PerformanceProbe.measure(self, scenario: "portrait-reflection-cold") {
+            let width = CGFloat(280 + rotation)
+            let size = CGSize(width: width, height: width * 1.5)
+            rotation += 1
+            var images: [UIImage] = []
+            var longestPrepare = 0
+            for (index, coordinator) in coordinators.enumerated() {
+                let start = ContinuousClock.now
+                let image = try XCTUnwrap(coordinator.prepare(
+                    sources[index], treatment: .extendedPortrait(blurredReflection: true), size: size, scale: 1
+                ))
+                let elapsed = start.duration(to: .now).components
+                longestPrepare = max(longestPrepare, Int(elapsed.seconds * 1_000_000
+                    + elapsed.attoseconds / 1_000_000_000_000))
+                XCTAssertEqual(image.size.width, size.width, accuracy: 1)
+                XCTAssertEqual(image.size.height, size.height, accuracy: 1)
+                XCTAssertNotNil(image.cgImage)
+                images.append(image)
+            }
+            XCTAssertEqual(Set(images.map(ObjectIdentifier.init)).count, sources.count)
+            return ["completedPosters": images.count, "maxPreparationMicroseconds": longestPrepare]
+        }
+    }
+
+    func testPerformancePortraitReflectionReuse() async throws {
+        try PerformanceProbe.requireEnabled()
+        let sources = (0..<12).map { source(index: $0, size: CGSize(width: 640, height: 960)) }
+        let size = CGSize(width: 280, height: 420)
+        let prepared = try sources.map { source in
+            let coordinator = NativeTVPoster<EmptyView>.Coordinator(focus: PlozzCardFocus().projectedValue, action: {})
+            return try XCTUnwrap(coordinator.prepare(
+                source, treatment: .extendedPortrait(blurredReflection: true), size: size, scale: 1
+            ))
+        }
+        try await PerformanceProbe.measure(self, scenario: "portrait-reflection-warm") {
+            var reused = 0
+            for _ in 0..<24 {
+                for (index, source) in sources.enumerated() {
+                    let coordinator = NativeTVPoster<EmptyView>.Coordinator(
+                        focus: PlozzCardFocus().projectedValue, action: {}
+                    )
+                    let image = try XCTUnwrap(coordinator.prepare(
+                        source, treatment: .extendedPortrait(blurredReflection: true), size: size, scale: 1
+                    ))
+                    XCTAssertTrue(image === prepared[index], "Recreated cards must reuse the finished reflection.")
+                    if image === prepared[index] { reused += 1 }
+                }
+            }
+            XCTAssertEqual(reused, 288)
+            return ["requests": 288, "reusedBitmaps": reused]
+        }
+    }
+
     func testPerformanceNativePosterIndicatorReuse() async throws {
         try PerformanceProbe.requireEnabled()
         var environment = EnvironmentValues()
@@ -196,16 +255,18 @@ final class NativePosterCompositionTests: XCTestCase {
         }
     }
 
-    private func source(index: Int) -> UIImage {
+    private func source(index: Int, size: CGSize = CGSize(width: 2160, height: 3240)) -> UIImage {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.preferredRange = .extended
         format.opaque = true
-        return UIGraphicsImageRenderer(size: CGSize(width: 2160, height: 3240), format: format).image { context in
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
             UIColor(displayP3Red: CGFloat(index + 1) / 13, green: 0.35, blue: 0.8, alpha: 1).setFill()
-            context.fill(CGRect(x: 0, y: 0, width: 2160, height: 3240))
+            context.fill(CGRect(origin: .zero, size: size))
             UIColor.white.setFill()
-            context.fill(CGRect(x: CGFloat(index * 30), y: 400, width: 300, height: 600))
+            context.fill(CGRect(x: CGFloat(index * 30) * size.width / 2160,
+                                y: 400 * size.height / 3240, width: 300 * size.width / 2160,
+                                height: 600 * size.height / 3240))
         }
     }
 

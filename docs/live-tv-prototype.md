@@ -165,12 +165,11 @@ replacement, including when the saved playlist has no channels.
 
 Search and the active-channel artwork stay aligned, with an additional 16-point
 clearance below native navigation. Pinned navigation keeps its existing inset.
-The full-height Search/categories pane slides and fades over 0.28 seconds while the guide resizes;
-Reduce Motion suppresses this animation. iPhone/iPad retain their existing layout.
-The pane has one geometry group, so button-local focus styling
-cannot cancel Search or Multiviews movement independently of the categories.
+The full-height Search/categories pane remains beside the guide during TV
+browsing. Moving focus between panes does not move or resize the guide.
 The category list remains lazy; no per-row animation timers or rasterized
-snapshots are used.
+snapshots are used. Mobile layouts choose the sidebar or category directory
+from the available window dimensions, not the device name.
 Native guide row hosts accept both growing and shrinking widths with leading
 alignment, so explicit-width programme timelines do not recenter independently
 of channels without listings during the sidebar transition.
@@ -320,11 +319,36 @@ request. This avoids downloading a large guide again for each channel batch;
 matching and parsing still run separately for each batch. Initial download
 assembly still uses Data. Backing failures are logged and leave a valid response
 uncached rather than failing its guide import.
-XMLTV accepts compact and colon-separated numeric timezone offsets, with strict
-date/offset validation. Programme-only feeds can supply exact channel IDs without
-invented display names or relaxed station matching. Referenced IDs and declared
-channels share the channel/text budgets; later declarations still provide names
-and conflicting duplicate declarations remain invalid.
+XMLTV accepts minute- or second-precision programme timestamps, compact and
+colon-separated numeric timezone offsets, and the unambiguous UTC/GMT/Z labels.
+Absent zones mean UTC. Calendar and offset validation remains strict; coarser
+dates and ambiguous regional timezone abbreviations do not invent airtimes.
+Programme-only feeds can supply exact channel IDs without invented display names
+or relaxed station matching. Repeated channel declarations with the same exact
+ID combine distinct display names in source order, rather than rejecting the
+whole guide. Different IDs remain separate and ambiguous names do not establish
+a match. Referenced IDs and declared channels share the channel/text budgets;
+repeated declarations still count toward the declaration limit. Declarations
+with missing, empty or whitespace-only IDs are skipped without inventing an
+identity; they still count toward declaration limits and their display names
+remain subject to text limits. Other channels and programme-only IDs remain usable.
+
+Programme titles, subtitles and descriptions select the first nonempty variant
+in the requested language, then untagged text, then the first nonempty variant.
+The default is the device language, independent of the profile's UI-language
+override and audio/subtitle preferences. Matching reuses the shared ISO-639
+normalization, including two/three-letter codes and regional variants. Empty
+variants never erase usable text. Indexed guide settings include the normalized
+language and parser version so old selections cannot pass cache-restore checks.
+
+XML remains strict: malformed markup, unknown entities, external/internal entity
+declarations and exhausted resource budgets fail the import, not a partial-success
+fallback. Standard external DOCTYPEs do not fetch their DTD. Harmless entity-like
+text in comments, processing instructions and CDATA is not a declaration.
+`XMLTV_PARSE` diagnostics identify the failing pass, a closed-vocabulary reason,
+numeric parser code, line/column and channel/programme counts. They never include
+XML fragments, station names, URLs or native error descriptions. Compatible
+duplicate and skipped declarations are reported once per metadata pass as counts.
 Playlist and imported-file accounts without an explicit or playlist-declared
 guide immediately report no guide capability. Both platforms show "No program
 guide available" and skip guide warmup and browsing requests instead of showing
@@ -472,9 +496,13 @@ compatibility; new account/file imports use the disk-backed path.
 
 Source setup appears only after the initial source reload, server enrollment,
 and library-catalog restoration have established that there are no channels.
-On iPhone and iPad, onboarding reveals the same full-page background as the
-guide instead of painting an inset Settings-colored panel. Source icons use the
-theme accent; server-enrollment status sits below a divider as secondary context.
+Onboarding reveals the same full-page background as the guide instead of painting
+an inset Settings-colored panel. On tvOS, the page owns the gradient behind the
+top navigation and source choices; empty setup has no video-legibility scrim.
+Source choices use the shared detail-card controls and page-aligned gradient
+surface, with solid fills when gradients or transparency are disabled.
+On iPhone and iPad, source icons use the theme accent; server-enrollment status
+sits below a divider as secondary context.
 Light, dark, black, and the gradient-background preference remain respected.
 Pending catalogs keep the page layout in place with non-focusable skeletons for
 the info artwork/text, category column, channel logos, and programme cells. They
@@ -519,11 +547,48 @@ the profile. Playlist addresses, optional guide
 addresses and their order, source names, and enabled states are stored securely
 per profile. Server sources store an account reference, not duplicate credentials.
 View preferences and source management live in **Settings > Live TV**.
-On Apple TV, Sources stays inside the Settings detail pane. Saved sources use
-compact icon/name/status rows instead of repeating every control and hostname.
+**TV sources** is the first section on the Live TV settings page on both
+platforms, with a regular-sized **Add source** button in its header. Saved
+sources open directly from this page; there is no separate Sources drill-in or
+truncated list with an All sources row. Up to four sources use their natural
+height. Longer lists reuse `FadingScrollView`, measuring the rows to show four
+complete sources and half the fifth with the existing directional edge fade.
+Long names and source errors contribute to the measured height rather than
+being clipped. Scrolling or remote focus reaches every source without moving
+the following settings down by the full list height.
+Saved sources use icon/name/status rows instead of repeating every control and hostname.
+Provider/type and status share one secondary line, with compact row insets rather
+than another full layer of group padding. Long content can still wrap.
 Playlist icons optionally load the source origin's favicon, with a generic
 fallback; no playlist credentials or third-party favicon service are used.
+Connected media servers reuse `ProviderBrandMark`, including the same Plex,
+Jellyfin, and Emby logos and focus-aware colors used elsewhere in Settings.
+Their identity comes from the active profile's account metadata, not their
+user-entered name or a credential lookup while rendering. Unavailable account
+metadata retains the generic server icon.
 Each source opens its controls and diagnostics on a child page with Back.
+**Plozz channels** follows the sources, with the guarded **Auto-create channels from
+your libraries** switch and a separate **Manage channels** action. The toggle label
+explains the action directly, without a detached section footer. Turning automatic
+channels off leaves custom channels available. **Guide & browsing** labels its root picker
+**Live TV opens to**, with Categories or Guide as its value. **Channel order** is
+also a root-level menu, offering Channel number or Name without opening a child
+page. Guide preferences and channel visibility have child pages. Single-line
+TV navigation and menu rows share the standard form height; configured source
+rows retain their compact sizing. Mobile retains its network playback preference. **Tools** contains
+source refresh, channel availability checks, and guide coverage when applicable.
+Source management remains PIN-protected while ordinary browsing preferences stay
+available without unlocking source mutations. On Apple TV, child pages stay
+inside the Settings workspace. Custom channel creation/editing and save dismissal
+use the same page navigation.
+The guide's separate Sources presentation also opens channel checks directly,
+without requiring Plozz channels to be available or open first.
+On tvOS, Generated channels is a bounded scrolling group with focusable,
+read-only rows. It shows four full rows and half of the next row to hint at more
+content; Up/Down browses the lineup and leaves it at either end.
+Custom-channel actions and menus use the shared form sizing, and Source
+libraries uses the same multi-select check rows as other Settings pages.
+Genre and ordering rules are explicit controls, without a one-off Comedy preset.
 Guide lookback/lookahead use native value menus on TV so all day choices fit
 the fixed detail column without overflowing horizontal pills.
 Child pages inherit the workspace background rather than drawing a second
@@ -571,8 +636,8 @@ Each tap pushes only its selected destination, and Back returns one level.
 This applies to both Settings and the Live TV toolbar's Sources entry.
 Channel, guide and access failures appear beside the affected enabled source,
 using the shared theme-aware inline error style and naming failed guides.
-On mobile, the source row, error and Retry share one group item; dividers
-separate sources, never a source from its own error.
+On mobile, the source row, error and Retry stay together as one item, including
+inside the bounded settings list.
 Retry shows an inline loading spinner and label, prevents duplicate taps, and
 briefly retains feedback even when the provider refuses the request immediately.
 During a source Retry, that inline indicator replaces the source's loading
@@ -590,8 +655,10 @@ The mobile welcome screen uses compact, whole-row choices instead of tall cards
 with duplicate action footers. Source cards use the detail page's shared adaptive
 surface: a theme-aware gradient wash and edge, or an opaque surface when gradients
 or transparency are disabled. IPTV setup uses the same settings-page background
-as the other setup sheets. Short source descriptions keep Plex's guide-only limit
-explicit. Modal sheets have an icon-only Close control,
+as the other setup sheets. The media-server choice identifies Jellyfin, Emby, and
+Plex without implying Plex is limited to guide listings. Actual server setup,
+permissions, and playback availability are checked during enrollment and tuning.
+Modal sheets have an icon-only Close control,
 distinct from the form's Add/Save action. Source choices cover playlist URLs,
 local files (iPhone/iPad), and connected media servers. Playlist fields keep their
 labels visible while editing and show example URLs instead of repeating labels
@@ -648,6 +715,14 @@ Earlier prototype builds did not store Favorites or Recents on disk, so there
 is no prior in-memory history to migrate on the first updated launch.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
+  Live TV opens to Categories by default. The profile-scoped **Live TV opens to**
+  preference in Settings > Live TV can select Guide instead.
+  Narrow windows show a grid of category tiles and an All channels tile, each
+  with its eligible channel count. Selecting a tile opens that category's guide
+  without tuning; Categories returns to the directory and its previous position.
+  Counts exclude hidden/filtered channels, deduplicate multi-group membership,
+  and do not change with the current search query or selected category.
+  Eligibility/catalog changes refresh counts; category/query changes reuse them.
 - Select a channel logo to open its Play, Favorite and Hide actions. The
   right-hand programme/channel-name area plays directly; long-press actions
   remain available there.
@@ -659,8 +734,16 @@ is no prior in-memory history to migrate on the first updated launch.
   a replacement. An all-hidden catalog explains where to restore channels.
 - Search transforms the current screen rather than opening a second results
   dialog. Apple TV uses the native inline search keyboard above the familiar
-  channel/programme rows; iPhone/iPad replace the hero with an inline search field.
+  channel/programme rows; mobile uses a standard native search field without
+  reserving the hero's height. The narrow category directory includes this field
+  directly above the tiles.
   Both use the same query and filtered catalog, not an extra eight-result list.
+  Channel search also shows matching categories above its channel results.
+  Category matches use the same active browse filters and hidden-channel rules;
+  a channel-name match alone does not make its unrelated category a result.
+  Selecting a category closes Search and opens that category at the first guide
+  row without tuning a channel. Back without selecting a category still restores
+  the previous guide position. Program search remains a separate scope.
   On TV, the guide and Search use `PrototypeNativeGuideList`, a native collection
   view that recycles visible rows while retaining the shared SwiftUI row controls.
   The focus engine no longer traverses a full-catalog set of synthetic lazy-stack
@@ -716,16 +799,28 @@ is no prior in-memory history to migrate on the first updated launch.
   at collapsed width. Collapsed icons have no panel behind them.
 - Wide screens pin Search and an independently scrolling category list
   to the left of the guide. Search never scrolls away
-  with either list. Select a category directly; Right returns to the remembered
-  guide channel/program. Compact or short windows keep pinned horizontal controls.
+  with either list. Select a category directly; Right enters its guide.
+  Mobile windows with at least 700 points of content width and 500 of content
+  height use the sidebar, including roomy phone layouts. Narrow iPad windows and
+  short landscape windows use the same category directory as narrow phones.
+  On iOS, Guide, Filters and the profile action share the native navigation
+  toolbar and its system Liquid Glass grouping. Browse actions use standard
+  native button sizes rather than custom circular controls. The native search
+  text field, category heading and tile grid share one content keyline; category
+  columns and rows use the same gap. Only the timeline guide uses edge bleed.
+  Narrow guides expose Search, Filters and Multiviews directly, without a Now
+  shortcut or a one-item More menu. The iPhone's channel-guide subpage omits the
+  profile action, which remains on its Categories page; iPad and wide sidebar
+  layouts retain it.
   Apple TV reserves 384 points for categories on wide layouts and 320 on narrower
-  sidebar layouts, without shrinking category text. Mobile layout widths are unchanged.
+  sidebar layouts, without shrinking category text. Mobile sidebars use
+  200, 224, or 272 points according to available width.
   Its sidebar runs the full content height, beside both the channel details and
   guide. Loading and loaded layouts use the same two-column container.
-  The category panel collapses completely when native focus enters the TV guide;
-  the channel details and same mounted guide expand into its space without resetting the channel,
-  vertical position, or time. A leading-edge move out of the guide reveals the
-  panel and focuses the selected category. Back still opens Search. Internal
+  The category panel remains visible when native focus enters the TV guide;
+  channel details and the mounted guide keep their geometry, channel,
+  vertical position, and time. A leading-edge move out of the guide focuses the
+  selected category. Back belongs to native app navigation. Internal
   programme-to-programme moves keep their normal timeline behavior.
   Once a category-entry focus request completes, transient focus loss during
   native fast scrolling must not re-arm its eligibility gate. Only a new
@@ -734,8 +829,8 @@ is no prior in-memory history to migrate on the first updated launch.
   visible category disabled. Real menu round trips still restore the selected
   category before releasing that gate.
   Left/Right continues across the guide normally. Exactly one leading press
-  from the far-left channel column (far-right in RTL) must reveal categories
-  and Search, without revealing them early or also opening app navigation.
+  from the far-left channel column (far-right in RTL) must enter categories,
+  without entering them early or also opening app navigation.
   A separate leading press from the panel should reach the app menu.
   The guide's boundary recognizer gives ancestor horizontal navigation
   recognizers a failure dependency: they wait until the guide decides whether
@@ -801,12 +896,21 @@ is no prior in-memory history to migrate on the first updated launch.
   logo and its backing together, so a warmed guide logo appears immediately in
   the player with the same appearance. Hero/search/player sizes remain
   independent of the full-row guide treatment.
-  Plozz library channels without supplied artwork use a locally rendered wordmark:
-  heavy compressed channel lettering, a small rounded Plozz signature and a
-  solid broadcast-style color field. FNV-1a over the stable channel identity picks
-  from a fixed palette, so names, schedules, view size and app restarts do not
-  randomly change the branding. Guide and player pass the same channel identity
-  to the shared renderer. Real source logos still take precedence; missing
+  Plozz library channels without supplied artwork use the locally rendered Byline:
+  a prominent, original-case channel name above a small pixel-mascot and Plozz
+  signature. Both share an inset leading edge; the signature is lifted away
+  from the bottom corner. Category moods tint the active theme's opaque surface:
+  cinematic blue, playful amber, calm green, warm rose, intense terracotta,
+  mysterious plum, and imaginative indigo. Light, Dark, and Black keep their
+  own surface and text contrast, including increased-contrast borders.
+  Automatic group keys and custom recipe genres determine the mood, never
+  translated or renamed display titles, current programmes, or provider order.
+  Unrecognized categories and mixed custom moods use a neutral field; unfiltered
+  movie-only channels use cinematic blue. Studio/director channels use cinematic
+  blue without guessing their content, and decade channels use warm rose.
+  The guide and player carry the same mood to the shared renderer. No saved
+  channel identity, schedule, recipe, or sync format is changed by this styling.
+  Real source logos still take precedence; missing
   external-channel logos keep their ordinary name fallback. No network service,
   generated image asset or per-channel manual design is needed.
   Station tiles show only the logo, or a name fallback when artwork is missing,
@@ -1040,6 +1144,17 @@ to temporarily unavailable servers are retained, but cannot play without
 current library authority. Media-share libraries are not yet supported by
 the automatic channel generator.
 
+Automatic scans skip individual items with invalid scheduling metadata as well
+as missing or invalid durations, and show the skipped-item count in management.
+Only validated native identities and metadata enter saved schedules; rejected
+values are never repaired by guessing or logged. Page diagnostics contain only
+item type, offset and counts. Source identities are checked before paging.
+Malformed responses and unstable pagination discard that server's incomplete
+scan, report it as unavailable and allow healthy servers to finish. An entirely
+malformed scan retains the server's saved groups instead of treating it as an
+empty library. Access changes, cancellation, catalogue limits and publication
+failures still stop publication. Custom-channel previews remain strict.
+
 Preparation reports the current server/library, actual page counts and total
 library items checked, followed by building-channel and saving-guide stages.
 The progress bar belongs to the current library/item type, not an invented
@@ -1173,6 +1288,14 @@ IPTV links, not network discovery or tuner-consuming Plex/Jellyfin/Emby streams,
 and do not commandeer the playing engine.
 
 ### Audible previews and seamless viewing
+
+On iPhone and iPad, tapping a station, programme, or empty guide cell starts that
+channel in the upper preview without opening fullscreen. The preview sits below
+the top safe area. This is explicit playback, independent of the TV auto-preview
+preference; channel preparation, authorization and stale-request cancellation
+still use the shared Watch coordinator. Watch and the channel's Play action open
+fullscreen without replacing an already prepared channel. Long-pressing a station
+retains its channel actions, and programme selection still updates the info bar.
 
 On Apple TV, resting on a different channel for **600 ms** requests its preview.
 Rapid scrolling cancels pending requests; moving between programs on the same

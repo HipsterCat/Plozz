@@ -107,6 +107,10 @@ public struct HomeRow: Identifiable, Equatable, Sendable {
     /// media row shows portrait posters.
     public var style: HomeRowStyle { kind == .continueWatching ? .landscape : .poster }
 
+    public func playsOnSelect(continueWatchingAction: ContinueWatchingAction) -> Bool {
+        kind == .continueWatching && continueWatchingAction == .play
+    }
+
     /// The number of cards this row renders — its media `items` for a media row,
     /// or its `libraries` tiles for the Libraries row (exactly one is populated).
     /// Recorded per row so the next launch's skeleton shows a matching count.
@@ -142,16 +146,9 @@ public extension HomeRow {
     /// caller can consult the shared, reactive visibility model; recomputing this
     /// on each render keeps visibility toggles taking effect without a reload.
     ///
-    /// Crucially, the same `isLibraryVisible` predicate is applied to the
-    /// Continue Watching and Recently Added rows' items via
-    /// `MediaItem.isVisibleOnHome(isLibraryVisible:)`, so a hidden library's
-    /// movies/episodes are suppressed from those rows too — not just the Libraries
-    /// tiles. Items that can't be attributed to a library stay visible
-    /// (fail-open), and a merged cross-server card shows if *any* of its
-    /// contributing libraries is visible. The **Watchlist** row is intentionally
-    /// exempt (see inline note): it's an explicit user save and the Plex watchlist
-    /// isn't a per-library list, so hiding a library never drops a watchlisted
-    /// title.
+    /// Library visibility filters discovery, not account-wide viewing history.
+    /// Recently Added keeps unattributed items and merged cards with any visible
+    /// contributing library. Watchlist retains its explicit-save policy below.
     static func rows(
         for content: HomeViewModel.Content,
         isLibraryVisible: (String) -> Bool,
@@ -179,7 +176,7 @@ public extension HomeRow {
         }
 
         if isGlobalRowEnabled(.continueWatching) {
-            let continueWatching = content.continueWatching.filter { $0.isVisibleOnHome(isLibraryVisible: isLibraryVisible) }
+            let continueWatching = content.continueWatching
             if !continueWatching.isEmpty || isPending(.continueWatching) {
                 rows.append(makeRow(.continueWatching, items: continueWatching))
             }

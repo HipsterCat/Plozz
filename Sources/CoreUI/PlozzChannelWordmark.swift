@@ -1,70 +1,68 @@
 #if canImport(SwiftUI)
+import CoreModels
 import SwiftUI
 
-struct PlozzChannelIdentity: Equatable {
-    let paletteIndex: Int
-
-    init(channelID: String) {
-        // FNV-1a is stable across launches and platforms; Swift's Hasher is not.
-        let hash = channelID.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
-            ($0 ^ UInt64($1)) &* 1_099_511_628_211
+private extension LibraryChannelArtworkMood {
+    var tint: Color {
+        switch self {
+        case .neutral: Color(red: 0.45, green: 0.49, blue: 0.52)
+        case .cinematic: Color(red: 0.26, green: 0.48, blue: 0.68)
+        case .playful: Color(red: 0.82, green: 0.61, blue: 0.25)
+        case .calm: Color(red: 0.32, green: 0.57, blue: 0.39)
+        case .warm: Color(red: 0.71, green: 0.42, blue: 0.38)
+        case .intense: Color(red: 0.76, green: 0.37, blue: 0.22)
+        case .mysterious: Color(red: 0.53, green: 0.35, blue: 0.60)
+        case .imaginative: Color(red: 0.39, green: 0.43, blue: 0.74)
         }
-        paletteIndex = Int(hash % UInt64(Self.fields.count))
     }
-
-    var field: Color { Self.fields[paletteIndex] }
-    static let ink = Color(red: 255 / 255, green: 247 / 255, blue: 232 / 255)
-    private static let fields: [Color] = [
-        Color(red: 23 / 255, green: 54 / 255, blue: 82 / 255),
-        Color(red: 21 / 255, green: 76 / 255, blue: 73 / 255),
-        Color(red: 71 / 255, green: 48 / 255, blue: 77 / 255),
-        Color(red: 100 / 255, green: 59 / 255, blue: 53 / 255),
-        Color(red: 61 / 255, green: 73 / 255, blue: 49 / 255)
-    ]
 }
 
 struct PlozzChannelWordmark: View {
     let name: String
-    let identity: PlozzChannelIdentity
+    let mood: LibraryChannelArtworkMood
     let size: CGSize
     let cornerRadius: CGFloat
+    @Environment(\.themePalette) private var palette
     @Environment(\.colorSchemeContrast) private var contrast
 
+    private var scale: CGFloat { size.height / 128 }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: size.height * 0.055) {
-            HStack(spacing: size.height * 0.07) {
-                Text(verbatim: "PLOZZ")
-                    .font(.system(size: size.height * 0.105, weight: .black, design: .rounded))
-                    .tracking(size.height * 0.014)
-                    .padding(.horizontal, size.height * 0.045)
-                    .padding(.vertical, size.height * 0.02)
-                    .foregroundStyle(identity.field)
-                    .background(PlozzChannelIdentity.ink)
-                Rectangle().frame(height: max(1, size.height * 0.025))
-                Rectangle()
-                    .frame(width: size.height * 0.04, height: max(1, size.height * 0.025))
-            }
-            Text(name)
-                .textCase(.uppercase)
-                .font(.system(size: size.height * 0.42, weight: .black).width(.compressed))
-                .tracking(-size.height * 0.007)
+        VStack(alignment: .leading, spacing: 8 * scale) {
+            Text(verbatim: name)
+                .font(.system(size: 34 * scale, weight: .bold))
+                .tracking(-0.9 * scale)
                 .lineLimit(2)
-                .minimumScaleFactor(0.28)
+                .minimumScaleFactor(0.44)
                 .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            HStack(spacing: 5 * scale) {
+                PlozzChannelPixelMascot()
+                    .fill(style: FillStyle(eoFill: true))
+                    .frame(width: 20 * scale, height: 20 * scale)
+                Text(verbatim: "plozz")
+                    .font(.system(size: 10 * scale, weight: .semibold))
+                    .tracking(0.3 * scale)
+            }
+            .foregroundStyle(palette.primaryText.opacity(contrast == .increased ? 1 : 0.65))
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .foregroundStyle(PlozzChannelIdentity.ink)
-        .padding(.horizontal, size.width * 0.10)
-        .padding(.vertical, size.height * 0.12)
+        .foregroundStyle(palette.primaryText)
+        .padding(.horizontal, size.width * 0.12)
+        .padding(.vertical, 22 * scale)
         .frame(width: size.width, height: size.height)
-        .background(identity.field)
+        .background {
+            palette.cardOpaqueSurface
+                .overlay(mood.tint.opacity(palette.isLight ? 0.14 : 0.24))
+        }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(
-                    PlozzChannelIdentity.ink.opacity(contrast == .increased ? 0.4 : 0.14),
+                    palette.primaryText.opacity(contrast == .increased ? 0.4 : 0.12),
                     lineWidth: contrast == .increased ? 2 : 1
                 )
+                .allowsHitTesting(false)
         }
         .accessibilityHidden(true)
     }

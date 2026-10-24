@@ -18,7 +18,7 @@ public struct SiloSignInView: View {
     private let onCancel: () -> Void
 
     public init(server: MediaServer, deviceID: String, verificationOnly: Bool = false,
-                onAuthenticated: @escaping (UserSession) -> Void, onCancel: @escaping () -> Void) {
+                onAuthenticated: @escaping (UserSession) throws -> Void, onCancel: @escaping () -> Void) {
         self.init(viewModel: SiloAuthViewModel(server: server, deviceID: deviceID,
                                              verificationOnly: verificationOnly, onAuthenticated: onAuthenticated),
                   server: server, onCancel: onCancel)

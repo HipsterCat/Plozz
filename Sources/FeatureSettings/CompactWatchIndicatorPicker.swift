@@ -40,7 +40,9 @@ struct CompactWatchIndicatorPicker: View {
                         indicator: indicator,
                         cornerRadius: PlozzTheme.Metrics.Radius.content
                     )
+                    .accessibilityHidden(true)
                 }
+                .accessibilityIdentifier("watch-indicator-preview-\(indicator.rawValue)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

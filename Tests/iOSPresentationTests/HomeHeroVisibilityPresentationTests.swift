@@ -6,11 +6,131 @@ import FeatureHomeCore
 import Observation
 import SwiftUI
 import UIKit
+import Vision
 import XCTest
 @testable import AppShelliOS
 
 @MainActor
 final class HomeHeroVisibilityPresentationTests: XCTestCase {
+    func testHomeLogoWidthExpandsTheReadingColumnWithinTheViewport() async throws {
+        let app = PlozziOSAppModel()
+        let original = app.profiles.activeProfileID
+        let profile = app.profiles.add(name: "Hero width fixture", isAwaitingSetup: false)
+        app.selectProfile(profile.id)
+        defer {
+            app.selectProfile(original)
+            app.profiles.remove(profile.id)
+        }
+        let item = MediaItem(
+            id: "width-fixture", title: "Across the stars", kind: .movie,
+            overview: String(repeating: "An expedition beyond the stars. ", count: 20),
+            allowsTitleBasedMetadataMatching: false
+        )
+        for sizeClass in [UserInterfaceSizeClass.compact, .regular] {
+            let style: HeroArtworkStyle = sizeClass == .compact ? .compactPortrait : .landscape
+            let content = HomeWidthFixture(item: item, style: style).environment(app)
+            try await withWindow(content, sizeClass: sizeClass) { window in
+                var widths: [Int: CGFloat] = [:]
+                for size in [-10, 0, 10] {
+                    app.settings.hero.settings.logoSize = .init(rawValue: size)
+                    for text in [0, 5] {
+                        app.settings.hero.settings.textSize = .init(rawValue: text)
+                        try await self.settle(window)
+                        let probe = try XCTUnwrap(self.find("reading-column", in: window))
+                        let frame = probe.convert(probe.bounds, to: window)
+                        XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                        XCTAssertLessThanOrEqual(frame.maxX, window.bounds.width)
+                        if let width = widths[size] {
+                            XCTAssertEqual(frame.width, width, accuracy: 1, "Text size alone must not widen the column.")
+                        } else {
+                            widths[size] = frame.width
+                        }
+                    }
+                }
+                XCTAssertEqual(try XCTUnwrap(widths[-10]), try XCTUnwrap(widths[0]), accuracy: 1)
+                if sizeClass == .regular {
+                    XCTAssertEqual(try XCTUnwrap(widths[0]), 480, accuracy: 1)
+                    XCTAssertEqual(try XCTUnwrap(widths[10]), 720, accuracy: 1)
+                } else {
+                    XCTAssertEqual(try XCTUnwrap(widths[10]), try XCTUnwrap(widths[0]), accuracy: 1)
+                }
+            }
+        }
+    }
+
+    func testHomeAndDetailTextSizingChangesMetadataAndDescriptionButNotActionText() async throws {
+        let app = PlozziOSAppModel()
+        let original = app.profiles.activeProfileID
+        let profile = app.profiles.add(name: "Text sizing fixture", isAwaitingSetup: false)
+        app.selectProfile(profile.id)
+        defer {
+            app.selectProfile(original)
+            app.profiles.remove(profile.id)
+        }
+        let item = MediaItem(
+            id: "text-sizing-fixture", title: "SIGNAL", kind: .movie,
+            overview: "Across the stars.", officialRating: "PG", genres: ["Documentary"],
+            allowsTitleBasedMetadataMatching: false
+        )
+        for detail in [false, true] {
+            for sizeClass in [UserInterfaceSizeClass.compact, .regular] {
+                let style: HeroArtworkStyle = sizeClass == .compact ? .compactPortrait : .landscape
+                app.settings.hero.settings.textSize = .default
+                app.settings.detailPage.settings.textSize = .default
+                let foreground = Group {
+                    if detail {
+                        PlozziOSDetailHeroSection(
+                            item: item, backdropItem: item, playableItem: item,
+                            sources: [], selectedSourceAccountID: nil, versions: [], selectedVersionID: nil,
+                            onSelectSource: { _ in }, onSelectVersion: { _ in },
+                            actionHandler: SizingActions(), onPlay: { _, _ in }
+                        )
+                        .environment(HeroTrailerController())
+                    } else {
+                        PlozziOSHomeHeroForeground(
+                            item: item, detailItem: item, watchlistItem: item,
+                            presentation: HeroPresentation(item: item, artworkStyle: style, surface: .home),
+                            style: style, onPlay: { _ in }
+                        )
+                        .padding(24)
+                    }
+                }
+                .environment(app)
+                .environment(PlozziOSSidebarGeometryModel())
+                try await withWindow(foreground, sizeClass: sizeClass) { window in
+                    var baseline: [String: CGFloat] = [:]
+                    for step in [0, -5, 5] {
+                        app.settings.hero.settings.textSize = HeroTextSize(rawValue: step)
+                        app.settings.detailPage.settings.textSize = HeroTextSize(rawValue: step)
+                        try await self.settle(window)
+                        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                        }
+                        let attachment = XCTAttachment(image: image)
+                        attachment.name = "mobile-\(detail ? "detail" : "home")-text-\(sizeClass)-\(step)"
+                        attachment.lifetime = .keepAlways
+                        self.add(attachment)
+                        let frames = try HeroTextInk.frames(
+                            in: image, terms: ["SIGNAL", "Documentary", "Across the stars", "Play"], darkTerms: ["Play"]
+                        )
+                        for text in ["SIGNAL", "Documentary", "Across the stars", "Play"] {
+                            let height = try XCTUnwrap(frames[text], "Missing \(text), \(sizeClass), step \(step)").height
+                            if step == 0 { baseline[text] = height }
+                            let scale = text == "Play" ? 1 : app.settings.hero.settings.textSize.scale
+                            XCTAssertEqual(
+                                height, try XCTUnwrap(baseline[text]) * scale, accuracy: 2, "\(text), \(step)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private final class SizingActions: MediaItemActionHandling {
+        func actions(for item: MediaItem, context: MediaItemActionContext) -> [MediaItemAction] { [] }
+        func perform(_ action: MediaItemAction, on item: MediaItem, context: MediaItemActionContext) {}
+    }
+
     func testActualHomeRemovesCompletedEmptyHeroWithoutChangingItsSettings() async throws {
         let app = PlozziOSAppModel()
         let original = app.profiles.activeProfileID
@@ -443,6 +563,22 @@ private struct FrameProbe: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+private struct HomeWidthFixture: View {
+    @Environment(PlozziOSAppModel.self) private var app
+    let item: MediaItem
+    let style: HeroArtworkStyle
+
+    var body: some View {
+        PlozziOSHomeHeroForeground(
+            item: item, detailItem: item, watchlistItem: item,
+            presentation: HeroPresentation(item: item, artworkStyle: style, surface: .home),
+            style: style, onPlay: { _ in }
+        )
+        .background(FrameProbe(identifier: "reading-column"))
+        .plozziOSHeroForegroundPlacement(style: style, logoSize: app.settings.hero.settings.logoSize)
+    }
 }
 
 private struct EmptyHeroHomeProvider: MediaProvider {

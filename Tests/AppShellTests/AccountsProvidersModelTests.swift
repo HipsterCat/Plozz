@@ -100,6 +100,30 @@ final class AccountsProvidersModelTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(model.provider(forAccountID: "a") as? LiveTVAccountsTestProvider) === first)
     }
 
+    func testAccountRecoveryRechecksProfileAndReloadsOnlyAfterSaving() throws {
+        let (model, store, profiles) = try makeModel(accountIDs: [("a", "a.test")])
+        model.reloadAccounts()
+        let account = try XCTUnwrap(model.accounts.first)
+        var completed = false
+        let recovery = model.makeAccountReauthentication(
+            account: account, isAuthorized: { true }, onComplete: { completed = true }
+        )
+        let other = profiles.add(name: "Other", activeAccountIDs: ["a"])
+        profiles.select(other.id)
+        XCTAssertThrowsError(try recovery.complete(account.session(token: "NEW")))
+        XCTAssertFalse(completed)
+        XCTAssertEqual(store.token(for: account.id), "token-a")
+
+        let currentRecovery = model.makeAccountReauthentication(
+            account: account, isAuthorized: { true }, onComplete: { completed = true }
+        )
+        try currentRecovery.complete(account.session(token: "NEW"))
+        XCTAssertTrue(completed)
+        XCTAssertEqual(store.token(for: account.id), "NEW")
+        XCTAssertEqual(model.accounts, store.loadAccounts())
+        XCTAssertNotEqual(model.accounts.first?.credentialRevision, account.credentialRevision)
+    }
+
     func testUnknownSyncedIdentityOnlyGatesWhenAnActivePlexAccountArrives() throws {
         for provider in [ProviderKind.plex, .iptv, .jellyfin, .emby, .silo, .mediaShare] {
             let (model, store, profiles) = try makeModel(accountIDs: [])
@@ -157,18 +181,84 @@ final class AccountsProvidersModelTests: XCTestCase {
         XCTAssertNil(model.provider(forAccountID: "does-not-exist"))
     }
 
+    func testPendingMediaCredentialsDoNotRedirectStartupToLiveTV() throws {
+        for provider in [ProviderKind.plex, .jellyfin, .emby, .silo, .mediaShare] {
+            for includesIPTV in [false, true] {
+                let (model, store, profiles) = try makeModel(accountIDs: [])
+                try store.add(account(id: "media", host: "media.example", provider: provider), token: "fixture")
+                model.registry.register(provider) { LiveTVAccountsTestProvider(session: $0.session) }
+                if includesIPTV {
+                    try store.add(account(id: "iptv", host: "iptv.example", provider: .iptv), token: "fixture")
+                    model.registry.register(.iptv) { LiveTVAccountsTestProvider(session: $0.session) }
+                }
+                let expectedIDs: Set<String> = includesIPTV ? ["media", "iptv"] : ["media"]
+                profiles.setActiveAccountIDs(Array(expectedIDs), for: profiles.activeProfileID)
+                var mediaIsReady = false
+                model.tokenResolver = { id in mediaIsReady || id == "iptv" ? "fixture" : nil }
+                model.reloadAccounts()
+
+                func initialSelection(current: NavigationRailDestination) -> NavigationRailDestination {
+                    let availability = NavigationContentAvailability(
+                        accounts: model.navigationAccounts, libraries: [], discoveredAccountIDs: [],
+                        disabledLibraryKeys: [], hasDiscoverySearch: false, hasWatchlistItems: false
+                    )
+                    return AppAdmissionNavigation.initialSelection(
+                        current: current, visible: [.home, .liveTV, .settings],
+                        liveTV: .liveTV, fallback: .settings,
+                        admission: AppAdmissionContext(hasMediaAccounts: !model.accounts.isEmpty),
+                        hasPendingLiveTVEntry: false, prefersLiveTV: availability.prefersLiveTV
+                    )
+                }
+
+                XCTAssertEqual(Set(model.homeAccounts.map(\.account.id)), includesIPTV ? ["iptv"] : [])
+                XCTAssertEqual(Set(model.navigationAccounts.map(\.id)), expectedIDs)
+                let startup = initialSelection(current: .home)
+                XCTAssertEqual(startup, .home, "\(provider), IPTV: \(includesIPTV)")
+
+                mediaIsReady = true
+                XCTAssertEqual(Set(model.homeAccounts.map(\.account.id)), expectedIDs)
+                XCTAssertEqual(initialSelection(current: startup), .home)
+                XCTAssertEqual(initialSelection(current: .settings), .settings)
+            }
+        }
+    }
+
+    func testNavigationAccountsNeverResolveCredentialsOrIncludeOtherProfiles() throws {
+        let (model, store, profiles) = try makeModel(accountIDs: [("a", "a.example"), ("b", "b.example")])
+        store.setActiveAccountIDs(["a", "b"])
+        model.tokenResolver = { _ in
+            XCTFail("Navigation availability must not resolve credentials.")
+            return nil
+        }
+        profiles.setActiveAccountIDs(["a"], for: profiles.activeProfileID)
+        model.reloadAccounts()
+        XCTAssertEqual(model.navigationAccounts.map(\.id), ["a"])
+
+        let other = profiles.add(name: "Other", activeAccountIDs: ["b"])
+        profiles.select(other.id)
+        model.reloadAccounts()
+        XCTAssertEqual(model.navigationAccounts.map(\.id), ["b"])
+
+        profiles.setActiveAccountIDs([], for: other.id)
+        model.reloadAccounts()
+        XCTAssertTrue(model.navigationAccounts.isEmpty)
+    }
+
     func testDeviceIDDelegatesToStore() throws {
         let (model, store, _) = try makeModel(accountIDs: [])
         XCTAssertEqual(model.deviceID, store.deviceID())
     }
 
     func testPrimaryActiveAccountFallsBackToFirst() throws {
-        let (model, _, _) = try makeModel(accountIDs: [("a", "a.example.com"), ("b", "b.example.com")])
+        let (model, store, _) = try makeModel(accountIDs: [("a", "a.example.com"), ("b", "b.example.com")])
+        store.setActiveAccountIDs([])
         model.reloadAccounts()
         // Even if the active set were empty, primaryActiveAccount falls back to the
         // first account so the signed-in UI is never empty.
         XCTAssertNotNil(model.primaryActiveAccount)
         XCTAssertTrue(["a", "b"].contains(model.primaryActiveAccount!.id))
+        XCTAssertTrue(model.activeAccountIDs.isEmpty)
+        XCTAssertEqual(model.navigationAccounts, [try XCTUnwrap(model.primaryActiveAccount)])
     }
 
     // MARK: Active-set resolution matrix (reloadAccounts)
@@ -176,6 +266,43 @@ final class AccountsProvidersModelTests: XCTestCase {
     // the three explicit-choice branches directly on the hub (previously only
     // covered end-to-end via ServerToggleTests through AppState), driving them
     // through the same injected profilesModel/accountStore seams.
+
+    func testPickerLockUsesEachProfilesResolvedPlexSources() throws {
+        let (model, store, profiles) = try makeModel(accountIDs: [])
+        try store.add(account(id: "plex", host: "plex.example", provider: .plex), token: "fixture")
+        try store.add(account(id: "silo", host: "silo.example", provider: .silo), token: "fixture")
+        store.setActiveAccountIDs(["plex", "silo"])
+        var target = profiles.add(name: "Silo")
+        target = target.settingHomeUserBinding(
+            .init(homeUserID: "protected", name: "Viewer", requiresPIN: true), forPlexAccount: "plex"
+        )
+        profiles.update(target)
+        model.reloadAccounts()
+        XCTAssertNotEqual(profiles.activeProfileID, target.id)
+        XCTAssertTrue(model.profileShowsPINLock(target), "An unset subset inherits household sources.")
+
+        profiles.setActiveAccountIDs(["silo"], for: target.id)
+        XCTAssertFalse(model.profileShowsPINLock(target), "Inactive picker tiles use their own source choice.")
+        profiles.setActiveAccountIDs([], for: target.id)
+        XCTAssertFalse(model.profileShowsPINLock(target))
+        profiles.setActiveAccountIDs(["plex", "silo"], for: target.id)
+        XCTAssertTrue(model.profileShowsPINLock(target), "Re-enabling Plex restores its lock hint.")
+        profiles.setActiveAccountIDs(["gone"], for: target.id)
+        XCTAssertTrue(model.profileShowsPINLock(target), "Match activation's entirely stale subset fallback.")
+        profiles.select(target.id)
+        model.reloadAccounts()
+        XCTAssertEqual(model.activeAccountIDs, Set(model.activeAccountIDs(forProfile: target.id)))
+
+        profiles.setActiveAccountIDs(["gone", "silo"], for: target.id)
+        XCTAssertFalse(model.profileShowsPINLock(target), "A surviving non-Plex source prevents fallback.")
+        profiles.setActiveAccountIDs(["plex"], for: target.id)
+        try store.remove(id: "plex")
+        model.reloadAccounts()
+        XCTAssertFalse(model.profileShowsPINLock(target), "A removed source cannot ask for a PIN.")
+        target.lock = ProfileLock.make(pin: "1234", matchesPlexPIN: true, iterations: 1)
+        profiles.update(target)
+        XCTAssertTrue(model.profileShowsPINLock(target), "Local locks remain independent of Plex enablement.")
+    }
 
     /// (a) An explicit EMPTY choice is honored — "watch nothing" / master toggle
     /// off — and must NOT be silently re-expanded to the household-global set.
@@ -187,6 +314,7 @@ final class AccountsProvidersModelTests: XCTestCase {
         model.reloadAccounts()
 
         XCTAssertTrue(model.activeAccountIDs.isEmpty)
+        XCTAssertTrue(model.navigationAccounts.isEmpty)
     }
 
     /// (b) An explicit choice whose accounts have ALL gone stale falls back to the
@@ -203,6 +331,7 @@ final class AccountsProvidersModelTests: XCTestCase {
 
         // Falls back to the global set (filtered to known), NOT empty, NOT all.
         XCTAssertEqual(model.activeAccountIDs, ["b"])
+        XCTAssertEqual(model.navigationAccounts.map(\.id), ["b"])
     }
 
     /// (c) An explicit choice where only SOME chosen accounts survive honors
@@ -218,6 +347,7 @@ final class AccountsProvidersModelTests: XCTestCase {
 
         // Exactly the surviving chosen account — not the global {a, b}.
         XCTAssertEqual(model.activeAccountIDs, ["a"])
+        XCTAssertEqual(model.navigationAccounts.map(\.id), ["a"])
     }
 
     func testLiveTVNeverFallsBackToAnExcludedAccount() throws {
@@ -277,7 +407,7 @@ final class AccountsProvidersModelTests: XCTestCase {
 }
 
 private final class LiveTVAccountsTestProvider: MediaProvider, ServerLiveTVProviding, ServerAddressUpdating, Sendable {
-    let kind: ProviderKind = .jellyfin
+    var kind: ProviderKind { session.server.provider }
     let session: UserSession
     private let routes = Mutex<[URL]>([])
     var alternatives: [URL] { routes.withLock { $0 } }

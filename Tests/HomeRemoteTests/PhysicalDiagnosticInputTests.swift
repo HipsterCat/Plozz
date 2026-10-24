@@ -55,7 +55,7 @@ final class PhysicalDiagnosticInputTests: XCTestCase {
                 } else {
                     XCUIRemote.shared.press(.left)
                 }
-                if categories.exists { break }
+                if containsNavigationFocus(categories) { break }
             }
             let revealed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 categories.exists && categories.isEnabled && self.containsNavigationFocus(categories)
@@ -64,7 +64,7 @@ final class PhysicalDiagnosticInputTests: XCTestCase {
             let result = XCTWaiter.wait(for: [revealed], timeout: 5)
             captureCategoryNavigation("categories-\(iteration + 1)", in: app)
             XCTAssertEqual(result, .completed,
-                           "Left must reveal only categories, not the native app menu.")
+                           "Left must enter categories, not the native app menu.")
             XCTAssertTrue(!navigation.exists || navigation.frame.isEmpty,
                           "The app menu must stay collapsed even if a category still owns focus.")
         }

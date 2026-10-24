@@ -54,11 +54,8 @@ extension JellyfinProvider {
     public func serverHomeItems(
         section: ServerHomeSection, limit: Int, excludingLibraryIDs: Set<String>
     ) async throws -> [MediaItem] {
-        let exclusions = try await homeHistoryExclusions(
-            for: section, limit: limit, excluding: excludingLibraryIDs
-        )
         return try await loadServerHomeItems(
-            section: section, limit: limit, excludingLibraryIDs: exclusions,
+            section: section, limit: limit, excludingLibraryIDs: excludingLibraryIDs,
             allowedParents: nil
         )
     }
@@ -71,14 +68,11 @@ extension JellyfinProvider {
         for section in sections where results[section.id] == nil {
             do {
                 try Task.checkCancellation()
-                let exclusions = try await homeHistoryExclusions(
-                    for: section, limit: limit, excluding: excludingLibraryIDs
-                )
-                if allowedParents == nil, limit > 0, !exclusions.isEmpty,
+                if allowedParents == nil, limit > 0, !excludingLibraryIDs.isEmpty,
                    section.libraryID == nil, section.kind != .libraries, section.kind != .liveTV,
                    !(section.kind == .recordings && section.id.hasPrefix("web:")) {
                     do {
-                        allowedParents = .success(try await homeVisibleParents(excluding: exclusions))
+                        allowedParents = .success(try await homeVisibleParents(excluding: excludingLibraryIDs))
                     } catch {
                         // Retain a failed lookup too: dependent rows share the
                         // failure, while library-scoped rows can still succeed.
@@ -86,7 +80,7 @@ extension JellyfinProvider {
                     }
                 }
                 results[section.id] = .success(try await loadServerHomeItems(
-                    section: section, limit: limit, excludingLibraryIDs: exclusions,
+                    section: section, limit: limit, excludingLibraryIDs: excludingLibraryIDs,
                     allowedParents: allowedParents
                 ))
             } catch {
@@ -94,16 +88,6 @@ extension JellyfinProvider {
             }
         }
         return results
-    }
-
-    private func homeHistoryExclusions(
-        for section: ServerHomeSection, limit: Int, excluding libraryIDs: Set<String>
-    ) async throws -> Set<String> {
-        guard limit > 0, !libraryIDs.isEmpty, section.libraryID == nil,
-              section.id.hasPrefix("web:"),
-              section.kind == .continueWatching || section.kind == .nextUp else { return libraryIDs }
-        return try await watchHistoryScope.isAccountWide(client: client, serverID: session.server.id)
-            ? [] : libraryIDs
     }
 
     private func loadServerHomeItems(

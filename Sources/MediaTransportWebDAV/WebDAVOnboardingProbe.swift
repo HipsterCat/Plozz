@@ -67,7 +67,7 @@ public protocol WebDAVOnboardingProbing: Sendable {
     /// Preflight TLS for an `https` URL, capturing an untrusted leaf's SHA-256
     /// for approval. Never transfers data over an unverified channel.
     func preflightTrust(url: URL) async -> WebDAVTrustPreflight
-    /// `OPTIONS` + `DAV` header check under the chosen credential/trust.
+    /// Bounded `PROPFIND` Depth:0 proving the URL names a WebDAV collection.
     func validate(
         url: URL,
         credential: WebDAVCredential,
@@ -86,7 +86,15 @@ public protocol WebDAVOnboardingProbing: Sendable {
 /// ephemeral registry per call (onboarding has no account/vault yet), and a
 /// dedicated capturing delegate for the trust-on-first-use preflight.
 public struct WebDAVOnboardingProbe: WebDAVOnboardingProbing {
-    public init() {}
+    private let registryFactory: @Sendable () -> TransportSessionRegistry
+
+    public init() {
+        self.registryFactory = { TransportSessionRegistry() }
+    }
+
+    init(registryFactory: @escaping @Sendable () -> TransportSessionRegistry) {
+        self.registryFactory = registryFactory
+    }
     // A fixed, arbitrary trust revision for onboarding sessions: onboarding
     // builds a throwaway registry per call, so the revision only needs to be
     // internally consistent between the key and the pinned policy.
@@ -121,17 +129,20 @@ public struct WebDAVOnboardingProbe: WebDAVOnboardingProbing {
         credential: WebDAVCredential,
         trust: WebDAVOnboardingTrust
     ) async -> Result<Void, WebDAVOnboardingError> {
-        guard let origin = TransportOrigin(url: url) else { return .failure(.invalidURL) }
+        guard let origin = TransportOrigin(url: url),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: true),
+              let root = WebDAVRoot(origin: origin, rawPath: components.percentEncodedPath) else {
+            return .failure(.invalidURL)
+        }
         guard let key = try? makeKey(origin: origin) else { return .failure(.invalidURL) }
-        let client = WebDAVClient(registry: TransportSessionRegistry())
+        let client = WebDAVClient(registry: registryFactory())
         do {
-            let headers = try await client.capabilities(
-                url: url,
+            try await client.validateCollection(
+                root: root,
                 sessionKey: key,
                 credential: credential,
                 trustPolicy: trust.policy(revision: Self.onboardingTrustRevision)
             )
-            guard headers["dav"] != nil else { return .failure(.notWebDAV) }
             return .success(())
         } catch {
             return .failure(Self.mapError(error))
@@ -147,7 +158,7 @@ public struct WebDAVOnboardingProbe: WebDAVOnboardingProbing {
         guard let origin = TransportOrigin(url: url) else { return .failure(.invalidURL) }
         guard let root = WebDAVRoot(origin: origin, rawPath: path) else { return .failure(.invalidURL) }
         guard let key = try? makeKey(origin: origin) else { return .failure(.invalidURL) }
-        let client = WebDAVClient(registry: TransportSessionRegistry())
+        let client = WebDAVClient(registry: registryFactory())
         do {
             let entries = try await client.listChildren(
                 root: root,

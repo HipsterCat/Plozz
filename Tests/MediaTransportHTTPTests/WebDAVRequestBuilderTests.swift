@@ -31,6 +31,15 @@ final class WebDAVRequestBuilderTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
     }
 
+    func testPropfindAcceptsBothCommonXMLMediaTypes() {
+        for depth in [PropfindDepth.zero, .one] {
+            let request = WebDAVRequestBuilder.propfind(
+                url: URL(string: "https://nas.example.com/dav/")!, depth: depth
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/xml, text/xml")
+        }
+    }
+
     func testPropfindBodyRequestsAllProp() {
         let request = WebDAVRequestBuilder.propfind(url: URL(string: "https://nas.example.com/dav/")!, depth: .one)
         let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""

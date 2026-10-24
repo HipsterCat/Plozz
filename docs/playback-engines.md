@@ -2,7 +2,7 @@
 
 Plozz uses two playback engines, automatically selected per-item based on
 container, codecs, and subtitle requirements. The goal is maximum format coverage
-with the best possible quality (Dolby Vision, Atmos, full-timeline seek).
+with the best possible quality (Dolby Vision, spatial audio, full-timeline seek).
 
 ## Media-share disc images
 
@@ -107,6 +107,32 @@ After the final seek, the live test observes another 60 seconds and requires
 more than 58 seconds of playhead advancement. This is a bounded continued-playback
 check, not proof of complete-film playback or physical-device frame smoothness.
 
+## Embedded container chapters
+
+`VideoEngine.chapters` contains normalized chapter starts on the engine's ordinary
+seek timeline; `onChaptersChanged` publishes optional metadata that arrives after
+load. Plozzigen maps AetherEngine's `mediaChapters` after the normal source probe,
+including authenticated/custom-reader sources, without opening another reader.
+Native playback loads AVAsset chapter metadata off the startup path using the
+same asset and authorization as playback. It cancels and fences that task by load
+generation and current player item. Both engines clear chapters on replacement
+and stop; the player separately rejects outgoing-engine/load callbacks.
+
+Server chapters remain preferred over embedded metadata. This fallback reads
+container chapters, not disc-title-relative chapters or generated scene markers.
+Original six-second synthetic fixtures in `Tests/EnginePlozzigenTests/Fixtures`
+cover MP4/native, MP4/Plozzigen, MKV/Plozzigen, seeking, and replacement by a file
+without chapters. Generate them with:
+
+```sh
+cd Tests/EnginePlozzigenTests/Fixtures
+ffmpeg -f lavfi -i 'color=c=navy:s=160x90:r=10:d=6' -i chapters.ffmetadata \
+  -map 0:v -map_metadata 1 -map_chapters 1 -c:v libx264 -preset ultrafast \
+  -pix_fmt yuv420p -g 10 -movflags +faststart chapters.mp4
+ffmpeg -i chapters.mp4 -map 0:v -map_chapters 0 -c copy chapters.mkv
+ffmpeg -i chapters.mp4 -map 0:v -map_chapters -1 -c copy -movflags +faststart no-chapters.mp4
+```
+
 ## IPTV live streams
 
 The [IPTV troubleshooting history](iptv-history.md) links earlier routing,
@@ -196,14 +222,35 @@ headers when updating the vendored sources, and update sources, public headers,
 binary checksums, and bundled notices together.
 
 Plozz pins the playback-corrected
-[AetherEngine fork](https://github.com/brandomoore/AetherEngine/tree/86af70ddfe7bcde27e06356dc7aa81e8997d43c4)
-at commit `86af70ddfe7bcde27e06356dc7aa81e8997d43c4`, integrating upstream
-**7.44.0** (`e5ea8dac56a6962d7f6793fc80b7c84caa61b7af`).
-Playback diagnostics show `AetherEngine v7.44.0`, read from the linked engine
+[AetherEngine fork](https://github.com/brandomoore/AetherEngine/tree/5fe2d42d68524dcfbcfacf07cbefe5b28b618155)
+at commit `5fe2d42d68524dcfbcfacf07cbefe5b28b618155`, integrating upstream
+**7.47.0** (`a1a70cd63c1fef89cffcf0e8110456807d0fab05`).
+Playback diagnostics show `AetherEngine v7.47.0`, read from the linked engine
 rather than a duplicated version constant. The exact fork commit remains in
 attributions because the upstream version does not identify Plozz's patches.
-The update overlaps eligible VOD segment preparation with HDR display switching
-and moves DTS:X height decoding to FFmpegBuild 3.9.0.
+The update retains overlapped VOD/HDR preparation and adds the upstream
+subtitle, HLG, chapter-timing, bounded-loading and cache fixes. Bitmap subtitle
+OCR is armed only for a native rendition used by PiP, AirPlay or an external
+display, avoiding its extra fullscreen read-ahead. Native subtitle readiness
+can still wait for OCR. Live startup waits for the requested first buffered
+window before attaching AVPlayer, rather than spending its playlist timeout
+filling a large cushion.
+
+The 7.47.0 update starts software Live TV picture and sound together at the
+first keyframe and no longer reports a brief rebuffer while AVPlayer evaluates
+its buffer on resume. It corrects the HDMI route check for the optional TrueHD
+spatial-output activator and no longer runs that activator for DTS:X conversion.
+The existing 30-second diagnostic probe also reports coarse per-thread CPU
+usage. Upstream stereo presentation is additive and remains at `.automatic`;
+Plozz's tvOS and iOS targets still present these sources in 2D. Dependency
+versions and production component traits are unchanged.
+
+Plozz uses the new session-cache byte budget with its existing Video buffer
+presets and exposes a separate Live TV buffer, both defaulting to Automatic.
+See [buffering contracts](../Sources/FeaturePlayback/README.md#on-demand-read-ahead)
+for route limits, temporary storage, safe-edge semantics and startup tradeoffs.
+Upstream moved DTS:X height decoding to FFmpegBuild 3.9.0; Plozz enables its
+production optional conversion component with runtime eligibility gates.
 ASS/SSA packets with neither a decoded end nor a packet duration are now discarded
 instead of lingering for a fabricated five seconds. This also applies to sidecars;
 other subtitle codecs retain their established fallback. This upstream snapshot
@@ -221,23 +268,19 @@ not modify SMB reads, video timestamps or Match Frame Rate. Synthetic regression
 cover both drift directions, late-onset drift, 44.1/48 kHz, restart/resume and
 decoded HLS timing. The original reporter's media has not been supplied.
 
-The fork exports **AetherEngine as a dynamic framework**. LibDovi and LibTrueHD
-each bring a Rust exception personality; statically combining both with Plozz's
-Objective-C and C++ text-rendering code exceeds Mach-O compact unwind's three
-personality slots. The framework keeps the engine's decoder runtimes in a
-separate Mach-O image, preserving unwind metadata and panic handling. Both app
-targets must embed and sign it alongside the FFmpeg frameworks. Upstream 7.44.0
-replaces LibDTSX with FFmpeg's patched `dca` decoder. `DTSX.framework` and the
-retired LibDTSX notices are no longer shipped; the `DTSXObjectAudio` trait and
+The fork exports **AetherEngine as a dynamic framework**, keeping the engine's
+decoder runtimes separate from Plozz's Objective-C and C++ text-rendering code.
+Both app targets must embed and sign it alongside the FFmpeg frameworks.
+Upstream 7.44.0 replaced LibDTSX with FFmpeg's patched `dca` decoder.
+`DTSX.framework` and the retired LibDTSX notices are no longer shipped;
 existing FFmpeg notices remain.
 
-Plozz explicitly enables `TrueHDObjectAudio`, `DTSXObjectAudio`,
-`DualLayerDolbyVision` and `DolbyVisionStillReshaping` on its Swift package
-dependency. Upstream 7.39 made these components off-by-default build traits;
-merely setting their `LoadOptions` without the traits is a no-op. Both app
-targets consume this same local package, so no generated-project trait patch
-is needed. This preserves compiled-in capabilities without changing playback
-preferences. The measurement-only `TrueHDReferenceRender` trait stays excluded.
+Plozz enables `TrueHDObjectAudio`, `DTSXObjectAudio`, `DualLayerDolbyVision` and
+`DolbyVisionStillReshaping` on its Swift package dependency. The measurement-only
+`TrueHDReferenceRender` remains excluded. LibTrueHD is linked; ordinary FFmpeg
+audio decoding is unchanged. Both apps consume this same local package, so no
+generated-project trait patch is needed. Engine integration tests inspect the
+linked engine's `OptionalComponent.isBuiltIn` flags, not just its load options.
 Upstream's patent-licensing warning still applies; enabling a trait does not
 establish patent clearance.
 
@@ -246,82 +289,52 @@ fixes, corrected software resume/seek timelines, transport-intent preservation
 during rebuilds, and blocking engine work moved off Swift's cooperative pool.
 Changing speed while paused now leaves the session paused until `play()`.
 E-AC-3 JOC stream copies advertise object audio in the HLS master, including
-untagged tracks. FFmpegBuild **3.7.x** fixes dependent-substream Atmos signaling;
+untagged tracks. FFmpegBuild **3.7.x** fixes dependent-substream spatial signaling;
 LibDovi remains **2.1.x**. The earlier 7.36.0 integration used LibTrueHD **2.3.x** and
-LibDTSX **1.0.1**. Upstream 7.36.0 added DTS:X object rendering, corrected spatial
-speaker positions and a tvOS Atmos output activator for receivers that need it.
+LibDTSX **1.0.1**. Upstream 7.36.0 added another object-audio rendering path, corrected
+spatial speaker positions and a tvOS spatial-output activator for receivers that need it.
 It also includes live-replay recovery, software-video recovery after a screen lock,
 and the intervening 7.35.x playback fixes; these are upstream changes, not new
 Plozz-specific implementations. The current pin uses FFmpegBuild **3.9.0**
-and LibTrueHD **3.0.0**, retaining LibDovi **2.1.x** and removing LibDTSX. It also includes
-single-connection Atmos-probe safeguards and system-composited Dolby Vision
+and LibDovi **2.1.x**, with LibTrueHD **3.0.0** enabled in Plozz and LibDTSX
+removed. It also includes
+single-connection spatial-audio probe safeguards and system-composited Dolby Vision
 held pictures. The fork retains the persistent HTTP body-reader isolation
 correction from its previous integration.
 
-On **tvOS 26 and later**, ordinary on-demand playback automatically requests
-TrueHD Atmos and DTS:X object rendering with `LoadOptions.objectAudioRendering = .apac(.l714)`.
-The 7.1.4 layout is an **intermediate spatial bed**, not a detected physical speaker
-configuration. tvOS and the receiver handle final output; there is no speaker
-setup prompt or mandatory opt-in. **Settings > Playback > TrueHD Atmos and DTS:X**
-provides an on-by-default switch on supported Apple TVs. It is saved per profile,
-including profile settings transfer, and applies when the next playback session
-starts. The original `trueHDAtmosEnabled` storage key is retained, so existing
-profile choices and transfers apply to both formats without resetting the preference.
-Keep it on for overhead sound from eligible TrueHD Atmos and DTS:X tracks on
-compatible equipment. Turning it off retains the ordinary channel bridge
-described below: the compatible channel presentation still plays, but does not carry
-the original height positioning. Avoiding the extra spatial conversion may
-help when those tracks stutter or seek slowly; it is not a guaranteed remedy for
-unrelated playback problems. This is not a global Atmos switch: Dolby Digital Plus
-(E-AC-3/JOC) Atmos remains unaffected.
-Older saved profiles default to on. HDMI channel counts and the current rendering
-mode are not used as Atmos capability gates: neither reliably describes the room's speakers.
+### Spatial audio
 
-Aether converts **48 kHz TrueHD Atmos and supported lossless DTS:X** on its
-native/HLS VOD path. For DTS-HD Master Audio, FFmpeg's patched decoder checks the actual packets:
-some DTS:X tracks are labelled only DTS-HD MA by FFmpeg, so metadata alone does
-not decide eligibility. Standard DTS:X has its four fixed heights removed from
-the compatible 7.1 downmix using the standard's constant fold, then mapped to the spatial bed.
-Alternate DTS:X presentations containing objects fall back to the ordinary
-channel bridge. Ordinary DTS-HD MA also retains that bridge.
-The engine renders into the spatial bed and encodes Apple Positional Audio (APAC), which
-tvOS can deliver as Dolby MAT to compatible equipment. This is **lossy conversion**,
-not TrueHD/DTS:X bitstream passthrough or preservation of the original dynamic object
-stream. It adds decoding/encoding work during eligible playback, not library
-scanning or idle sync. Shared live players and muted previews stay off to avoid
-additional spatial encoding in those background/concurrent paths.
+**Spatial audio defaults on for supported on-demand playback on tvOS 26+.**
+The profile-scoped `trueHDAtmosEnabled` key preserves existing Off choices and
+profile transfers; missing or malformed values use the central default. A build
+that previously omitted the preference cannot recover an Off value already
+discarded by an intervening settings save.
 
-Since 7.40, TrueHD uses the stream's own channel presentation and `BedSplitter`
-to distribute its energy between floor and height speakers, guided by decoded
-object positions and energy. This is an approximation, not the earlier exact
-object-signal mix; the production LibTrueHD build excludes matrix interpolation.
-The engine accounts for the split's latency and drains it on restart and EOF.
-With rendering enabled, completely untagged audio tracks can now prefer a
-recognized TrueHD Atmos/DTS:X track over the container default. Explicit track
-selections and the language/dub boundaries of tagged files remain authoritative.
+The adapter requests `objectAudioRendering = .apac(.l714)` only for an audible,
+non-shared on-demand session with the preference enabled. The 7.1.4 layout is an
+intermediate spatial bed, not the detected speaker inventory. The engine checks
+48 kHz TrueHD Atmos/DTS:X source eligibility and the native route, with ordinary
+channel fallback. APAC is lossy conversion, not lossless bitstream passthrough;
+actual overhead output requires compatible equipment.
 
-Live stream loading, iOS/iPadOS and older tvOS keep object rendering off. Plain
-TrueHD, ordinary DTS/DTS-HD MA, unsupported DTS:X presentations, ineligible sources and APAC initialization
-failures retain the existing bridge: FLAC for source layouts above six channels,
-otherwise the E-AC-3 compatibility bridge. Software-video playback does not use
-this conversion. E-AC-3/JOC Atmos remains stream-copied. Explicit track selections
-and language preferences are still passed to Aether; its automatic selection can
-prefer TrueHD Atmos or DTS:X within the same language/dub when rendering is enabled.
-DTS:X alternate object presentations are not rendered by the current pin.
+The pinned production TrueHD implementation uses `BedSplitter`: decoded objects
+estimate how channel-presentation energy is divided between floor and overhead
+speakers. Object signals do not directly reach output, matrix interpolation is
+disabled, and size/snap/zone/screen/elevation metadata controls are excluded.
+The fuller reference renderer remains measurement-only and is not enabled.
+This implementation description is not patent clearance: upstream explicitly
+leaves third-party patent licensing to integrators. Other apps enabling the
+feature does not establish licensing compliance or guarantee App Store approval.
 
-Progressive segment delivery remains disabled. The upstream Apple TV reports in
-[AetherEngine #731](https://github.com/superuser404notfound/AetherEngine/issues/731)
-support this output path, but are not verification of every receiver/speaker
-configuration. An Atmos receiver label alone does not prove discrete height
-mapping, particularly with tvOS Continuous Audio.
+Off and unsupported paths retain the ordinary compatible channel presentation:
+FLAC above six channels, otherwise the E-AC-3 compatibility bridge. Live streams,
+shared players, muted previews and iOS/iPadOS do not request conversion. FEL and
+other software-video routes retain channel audio. Dolby Digital Plus (E-AC-3/JOC)
+stream-copy is unaffected. Explicit track selections and language preferences
+remain authoritative. Progressive segment delivery remains off.
 
-Both apps bundle the unmodified
-MIT license, Apache-2.0 license and NOTICE from
-[LibTrueHD 2.3.0](https://github.com/superuser404notfound/LibTrueHD/tree/2.3.0)
-as `LibTrueHDLicense.txt`, `LibTrueHDApacheLicense.txt` and `LibTrueHDNotices.txt`,
-with a shared in-app credit. They also bundle the unmodified Apache-2.0 license
-and NOTICE from [LibDTSX 1.0.1](https://github.com/superuser404notfound/LibDTSX/tree/1.0.1)
-as `LibDTSXLicense.txt` and `LibDTSXNotices.txt`, with its own in-app credit.
+Both apps bundle the unmodified LibTrueHD MIT/Apache-2.0 license and NOTICE
+resources and identify the linked decoder in the in-app credits.
 
 The retained 7.23.0 audio-output
 flush epoch prevents a buffer decoded before a software seek from entering
@@ -422,10 +435,12 @@ layer is discarded.
 
 FEL decodes both layers with VideoToolbox and reconstructs the picture with Metal.
 It adds GPU/memory work and uses the sample-buffer playback path, not AVPlayer.
-E-AC-3 Atmos therefore loses its objects, and the native/HLS TrueHD Atmos and
-DTS:X height conversion does not run. The separate audio preference is preserved,
-so non-FEL titles still receive their configured audio behavior. These tradeoffs
-are stated next to the switch.
+Audio still plays as decoded channel-based PCM, including TrueHD and DTS tracks.
+The FEL route also reduces an E-AC-3/JOC soundtrack to its channel presentation,
+without the spatial information preserved by native playback. That remaining
+tradeoff is why the helper still says FEL turns off overhead sound, even when
+Spatial audio is on. Non-FEL titles keep
+their ordinary audio paths, including native E-AC-3/JOC spatial playback.
 
 Upstream documents measured Dolby Vision metadata consumption on tvOS, but not
 on iOS/iPadOS. Enabling the option is not evidence that a particular file took
@@ -553,82 +568,122 @@ HDR10+ output.
 
 | Engine | Internal name | Underlying tech | Primary use case |
 |--------|--------------|-----------------|------------------|
-| **Plozzigen** | `.plozzigen` | AetherEngine (FFmpeg demux → HLS-fMP4 → localhost → AVPlayer) | MKV library content — the workhorse (~95% of local files) |
-| **Native** | `.native` | AVPlayer directly | Server-delivered HLS/fMP4 (transcodes, direct-play manifests) |
+| **Plozzigen** | `.plozzigen` | AetherEngine: native HLS, local remux/AVPlayer, or software decoding | Primary owner for library video, selected server renditions, ordinary downloads, and live channels |
+| **Native** | `.native` | AVPlayer / AVComposition | OS-managed download packages, separate trailer audio, constrained HEVC-HLS initialization repair, and bounded compatibility recovery |
 
 > `.hybrid` is a legacy routing value meaning "this item needs on-device
 > decode." It historically selected a libmpv-backed `EngineMPV`, which has been
-> **retired** (recoverable at the `archive/mpv-engine` git tag). The router still
-> emits `.hybrid` as its abstract "needs on-device decode" signal, but it now
-> resolves to **Plozzigen** — the sole on-device decode engine.
+> **retired** (recoverable at the `archive/mpv-engine` git tag). The current router
+> no longer emits `.hybrid`; retained compatibility values resolve to Plozzigen.
 
 ## Routing Logic
 
-Engine selection happens in `PlayerViewModel` at playback start:
+`EngineSelection` chooses the owner, not the decoder:
 
 ```
-1. Is there a localRemuxSource descriptor?
-   NO  → Native (server is delivering a ready-to-play stream)
-   YES → continue
-
-2. Is plozzigenEligibility == .eligible?
-   NO  → Native (Plozzigen can't handle this container/codec)
-   YES → Plozzigen ✓
+1. Credential-scoped network file -> Aether transport, never a native URL loader.
+2. Constrained, transcoded HEVC HLS -> native AVAsset initialization repair.
+3. Separate trailer audio or an OS-managed .movpkg directory -> native asset.
+4. Otherwise -> Aether when linked; native on native-only hosts.
 ```
 
-When the router asks for on-device decode (`.hybrid`), it resolves to Plozzigen
-if that engine is linked in; otherwise it falls back to Native (AVPlayer).
+Missing codec metadata, MP4/MOV, Dolby Vision profiles, and subtitle classes do
+not reintroduce host-side format gates. Aether probes the selected source and
+chooses its supported decode/render path. A progressive file with a legacy
+`.movpkg` extension is not an OS-managed asset package.
 
-## Plozzigen Eligibility Gate
+The adapter loads `PlaybackRequest.playbackSource`, **not**
+`localRemuxSource.originalSource`. The latter retains original-file facts and
+preview access; substituting it would bypass server-selected quality, audio,
+subtitle and conversion choices. Resume and server-session ownership remain
+with the existing playback coordinator. VOD uses Aether's ordinary load path,
+which classifies finite HEVC-in-TS HLS; forcing `nativeRemoteHLS` would bypass
+that classification. Live HLS keeps its separately configured engine path.
 
-Plozzigen accepts content when ALL of these are true:
+Managed server renditions retain the provider's source audio choices, even when
+the delivered stream contains only one audio track. Manual picks, imported
+language preferences and restored selections renegotiate through the playback
+coordinator. Source track IDs are never passed as rendition-local demux indexes.
 
-- **Container:** MKV / Matroska
-- **Video codec:** HEVC, H.264, VP9, or AV1
-- **Audio codec:** Any (fMP4-legal codecs are stream-copied; eligible TrueHD Atmos
-  is spatially rendered on tvOS 26+; other incompatible audio uses the existing
-  FLAC/E-AC-3 bridge)
-- **Byte-range readable:** HTTP range requests or local file access
-- **NOT Dolby Vision Profile 7** (dual-layer BL+EL+RPU — unsupported everywhere)
+This follows the single-player, server-selected-input pattern in
+[Sodalite's player](https://github.com/superuser404notfound/Sodalite/blob/31799bde53e2d93384216b3f9b2523600896ef2b/Sodalite/Player/PlayerViewModel.swift).
+It does not assume that another app's profile or comments override Plozz's
+pinned engine API or provider contracts.
 
-## Edge Cases the Engines Don't Fully Cover
+## Provider input capabilities
 
-The retired mpv engine used to absorb these cases. They now route to Plozzigen
-(when eligible) or fall back to Native (AVPlayer):
+`PlozzigenMediaFormats` is the shared decoder-backed input list for Plex and
+Jellyfin/Emby negotiation. It includes MP4, Matroska/WebM, transport/program
+streams, AVI, ASF, Ogg, FLV and RealMedia, with their linked video/audio families.
+MPEG-2, MPEG-4 Part 2, VC-1, WMV/WMA, Theora, RealMedia and supported FLV-era
+codecs are not rejected merely because the old native-remux path lacked them.
+The list is not a promise that every file or arbitrary codec/container pairing
+works. Decoder availability, actual stream validity, transport, output and
+provider policy still matter. DASH is not advertised: compiled demuxers alone
+do not establish a supported remote-input path.
 
-| Scenario | Current handling |
-|----------|------------------|
-| PGS bitmap subtitles active | AVPlayer has no bitmap subtitle renderer; server-side burn-in/transcode is the path |
-| External audio URL | Plozzigen/AVPlayer play the primary track; server-side mux is the path |
-| Non-MKV containers (rare edge cases) | Native AVPlayer / server transcode |
-| DV Profile 7 dual-layer | Can't be remuxed to single-layer fMP4 |
-| Exotic video codecs (MPEG-2, VC-1) | Native AVPlayer / server transcode |
+Native-only capability profiles remain separate. Server conversion profiles,
+quality budgets, selected versions/tracks and session maintenance are unchanged.
 
-## When Native AVPlayer Is Used
+## Deliberate native exceptions
 
-Native handles content the server has already prepared:
+- An `AVAssetDownload` package is an OS-managed asset, not an ordinary file.
+- Separate trailer audio needs the existing `AVComposition`; Aether's single
+  URL/reader load is not that composition.
+- Constrained HEVC HLS retains the tested empty-`sdtp` fMP4 initialization repair.
+  It uses Plozz's custom AVAsset resource loader, which Aether's URL load cannot
+  accept. `HEVCInitializationPlaybackHostedTests` exercises the original
+  rejection and actual decoded frames after repair, including seeking.
+- Existing bounded alternate-engine/server-conversion recovery remains.
+  A transcoded request is not eligible for arbitrary alternate-engine recovery;
+  that ladder is not a substitute for preserving the initialization repair.
 
-- Server-transcoded HLS streams (`.m3u8`)
-- Direct-play of natively compatible MP4/MOV files
-- YouTube trailers (no `localRemuxSource` — just a URL)
+These are asset/API compatibility boundaries, not a blanket MP4, HEVC, HLS,
+Dolby Vision or subtitle exclusion. Aether's AVPlayer-backed routes are still
+native decoding; consolidation does not force software decoding or establish
+lower CPU, I/O or energy use.
+
+## Persistent playback diagnostics
+
+`PlaybackDiagnosticJournal` records event-driven request/load/first-frame,
+phase-change, failure, retry, stop and server-release evidence. Random
+session/attempt IDs correlate retries without persisting server session IDs.
+Typed failures are captured before teardown; output codec/range are separate
+from source metadata and negotiated output. Live playback records the existing
+typed failure evidence even when there is no server reporting callback; unknown
+live provider identity remains unknown rather than being labelled IPTV.
+
+Recording neither reads AVPlayer logs nor performs disk I/O. A utility queue
+coalesces writes, retaining at most 256 entries and 128 KiB for 48 hours.
+No new per-frame observation or polling loop is added. URLs, headers, titles,
+account identifiers and arbitrary error descriptions are excluded. Storage
+failures are explicit. `releaseFinished` means the provider release API returned,
+not proof that the server deleted the session.
+
+Settings' existing consent-gated diagnostic submission asynchronously appends
+the journal to its attachment, rechecking reporting availability after export.
+This is not an automatic per-event upload. The HUD remains separate.
+The `playback-journal-disabled/enabled` performance-lab controls measure 10,000
+notifications, synchronous admission separately, and completed persistence with
+retention assertions; they do not establish physical-device frame pacing.
 
 ## Quality Capabilities by Engine
 
 | Feature | Plozzigen | Native |
 |---------|-----------|--------|
-| Dolby Vision | ✅ (Profile 5/8) | ✅ (if server delivers DV) |
-| Dolby Atmos | ✅ (E-AC-3 JOC stream-copy; TrueHD Atmos converted to APAC on tvOS 26+ VOD) | ✅ (if stream has E-AC3 JOC) |
+| Dolby Vision | ✅ (Profile 5/8; optional dual-layer path, see above) | ✅ (if server delivers DV) |
+| Directly compatible spatial audio | ✅ (E-AC-3 JOC stream-copy on the native path; FEL uses channel PCM) | ✅ (if stream has E-AC-3 JOC) |
 | HDR10 / HLG | ✅ | ✅ |
 | Full-timeline seek | ✅ | ✅ (if not live transcode) |
-| PGS subtitles | ❌ | ❌ |
-| DTS:X heights | ✅ (supported lossless DTS:X converted to APAC on tvOS 26+ native/HLS VOD) | ❌ |
+| PGS subtitles | ✅ (engine-owned subtitle paths) | ❌ (server burn-in needed) |
+| Spatial audio conversion with heights | ✅ (supported native-path tracks on tvOS 26+, lossy; not FEL) | ❌ |
 | DTS bitstream | ❌ (channel audio uses FLAC/E-AC-3 bridge) | ❌ |
-| TrueHD bitstream | ❌ (eligible Atmos uses APAC; otherwise FLAC/E-AC-3 bridge) | ❌ |
+| TrueHD bitstream | ❌ (channel audio uses FLAC/E-AC-3 bridge) | ❌ |
 
 ## AirPlay 2 / HomePod Audio Recovery
 
-The Plozzigen and Native engines both output audio through `AVPlayer` +
-`AVAudioSession`, so they are subject to the **AirPlay 2 / HomePod silent-drop**
+Native and Aether's AVPlayer-backed routes use `AVPlayer` +
+`AVAudioSession`, so they can encounter the **AirPlay 2 / HomePod silent-drop**
 that was root-caused and fixed for music. The cure (a full audio-session
 deactivate→reactivate cycle — `setActive(true)` alone is a no-op), plus what
 did/didn't work and how to port it to video seek/route-change handling, is
@@ -636,11 +691,11 @@ documented in **[airplay-audio-recovery.md](./airplay-audio-recovery.md)**.
 
 ## Source Code References
 
-- Eligibility gate: `Sources/CoreModels/LocalRemuxModels.swift` → `plozzigenEligibility`
-- Engine routing: `Sources/FeaturePlayback/PlayerViewModel.swift` → engine selection block
+- Provider input formats: `Sources/CoreModels/PlozzigenMediaFormats.swift`
+- Engine routing: `Sources/FeaturePlayback/EngineSelection.swift`
 - Plozzigen adapter: `Sources/EnginePlozzigen/PlozzigenVideoEngine.swift`
 - Engine factory: `Sources/FeaturePlayback/EngineFactory.swift`
-- AetherEngine dependency: `Package.swift` → `superuser404notfound/AetherEngine`
+- AetherEngine dependency: `Package.swift` → `brandomoore/AetherEngine` (patched upstream fork)
 
 ## History
 
@@ -650,7 +705,7 @@ handle Plex content correctly. The prior engine's experimental branches are
 preserved under `preserve/remux-*` git tags for reference but are not used.
 
 AetherEngine was adopted because it solves the exact same problem (MKV → AVPlayer
-with DoVi + Atmos + seeking) with a battle-tested pipeline. Plozz wraps it via
+with Dolby Vision, spatial audio and seeking) with a battle-tested pipeline. Plozz wraps it via
 the `PlozzigenVideoEngine` adapter conforming to the `VideoEngine` protocol.
 
 An earlier libmpv-backed `EngineMPV` engine (routed via `.hybrid`) was also

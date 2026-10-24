@@ -24,12 +24,12 @@ public final class QuickConnectViewModel {
     public var codeLifetime: TimeInterval { service.timeout }
 
     private let service: QuickConnectService
-    private let onAuthenticated: (UserSession) -> Void
+    private let onAuthenticated: (UserSession) throws -> Void
     private var flow: Task<Void, Never>?
 
     public init(
         service: QuickConnectService,
-        onAuthenticated: @escaping (UserSession) -> Void
+        onAuthenticated: @escaping (UserSession) throws -> Void
     ) {
         self.service = service
         self.onAuthenticated = onAuthenticated
@@ -54,8 +54,9 @@ public final class QuickConnectViewModel {
 
                     switch try await Self.awaitApprovalOrExpiry(service: service, challenge: challenge, expiresAt: expiresAt) {
                     case let .approved(session):
+                        try Task.checkCancellation()
+                        try self.onAuthenticated(session)
                         self.phase = .success
-                        self.onAuthenticated(session)
                         return
                     case .expired:
                         continue // Transparently issue a fresh code.
@@ -64,9 +65,10 @@ public final class QuickConnectViewModel {
             } catch is CancellationError {
                 // Cancelled by the user; leave phase as-is (view is dismissing).
             } catch let error as AppError {
-                if error == .cancelled { return }
+                if Task.isCancelled || error == .cancelled { return }
                 self.phase = .error(error.userMessage)
             } catch {
+                guard !Task.isCancelled else { return }
                 self.phase = .error(AppError.unknown("").userMessage)
             }
         }

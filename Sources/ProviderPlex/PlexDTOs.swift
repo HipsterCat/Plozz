@@ -232,7 +232,14 @@ struct PlexMetadata: Decodable {
     /// Plex Pass intro/credits markers, present only when the metadata request
     /// passes `includeMarkers=1`. Offsets are in milliseconds.
     let Marker: [PlexMarker]?
+    let Chapter: [PlexChapter]?
     let Preferences: PlexItemPreferences?
+}
+
+struct PlexChapter: Decodable {
+    let tag: String?
+    let startTimeOffset: Int64?
+    let thumb: String?
 }
 
 struct PlexItemPreferences: Decodable {

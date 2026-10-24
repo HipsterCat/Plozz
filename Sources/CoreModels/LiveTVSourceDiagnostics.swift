@@ -210,11 +210,18 @@ public final class LiveTVSourceDiagnostics: @unchecked Sendable {
             if deduplicate {
                 let readEvents: Set<Event> = [.sourceRead, .sourceMissing, .sourceReadFailed]
                 let category = readEvents.contains(payload.event) ? "sourceReading" : payload.event.rawValue
-                let key = category + (payload.identities[.namespace] ?? "")
-                    + (payload.identities[.profile] ?? "") + (payload.identities[.account] ?? "")
-                    + (payload.identities[.catalog] ?? "")
-                    + (payload.identities[.source] ?? "") + (payload.flags[.sharedPartition].map(String.init) ?? "")
-                    + (payload.event == .keychainRead ? (payload.identities[.storageKey] ?? "") : "")
+                var key = category
+                key += payload.identities[.namespace] ?? ""
+                key += payload.identities[.profile] ?? ""
+                key += payload.identities[.account] ?? ""
+                key += payload.identities[.catalog] ?? ""
+                key += payload.identities[.source] ?? ""
+                if let sharedPartition = payload.flags[.sharedPartition] {
+                    key += String(sharedPartition)
+                }
+                if payload.event == .keychainRead {
+                    key += payload.identities[.storageKey] ?? ""
+                }
                 guard deduplicated[key] != payload else { return }
                 if deduplicated.count >= 128 { deduplicated.removeAll(keepingCapacity: true) }
                 deduplicated[key] = payload

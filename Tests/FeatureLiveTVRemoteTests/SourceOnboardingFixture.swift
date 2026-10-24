@@ -11,14 +11,26 @@ import SwiftUI
 struct SourceOnboardingFixture: View {
     private enum Destination: Hashable { case sources, settings }
     @State private var path: [Destination] = []
-    @State private var profiles = ProfilesModel(store: SourceSmokeProfiles())
+    @State private var profiles = makeProfiles()
     @State private var sources = SourceSmokeStore()
+    @State private var viewSettings = SourceSmokeViewSettings()
     @State private var automatic = AutomaticChannelsFixtureModel()
     @State private var automaticLoadIssue: LibraryChannelError?
     private let usesTypedNavigation = ProcessInfo.processInfo.arguments.contains("--typed-sources")
     private let usesSettings = ProcessInfo.processInfo.arguments.contains("--source-settings")
     private let usesTypedSettings = ProcessInfo.processInfo.arguments.contains("--typed-settings")
     private let usesAutomaticChannels = ProcessInfo.processInfo.arguments.contains("--automatic-channels")
+
+    private static func makeProfiles() -> ProfilesModel {
+        let profiles = ProfilesModel(store: SourceSmokeProfiles())
+        if ProcessInfo.processInfo.arguments.contains("--source-kids-locked") {
+            var profile = profiles.activeProfile
+            profile.isKids = true
+            profiles.update(profile)
+            profiles.setParentalPIN(ParentalPIN.make(pin: "1234", iterations: 1))
+        }
+        return profiles
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -82,22 +94,33 @@ struct SourceOnboardingFixture: View {
         }
         .overlay(alignment: .bottom) {
             TimelineView(.periodic(from: .now, by: 0.2)) { _ in
-                Text(verbatim: "Sources \(sources.sourceCount) writes \(sources.writeCount) requests \(SourceSmokeNetworkBlocker.requestCount)")
-                    .font(.caption2)
-                    .accessibilityIdentifier("fixture-source-metrics")
-                    .allowsHitTesting(false)
+                VStack {
+                    Text(verbatim: "Sources \(sources.sourceCount) writes \(sources.writeCount) requests \(SourceSmokeNetworkBlocker.requestCount)")
+                        .accessibilityIdentifier("fixture-source-metrics")
+                    if usesSettings {
+                        let saved = viewSettings.load()
+                        Text(verbatim: "Recent \(saved.showsRecentChannels) favorites \(saved.favoritesOnly)")
+                            .accessibilityIdentifier("fixture-view-settings-metrics")
+                        Text(verbatim: saved.sortByName ? "Order by name" : "Order by number")
+                            .accessibilityIdentifier("fixture-sort-metrics")
+                        Text(verbatim: saved.startsWithCategories ? "Start with categories" : "Start with guide")
+                            .accessibilityIdentifier("fixture-start-view-metrics")
+                    }
+                }
+                .font(.caption2)
+                .allowsHitTesting(false)
             }
         }
     }
 
     private var settings: some View {
         LiveTVSettingsView(
-            store: SourceSmokeViewSettings(),
+            store: viewSettings,
             preferencesStore: SourceSmokePreferences()
-        ) {
+        ) { preferences in
             AnyView(SourceSmokeSourcesPane(
                 sources: sources, presentation: .settingsPane,
-                automatic: usesAutomaticChannels ? automatic : nil))
+                automatic: usesAutomaticChannels ? automatic : nil, settingsPreferences: preferences))
         }
     }
 }
@@ -106,16 +129,18 @@ private struct SourceSmokeSourcesPane: View {
     let sources: SourceSmokeStore
     let presentation: LiveTVSourcesView.Presentation
     let automatic: AutomaticChannelsFixtureModel?
+    let settingsPreferences: AnyView?
     @State private var managesChannels = false
     @State private var catalog: SourceSmokeCatalog?
 
     init(
         sources: SourceSmokeStore, presentation: LiveTVSourcesView.Presentation,
-        automatic: AutomaticChannelsFixtureModel?
+        automatic: AutomaticChannelsFixtureModel?, settingsPreferences: AnyView? = nil
     ) {
         self.sources = sources
         self.presentation = presentation
         self.automatic = automatic
+        self.settingsPreferences = settingsPreferences
         _catalog = State(initialValue: ProcessInfo.processInfo.arguments.contains("--catalog-sources")
             ? SourceSmokeCatalog(configuration: try! sources.load()) : nil)
     }
@@ -123,7 +148,7 @@ private struct SourceSmokeSourcesPane: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if presentation == .settingsPane {
+            if presentation == .settingsPane && settingsPreferences == nil {
                 SettingsPageScroll { sourceContent }
                     .navigationTitle("Sources")
             } else {
@@ -145,8 +170,14 @@ private struct SourceSmokeSourcesPane: View {
     private var sourceContent: some View {
         LiveTVSourcesView(
             store: sources, imports: catalog?.imports, presentation: presentation,
+            serverChoices: ProcessInfo.processInfo.arguments.contains("--server-sources") ? [
+                .init(id: "plex-account", name: "Media room", userName: "Viewer", kind: .plex),
+                .init(id: "jellyfin-account", name: "Media room", userName: "Viewer", kind: .jellyfin)
+            ] : [],
             createChannel: automatic == nil ? nil : { managesChannels = true },
-            scanCoordinator: catalog?.scans
+            scanCoordinator: catalog?.scans, settingsPreferences: settingsPreferences,
+            automaticChannels: automatic?.presentation,
+            customChannelCount: automatic?.service.visibleDefinitions.filter { !$0.isAutomatic }.count ?? 0
         )
     }
 }
@@ -232,6 +263,7 @@ private struct SetupCardsFixture: View {
             createChannel: { selectedAction = "library" }
         )
         .frame(width: arguments.contains("--setup-compact") ? 720 : nil)
+        .settingsPageBackground()
         .environment(\.layoutDirection, arguments.contains("--rtl") ? .rightToLeft : .leftToRight)
         .environment(\.themePalette, arguments.contains("--light") ? .light : .dark)
         .environment(\.colorScheme, arguments.contains("--light") ? .light : .dark)
@@ -266,20 +298,32 @@ final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable {
         if let configuration {
             self.configuration = configuration
         } else if ProcessInfo.processInfo.arguments.contains("--configured-sources") {
-            self.configuration = LiveTVSourcesConfiguration(playlists: [
+            let count = ProcessInfo.processInfo.arguments.contains("--many-sources") ? 6 : 1
+            self.configuration = LiveTVSourcesConfiguration(playlists: (0..<count).map { index in
                 LiveTVPlaylistSource(
-                    id: "fixture", name: "Fixture IPTV",
+                    id: index == 0 ? "fixture" : "fixture-\(index)",
+                    name: index == 0 ? "Fixture IPTV" : "Fixture source \(index + 1)",
                     playlistURL: URL(string: "https://example.invalid/fixture.m3u")!,
                     guideURLs: ProcessInfo.processInfo.arguments.contains("--source-guides")
                         ? [URL(string: "https://example.invalid/guide.xml")!] : []
                 )
+            })
+        } else if ProcessInfo.processInfo.arguments.contains("--server-sources") {
+            self.configuration = .init(servers: [
+                .init(id: "plex-source", name: "Media room", accountID: "plex-account", isEnabled: false),
+                .init(id: "jellyfin-source", name: "Media room", accountID: "jellyfin-account", isEnabled: false)
             ])
         }
     }
 
     var sourceCount: Int { lock.withLock { configuration.playlists.count + configuration.servers.count } }
     var writeCount: Int { lock.withLock { writes } }
-    func load() throws -> LiveTVSourcesConfiguration { lock.withLock { configuration } }
+    func load() throws -> LiveTVSourcesConfiguration {
+        if ProcessInfo.processInfo.arguments.contains("--source-load-fails") {
+            throw LiveTVSourcesStoreError.loadFailed
+        }
+        return lock.withLock { configuration }
+    }
     func save(_ value: LiveTVSourcesConfiguration) throws {
         if ProcessInfo.processInfo.arguments.contains("--source-save-fails") {
             throw LiveTVSourcesStoreError.saveFailed
@@ -292,9 +336,11 @@ final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable {
     }
 }
 
-private struct SourceSmokeViewSettings: LiveTVViewSettingsStoring {
-    func load() -> LiveTVViewSettings { .init() }
-    func save(_ settings: LiveTVViewSettings) {}
+private final class SourceSmokeViewSettings: LiveTVViewSettingsStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var settings = LiveTVViewSettings()
+    func load() -> LiveTVViewSettings { lock.withLock { settings } }
+    func save(_ settings: LiveTVViewSettings) { lock.withLock { self.settings = settings } }
 }
 
 struct SourceSmokePreferences: LiveTVPreferencesStoring {

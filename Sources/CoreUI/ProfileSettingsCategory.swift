@@ -43,12 +43,12 @@ public enum ProfileSettingsCategory: String, CaseIterable, Identifiable, Sendabl
     public var summary: LocalizedStringResource? {
         switch self {
         case .appearance:
-            "Theme, cards, artwork, and spoilers"
+            "Theme, cards, artwork, and display size"
         case .screensNavigation:
             #if os(tvOS)
-            "Home, navigation, detail pages, and music"
+            "Shared settings, Home, libraries, detail pages, and music"
             #else
-            "Home, navigation, and detail pages"
+            "Shared settings, Home, libraries, and detail pages"
             #endif
         case .trackers:
             if RuntimeFeatureFlags.buildDefault.isEnabled(.wetrakr) {

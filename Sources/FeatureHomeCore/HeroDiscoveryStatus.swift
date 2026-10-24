@@ -27,6 +27,7 @@ public enum HeroDiscoveryStatus {
             var item = item
             item.availability = update.availability
             item.downloadProgress = update.downloadProgress
+            item.hasRequestDownloadActivity = update.hasRequestDownloadActivity
             return item
         }
     }

@@ -146,6 +146,14 @@ Already identified, owned, unsupported, and personal-media items skip this work.
 
 ## Invariants
 
+- **Single-image logo selection.** TMDB logos include SVG-origin artwork through
+  the CDN's PNG rendition at the existing `w500` size. Language and rating choose
+  one logo in a single pass over the usual images response; there is no extra
+  endpoint, candidate-image download, SVG renderer, or contrast-analysis pass.
+  Better-ranked originals can improve dark-background legibility, but metadata
+  ranking does not guarantee contrast. Server artwork and configured source
+  priority remain authoritative. Existing URL caches expire normally rather than
+  forcing a library-wide refetch; already-cached logos need not change immediately.
 - **Portrait hero artwork is opt-in.** Compact mobile heroes prefer a
   language-neutral portrait, then a language-neutral landscape, then usable
   fallback artwork. TMDB and TheTVDB rank the image lists already returned by

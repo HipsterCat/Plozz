@@ -55,6 +55,13 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
         self == .jellyfin || self == .emby
     }
 
+    public var supportsAccountReauthentication: Bool {
+        switch self {
+        case .jellyfin, .emby, .plex, .silo: true
+        case .iptv, .mediaShare: false
+        }
+    }
+
     /// A rotating Silo refresh token belongs to one installation's login.
     /// Other devices pair independently instead of racing the same token.
     public var permitsCredentialTransfer: Bool { self != .silo }

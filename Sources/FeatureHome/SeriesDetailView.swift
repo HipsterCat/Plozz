@@ -96,18 +96,7 @@ struct SeriesDetailView: View {
     /// once. It is declarative and re-evaluates on every appearance — including a
     /// pop — where it would override the returning user's focus.
     @State private var hasOpenedOnce = false
-    /// Latched once the opening claim on Play has been settled.
-    ///
-    /// `defaultFocus` fires when the page appears, but the hero's Play button only
-    /// EXISTS once `playTarget` resolves — and on a season page that's an async
-    /// load. Open before it lands and the action row's first focusable is whatever
-    /// else is there (the watched button), so tvOS gives entry focus to "Mark as
-    /// Watched" and the already-spent `defaultFocus` never reclaims it. Re-asserting
-    /// Play the moment it appears is what makes the page open on Play reliably.
-    @State private var hasSettledOpeningFocus = false
-    /// Set as soon as the user genuinely drives focus somewhere themselves (into
-    /// the rail or the season bar). It fences the re-assert above so a fast user
-    /// who has already moved on is never yanked back up to Play.
+    /// Preserves explicit episode/season browsing while late data resolves.
     @State private var hasUserDirectedFocus = false
     /// True from the moment a pushed page pops until the rail has reclaimed
     /// focus. `hasChildOnTop` alone is too short a window: it clears the instant
@@ -358,16 +347,6 @@ struct SeriesDetailView: View {
                 )
             )
             .onAppear { hasOpenedOnce = true }
-            // The Play button appears only once the play target resolves; until
-            // then there is nothing for `defaultFocus` to land on. Claim it the
-            // moment it exists and the entrance is ready, never after the user
-            // has driven focus themselves.
-            .onChange(of: playTarget?.id, initial: true) { _, _ in
-                settleOpeningHeroFocus()
-            }
-            .onChange(of: holdsHeroFocusDuringEntrance) { _, held in
-                if !held { settleOpeningHeroFocus() }
-            }
             .onChange(of: hasChildOnTop) { _, covered in
                 // Returning from a pushed page. tvOS hands focus to the hero
                 // rather than back to the rail (verified on device: the rail
@@ -397,17 +376,6 @@ struct SeriesDetailView: View {
             }
     }
 
-    private func settleOpeningHeroFocus() {
-        guard playTarget != nil,
-              !holdsHeroFocusDuringEntrance,
-              !hasSettledOpeningFocus,
-              !hasUserDirectedFocus,
-              !hasChildOnTop,
-              !isReclaimingFocus else { return }
-        hasSettledOpeningFocus = true
-        playFocused = true
-    }
-
     /// Whether focus changes arriving now are the system's rather than the
     /// user's — while a child page is on top, or while the rail is reclaiming
     /// focus just after one pops.
@@ -434,7 +402,13 @@ struct SeriesDetailView: View {
                         scheduleLine: upcomingHeroLine,
                         spoilerSettings: spoilerSettings,
                         playTitle: playTarget.map { viewModel.playButtonTitle(for: $0) },
-                        onPlay: playTarget.map { target in { onPlay(target.selectingVersion(effectivePlayVersionID)) } },
+                        onPlay: playTarget.map { target in {
+                            onPlay(DetailPlaybackSelection.playItem(
+                                for: target, sources: target.sources, activeAccountID: target.sourceAccountID,
+                                versionID: effectivePlayVersionID,
+                                explicit: versionOverride != nil || target.explicitSourceSelection
+                            ))
+                        } },
                         showsPlayPlaceholder: DetailPlaybackSelection.showsPlayPlaceholder(
                             for: series,
                             hasPlayTarget: playTarget != nil,
@@ -450,13 +424,16 @@ struct SeriesDetailView: View {
                         isRetryingPlaybackInventory: playTarget.map {
                             viewModel.isRetryingPlaybackInventory(for: $0)
                         } ?? false,
+                        allowsDeferredActivation: !hasChildOnTop && !browserHoldsFocus && !seasonBarEngaged,
+                        deferredActionOwner: ObjectIdentifier(viewModel),
                         playProgress: playTarget?.resumeProgressFraction,
                         playRemainingText: playTarget?.resumeRemainingText,
                         playSeasonEpisodeText: playTarget.flatMap { HeroForegroundModelBuilder.seasonEpisodeButtonText(for: $0) },
                         onPlayTrailer: trailerButtonAction,
                         versions: playVersions,
                         selectedVersionID: effectivePlayVersionID,
-                        onSelectVersion: playVersions.count > 1 ? { selectVersion($0) } : nil,
+                        onSelectVersion: { selectVersion($0) },
+                        loadVersions: playTarget.flatMap { viewModel.playbackVersionsLoader(for: $0) },
                         sources: distinctServerChoices,
                         offlineSourceAccountIDs: viewModel.unreachableSourceAccountIDs,
                         selectedSourceAccountID: series.sourceAccountID,
@@ -865,7 +842,6 @@ struct SeriesDetailView: View {
         browserEntry = loading ? .loadingSeasons : .browser
         browserHoldsFocus = true
         if !loading { hasUserDirectedFocus = true }
-        hasSettledOpeningFocus = true
         if entering { episodeRailResetToken += 1 }
         if shouldReveal { onFocusEntered() }
     }
@@ -1230,7 +1206,6 @@ struct SeriesDetailView: View {
         browserEntry = .browser
         browserHoldsFocus = true
         if !isPlaceholder { hasUserDirectedFocus = true }
-        hasSettledOpeningFocus = true
         if browserPresentationSettled && recedeModel.isReceded {
             hasPresentedEpisodeBrowser = true
         }
@@ -1450,7 +1425,10 @@ struct SeriesDetailView: View {
     /// only appears when an episode genuinely has more than one file — matching the
     /// movie behaviour.
     private var playVersions: [MediaVersion] {
-        playTarget?.versions ?? []
+        guard let target = playTarget else { return [] }
+        return DetailPlaybackSelection.versions(
+            for: target, sources: target.sources, activeAccountID: target.sourceAccountID
+        )
     }
 
     /// Applies to the WHOLE SHOW, not just this episode.

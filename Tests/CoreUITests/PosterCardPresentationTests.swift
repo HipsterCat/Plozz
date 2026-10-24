@@ -353,6 +353,30 @@ final class PosterCardPresentationTests: XCTestCase {
         XCTAssertFalse(hosted.plozzShowsUnwatchedEpisodeCount)
     }
 
+    func testHostedEnvironmentCarriesEveryWatchIndicatorColor() {
+        var source = EnvironmentValues()
+        var hosted = EnvironmentValues()
+        for color in WatchIndicatorColor.allCases {
+            source.plozzWatchIndicatorColor = color
+            hosted.copyHostedPresentation(from: source)
+            XCTAssertEqual(hosted.plozzWatchIndicatorColor, color)
+        }
+    }
+
+    func testHostedEnvironmentCarriesIndependentEpisodeCountStyle() {
+        var source = EnvironmentValues()
+        var hosted = EnvironmentValues()
+        for indicator in WatchStatusIndicator.allCases {
+            source.plozzWatchStatusIndicator = indicator
+            for style in EpisodeCountBadgeStyle.allCases {
+                source.plozzEpisodeCountBadgeStyle = style
+                hosted.copyHostedPresentation(from: source)
+                XCTAssertEqual(hosted.plozzWatchStatusIndicator, indicator)
+                XCTAssertEqual(hosted.plozzEpisodeCountBadgeStyle, style)
+            }
+        }
+    }
+
     func testProgressTakesPriorityOverWatchedBadge() {
         let item = MediaItem(
             id: "movie",

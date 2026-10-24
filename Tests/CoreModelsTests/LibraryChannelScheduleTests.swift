@@ -54,6 +54,27 @@ final class LibraryChannelScheduleTests: XCTestCase {
         }
     }
 
+    func testSourcePreflightUsesTheSameIdentityRulesAsScheduledItems() throws {
+        let media = MediaItem(id: "movie", title: "Movie", kind: .movie, runtime: 60)
+        for (accountID, libraryID, serverID, userID) in [
+            ("bad/account", "library", "server", "user"),
+            ("account", "bad/library", "server", "user"),
+            ("account", "library", "bad/server", "user"),
+            ("account", "library", "server", "")
+        ] {
+            let library = LibraryChannelLibrary(accountID: accountID, libraryID: libraryID)
+            XCTAssertThrowsError(try LibraryChannelItem.validateSource(
+                library: library, serverID: serverID, userID: userID
+            )) { XCTAssertEqual($0 as? LibraryChannelError, .invalidSnapshot) }
+            XCTAssertThrowsError(try LibraryChannelItem(
+                item: media, library: library, serverID: serverID, userID: userID
+            )) { XCTAssertEqual($0 as? LibraryChannelError, .invalidSnapshot) }
+        }
+        XCTAssertNoThrow(try LibraryChannelItem.validateSource(
+            library: .init(accountID: "server|user", libraryID: "library"), serverID: "server", userID: "user"
+        ))
+    }
+
     func testEpisodeWithoutAParentNeverGuessesAShowByTitle() throws {
         let episode = try LibraryChannelItem(
             item: MediaItem(id: "episode", title: "Episode", kind: .episode, runtime: 60),

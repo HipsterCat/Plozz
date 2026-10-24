@@ -26,17 +26,20 @@ public final class PlexAuthViewModel {
     public var codeLifetime: TimeInterval { service.timeout }
 
     private let service: PlexAuthService
-    private let onAuthenticated: (UserSession) -> Void
-    private let onAuthenticatedMany: ([UserSession]) -> Void
+    private let onAuthenticated: (UserSession) throws -> Void
+    private let onAuthenticatedMany: ([UserSession]) throws -> Void
+    private let reconnectingAccount: Account?
     private var flow: Task<Void, Never>?
     private var authToken: String?
 
     public init(
         service: PlexAuthService,
-        onAuthenticated: @escaping (UserSession) -> Void,
-        onAuthenticatedMany: @escaping ([UserSession]) -> Void = { _ in }
+        reconnectingAccount: Account? = nil,
+        onAuthenticated: @escaping (UserSession) throws -> Void,
+        onAuthenticatedMany: @escaping ([UserSession]) throws -> Void = { _ in }
     ) {
         self.service = service
+        self.reconnectingAccount = reconnectingAccount
         self.onAuthenticated = onAuthenticated
         self.onAuthenticatedMany = onAuthenticatedMany
     }
@@ -77,6 +80,14 @@ public final class PlexAuthViewModel {
 
                         let servers = try await service.servers(authToken: token)
                         try Task.checkCancellation()
+                        if let account = self.reconnectingAccount {
+                            guard let server = servers.first(where: { $0.id == account.server.id }) else {
+                                self.phase = .error("This Plex account no longer has access to the saved server. Sign in with the original account or restore its server access in Plex.")
+                                return
+                            }
+                            try await self.finish(with: server, token: token)
+                            return
+                        }
                         switch servers.count {
                         case 0:
                             self.phase = .error("No Plex servers are available on this account.")
@@ -94,11 +105,14 @@ public final class PlexAuthViewModel {
             } catch is CancellationError {
                 // Cancelled by the user; leave phase as-is (view is dismissing).
             } catch let error as PlexPinError {
+                guard !Task.isCancelled else { return }
                 self.phase = .error(error.userMessage)
             } catch let error as AppError {
+                guard !Task.isCancelled else { return }
                 if error == .cancelled { return }
                 self.phase = .error(error.userMessage)
             } catch {
+                guard !Task.isCancelled else { return }
                 self.phase = .error(AppError.unknown("").userMessage)
             }
         }
@@ -159,7 +173,8 @@ public final class PlexAuthViewModel {
     /// per server. Hands them all back at once so onboarding continues a single
     /// time after all accounts are persisted.
     public func selectServers(_ candidates: [PlexServerCandidate]) {
-        guard let token = authToken, !candidates.isEmpty else { return }
+        guard reconnectingAccount == nil,
+              let token = authToken, !candidates.isEmpty else { return }
         flow?.cancel()
         phase = .loadingServers
         flow = Task { [weak self] in
@@ -172,9 +187,9 @@ public final class PlexAuthViewModel {
                 }
                 try Task.checkCancellation()
                 if sessions.count == 1 {
-                    self.onAuthenticated(sessions[0])
+                    try self.onAuthenticated(sessions[0])
                 } else {
-                    self.onAuthenticatedMany(sessions)
+                    try self.onAuthenticatedMany(sessions)
                 }
             } catch is CancellationError {
                 // Dismissing.
@@ -189,13 +204,18 @@ public final class PlexAuthViewModel {
     private func finish(with candidate: PlexServerCandidate, token: String) async throws {
         let session = try await service.makeSession(for: candidate, authToken: token)
         try Task.checkCancellation()
-        onAuthenticated(session)
+        if let account = reconnectingAccount, session.userID != account.userID {
+            phase = .error("Sign in with the original Plex account to reconnect this server.")
+            return
+        }
+        try onAuthenticated(session)
     }
 
     /// Cancels any in-flight work (Cancel button / view disappears).
     public func cancel() {
         flow?.cancel()
         flow = nil
+        authToken = nil
     }
 
     public func retry() {

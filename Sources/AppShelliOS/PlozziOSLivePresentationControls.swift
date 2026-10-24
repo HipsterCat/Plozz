@@ -35,13 +35,6 @@ struct PlozziOSLivePresentationControls: View {
                         .accessibilityValue(pictureInPicture.isAirPlayActive ? "Connected" : "Not connected")
                         .accessibilityIdentifier("live-channel-airplay")
                 }
-                Button(action: context.stopPlayback) {
-                    Label("Stop playback", systemImage: "stop.fill")
-                        .font(.headline)
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(PlayerGlassCircleButtonStyle(diameter: 44))
-                .accessibilityIdentifier("live-channel-stop")
             }
         }
         .foregroundStyle(.white)

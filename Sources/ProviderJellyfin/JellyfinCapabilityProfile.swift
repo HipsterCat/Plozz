@@ -3,14 +3,13 @@ import CoreModels
 
 /// The Jellyfin **DeviceProfile** Plozz sends in the body of
 /// `POST /Items/{id}/PlaybackInfo` so the server can decide, per media source,
-/// whether Apple TV can *direct play* a file or whether it must be transcoded /
-/// remuxed to a seekable HLS stream.
+/// whether the linked playback engine can direct play a file or whether the
+/// server must produce a compatible stream.
 ///
 /// This is distinct from `JellyfinDeviceProfile`, which is only the device
 /// *identity* carried in the `Authorization` header. This type describes
-/// **codec/container capabilities** and mirrors Swiftfin's native (AVFoundation)
-/// profile: AVPlayer can demux `mp4/m4v/mov/mpegts/3gp/avi` but **not** MKV, so
-/// MKV (and any unsupported codec) falls through to the HLS transcoding profile.
+/// **codec/container capabilities**. Aether-enabled hosts advertise the linked
+/// decoder families; native-only hosts retain their AVFoundation profile.
 ///
 /// Direct play is always preferred (best quality, no server CPU); transcoding is
 /// the last-resort fallback. The HLS transcoding profile uses fMP4 segments with
@@ -42,20 +41,9 @@ extension JellyfinCapabilityProfile {
     /// still capping pathological files.
     public static let defaultMaxBitrate = 120_000_000
 
-    /// Builds the native (AVFoundation / `AVPlayer`) profile for Apple TV,
-    /// mirroring Swiftfin's `.native` profile, from the shared
-    /// ``CoreModels/MediaCapabilities`` source of truth.
-    ///
-    /// - Parameter hybridEngineEnabled: when `true`, the dual-engine (VLCKit)
-    ///   build is active, so the profile additionally advertises the **extra**
-    ///   direct-play formats the on-device hybrid engine can handle — the MKV /
-    ///   WebM container (every display-supported range, including Dolby Vision,
-    ///   decoded on-device), AV1, and DTS / DTS-HD / TrueHD
-    ///   audio (decoded on-device, no
-    ///   passthrough required). Defaults to `false`, which emits **byte-for-byte**
-    ///   the current native-only profile (non-regression). This must stay in
-    ///   lockstep with `EngineRouter`: every extra format advertised here is one
-    ///   the router sends to the hybrid engine.
+    /// Advertise the linked engine's input formats when available. Native-only
+    /// hosts retain the device capability profile; server conversions retain
+    /// their independently negotiated output limits.
     public static func appleTV(
         capabilities: MediaCapabilities = .default,
         hybridEngineEnabled: Bool = false,
@@ -85,6 +73,16 @@ extension JellyfinCapabilityProfile {
     // MARK: Profile sections
 
     private static func directPlay(_ caps: MediaCapabilities, hybrid: Bool) -> [DirectPlayProfile] {
+        if hybrid {
+            return [
+                DirectPlayProfile(
+                    type: "Video",
+                    container: PlozzigenMediaFormats.containers.joined(separator: ","),
+                    videoCodec: PlozzigenMediaFormats.videoCodecs.joined(separator: ","),
+                    audioCodec: PlozzigenMediaFormats.audioCodecs.joined(separator: ",")
+                )
+            ] + directPlay(caps, hybrid: false).filter { $0.type == "Audio" }
+        }
         let videoCodecs = caps.allowedDirectPlayVideoCodecs
         let supportsHEVC = videoCodecs.contains(.hevc)
         let supportsAV1 = videoCodecs.contains(.av1)
@@ -99,24 +97,13 @@ extension JellyfinCapabilityProfile {
         var tsVideo = ["h264"]
         if supportsHEVC { tsVideo.append("hevc") }
 
-        // DTS / DTS-HD only direct-play when the route can passthrough the
-        // bitstream to an external decoder (Apple TV can't decode DTS itself).
-        // `dca` is ffmpeg's alternate name for the DTS family. When the hybrid
-        // engine is available it decodes DTS / DTS-HD / TrueHD on-device, so those
-        // are advertised regardless of passthrough.
+        // Native-only profile; Aether's audio input support is independent.
         let passthrough = caps.allowedPassthroughAudioCodecs
         let canBitstreamDTS = passthrough.contains(.dts) || passthrough.contains(.dtsHD)
-        let dtsTokens = (hybrid || canBitstreamDTS) ? ["dts", "dca"] : []
-        let trueHDTokens = hybrid ? ["truehd", "mlp"] : []
-        // Opus and Vorbis are not decodable by AVPlayer in an MP4/MOV/TS container —
-        // the file plays video with no sound. Only include them in Apple containers
-        // when the hybrid engine is available (Plozzigen decodes them fine). They're
-        // always included in the MKV/WebM profile below.
-        let opusTokens = hybrid ? ["opus"] : []
-        let vorbisTokens = hybrid ? ["vorbis"] : []
+        let dtsTokens = canBitstreamDTS ? ["dts", "dca"] : []
 
-        func audio(_ base: [String], allowExtras: Bool) -> String {
-            (allowExtras ? base + dtsTokens + trueHDTokens + opusTokens + vorbisTokens : base).joined(separator: ",")
+        func audio(_ base: [String]) -> String {
+            (base + dtsTokens).joined(separator: ",")
         }
 
         var profiles = [
@@ -124,13 +111,13 @@ extension JellyfinCapabilityProfile {
                 type: "Video",
                 container: "mp4,m4v",
                 videoCodec: mp4Video.joined(separator: ","),
-                audioCodec: audio(["aac", "ac3", "alac", "eac3", "flac", "mp3"], allowExtras: true)
+                audioCodec: audio(["aac", "ac3", "alac", "eac3", "flac", "mp3"])
             ),
             DirectPlayProfile(
                 type: "Video",
                 container: "mov",
                 videoCodec: movVideo.joined(separator: ","),
-                audioCodec: audio(["aac", "ac3", "alac", "eac3", "mp3", "pcm_s16be", "pcm_s16le", "pcm_s24be", "pcm_s24le"], allowExtras: true)
+                audioCodec: audio(["aac", "ac3", "alac", "eac3", "mp3", "pcm_s16be", "pcm_s16le", "pcm_s24be", "pcm_s24le"])
             ),
             DirectPlayProfile(
                 type: "Video",
@@ -150,38 +137,14 @@ extension JellyfinCapabilityProfile {
         ]
 
         // Native path: keep transport streams conservative for AVPlayer.
-        if !hybrid {
-            profiles.append(
-                DirectPlayProfile(
-                    type: "Video",
-                    container: "mpegts,m2ts,mts",
-                    videoCodec: tsVideo.joined(separator: ","),
-                    audioCodec: audio(["aac", "ac3", "eac3", "mp3"], allowExtras: true)
-                )
+        profiles.append(
+            DirectPlayProfile(
+                type: "Video",
+                container: "mpegts,m2ts,mts",
+                videoCodec: tsVideo.joined(separator: ","),
+                audioCodec: audio(["aac", "ac3", "eac3", "mp3"])
             )
-        }
-
-        // Hybrid engine: advertise the extra containers the on-device Plozzigen engine
-        // demuxes directly (Matroska/WebM + transport-stream variants). HEVC and
-        // AV1 are listed unconditionally here (not gated on hardware decode)
-        // because the on-device engine software-decodes them regardless of
-        // VideoToolbox AV1 support, exactly as the router expects.
-        if hybrid {
-            let mkvVideo = MediaCapabilities.plozzigenVideoCodecs
-            let mkvAudio = [
-                "aac", "ac3", "eac3", "dts", "dca", "truehd", "mlp",
-                "flac", "alac", "mp3", "opus", "vorbis",
-                "pcm_s16le", "pcm_s24le"
-            ]
-            profiles.append(
-                DirectPlayProfile(
-                    type: "Video",
-                    container: "mkv,webm,ts,m2ts,mts,m2t,mpegts,bdav,bdmv",
-                    videoCodec: mkvVideo.joined(separator: ","),
-                    audioCodec: mkvAudio.joined(separator: ",")
-                )
-            )
-        }
+        )
 
         return profiles
     }
@@ -208,6 +171,9 @@ extension JellyfinCapabilityProfile {
     }
 
     private static func codec(_ caps: MediaCapabilities, hybrid: Bool) -> [CodecProfile] {
+        // Aether probes format/profile and handles display conversion itself.
+        // Native-only restrictions would unnecessarily force server conversion.
+        if hybrid { return [] }
         let allowed = caps.allowedDirectPlayVideoCodecs
         var profiles: [CodecProfile] = [
             CodecProfile(type: "Video", codec: "h264", conditions: [
@@ -216,11 +182,9 @@ extension JellyfinCapabilityProfile {
                 ProfileCondition(condition: "LessThanEqual", property: "VideoLevel", value: "52", isRequired: false)
             ])
         ]
-        if !hybrid {
-            profiles[0].conditions.append(
-                ProfileCondition(condition: "NotEquals", property: "IsInterlaced", value: "true", isRequired: false)
-            )
-        }
+        profiles[0].conditions.append(
+            ProfileCondition(condition: "NotEquals", property: "IsInterlaced", value: "true", isRequired: false)
+        )
 
         if allowed.contains(.hevc) {
             // VideoRangeType comes straight from the shared HDR policy: SDR plus
@@ -234,11 +198,9 @@ extension JellyfinCapabilityProfile {
                 ProfileCondition(condition: "LessThanEqual", property: "VideoLevel", value: "183", isRequired: false),
                 ProfileCondition(condition: "EqualsAny", property: "VideoRangeType", value: ranges, isRequired: false)
             ]
-            if !hybrid {
-                conditions.append(
-                    ProfileCondition(condition: "NotEquals", property: "IsInterlaced", value: "true", isRequired: false)
-                )
-            }
+            conditions.append(
+                ProfileCondition(condition: "NotEquals", property: "IsInterlaced", value: "true", isRequired: false)
+            )
             profiles.append(CodecProfile(type: "Video", codec: "hevc", conditions: conditions))
         }
 
@@ -246,27 +208,14 @@ extension JellyfinCapabilityProfile {
             var conditions: [ProfileCondition] = [
                 ProfileCondition(condition: "NotEquals", property: "IsAnamorphic", value: "true", isRequired: false)
             ]
-            if !hybrid {
-                conditions.append(
-                    ProfileCondition(condition: "NotEquals", property: "IsInterlaced", value: "true", isRequired: false)
-                )
-            }
+            conditions.append(
+                ProfileCondition(condition: "NotEquals", property: "IsInterlaced", value: "true", isRequired: false)
+            )
             profiles.append(
                 CodecProfile(type: "Video", codec: "av1", conditions: conditions)
             )
         }
 
-        // Hybrid engine: a raw MKV is fully decoded on-device by Plozzigen —
-        // including Dolby Vision (the engine decodes the HEVC base layer: HDR10/
-        // HLG/SDR for Profile 8, tone-mapped for Profile 5). We therefore add NO
-        // container-scoped range restriction for MKV: the global HEVC/AV1 codec
-        // profiles above already gate on the display's supported ranges (which on
-        // an Apple TV 4K include Dolby Vision, since DoVi support tracks HEVC
-        // hardware decode). The hybrid flag still gates MKV entirely via the
-        // `mkv,webm,ts,m2ts,mts,m2t,mpegts,bdav,bdmv` DirectPlayProfile, so
-        // flag-off advertises none of those hybrid-only containers. This makes
-        // HDR10/HLG and DoVi MKV direct-play on the on-device engine (no server
-        // transcode), matching Infuse.
         return profiles
     }
 
@@ -282,10 +231,7 @@ extension JellyfinCapabilityProfile {
         // When the on-device Plozzigen engine is wired in it renders bitmap subs (PGS/
         // VOBSUB/…) and styled ASS/SSA itself (libass), so we advertise those as
         // `Embed` instead. The server then leaves them in the **direct-played**
-        // container — no transcode — and the engine router sends the file (MKV,
-        // and any image-subtitle default) to Plozzigen, which draws the subtitle. This
-        // is exactly why the same file direct-plays on Plex (whose client renders
-        // these subs) but transcoded on Jellyfin.
+        // container; Aether owns playback and the subtitle rendering path.
         let imageAndStyledMethod = hybrid ? "Embed" : "Encode"
         return [
             SubtitleProfile(format: "vtt", method: "Hls"),
@@ -371,9 +317,7 @@ public struct CodecProfile: Encodable, Sendable, Equatable {
     public var codec: String
     /// Optional comma-separated container scope (e.g. `mkv,webm`). When set, the
     /// profile's conditions apply only to that codec **inside** those containers,
-    /// letting the dual-engine build constrain MKV HEVC/AV1 to SDR without
-    /// affecting the global (Apple-container) codec profiles. Omitted from the
-    /// JSON when `nil`, so the default native-only profile is byte-for-byte today.
+    /// independently of the global codec profile. Omitted from JSON when nil.
     public var container: String?
     public var conditions: [ProfileCondition]
 

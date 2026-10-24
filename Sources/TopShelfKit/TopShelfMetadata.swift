@@ -4,7 +4,7 @@ import Foundation
 enum TopShelfMetadata {
     static func apply(
         to snapshot: inout TopShelfSnapshot.Item, item: MediaItem, details: MediaItem?,
-        spoilerSettings: SpoilerSettings, locale: Locale?
+        spoilerSettings: SpoilerSettings, locale: Locale?, showsContentRatings: Bool = true
     ) {
         let metadata = details ?? item
         let hidesText = spoilerSettings.shouldHideText(for: item)
@@ -44,7 +44,9 @@ enum TopShelfMetadata {
            progress.resumePosition?.isFinite != false, progress.playedPercentage?.isFinite != false {
             append("Time Left", [progress.resumeRemainingText])
         }
-        append("Content Rating", [cleaned([metadata.officialRating, item.officialRating]).first])
+        if showsContentRatings {
+            append("Content Rating", [cleaned([metadata.officialRating, item.officialRating]).first])
+        }
         let people = metadata.people.isEmpty ? item.people : metadata.people
         // Unwatched guest appearances can reveal plot points just like episode titles.
         if !hidesText {

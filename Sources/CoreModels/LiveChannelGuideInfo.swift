@@ -52,19 +52,22 @@ public struct LiveChannelOnNowItem: Identifiable, Equatable, Sendable {
     public let logoURL: URL?
     /// Set for Plozz library channels, whose logo is generated rather than fetched.
     public let plozzChannelID: String?
+    public let plozzChannelMood: LibraryChannelArtworkMood?
     public let program: LiveChannelProgramInfo?
 
     public var id: String { channelID }
 
     public init(
         channelID: String, channelName: String, number: Int? = nil, logoURL: URL?,
-        plozzChannelID: String? = nil, program: LiveChannelProgramInfo?
+        plozzChannelID: String? = nil, plozzChannelMood: LibraryChannelArtworkMood? = nil,
+        program: LiveChannelProgramInfo?
     ) {
         self.channelID = channelID
         self.channelName = channelName
         self.number = number
         self.logoURL = logoURL
         self.plozzChannelID = plozzChannelID
+        self.plozzChannelMood = plozzChannelMood
         self.program = program
     }
 }

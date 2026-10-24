@@ -34,6 +34,9 @@ public struct SettingsView: View {
     @State private var showDeveloperUnlockedAlert = false
     @Environment(\.themePalette) private var palette
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
+    @Environment(CardStyleSettingsModel.self) private var cardStyle
+    @Environment(LibraryPresentationSettingsModel.self) private var libraryPresentation
+    @Environment(\.libraryPresentationLoader) private var libraryPresentationLoader
     /// App-wide media-share scan/enrich status. Optional so previews/tests that
     /// don't inject it don't crash. Drives the status card at the top of this
     /// page — the home for progress that used to float over Home's top-right.
@@ -957,8 +960,19 @@ public struct SettingsView: View {
                 discoveredLibraries: librariesStore.state,
                 homeVisibility: homeVisibility,
                 seerConfigured: seer.isConfigured,
-                accounts: homeRowAccounts
+                accounts: homeRowAccounts,
+                spoilerSettings: spoilers.settings
             )
+        case .customizeLibraries:
+            if let libraryPresentationLoader {
+                LibraryPresentationSettingsView(
+                    model: libraryPresentation, cards: cardStyle, visibility: homeVisibility, accounts: homeRowAccounts,
+                    loader: libraryPresentationLoader
+                )
+                .id(ObjectIdentifier(libraryPresentation))
+            } else {
+                InlineErrorMessage(Text("Library settings are unavailable."))
+            }
         case .liveTV:
             LiveTVSettingsView(
                 store: LiveTVViewSettingsStore(
@@ -967,13 +981,14 @@ public struct SettingsView: View {
                 preferencesStore: LiveTVPreferencesStore(
                     namespace: liveTVPreferencesNamespace
                 ),
-                sourceManagement: liveTVSources.map { destination in { destination.content() } }
+                sourceManagement: liveTVSources.map { destination in { destination.content(preferences: $0) } }
             )
             .id(activeProfile.id)
         case .nightShift:
             NightShiftDetailView(model: nightShift)
         case .detailPage:
             DetailPageDetailView(
+                cards: cardStyle,
                 themeMusic: themeMusic,
                 heroBackground: heroBackground
             )
@@ -1048,7 +1063,7 @@ public struct SettingsView: View {
             )
         case .recentActivity:
             RecentActivityDetailView(
-                canSendDiagnostics: crashReportingConfigured && crashReporting.settings.isEnabled
+                canSendDiagnostics: crashReportingConfigured && crashReporting.isEnabled
             )
         case let .plexUser(accountID):
             PlexLinkedUserDetailView(scope: context.librariesScope, accountID: accountID)

@@ -353,12 +353,14 @@ public enum HeroLiveMerge {
                     kept = kept.removingDiscoveryOwnership()
                     kept.availability = fresh.availability ?? .unknown
                     kept.downloadProgress = fresh.downloadProgress
+                    kept.hasRequestDownloadActivity = fresh.hasRequestDownloadActivity
                 }
             }
             kept.fillingMissingPresentation(from: fresh)
             if verifiedRouting {
                 kept.availability = nil
                 kept.downloadProgress = nil
+                kept.hasRequestDownloadActivity = nil
             }
             return kept
         }

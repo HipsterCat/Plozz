@@ -202,6 +202,7 @@ public struct PosterCardView: View {
 
     public var body: some View {
         cardBody
+            .fittingPortraitPlaybackReflection(showsSeriesArtwork && style == .poster && showsResumeChip)
             .environment(\.plozzArtworkArea, presentationArtworkPolicy.area)
             .plozzChromeFocused(usesNativePoster ? false : isFocused)
             .mediaItemContextMenu(for: item)
@@ -1193,6 +1194,8 @@ public struct PosterCardView: View {
                 if style == .poster {
                     ExtendedArtworkFill(
                         image: image, artworkAspectRatio: 2.0 / 3.0, sideCrop: 0,
+                        minimumReflectionShare: usesProgressOnlyPortrait
+                            ? 0 : PlozzTheme.Metrics.continueWatchingPortraitReflectionShare,
                         progressivelyBlursReflection: !reduceTransparency && !usesProgressOnlyPortrait
                     )
                 } else {

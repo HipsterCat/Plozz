@@ -683,11 +683,6 @@ public struct TMDbMetadataProvider: ArtworkProvider {
 
     static func bestLogoPath(_ logos: [Image]?) -> String? {
         guard let logos else { return nil }
-        let usable = logos.filter {
-            guard let p = $0.file_path, !p.isEmpty else { return false }
-            return !p.lowercased().hasSuffix(".svg")
-        }
-        guard !usable.isEmpty else { return nil }
         func rank(_ image: Image) -> Int {
             switch image.iso_639_1 {
             case "en": return 0
@@ -695,11 +690,16 @@ public struct TMDbMetadataProvider: ArtworkProvider {
             default: return 2
             }
         }
-        return usable.sorted {
+        guard let path = logos.lazy.filter({ $0.file_path?.isEmpty == false }).min(by: {
             let (lr, rr) = (rank($0), rank($1))
             if lr != rr { return lr < rr }
             return ($0.vote_average ?? 0) > ($1.vote_average ?? 0)
-        }.first?.file_path
+        })?.file_path else { return nil }
+        // TMDb rasterizes SVG originals at the normal CDN size. Keep one image
+        // request and the existing bitmap decoder instead of fetching variants.
+        return path.lowercased().hasSuffix(".svg")
+            ? String(path.dropLast(4)) + ".png"
+            : path
     }
 
     // MARK: - DTOs

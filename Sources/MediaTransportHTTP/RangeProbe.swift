@@ -102,7 +102,7 @@ public struct RangeProbeResult: Equatable, Sendable {
 }
 
 /// Builds and validates the two request/response pairs a safe ranged read
-/// needs: an initial 1-byte probe that establishes a validator and the
+/// needs: an initial two-byte probe that establishes a validator and the
 /// resource's total length, and every subsequent bounded read, which must
 /// reuse it as an `If-Match` or `If-Unmodified-Since` precondition.
 ///
@@ -112,14 +112,17 @@ public struct RangeProbeResult: Equatable, Sendable {
 public enum RangeProbe {
     // MARK: - Probe (establishes seekability)
 
-    /// `GET` with `Range: bytes=0-0` and `Accept-Encoding: identity`. No
+    // Some SabreDAV servers interpret an end offset of zero as an open-ended range.
+    static let probeByteCount = 2
+
+    /// `GET` with `Range: bytes=0-1` and `Accept-Encoding: identity`. No
     /// `If-Match` yet — this is the first request, before any validator is
     /// known.
     public static func probeRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
-        request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        request.setValue("bytes=0-\(probeByteCount - 1)", forHTTPHeaderField: "Range")
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         return request
     }
@@ -127,8 +130,8 @@ public enum RangeProbe {
     /// Validates a probe response. Success requires: `206` (not `200` — a
     /// server that ignores `Range` and returns the whole body is not
     /// seekable by this module's definition), a strong `ETag` or valid
-    /// `Last-Modified`, a well-formed `Content-Range: bytes 0-0/<total>`,
-    /// and a 1-byte body.
+    /// `Last-Modified`, a matching `Content-Range`, and an exact two-byte body
+    /// (clamped to EOF for a one-byte resource).
     public static func validateProbe(
         status: Int,
         headers: [String: String],
@@ -162,11 +165,12 @@ public enum RangeProbe {
         guard let contentRangeHeader = normalized["content-range"], let contentRange = ContentRange.parse(contentRangeHeader) else {
             return .failure(.rangeValidationFailed(reason: "missing/malformed Content-Range on probe"))
         }
-        guard contentRange.start == 0, contentRange.end == 0 else {
-            return .failure(.rangeValidationFailed(reason: "probe Content-Range did not echo bytes=0-0"))
+        let expectedLength = Int(min(Int64(probeByteCount), contentRange.total))
+        guard contentRange.start == 0, contentRange.end == Int64(expectedLength - 1) else {
+            return .failure(.rangeValidationFailed(reason: "probe Content-Range did not match the requested prefix"))
         }
-        guard bodyLength == 1 else {
-            return .failure(.rangeValidationFailed(reason: "probe body length \(bodyLength) != 1"))
+        guard bodyLength == expectedLength else {
+            return .failure(.rangeValidationFailed(reason: "probe body length \(bodyLength) != \(expectedLength)"))
         }
         return .success(
             RangeProbeResult(

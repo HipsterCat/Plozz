@@ -156,7 +156,10 @@ public final class ProfileFlowModel {
     /// Set when `switchProfile(to:)` is asked for a locked profile and cleared on
     /// success or cancel. `RootView` presents the PIN screen off this, exactly
     /// like the Plex Home PIN prompt it sits in front of.
-    public private(set) var pendingLockedProfile: Profile?
+    public private(set) var pendingLockedProfile: Profile? {
+        didSet { profileLockRequestID = UUID() }
+    }
+    @ObservationIgnored private var profileLockRequestID = UUID()
     /// Message from the last failed unlock attempt, or `nil`.
     public private(set) var profileLockError: LocalizedStringResource?
 
@@ -190,13 +193,6 @@ public final class ProfileFlowModel {
     public var managementRequiresParentalPIN: Bool {
         profilesModel.managementRequiresParentalPIN || parentalFallThrough != nil
     }
-
-    /// Profiles unlocked during this app run, so a person who has already proved
-    /// they know the PIN isn't asked again every time they hop between profiles.
-    ///
-    /// Deliberately in-memory: it dies with the process, so a cold launch always
-    /// re-asks. Persisting it would quietly turn "locked" into "locked once".
-    @ObservationIgnored private var unlockedProfileIDs: Set<String> = []
 
     /// Switches to `id`, re-scoping settings + the active account set, then
     /// dismisses the picker. Fast: a few `UserDefaults` reads plus an in-memory
@@ -233,7 +229,8 @@ public final class ProfileFlowModel {
 
     /// The switch past the parental gate, still subject to the target's own lock.
     private func continueSwitch(to target: Profile) {
-        if target.isLocked, !unlockedProfileIDs.contains(target.id) {
+        if target.isLocked,
+           target.id != profilesModel.activeProfileID || !profilesModel.isProfileUnlocked(target.id) {
             profileLockError = nil
             pendingLockedProfile = target
             return
@@ -244,7 +241,7 @@ public final class ProfileFlowModel {
     /// Checks `pin` against the household's Parental PIN and, on a match, lets
     /// the held switch continue.
     ///
-    /// Deliberately **not** remembered for the run, unlike `unlockedProfileIDs`.
+    /// Deliberately **not** remembered across switches.
     /// Remembering it would mean that once a grown-up stepped out of the child's
     /// profile, the child could too until the next cold launch — which is the
     /// whole thing this gate exists to prevent. Leaving a Kids Profile is rare
@@ -284,7 +281,7 @@ public final class ProfileFlowModel {
     ///   during profile setup sends every later setup step to the wrong
     ///   profile's settings — a reported bug that has not yet been reproduced on
     ///   demand. The emit is a no-op outside debug builds.
-    private func performSwitch(to id: String, reason: String) {
+    private func performSwitch(to id: String, reason: String, unlocking lock: ProfileLock? = nil) {
         let before = profilesModel.activeProfileID
         profilesModel.select(id)
         HandoffDiagnostics.emit(
@@ -297,6 +294,7 @@ public final class ProfileFlowModel {
         // picker on a switch that never happened would strand the child in the
         // grown-up profile the gate exists to withhold.
         guard profilesModel.activeProfileID == id else { return }
+        if let lock, profilesModel.activeProfile.lock == lock { profilesModel.noteProfileUnlocked(id) }
         plexHomeUsers.beginExplicitProfileActivation()
         audioController.stop()
         // Past both gates, so the hold has done its job — released here rather
@@ -327,13 +325,21 @@ public final class ProfileFlowModel {
     ///
     /// - Returns: `true` when the PIN was accepted.
     @discardableResult
-    public func submitProfileLockPIN(_ pin: String) -> Bool {
+    public func submitProfileLockPIN(_ pin: String) async -> Bool {
         guard let profile = pendingLockedProfile, let lock = profile.lock else { return false }
-        guard lock.matches(pin: pin) else {
+        let requestID = profileLockRequestID
+        let selection = profilesModel.selectionGeneration
+        let matches = await lock.matchesOffMainActor(pin: pin)
+        guard !Task.isCancelled, profileLockRequestID == requestID,
+              profilesModel.selectionGeneration == selection else { return false }
+        guard profilesModel.profiles.first(where: { $0.id == profile.id })?.lock == lock else {
+            profileLockError = ProfileLockCopy.profileChanged
+            return false
+        }
+        guard matches else {
             profileLockError = ProfileLockCopy.incorrectPIN
             return false
         }
-        unlockedProfileIDs.insert(profile.id)
         pendingLockedProfile = nil
         profileLockError = nil
 
@@ -345,7 +351,7 @@ public final class ProfileFlowModel {
         if lock.matchesPlexPIN {
             plexHomeUsers.prefillPlexPIN(pin, forProfile: profile.id)
         }
-        performSwitch(to: profile.id, reason: "lockPIN")
+        performSwitch(to: profile.id, reason: "lockPIN", unlocking: lock)
         return true
     }
 
@@ -355,31 +361,27 @@ public final class ProfileFlowModel {
         profileLockError = nil
     }
 
-    /// Whether `id` has already been proved this run, so a second gate (editing
-    /// it from the picker) doesn't ask for the same PIN again.
-    /// Whether the ACTIVE profile is locked and unproven this run.
+    /// Whether the active profile is locked and unproven for this activation.
     /// See `UniversalWatchlistHost.activeProfileAwaitsUnlock`.
     public var activeProfileAwaitsUnlock: Bool {
         let active = profilesModel.activeProfile
-        return active.isLocked && !unlockedProfileIDs.contains(active.id)
+        return active.isLocked && !profilesModel.isProfileUnlocked(active.id)
             && !plexHomeUsers.isAutomaticallySignedIn(active)
     }
 
     public func isUnlockedThisRun(_ id: String) -> Bool {
-        unlockedProfileIDs.contains(id)
+        profilesModel.isProfileUnlocked(id)
     }
 
-    /// Records that `id`'s PIN was proved outside `submitProfileLockPIN` — e.g.
-    /// to edit it from the picker. Knowing the PIN is knowing the PIN, so it
-    /// counts for opening the profile too.
+    /// Records proof for profile settings until the next active-profile change.
     public func noteUnlocked(_ id: String) {
-        unlockedProfileIDs.insert(id)
+        profilesModel.noteProfileUnlocked(id)
     }
 
     /// Forgets that `id` was unlocked this run — called when its PIN changes or
     /// is removed, so a stale unlock can't outlive the lock that granted it.
     public func forgetUnlock(for id: String) {
-        unlockedProfileIDs.remove(id)
+        profilesModel.forgetProfileUnlock(id)
     }
 
     /// Creates or updates a profile from an editor draft. Updating the active

@@ -84,4 +84,88 @@ final class WatchStatusIndicatorSettingsStoreTests: XCTestCase {
         XCTAssertFalse(WatchStatusIndicatorSettingsStore(defaults: destination, namespace: "alice").loadShowsUnwatchedEpisodeCount())
         XCTAssertTrue(WatchStatusIndicatorSettingsStore(defaults: destination).loadShowsUnwatchedEpisodeCount())
     }
+
+    @MainActor
+    func testEpisodeCountStyleMigratesOnceThenStaysIndependent() {
+        for indicator in WatchStatusIndicator.allCases {
+            let defaults = makeDefaults()
+            let store = WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "legacy")
+            store.save(indicator)
+            let expected: EpisodeCountBadgeStyle = indicator == .watched ? .floating : .attached
+            let model = WatchStatusIndicatorSettingsModel(store: store)
+            XCTAssertEqual(model.episodeCountStyle, expected)
+            model.indicator = indicator == .watched ? .unwatched : .watched
+            model.showsUnwatchedEpisodeCount = false
+            XCTAssertEqual(WatchStatusIndicatorSettingsModel(store: store).episodeCountStyle, expected)
+            for style in EpisodeCountBadgeStyle.allCases {
+                model.episodeCountStyle = style
+                XCTAssertEqual(store.loadEpisodeCountStyle(), style)
+                XCTAssertFalse(model.showsUnwatchedEpisodeCount)
+            }
+        }
+    }
+
+    func testEpisodeCountStyleTransfersWithoutLeakingBetweenProfiles() {
+        let defaults = makeDefaults()
+        let alice = WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "alice")
+        alice.save(.unwatched)
+        alice.saveEpisodeCountStyle(.floating)
+        XCTAssertEqual(WatchStatusIndicatorSettingsStore(defaults: defaults).loadEpisodeCountStyle(), .attached)
+        let snapshot = ProfileSettingsTransfer.capture(namespace: "alice", defaults: defaults)
+        let destination = makeDefaults()
+        ProfileSettingsTransfer.apply(snapshot, namespace: "copy", defaults: destination)
+        let copy = WatchStatusIndicatorSettingsStore(defaults: destination, namespace: "copy")
+        XCTAssertEqual(copy.loadEpisodeCountStyle(), .floating)
+        XCTAssertEqual(copy.load(), .unwatched)
+        XCTAssertEqual(WatchStatusIndicatorSettingsStore(defaults: destination, namespace: "bob").loadEpisodeCountStyle(), .attached)
+    }
+
+    func testUnknownCountStyleUsesDefaultWithoutChangingStoredValue() {
+        let defaults = makeDefaults()
+        defaults.set("future-style", forKey: WatchStatusIndicatorSettingsStore.episodeCountStyleStorageKey)
+        let store = WatchStatusIndicatorSettingsStore(defaults: defaults)
+        store.save(.watched)
+        XCTAssertEqual(store.loadEpisodeCountStyle(), .default)
+        XCTAssertEqual(defaults.string(forKey: WatchStatusIndicatorSettingsStore.episodeCountStyleStorageKey), "future-style")
+    }
+
+    @MainActor
+    func testEveryColorPersistsWithoutChangingOtherIndicatorPreferences() {
+        let defaults = makeDefaults()
+        let store = WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "colors")
+        let model = WatchStatusIndicatorSettingsModel(store: store)
+        model.indicator = .watched
+        model.showsUnwatchedEpisodeCount = false
+        XCTAssertEqual(WatchIndicatorColor.allCases.count, 8)
+        for color in WatchIndicatorColor.allCases {
+            model.color = color
+            XCTAssertEqual(WatchStatusIndicatorSettingsModel(store: store).color, color)
+            XCTAssertEqual(store.load(), .watched)
+            XCTAssertFalse(store.loadShowsUnwatchedEpisodeCount())
+        }
+    }
+
+    func testUnknownColorFallsBackToWhiteWithinItsProfile() {
+        let defaults = makeDefaults()
+        defaults.set("future-color", forKey: "com.plozz.watchIndicatorColor.alice")
+        let alice = WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "alice")
+        let bob = WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "bob")
+        bob.saveColor(.purple)
+        XCTAssertEqual(alice.loadColor(), .white)
+        XCTAssertEqual(bob.loadColor(), .purple)
+    }
+
+    @MainActor
+    func testColorIsProfileScopedAndTransferable() {
+        let defaults = makeDefaults()
+        let alice = WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "alice")
+        XCTAssertEqual(alice.loadColor(), .white)
+        alice.saveColor(.blue)
+        XCTAssertEqual(WatchStatusIndicatorSettingsModel(store: alice).color, .blue)
+        XCTAssertEqual(WatchStatusIndicatorSettingsStore(defaults: defaults).loadColor(), .white)
+        let snapshot = ProfileSettingsTransfer.capture(namespace: "alice", defaults: defaults)
+        let destination = makeDefaults()
+        ProfileSettingsTransfer.apply(snapshot, namespace: "alice", defaults: destination)
+        XCTAssertEqual(WatchStatusIndicatorSettingsStore(defaults: destination, namespace: "alice").loadColor(), .blue)
+    }
 }

@@ -42,7 +42,7 @@ private struct LiveTVSettingsSourcesScope<Content: View>: View {
         didConfigurePlaylist: @escaping () -> Void
     ) {
         self.content = content
-        _sources = State(initialValue: LiveTVSettingsSources {
+        _sources = State(initialValue: LiveTVSettingsSources { preferences in
             AnyView(LiveTVShellSourcesDestination(
                 profileID: profileID,
                 preferencesNamespace: preferencesNamespace,
@@ -50,7 +50,8 @@ private struct LiveTVSettingsSourcesScope<Content: View>: View {
                 connectServer: connectServer,
                 didConfigurePlaylist: didConfigurePlaylist,
                 isPresented: isPresented(),
-                isProfileAuthorized: { isPresented() && isProfileAuthorized() }
+                isProfileAuthorized: { isPresented() && isProfileAuthorized() },
+                settingsPreferences: preferences
             ))
         })
     }
@@ -918,7 +919,7 @@ struct MainTabView: View {
 
     private var navigationAvailability: NavigationContentAvailability {
         NavigationContentAvailability(
-            accounts: accounts.map(\.account),
+            accounts: accountsProviders.navigationAccounts,
             libraries: railLibraries,
             discoveredAccountIDs: navigationStyleModel.discoveredAccountIDs,
             disabledLibraryKeys: homeVisibility.visibility.disabledKeys,
@@ -1951,6 +1952,7 @@ struct MainTabView: View {
         let _ = plozzPrintChanges { Self._printChanges() }
         let _ = PlozzBodyRate.tick("MainTabView")
         return playbackShell
+        .detailNavigationZoom(isEnabled: navigationStyleModel.detailZoomEnabled)
         .environment(\.themeMusicController, themeMusicController)
         .environment(
             \.seasonRequestContextID,

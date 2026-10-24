@@ -8,6 +8,65 @@ final class LibraryCollectionModeTests: XCTestCase {
     private var defaults: UserDefaults!
     private var defaultsName: String!
 
+    func testSharedTabArrangementReconcilesSelectionWithoutChangingProviderCapabilities() async {
+        for providerKind: ProviderKind in [.plex, .jellyfin, .emby, .silo] {
+            let settings = LibraryPresentationSettingsModel(
+                store: LibraryPresentationSettingsStore(defaults: defaults, namespace: providerKind.rawValue)
+            )
+            settings.settings.navigation = .init(
+                order: ["collections", "recommended", "titles", "playlists"], hidden: ["playlists"]
+            )
+            let provider = LibraryModeProvider(kind: providerKind, supportsPlaylists: true)
+            let model = LibraryBrowseViewModel(
+                provider: provider, containerID: "real-library", containerKind: .movie,
+                defaults: defaults, sourceAccountID: "owning-account", presentation: settings
+            )
+            XCTAssertEqual(model.contentMode, .collections)
+            XCTAssertEqual(model.availableContentModes, [.collections, .recommended, .titles])
+            XCTAssertTrue(model.supportsPlaylists)
+            settings.settings.navigation.hidden.insert("collections")
+            await model.reconcileContentMode()
+            XCTAssertEqual(model.contentMode, .recommended)
+            settings.settings.navigation.hidden.insert("recommended")
+            settings.settings.navigation.hidden.insert("titles")
+            await model.reconcileContentMode()
+            XCTAssertEqual(model.availableContentModes, [.titles])
+            XCTAssertEqual(model.contentMode, .titles)
+            let member = LibraryBrowseViewModel(
+                provider: provider, containerID: "collection", containerKind: .collection,
+                defaults: defaults, browseScope: .collectionMembers, presentation: settings
+            )
+            XCTAssertEqual(member.availableContentModes, [.titles])
+            XCTAssertEqual(member.contentMode, .titles)
+        }
+    }
+
+    func testRecommendedArrangementIsLocalOnlyAndPreservesHiddenRowsForRestoration() async throws {
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie)
+        let provider = LibraryModeProvider(nativeSections: [
+            .init(id: "discovery", title: "Discovery", items: [item])
+        ])
+        let model = model(provider)
+        await model.loadRecommendationsIfNeeded()
+        let rows = try XCTUnwrap(model.recommendationState.value)
+        let hub = try XCTUnwrap(rows.first { $0.id.hasPrefix("hub:") })
+        let requests = await provider.requestedHubLibraries.count
+        model.presentation.settings.recommendedRows[model.recommendedRowsAddress] = .init(
+            order: ["recentlyAdded", hub.id], hidden: [hub.id]
+        )
+        XCTAssertEqual(model.visibleRecommendedRows(rows).map(\.id), ["recentlyAdded"])
+        XCTAssertEqual(model.recommendationState.value, rows)
+        model.presentation.settings.recommendedRows[model.recommendedRowsAddress]?.hidden.remove(hub.id)
+        XCTAssertEqual(model.visibleRecommendedRows(rows).map(\.id), ["recentlyAdded", hub.id])
+        let remainingRequests = await provider.requestedHubLibraries.count
+        XCTAssertEqual(remainingRequests, requests, "Reordering must not refetch recommendations.")
+        let other = LibraryBrowseViewModel(
+            provider: provider, containerID: "another-library", containerKind: .movie,
+            defaults: defaults, sourceAccountID: "owning-account", presentation: model.presentation
+        )
+        XCTAssertEqual(other.visibleRecommendedRows(rows), rows)
+    }
+
     override func setUp() async throws {
         try await super.setUp()
         defaultsName = "LibraryCollectionModeTests.\(UUID().uuidString)"

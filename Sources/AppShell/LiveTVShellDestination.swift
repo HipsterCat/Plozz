@@ -148,10 +148,12 @@ struct LiveTVShellDestination: View {
                 title: playback.channel.name,
                 input: playback.input,
                 logoURL: playback.channel.logoURL,
+                plozzChannelMood: playback.channel.plozzChannelMood,
                 makeEngine: {
                     library.makeEngine(
                         engine: try PlozzigenVideoEngine(
-                            authenticatedHTTPResolver: playback.authenticatedHTTPResolver
+                            authenticatedHTTPResolver: playback.authenticatedHTTPResolver,
+                            liveBufferPreference: { LivePlaybackBufferStore().load() }
                         ),
                         onCompleted: completeLibraryChannelPlayback
                     )
@@ -215,6 +217,7 @@ struct LiveTVShellSourcesDestination: View {
     let didConfigurePlaylist: () -> Void
     var isPresented = true
     var isProfileAuthorized: @MainActor () -> Bool = { true }
+    var settingsPreferences: AnyView? = nil
     @Environment(ProfilesModel.self) private var profiles
 
     var body: some View {
@@ -227,7 +230,8 @@ struct LiveTVShellSourcesDestination: View {
                 ) { runtime in
                     LiveTVShellSourcesContent(
                         runtime: runtime, library: library, accounts: accountsProviders,
-                        connectServer: connectServer, didConfigurePlaylist: didConfigurePlaylist
+                        connectServer: connectServer, didConfigurePlaylist: didConfigurePlaylist,
+                        settingsPreferences: settingsPreferences
                     )
                 }
             }
@@ -237,12 +241,13 @@ struct LiveTVShellSourcesDestination: View {
     }
 }
 
-private struct LiveTVShellSourcesContent: View {
+struct LiveTVShellSourcesContent: View {
     let runtime: LiveTVSourcesRuntime
     let library: LiveTVLibraryRuntime
     let accounts: AccountsProvidersModel
     let connectServer: (() -> Void)?
     let didConfigurePlaylist: () -> Void
+    var settingsPreferences: AnyView? = nil
     @State private var managesChannels = false
     @State private var scansChannels = false
     @State private var scanOfferSourceID: String?
@@ -257,7 +262,10 @@ private struct LiveTVShellSourcesContent: View {
                 createChannel: { managesChannels = true },
                 scanChannels: { scansChannels = true },
                 scanCoordinator: runtime.scanBinding.coordinator,
-                didImportPlaylist: { scanOfferSourceID = $0 }
+                didImportPlaylist: { scanOfferSourceID = $0 },
+                settingsPreferences: settingsPreferences,
+                automaticChannels: library.automaticChannelsPresentation,
+                customChannelCount: library.service.visibleDefinitions.filter { !$0.isAutomatic }.count
             )
             if let scanOfferSourceID, runtime.isPresentationCurrent {
                 LiveTVScanImportOffer(
@@ -266,18 +274,10 @@ private struct LiveTVShellSourcesContent: View {
                 )
             }
         }
-        .navigationDestination(isPresented: $managesChannels) {
-            if runtime.isPresentationCurrent {
-                LibraryChannelManagementView(
-                    service: library.service, history: library.history, prepareLibraries: library.prepareForEditing,
-                    automaticChannels: library.automaticChannelsPresentation)
-            } else {
-                ContentUnavailableView(
-                    "Profile access changed", systemImage: "lock",
-                    description: Text("Reopen Sources to continue."))
-            }
+        .settingsPageDestination(isPresented: $managesChannels) {
+            LiveTVShellLibraryChannelsDestination(runtime: runtime, library: library)
         }
-        .navigationDestination(isPresented: $scansChannels) {
+        .settingsPageDestination(isPresented: $scansChannels) {
             LiveTVSourcesScanView(runtime: runtime) {
                 LiveTVScanSourcesView(
                     coordinator: runtime.scanBinding.coordinator,
@@ -291,6 +291,23 @@ private struct LiveTVShellSourcesContent: View {
             managesChannels = false
             scansChannels = false
             scanOfferSourceID = nil
+        }
+    }
+}
+
+private struct LiveTVShellLibraryChannelsDestination: View {
+    let runtime: LiveTVSourcesRuntime
+    let library: LiveTVLibraryRuntime
+
+    var body: some View {
+        if runtime.isPresentationCurrent {
+            LibraryChannelManagementView(
+                service: library.service, history: library.history, prepareLibraries: library.prepareForEditing,
+                automaticChannels: library.automaticChannelsPresentation)
+        } else {
+            ContentUnavailableView(
+                "Profile access changed", systemImage: "lock",
+                description: Text("Reopen Sources to continue."))
         }
     }
 }

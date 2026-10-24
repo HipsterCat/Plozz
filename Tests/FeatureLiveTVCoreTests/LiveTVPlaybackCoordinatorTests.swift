@@ -5,6 +5,53 @@ import XCTest
 
 @MainActor
 final class LiveTVPlaybackCoordinatorTests: XCTestCase {
+    func testExplicitInlineWatchStartsWithoutAutoPreviewAndExpandsWithoutReplacingPlayback() async {
+        let fixture = CoordinatorFixture()
+        fixture.preview.setFollowsFocus(false)
+        fixture.preview.setKeepWatchingWhileBrowsing(false)
+        let accepted = await fixture.coordinator.watch("iptv", expandsPlayer: false).value
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(fixture.model.playingChannelID, "iptv")
+        XCTAssertFalse(fixture.preview.isExpanded)
+        XCTAssertTrue(fixture.preview.isWatchingInline)
+        XCTAssertTrue(fixture.preview.isHoldingWatchedChannel)
+        let prepared = fixture.preparation.current?.id
+        let presentation = fixture.coordinator.presentationID
+        let expanded = await fixture.coordinator.watch("iptv").value
+        XCTAssertTrue(expanded)
+        XCTAssertTrue(fixture.preview.isExpanded)
+        XCTAssertFalse(fixture.preview.isWatchingInline)
+        XCTAssertEqual(fixture.preparation.current?.id, prepared)
+        XCTAssertEqual(fixture.coordinator.presentationID, presentation)
+        fixture.coordinator.stop()
+        XCTAssertFalse(fixture.preview.isWatchingInline)
+        await fixture.preparation.close()
+    }
+
+    func testCancelledInlineSelectionCannotReplaceTheCurrentPreview() async throws {
+        let entered = expectation(description: "Inline channel preparation started")
+        let gate = CoordinatorFixtureGate()
+        let candidate = try CoordinatorFixtureLease("one")
+        let fixture = CoordinatorFixture(replies: [
+            "one": [.init(lease: candidate, entered: entered, gate: gate)]
+        ])
+        _ = await fixture.coordinator.watch("iptv", expandsPlayer: false).value
+        let original = fixture.preparation.current?.id
+        let pending = fixture.coordinator.watch("one", expandsPlayer: false)
+        await fulfillment(of: [entered], timeout: 2)
+        fixture.coordinator.cancelWatch()
+        await gate.release()
+        let accepted = await pending.value
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(fixture.preparation.current?.id, original)
+        XCTAssertEqual(fixture.model.playingChannelID, "iptv")
+        XCTAssertFalse(fixture.preview.isExpanded)
+        XCTAssertTrue(fixture.preview.isWatchingInline)
+        let closes = await candidate.closeCalls
+        XCTAssertEqual(closes, 1)
+        await fixture.preparation.close()
+    }
+
     func testIPTVPreviewKeepsItsTaskKeyUntilCleanupFinishes() async throws {
         let closing = expectation(description: "Previous IPTV preview is draining")
         let gate = CoordinatorFixtureGate()

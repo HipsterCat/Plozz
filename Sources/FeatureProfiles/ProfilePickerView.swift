@@ -26,6 +26,7 @@ public struct ProfilePickerView: View {
     /// than after a trip through Settings.
     private let onAddKidsProfile: (() -> Void)?
     private let onCancel: (() -> Void)?
+    private let showsPINLock: (Profile) -> Bool
 
     @Environment(\.themePalette) private var palette
 
@@ -37,7 +38,8 @@ public struct ProfilePickerView: View {
         onAddProfile: (() -> Void)? = nil,
         onEditProfile: ((Profile) -> Void)? = nil,
         onAddKidsProfile: (() -> Void)? = nil,
-        onCancel: (() -> Void)? = nil
+        onCancel: (() -> Void)? = nil,
+        showsPINLock: @escaping (Profile) -> Bool = { $0.showsPINLock }
     ) {
         self.profiles = profiles
         self.activeProfileID = activeProfileID
@@ -47,6 +49,7 @@ public struct ProfilePickerView: View {
         self.onEditProfile = onEditProfile
         self.onAddKidsProfile = onAddKidsProfile
         self.onCancel = onCancel
+        self.showsPINLock = showsPINLock
     }
 
 
@@ -156,7 +159,7 @@ public struct ProfilePickerView: View {
                 HStack(alignment: .top, spacing: ProfilePickerLayout.tileSpacing) {
                     ForEach(profiles) { profile in
                         VStack(spacing: 20) {
-                            ProfileTile(profile: profile) {
+                            ProfileTile(profile: profile, showsLock: showsPINLock(profile)) {
                                 onSelect(profile)
                             }
                             .focused($focus, equals: .profile(profile.id))
@@ -304,11 +307,12 @@ private struct TileCentersKey: PreferenceKey {
 /// need, and marking it drew the eye to the least useful tile.
 private struct ProfileTile: View {
     let profile: Profile
+    let showsLock: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            ProfileTileLabel(profile: profile)
+            ProfileTileLabel(profile: profile, showsLock: showsLock)
         }
         .plozzCardFocusButtonStyle(
             ProfileTileButtonStyle(), cornerRadius: ProfilePickerLayout.avatarSize / 2,
@@ -316,7 +320,7 @@ private struct ProfileTile: View {
         )
         .plozzCircularFocusStyle()
         .accessibilityLabel(profile.name)
-        .accessibilityValue(profile.isLocked ? Text(ProfileLockCopy.title) : Text(verbatim: ""))
+        .accessibilityValue(showsLock ? Text(ProfileLockCopy.title) : Text(verbatim: ""))
     }
 }
 
@@ -370,6 +374,7 @@ private extension EnvironmentValues {
 /// button propagates it) so the name gently emphasises on focus.
 private struct ProfileTileLabel: View {
     let profile: Profile
+    let showsLock: Bool
 
     @Environment(\.isFocused) private var isFocused
     @Environment(\.themePalette) private var palette
@@ -380,7 +385,7 @@ private struct ProfileTileLabel: View {
                 ProfileAvatarView(profile: profile, size: ProfilePickerLayout.avatarSize)
             }
 
-            ProfileNameLabel(profile: profile)
+            ProfileNameLabel(profile: profile, showsLock: showsLock)
                 .font(ProfilePickerLayout.nameFont)
                 .foregroundStyle(isFocused ? palette.primaryText : palette.secondaryText)
                 .lineLimit(1)

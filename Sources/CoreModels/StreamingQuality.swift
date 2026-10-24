@@ -406,7 +406,7 @@ public protocol StreamingSessionMaintaining: MediaProvider {
 }
 
 public enum StreamingQualityError: Error, Equatable, Sendable {
-    public enum RefusalReason: String, Sendable {
+    public enum RefusalReason: String, Codable, Sendable {
         case sessionExpired = "session_expired"
         case transcodingDisabled = "transcoding_disabled"
         case conversionToolUnavailable = "conversion_tool_unavailable"
@@ -496,13 +496,13 @@ public enum StreamingQualityError: Error, Equatable, Sendable {
 }
 
 public struct StreamingPlaybackFailure: Equatable, Sendable {
-    public enum Kind: String, Sendable {
+    public enum Kind: String, Codable, Sendable {
         case network, timedOut, accessDenied, unavailable, unsupportedFormat
         case hdrConversion, hdrConversionUnconfirmed, server, unknown
         case rateLimited, accessRestricted, storageExhausted, audioOutputFailed
         case readinessTimedOut, processingFailed
     }
-    public enum Domain: String, Sendable { case avFoundation = "AVFoundation", url = "URL", coreMedia = "CoreMedia" }
+    public enum Domain: String, Codable, Sendable { case avFoundation = "AVFoundation", url = "URL", coreMedia = "CoreMedia" }
     public let kind: Kind
     public let domain: Domain?
     public let code: Int?
@@ -530,7 +530,18 @@ public struct StreamingPlaybackFailure: Equatable, Sendable {
     }
 
     public var allowsCodecFallback: Bool {
-        kind == .unsupportedFormat || kind == .processingFailed || kind == .unknown || kind == .hdrConversionUnconfirmed
+        if kind == .unavailable {
+            // Native URL -1008 alone does not establish missing or expired media.
+            // Keep bounded compatibility recovery unless stronger failure evidence exists.
+            return domain == .url && code == URLError.resourceUnavailable.rawValue
+                && httpStatus == nil && providerReason == nil
+                && (engineFailure == nil || engineFailure == .nativeItemFailed)
+                && underlyingErrors.allSatisfy {
+                    $0.domain != .posix
+                        && ($0.domain != .url || $0.code == URLError.resourceUnavailable.rawValue)
+                }
+        }
+        return kind == .unsupportedFormat || kind == .processingFailed || kind == .unknown || kind == .hdrConversionUnconfirmed
     }
     public var diagnosticCode: String? {
         let components = [

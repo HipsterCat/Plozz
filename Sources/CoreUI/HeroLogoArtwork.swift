@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
+import CoreNetworking
 import MetadataKit
 #if canImport(UIKit)
 import UIKit
@@ -132,6 +133,9 @@ public enum HeroLogoHaloStyle: Sendable {
     /// the picture. At full strength it instead read as a hard outline, worst on
     /// pale artwork where a tight black edge has the most to contrast against.
     case gentle
+    /// Showcase's leading title column can select a cached, highlight-preserving
+    /// lift for dark coloured ink. Other hero and card treatments are unchanged.
+    case showcase
 }
 
 /// Keeps an asynchronous lookup attached to the title it resolves, even when
@@ -335,6 +339,12 @@ private struct LoadedLogo<TextFallback: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.heroArtworkDisplayState) private var displayedArtwork
+    #if os(tvOS)
+    @Environment(\.themePalette) private var palette
+    @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
+    @Environment(\.artworkGradientTintSaturation) private var tintSaturation
+    @Environment(\.ambientBackdropModel) private var ambient
+    #endif
 
     @State private var image: ProcessedLogo?
     /// The completed request, including a confirmed miss. A different subject
@@ -423,7 +433,7 @@ private struct LoadedLogo<TextFallback: View>: View {
                 .frame(maxWidth: maxWidth, alignment: alignment)
                 .foregroundStyle(tintLight ? Color.white : Color.black)
         } else {
-            Image(uiImage: processed.image)
+            Image(uiImage: coloredImage(for: processed))
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: fitted.width, height: fitted.height)
@@ -439,6 +449,28 @@ private struct LoadedLogo<TextFallback: View>: View {
                     isGentle: haloStyle == .gentle
                 ))
         }
+    }
+
+    private func coloredImage(for logo: ProcessedLogo) -> UIImage {
+        #if os(tvOS)
+        guard haloStyle == .showcase, colorScheme == .dark,
+              let contrast = logo.showcaseContrast else { return logo.image }
+        // The Showcase logo sits to the left of the backdrop, on the page's
+        // leading colour, not on the uncomposited artwork sample.
+        let background = gradientEnabled
+            ? AmbientGradientBackground.meshColors(
+                tint: ambient?.colors, palette: palette, tintSaturation: tintSaturation
+            )[0]
+            : palette.backgroundBase
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard UIColor(background).getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return logo.image
+        }
+        if contrast.improvesContrast(on: SIMD3(Double(red), Double(green), Double(blue))) {
+            return contrast.image
+        }
+        #endif
+        return logo.image
     }
 
     /// Re-run resolution whenever the candidate sources change.
@@ -540,7 +572,8 @@ enum HeroLogoAnalysis {
         analyze(
             PreparedLogo(image: logo.image, luminance: logo.luminance,
                          red: logo.red, green: logo.green, blue: logo.blue,
-                         coverage: logo.coverage, brightInk: logo.brightInk, backgroundPlate: logo.backgroundPlate),
+                         coverage: logo.coverage, brightInk: logo.brightInk, backgroundPlate: logo.backgroundPlate,
+                         showcaseContrast: logo.showcaseContrast),
             backgroundSample: backgroundSample
         )
     }
@@ -572,9 +605,7 @@ enum HeroLogoAnalysis {
         let isDark = prepared.luminance < 0.5
         let chroma = max(prepared.red, prepared.green, prepared.blue)
             - min(prepared.red, prepared.green, prepared.blue)
-        let isMonochrome = prepared.coverage < 0.85
-            && chroma < 0.10
-            && (prepared.luminance < 0.22 || prepared.luminance > 0.85)
+        let isMonochrome = Self.isMonochrome(luminance: prepared.luminance, chroma: chroma, coverage: prepared.coverage)
 
         var needsHalo = halosWhenUnmeasured
         if let bg = backgroundSample {
@@ -596,8 +627,13 @@ enum HeroLogoAnalysis {
             green: prepared.green,
             blue: prepared.blue,
             brightInk: prepared.brightInk,
-            backgroundPlate: prepared.backgroundPlate
+            backgroundPlate: prepared.backgroundPlate,
+            showcaseContrast: prepared.showcaseContrast
         )
+    }
+
+    static func isMonochrome(luminance: Double, chroma: Double, coverage: Double) -> Bool {
+        coverage < 0.85 && chroma < 0.10 && (luminance < 0.22 || luminance > 0.85)
     }
 
     /// Weighted ("redmean") RGB distance — a cheap approximation of perceived
@@ -793,6 +829,7 @@ struct PreparedLogo: @unchecked Sendable {
     /// ``luminance``, which is the mean and so misses exactly this.
     let brightInk: Double
     let backgroundPlate: HeroBackgroundSample?
+    let showcaseContrast: ShowcaseLogoContrast?
 
     /// Luminance above which ink counts as carrying its own contrast.
     static let brightInkLuminance = 0.72
@@ -805,7 +842,8 @@ struct PreparedLogo: @unchecked Sendable {
         blue: Double = 0,
         coverage: Double = 1.0,
         brightInk: Double = 0,
-        backgroundPlate: HeroBackgroundSample? = nil
+        backgroundPlate: HeroBackgroundSample? = nil,
+        showcaseContrast: ShowcaseLogoContrast? = nil
     ) {
         self.image = image
         self.luminance = luminance
@@ -815,6 +853,7 @@ struct PreparedLogo: @unchecked Sendable {
         self.coverage = coverage
         self.brightInk = brightInk
         self.backgroundPlate = backgroundPlate
+        self.showcaseContrast = showcaseContrast
     }
 }
 
@@ -839,6 +878,7 @@ struct ProcessedLogo {
     let blue: Double
     let brightInk: Double
     let backgroundPlate: HeroBackgroundSample?
+    let showcaseContrast: ShowcaseLogoContrast?
 
     var tone: ResolvedLogoTone {
         ResolvedLogoTone(
@@ -1285,6 +1325,41 @@ private extension UIImage {
             return nil
         }
         let cropRect = CGRect(x: stats.minX, y: stats.minY, width: stats.maxX - stats.minX + 1, height: stats.maxY - stats.minY + 1)
+        var showcaseContrast: ShowcaseLogoContrast?
+        #if os(tvOS)
+        let chroma = max(meanR, meanG, meanB) - min(meanR, meanG, meanB)
+        if backgroundPlate == nil, coverage < 0.98,
+           !HeroLogoAnalysis.isMonochrome(luminance: luminance, chroma: chroma, coverage: coverage),
+           brightInk < 0.35, stats.darkWeight >= weight * 0.20 {
+            var liftedDarkSum = SIMD3<Double>(repeating: 0)
+            for y in stats.minY...stats.maxY {
+                guard !Task.isCancelled else { return nil }
+                for x in stats.minX...stats.maxX {
+                    let i = y * bytesPerRow + x * 4
+                    let alpha = Double(data[i + 3])
+                    guard alpha > 0 else { continue }
+                    let original = SIMD3(Double(data[i]), Double(data[i + 1]), Double(data[i + 2])) / alpha
+                    let lifted = ShowcaseLogoContrast.lifted(original)
+                    if alpha > 10, ShowcaseLogoContrast.isDarkInk(original) {
+                        liftedDarkSum += lifted * (alpha / 255)
+                    }
+                    for channel in 0..<3 {
+                        data[i + channel] = UInt8(clamping: Int((lifted[channel] * alpha).rounded()))
+                    }
+                }
+            }
+            if let full = Self.makeImage(&data, width: width, height: height, bytesPerRow: bytesPerRow),
+               let lifted = full.cropping(to: cropRect) {
+                showcaseContrast = ShowcaseLogoContrast(
+                    image: UIImage(cgImage: lifted, scale: scale, orientation: imageOrientation),
+                    originalDarkInk: stats.darkColorSum / stats.darkWeight,
+                    liftedDarkInk: liftedDarkSum / stats.darkWeight
+                )
+            } else {
+                PlozzLog.networking.error("Could not prepare Showcase logo contrast variant")
+            }
+        }
+        #endif
         guard let cropped = processedFull.cropping(to: cropRect) else {
             return PreparedLogo(
                 image: UIImage(cgImage: processedFull, scale: scale, orientation: imageOrientation),
@@ -1298,7 +1373,8 @@ private extension UIImage {
             red: meanR, green: meanG, blue: meanB,
             coverage: coverage,
             brightInk: brightInk,
-            backgroundPlate: backgroundPlate
+            backgroundPlate: backgroundPlate,
+            showcaseContrast: showcaseContrast
         )
     }
 
@@ -1479,6 +1555,13 @@ private extension UIImage {
                     // be left alone rather than treated as the mid-tone its mean
                     // claims it is.
                     if luma > PreparedLogo.brightInkLuminance { stats.brightWeight += af }
+                    #if os(tvOS)
+                    let rgb = SIMD3(r, g, b)
+                    if ShowcaseLogoContrast.isDarkInk(rgb) {
+                        stats.darkWeight += af
+                        stats.darkColorSum += rgb * af
+                    }
+                    #endif
                 }
             }
         }
@@ -1511,6 +1594,8 @@ private struct LogoStats {
     /// Ink bright enough to carry its own contrast — see
     /// ``PreparedLogo/brightInk``.
     var brightWeight = 0.0
+    var darkWeight = 0.0
+    var darkColorSum = SIMD3<Double>(repeating: 0)
 }
 
 /// Samples the effective colour of the hero artwork behind the logo, so the

@@ -10,6 +10,81 @@ import XCTest
 
 @MainActor
 final class LiveTVSourcesPresentationTests: XCTestCase {
+    func testSourceOverflowUsesMeasuredRowsAndDirectionalSharedFade() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let heights: [CGFloat] = [58, 82, 74, 96, 108, 62]
+        for width in [CGFloat(390), 834] {
+            for count in [1, 4, 5, 6] {
+                let viewport = SourceViewport()
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 1024)
+                host.rootView = AnyView(
+                    VStack(spacing: 0) {
+                        LiveTVBoundedSourceRows {
+                            ForEach(0..<count, id: \.self) { index in
+                                Color.red.frame(height: heights[index])
+                            }
+                        }
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                            viewport.frame = $0
+                        }
+                        .id("\(width)-\(count)")
+                        Spacer(minLength: 0)
+                    }
+                    .background(.black)
+                )
+                try await settle(window)
+                let scrolls = sourceScrollViews(in: window)
+                if count <= 4 {
+                    XCTAssertTrue(scrolls.isEmpty, "Four or fewer sources must use their natural height.")
+                    XCTAssertEqual(
+                        viewport.frame.height,
+                        heights.prefix(count).reduce(0, +) + CGFloat(count - 1) * SettingsRowMetrics.formRowSpacing,
+                        accuracy: 1
+                    )
+                    continue
+                }
+                let scroll = try XCTUnwrap(scrolls.first, "Missing source scroll view at width \(width), count \(count).")
+                XCTAssertEqual(scrolls.count, 1)
+                let expected = 8 + heights.prefix(4).reduce(0, +)
+                    + heights[4] / 2 + 4 * SettingsRowMetrics.formRowSpacing
+                XCTAssertEqual(viewport.frame.height, expected, accuracy: 1,
+                               "Show four complete, potentially wrapping rows and half of the fifth.")
+                let frame = viewport.frame
+                let bottom = CGPoint(x: frame.midX, y: frame.maxY - 15)
+                let before = snapshot(window)
+                XCTAssertLessThan(try pixel(before, at: bottom)[0], 180,
+                                  "The partially visible fifth row must fade, not end abruptly.")
+                scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentSize.height - scroll.bounds.height),
+                                        animated: false)
+                try await settle(window)
+                XCTAssertGreaterThan(try pixel(snapshot(window), at: bottom)[0], 230,
+                                     "The last source must stop fading when no content remains below.")
+                let attachment = XCTAttachment(image: before)
+                attachment.name = "source-overflow-\(Int(width))-\(count)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
+    private func sourceScrollViews(in view: UIView) -> [UIScrollView] {
+        (view as? UIScrollView).map { [$0] } ?? view.subviews.flatMap { sourceScrollViews(in: $0) }
+    }
+
+    private final class SourceViewport {
+        var frame: CGRect = .zero
+    }
+
     func testIPTVSetupUsesTheSharedSettingsBackground() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)

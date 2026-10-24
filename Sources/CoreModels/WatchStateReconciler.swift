@@ -507,6 +507,9 @@ public actor WatchStateReconciler {
         merged.targets = (incoming.targets + existing.targets).filter {
             !merged.rejectedSourceIDs.contains($0.id) && seen.insert($0.id).inserted
         }
+        merged.targetRetries = existing.targetRetries.merging(incoming.targetRetries) {
+            $0.notBefore >= $1.notBefore ? $0 : $1
+        }.filter { seen.contains($0.key) }
         seen.removeAll(keepingCapacity: true)
         merged.optimisticTargets = (incoming.optimisticTargets + existing.optimisticTargets)
             .filter { !merged.rejectedSourceIDs.contains($0.id) && seen.insert($0.id).inserted }
@@ -767,6 +770,10 @@ public actor WatchStateReconciler {
                 FanoutDiagnostics.emit(FanoutDiagnostics.drainTargetLine(target, outcome: "deferred(live session)"))
                 continue
             }
+            if let retry = mutation.targetRetries[target.id], now() < retry.notBefore {
+                remaining.append(target)
+                continue
+            }
             // Build a per-op outcome string so a silent write failure is visible:
             // which of setPlayed / setResume succeeded, and the exact error if one
             // threw (a thrown target stays queued for the next drain). NOTE: a Plex
@@ -843,12 +850,25 @@ public actor WatchStateReconciler {
             } catch {
                 try await WatchMutationDeliveryAuthorization.check()
                 remaining.append(target)
+                if !(error is CancellationError), error as? AppError != .cancelled {
+                    let failures = min(max(mutation.targetRetries[target.id]?.failures ?? 0, 0), 5) + 1
+                    var delay = min(15 * 60, 30 * pow(2, Double(failures - 1)))
+                    if case .rateLimited(let retryAfter) = error as? AppError,
+                       let retryAfter, retryAfter.isFinite, retryAfter > delay {
+                        delay = retryAfter
+                    }
+                    mutation.targetRetries[target.id] = .init(
+                        failures: failures, notBefore: now().addingTimeInterval(delay)
+                    )
+                }
                 FanoutDiagnostics.emit(FanoutDiagnostics.drainTargetLine(
                     target,
                     outcome: outcome + "THROW(\(error)) -> requeued"))
             }
         }
         mutation.targets = remaining
+        let remainingIDs = Set(remaining.map(\.id))
+        mutation.targetRetries = mutation.targetRetries.filter { remainingIDs.contains($0.key) }
 
         try await WatchMutationDeliveryAuthorization.check()
         // The optimistic stop notification precedes these writes. Tell Home

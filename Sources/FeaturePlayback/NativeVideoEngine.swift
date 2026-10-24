@@ -73,6 +73,7 @@ public final class NativeVideoEngine: VideoEngine {
 
     public var audioTracks: [MediaTrack] { request?.audioTracks ?? [] }
     public var subtitleTracks: [MediaTrack] { request?.subtitleTracks ?? [] }
+    public private(set) var chapters: [MediaChapter] = []
 
     // MARK: Orchestration callbacks
 
@@ -82,6 +83,7 @@ public final class NativeVideoEngine: VideoEngine {
     /// Provider tracks are known synchronously; native text is emitted as timed
     /// cues while sidecars remain owned by the view model.
     public var onTracksChanged: (@MainActor () -> Void)?
+    public var onChaptersChanged: (@MainActor () -> Void)?
     public var onProbedSourceFactsChanged: (@MainActor (EngineProbedSourceFacts) -> Void)?
     public var onSubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
     public var onSecondarySubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
@@ -123,6 +125,7 @@ public final class NativeVideoEngine: VideoEngine {
     /// with playback start) so a known AVPlayer-hostile codec can swap instantly
     /// instead of waiting out the no-frames probe.
     @ObservationIgnored private var formatInspectTask: Task<Void, Never>?
+    @ObservationIgnored private var chapterMetadataTask: Task<Void, Never>?
     private var convertedVideoFormat: NativePlaybackFailure.VideoFormat?
     @ObservationIgnored private var audioSessionConfigured = false
     /// Retains the resource-loader delegate that serves injected subtitle
@@ -134,7 +137,7 @@ public final class NativeVideoEngine: VideoEngine {
     /// startup so resolving the asset's `AVMediaSelectionGroup` never extends the
     /// time-to-first-frame; cancelled on teardown so a stale selection never
     /// applies to a replaced player item.
-    @ObservationIgnored private var defaultSubtitleSelectionTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var defaultSubtitleSelectionTask: Task<Void, Never>?
     /// The legible track extracted into the owned overlay, or nil for Off/a
     /// sidecar. Retained across item rebuilds when that track still exists.
     @ObservationIgnored private var requestedLegibleTrack: MediaTrack?
@@ -411,6 +414,9 @@ public final class NativeVideoEngine: VideoEngine {
         status = .ready
         isPaused = false
         startPlayback(player)
+        if MediaChapter.normalized(request.chapters, duration: request.item.runtime).isEmpty {
+            loadChapters(asset: item.asset, item: item, generation: generation)
+        }
 
         // The model owns selection; the suppressed native output supplies cues.
         // Resolve the group off the startup path and retain only a selection
@@ -436,6 +442,44 @@ public final class NativeVideoEngine: VideoEngine {
                     for: item,
                     preferredLanguages: preferredAudioLanguages
                 )
+            }
+        }
+    }
+
+    private func loadChapters(asset: AVAsset, item: AVPlayerItem, generation: UInt) {
+        chapterMetadataTask = Task { @MainActor [weak self] in
+            do {
+                var groups = try await asset.loadChapterMetadataGroups(
+                    bestMatchingPreferredLanguages: Locale.preferredLanguages
+                )
+                if groups.isEmpty, let locale = try await asset.load(.availableChapterLocales).first {
+                    groups = try await asset.loadChapterMetadataGroups(
+                        withTitleLocale: locale, containingItemsWithCommonKeys: []
+                    )
+                }
+                var chapters: [MediaChapter] = []
+                for group in groups {
+                    try Task.checkCancellation()
+                    let titleItem = group.items.first { $0.commonKey == .commonKeyTitle }
+                    var title: String? // l10n:content - embedded chapter title from the playing asset
+                    do {
+                        title = try await titleItem?.load(.stringValue)
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        PlozzLog.playback.error("Could not read an embedded chapter title.")
+                    }
+                    chapters.append(MediaChapter(start: group.timeRange.start.seconds, title: title))
+                }
+                guard let self, !Task.isCancelled,
+                      self.loadGeneration == generation,
+                      self.player?.currentItem === item else { return }
+                self.chapters = MediaChapter.normalized(chapters, duration: self.duration)
+                self.onChaptersChanged?()
+            } catch {
+                guard let self, !Task.isCancelled,
+                      self.loadGeneration == generation,
+                      self.player?.currentItem === item else { return }
+                PlozzLog.playback.error("Could not read embedded chapters from the playing asset.")
             }
         }
     }
@@ -808,6 +852,10 @@ public final class NativeVideoEngine: VideoEngine {
 
     public var streamingOutputDynamicRange: SourceDynamicRange? { convertedVideoFormat?.dynamicRange }
     public var streamingOutputVideoCodec: DirectPlayVideoCodec? { convertedVideoFormat?.videoCodec }
+    public var diagnosticRoute: PlaybackFailureEvidence.Route? {
+        guard let request else { return nil }
+        return request.isManifestStream ? .nativeHLS : .nativeFile
+    }
 
     public var streamingFailure: StreamingPlaybackFailure? {
         guard let item = player?.currentItem else { return nil }
@@ -1033,6 +1081,9 @@ public final class NativeVideoEngine: VideoEngine {
     }
 
     private func teardownPlayer() {
+        chapterMetadataTask?.cancel()
+        chapterMetadataTask = nil
+        chapters = []
         startupResume?.cancel()
         startupResume = nil
         lifecycleDiagnostics = nil
@@ -1222,17 +1273,20 @@ public final class NativeVideoEngine: VideoEngine {
             if let track { option = await Self.legibleOption(for: track, in: group) }
             else { option = nil }
             guard !Task.isCancelled, self.player?.currentItem === item else { return }
-            if option != nil, self.isPaused {
-                self.nativeSubtitleOutput?.select(enabled: false)
+            if let option, self.nativeSubtitleOutput?.isSelecting(option) == true,
+               item.currentMediaSelection.selectedMediaOption(in: group) == option {
+                return
+            }
+            let current = item.currentMediaSelection.selectedMediaOption(in: group)
+            if current?.mediaSubTypes.contains(NSNumber(value: kCMSubtitleFormatType_3GText)) == true {
+                // An active tx3g decoder can keep a removed output on tvOS 27.
+                // HLS switches must stay direct: an intermediate Off can lose paused cues.
                 item.select(nil, in: group)
-                // Let the old paused rendition detach before registering the replacement.
                 await Task.yield()
                 guard !Task.isCancelled, self.player?.currentItem === item else { return }
             }
-            // Register the replacement output against the requested rendition,
-            // not an intermediate Off or the previous paused track.
+            self.nativeSubtitleOutput?.select(enabled: option != nil, option: option)
             item.select(option, in: group)
-            self.nativeSubtitleOutput?.select(enabled: option != nil)
             if track != nil, option == nil {
                 PlozzLog.playback.error("The selected native subtitle track is unavailable in the current stream.")
             }

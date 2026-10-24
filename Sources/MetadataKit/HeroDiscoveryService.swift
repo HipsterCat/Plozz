@@ -274,6 +274,7 @@ public actor HeroDiscoveryService {
             item.locallyValidatedPlayableSource = false
             item.availability = .unknown
             item.downloadProgress = nil
+            item.hasRequestDownloadActivity = nil
             item.watchlistAliasID = nil
             item.fileBrowserContainerID = nil
             item.sourceAccountID = nil

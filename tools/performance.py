@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import shutil
 import signal
 import statistics
 import subprocess
@@ -170,6 +171,32 @@ SCENARIOS = {
         "description": "100 full bounded snapshots including serialization at event-capture boundaries.",
         "counters": ["snapshots", "records", "serializedBytes"],
     },
+    "playback-journal-disabled": {
+        "suite": "diagnostics", "target": "CoreModelsTests",
+        "test": "PerformanceDiagnosticsProbeTests/testPerformancePlaybackJournalDisabled",
+        "file": "Tests/CoreModelsTests/PerformanceDiagnosticsProbeTests.swift",
+        "description": "10,000 lifecycle notifications without recording; control for journal overhead.",
+        "counters": ["notifications", "retained", "discarded", "persistedBytes", "enqueueMicroseconds"],
+    },
+    "playback-journal-enabled": {
+        "suite": "diagnostics", "target": "CoreModelsTests",
+        "test": "PerformanceDiagnosticsProbeTests/testPerformancePlaybackJournalEnabled",
+        "file": "Tests/CoreModelsTests/PerformanceDiagnosticsProbeTests.swift",
+        "description": "The same notifications with bounded recording and completed encoding/persistence.",
+        "counters": ["notifications", "retained", "discarded", "persistedBytes", "enqueueMicroseconds"],
+    },
+    "skeletons-idle": {
+        "suite": "ui", "test": "ShimmerPerformanceTests/testPerformanceLoadingCards",
+        "file": "Tests/PerformancePresentationSupport/ShimmerPerformanceTests.swift",
+        "description": "Observe 24 production loading cards over complete 2.3-second shimmer cycles; verify visible motion outside the measurement.",
+        "counters": ["placeholders", "observationMilliseconds"], "timing": ["cpuMilliseconds"],
+    },
+    "skeletons-static": {
+        "suite": "ui", "test": "ShimmerPerformanceTests/testPerformanceStaticCards",
+        "file": "Tests/PerformancePresentationSupport/ShimmerPerformanceTests.swift",
+        "description": "The same 24 loading cards with implicit animations disabled; verify stable pixels before measuring idle CPU.",
+        "counters": ["placeholders", "observationMilliseconds"], "timing": ["cpuMilliseconds"],
+    },
     "cards-idle": {
         "suite": "ui", "test": "CardPerformanceTests/testPerformanceIdle",
         "file": "Tests/PerformancePresentationSupport/CardPerformanceTests.swift",
@@ -259,6 +286,35 @@ SCENARIOS = {
         "description": "Update 24 production mobile Home cards against a four-source identity index without activating a card.",
         "counters": ["rootUpdates", "cards", "sourceResolutions", "observedRevision"],
     },
+    "mobile-home-rail-prefetch": {
+        "suite": "ui", "platforms": ["iOS"],
+        "test": "HomeRailPrefetchPerformanceTests/testPerformanceRepeatedRailUpdates",
+        "file": "Tests/iOSPresentationTests/HomeRailPrefetchPerformanceTests.swift",
+        "description": "Update a production mobile Continue Watching rail 24 times with 180 episodes across twelve synthetic source identities and cached artwork.",
+        "counters": ["rootUpdates", "items", "accounts", "seriesSourceBuilds"],
+    },
+    "mobile-preference-sync": {
+        "suite": "ui",
+        "platforms": ["iOS"],
+        "test": "CloudConfigurationRefreshTests/testPerformancePreferenceSync",
+        "file": "Tests/iOSPresentationTests/CloudConfigurationRefreshTests.swift",
+        "description": "Apply 24 active/inactive preference batches through the mobile app model; count synchronous account, index and download invalidations.",
+        "counters": ["batches", "appliedPreferences", "accountInvalidations", "indexResets", "downloadTransitions"],
+    },
+    "mobile-profile-selection": {
+        "suite": "ui", "platforms": ["iOS"],
+        "test": "ProfileSelectionPerformanceTests/testPerformanceProfileSelection",
+        "file": "Tests/iOSPresentationTests/ProfileSelectionPerformanceTests.swift",
+        "description": "Activate sixteen profiles through the mobile app model and verify current Plex PIN gating; measure synchronous selection separately from 5-ms fixture metadata.",
+        "counters": ["selections", "selectionMicroseconds", "maxSelectionMicroseconds"],
+    },
+    "mobile-profile-pin-handoff": {
+        "suite": "ui", "platforms": ["iOS"],
+        "test": "ProfileSelectionPerformanceTests/testPerformanceLocalPINHandoff",
+        "file": "Tests/iOSPresentationTests/ProfileSelectionPerformanceTests.swift",
+        "description": "Unlock a local profile in a sixteen-profile household using the production verifier cost; measure verification duration and main-actor heartbeat gaps.",
+        "counters": ["profiles", "verifierIterations", "verificationMicroseconds", "maxMainActorGapMicroseconds"],
+    },
     "source-menu-version-presentation": {
         "suite": "ui",
         "test": "PlaybackSourceMenuPerformanceTests/testPerformanceVersionPresentation",
@@ -279,6 +335,20 @@ SCENARIOS = {
         "file": "Tests/FocusIntegrationTests/NativePosterCompositionTests.swift",
         "description": "Render 72 native poster foregrounds with three visible badges and changing playback progress.",
         "counters": ["completedOverlays", "distinctBitmaps"],
+    },
+    "portrait-reflection-cold": {
+        "suite": "ui", "platforms": ["tvOS"],
+        "test": "NativePosterCompositionTests/testPerformancePortraitReflectionPreparation",
+        "file": "Tests/FocusIntegrationTests/NativePosterCompositionTests.swift",
+        "description": "Prepare twelve Detailed portrait reflections through the native coordinator with cold geometry.",
+        "counters": ["completedPosters", "maxPreparationMicroseconds"],
+    },
+    "portrait-reflection-warm": {
+        "suite": "ui", "platforms": ["tvOS"],
+        "test": "NativePosterCompositionTests/testPerformancePortraitReflectionReuse",
+        "file": "Tests/FocusIntegrationTests/NativePosterCompositionTests.swift",
+        "description": "Recreate 288 native portrait coordinators and require reuse of their twelve prepared reflection bitmaps.",
+        "counters": ["requests", "reusedBitmaps"],
     },
     "runtime-matrix": {
         "suite": "matrix", "target": "AppRuntimeTests",
@@ -448,7 +518,10 @@ def stack_sample_summary(path, pid):
     text = path.read_text()
     if not re.search(rf"^Process:\s+FocusHost \[{pid}\]$", text, re.MULTILINE):
         raise Failure("Stack sample belongs to a different process.")
-    if "Call graph:\n" not in text or "\nBinary Images:" not in text:
+    images_available = "\nBinary Images:" in text
+    if "Call graph:\n" not in text or not (
+        images_available or text.rstrip().endswith("Binary images description not available")
+    ):
         raise Failure("Stack sample did not finalize.")
     thread = None
     frames = []
@@ -470,6 +543,7 @@ def stack_sample_summary(path, pid):
     if not frames:
         raise Failure("Stack sample has no main-thread frames.")
     return {
+        "binaryImagesAvailable": images_available,
         "mainThreadFrames": sorted(frames, key=lambda row: row["stackSamples"], reverse=True)[:40],
         "appFrames": sorted((row for row in frames if "(in FocusHost)" in row["frame"]),
                             key=lambda row: row["stackSamples"], reverse=True)[:40],
@@ -670,6 +744,12 @@ class Lane:
                       key="PLOZZ_PERFORMANCE_ATTACH", value="1", isEnabled="YES")
         derived = self.root / ".build/performance-derived-data/tvOS/ui"
         bundle_id = "com.thatcube.Plozz.FocusHost"
+        workload = getattr(self.args, "workload", "home-navigation")
+        test = (
+            "DetailReturnFocusRemoteTests/testProfilePopulatedShowcaseDetailReturns"
+            if workload == "detail-return"
+            else "ProductionHomeNavigationTests/testNavigateProductionHomeWithNativeCards"
+        )
         command = [
             "xcodebuild", "-project", str(project), "-scheme", name, "-configuration", "Debug",
             "-destination", f"platform=tvOS Simulator,id={self.args.sim_id}",
@@ -677,7 +757,7 @@ class Lane:
             "-parallel-testing-enabled", "NO", "-enableCodeCoverage", "NO",
             "-enableAddressSanitizer", "NO", "-enableThreadSanitizer", "NO",
             "-enableUndefinedBehaviorSanitizer", "NO",
-            "-only-testing:PlozzHomeRemoteTests/ProductionHomeNavigationTests/testNavigateProductionHomeWithNativeCards",
+            "-only-testing:PlozzHomeRemoteTests/" + test,
         ]
         owned = []
         handles = []
@@ -704,6 +784,12 @@ class Lane:
             self.command("fixture-install", ["xcrun", "simctl", "install", self.args.sim_id, str(app)], 120)
             arguments = ["--production-home-fixture", "--home-performance-fixture", "--distinct-home-artwork",
                          "--home-artwork-cache-namespace=" + self.output.name]
+            if workload == "detail-return":
+                arguments = [
+                    "--production-home-fixture", "--native-top-home", "--return-focus-trace",
+                    "--immersive-home", "--progressive-library-rows", "--populated-home-return",
+                    "--distinct-home-artwork", "--home-artwork-cache-namespace=" + self.output.name,
+                ]
             _, launch = self.command("fixture-launch", ["xcrun", "simctl", "launch", self.args.sim_id, bundle_id, *arguments])
             launched = True
             match = re.fullmatch(re.escape(bundle_id) + r": (\d+)\s*", launch)
@@ -754,9 +840,18 @@ class Lane:
             _, current = self.command("fixture-final-process", ["ps", "-p", str(pid), "-o", "comm="])
             if current != executable:
                 raise Failure("Navigation did not preserve the profiled app process.")
+            _, data_container = self.command("fixture-data-container", [
+                "xcrun", "simctl", "get_app_container", self.args.sim_id, bundle_id, "data",
+            ])
+            journal = Path(data_container.strip()) / "Library/Caches/Plozz/playback-trace.log"
+            if workload == "detail-return" and not journal.is_file():
+                raise Failure("Detail-return profiling is missing its native focus journal.")
+            if journal.is_file():
+                shutil.copy2(journal, folder / "handoff-journal.log")
             if self.args.template == "Process Sample":
                 return {
                     "pid": pid, "bundleID": bundle_id, "arguments": arguments, "template": self.args.template,
+                    "workload": workload,
                     "stacks": stack_sample_summary(sample_path, pid), "sample": str(sample_path),
                     "note": "Sampled simulator navigation, not device frame pacing or a full multi-provider app session.",
                 }
@@ -774,6 +869,7 @@ class Lane:
                 raise Failure("Instruments reported incomplete recording; raw evidence retained.")
             return {
                 "pid": pid, "bundleID": bundle_id, "arguments": arguments, "template": self.args.template,
+                "workload": workload,
                 "cpu": trace_tools.sample_summary(samples, pid), "trace": str(trace),
                 "note": "Instrumented simulator navigation, not device frame pacing or a full multi-provider app session.",
             }
@@ -891,6 +987,7 @@ def main(argv=None):
     profile.add_argument("--sim-id", required=True)
     profile.add_argument("--timeout", type=int, default=2400)
     profile.add_argument("--template", choices=("Time Profiler", "SwiftUI", "Process Sample"), default="Process Sample")
+    profile.add_argument("--workload", choices=("home-navigation", "detail-return"), default="home-navigation")
     comparison = commands.add_parser("compare", help="Compare saved runs; never updates a baseline.")
     comparison.add_argument("baseline", type=Path)
     comparison.add_argument("candidate", type=Path)

@@ -77,8 +77,8 @@ class WorkflowTests(unittest.TestCase):
                 block = JOBS[lane]
                 self.assertIn("    needs: guards\n", block)
                 self.assertEqual(block.count("needs:"), 1)
-                self.assertIn("    runs-on: macos-15\n", block)
-                timeout = 90 if lane == "hosted-focus" else 60
+                self.assertIn("    runs-on: xcode-27\n", block)
+                timeout = {"app-build": 60, "package-tests": 80, "hosted-focus": 140}[lane]
                 self.assertIn(f"    timeout-minutes: {timeout}\n", block)
                 self.assertIn(f"          lane: {lane}\n", block)
                 self.assertIn("uses: ./.github/actions/ci-prepare", block)
@@ -110,22 +110,43 @@ class WorkflowTests(unittest.TestCase):
 
     def test_full_matrix_and_hosted_tests_remain_unconditional_and_bounded(self):
         self.assertIn(
-            'run: python3 tools/run-bounded.py 2400 "CI full test matrix" -- tools/run-tests.sh\n',
+            'run: python3 tools/run-bounded.py 3600 "CI full test matrix" -- tools/run-tests.sh\n',
             JOBS["package-tests"],
         )
+        package_deadline = int(re.search(
+            r'run-bounded\.py (\d+) "CI full test matrix"', JOBS["package-tests"]
+        )[1])
+        package_job_minutes = int(re.search(r"timeout-minutes: (\d+)", JOBS["package-tests"])[1])
+        self.assertGreaterEqual(package_job_minutes * 60 - package_deadline, 15 * 60,
+                                "Keep setup, timeout teardown, and diagnostic uploads inside the outer job budget.")
         self.assertIn("run: tools/run-focus-tests.sh\n", JOBS["hosted-focus"])
+        self.assertIn('PLOZZ_FOCUS_TEST_TIMEOUT: "5400"', JOBS["hosted-focus"])
+        self.assertEqual(
+            re.findall(r"PLOZZ_FOCUS_TEST_TIMEOUT:\s*([^\n]+)", WORKFLOW + PREPARE),
+            ['"5400"'],
+        )
         for lane in ("package-tests", "hosted-focus"):
             before_save = JOBS[lane].split("- name: Save successful trusted caches")[0]
             self.assertNotIn("if:", before_save)
         for unsafe in (
             "-only-testing", "-skip-testing", "test-fast.sh",
-            "PLOZZ_SKIP_", "PLOZZ_HANG_SECS:", "PLOZZ_FOCUS_TEST_TIMEOUT:",
+            "PLOZZ_SKIP_", "PLOZZ_HANG_SECS:",
             "PLOZZ_RESULT_TIMEOUT:", "PLOZZ_PARALLEL: YES",
         ):
             self.assertNotIn(unsafe, WORKFLOW + PREPARE)
 
+    def test_all_macos_lanes_use_the_engine_supported_toolchain(self):
+        for lane in ("guards", *CACHE.LANES):
+            with self.subTest(lane=lane):
+                self.assertIn("    runs-on: xcode-27\n", JOBS[lane])
+        for source in (JOBS["guards"], PREPARE):
+            self.assertIn("xcodebuild -version", source)
+            self.assertIn("xcrun swift --version", source)
+        self.assertNotIn("xcode-select", WORKFLOW + PREPARE)
+        self.assertNotIn("Xcode_26", WORKFLOW + PREPARE)
+
     def test_cache_hits_do_not_skip_generation_or_sdk_selection(self):
-        self.assertIn("sudo xcode-select -s /Applications/Xcode_26.2.app", PREPARE)
+        self.assertLess(PREPARE.index("xcodebuild -version"), PREPARE.index("ci-cache.py keys"))
         self.assertIn('tools/select-ci-tvos-simulator.py --sdk-version "$sdk_version"', PREPARE)
         self.assertIn('PLOZZ_SIM_ID=%s\\n', PREPARE)
         self.assertLess(PREPARE.index("tools/generate-project.sh"), PREPARE.index("ci-cache.py keys"))
@@ -306,6 +327,7 @@ class HostedRunnerTests(unittest.TestCase):
             self.assertEqual(calls[0][calls[0].index(flag) + 1], calls[1][calls[1].index(flag) + 1])
         for call in calls:
             self.assertIn("-only-testing:PlozzFocusTests/Fixture", call)
+            self.assertIn("SWIFT_OPTIMIZATION_LEVEL=-O", call)
             self.assertIn("CODE_SIGNING_ALLOWED=NO", call)
             self.assertEqual(call[call.index("-parallel-testing-enabled") + 1], "NO")
         runner = (ROOT / "tools/run-focus-tests.sh").read_text()

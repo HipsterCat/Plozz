@@ -131,3 +131,41 @@ explicit Level Up XMLTV HTTP 404, not confirmation that the configured URL or
 actual service is fixed. [#113](https://github.com/brandomoore/Plozz/issues/113)
 and [#168](https://github.com/brandomoore/Plozz/issues/168) likewise need their own
 relevant evidence; these controlled changes do not establish their causes.
+
+### XMLTV compatibility comparison
+
+The October 22 build-61 diagnostic for #116 shows the missing explicit guide
+falling back successfully to HTTP 200 and 94,191,315 bytes of XML. Parsing then
+fails as `malformed`; subsequent channel batches reuse the downloaded body and
+the remembered 404. The attachment does not contain the XML or a native parser
+error, so the rejected construct and actual provider compatibility remain
+unconfirmed.
+
+Behavioral references, not copied implementations:
+
+- [Kodi IPTV Simple](https://github.com/kodi-pvr/pvr.iptvsimple/blob/2066e6e6d9fc34f7fe454d91025bcb56de156b74/src/iptvsimple/Epg.cpp)
+  and its [channel metadata handling](https://github.com/kodi-pvr/pvr.iptvsimple/blob/2066e6e6d9fc34f7fe454d91025bcb56de156b74/src/iptvsimple/data/ChannelEpg.cpp)
+  combine repeated channel IDs and expose parser errors. Plozz independently
+  combines names only for identical IDs, retains its stricter identity/region
+  safeguards, and logs numeric locations/codes instead of source fragments.
+- [Jellyfin.XmlTv](https://github.com/jellyfin/Jellyfin.XmlTv/blob/6c8c302c8520e5f41cd51dd392ac631f97179d82/src/Jellyfin.XmlTv/XmlTvReader.cs)
+  accepts reduced-precision dates and disables character checks in its XML
+  reader. Plozz accepts minute precision but does not copy broad character
+  validation bypasses or guess repairs for malformed XML. Its text selection
+  now follows the same requested-language, untagged, first-usable fallback order
+  without retaining every translation.
+- [Tvheadend's XMLTV importer](https://github.com/tvheadend/tvheadend/blob/51ec612fa22c4c78b4697e4c262c943da9cbd6cc/src/epggrab/module/xmltv.c)
+  skips channel records without IDs and preserves language-tagged programme
+  text. Plozz likewise skips unusable channel declarations with diagnostic counts,
+  while retaining its XML/entity checks, resource budgets and exact identities.
+- The [XMLTV specification](https://github.com/XMLTV/xmltv/blob/f33601698cf1f1c7a67030b9ec2d3ad565421b5a/xmltv.dtd)
+  allows shortened timestamps, optional channel declarations and multiple
+  display names. Plozz already supports programme-only feeds and standard
+  DOCTYPEs; its declaration guard now distinguishes real entities from literal
+  mentions in comments, processing instructions and CDATA.
+
+The parser, gzip and indexed paths share regression coverage for these cases,
+strict failure/privacy behavior, cancellation and resource budgets. These are
+bounded compatibility changes, not proof that Level Up's particular XML is
+accepted. Fresh diagnostics can distinguish syntax, structural, entity and
+resource failures without collecting feed content.

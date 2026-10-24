@@ -3,6 +3,7 @@ import Observation
 import CoreModels
 import PlozzCoreUI
 import CoreNetworking
+import FeatureAuthCore
 import ProviderPlex
 
 /// The Plex Home users ("Who's watching?") facet, extracted from `AppState`.
@@ -86,6 +87,8 @@ public final class PlexHomeUsersModel {
     public private(set) var plexPINError: LocalizedStringResource?
     public private(set) var isSubmittingPlexPIN = false
     public private(set) var plexPINEntryAvailability: PINEntryAvailability = .checking
+    public private(set) var plexReauthentication: PlexAuthViewModel?
+    @ObservationIgnored private var plexReauthenticationID: UUID?
     /// Bumped whenever the active Plex identity (token override) changes so
     /// `RootView` rebuilds the signed-in subtree and content reloads as the new
     /// Plex Home user.
@@ -610,6 +613,7 @@ public final class PlexHomeUsersModel {
     /// An unresolved saved-profile activation instead keeps its authorization
     /// gate until the normal profile-switch flow authorizes a fallback.
     public func cancelPlexPIN() {
+        cancelPlexReauthentication()
         guard pendingPlexPINRequest != nil else { return }
         if pendingBindingChange != nil {
             discardPendingBindingChange()
@@ -618,6 +622,7 @@ public final class PlexHomeUsersModel {
         }
         let cancelledRequest = pendingPlexPINRequest
         let cancelledAvailability = plexPINEntryAvailability
+        let cancelledError = plexPINError
         profileActivationGeneration += 1
         startupProfileAccess = nil
         authenticatedProfileAccess = nil
@@ -627,6 +632,7 @@ public final class PlexHomeUsersModel {
         // fallback actually activates, including when its own lock is cancelled.
         pendingPlexPINRequest = cancelledRequest
         plexPINEntryAvailability = cancelledAvailability == .checking ? .unavailable : cancelledAvailability
+        plexPINError = cancelledError
         if let fallback = profilesModel.profiles.first?.id,
            fallback != profilesModel.activeProfileID {
             HandoffDiagnostics.emit(
@@ -783,10 +789,79 @@ public final class PlexHomeUsersModel {
     }
 
     public func retryPlexPINRequirement() {
+        cancelPlexReauthentication()
         guard let request = pendingPlexPINRequest else { return }
         cancelPINRequirementCheck()
         plexPINError = nil
         checkPlexPINRequirement(for: request, suppliedPIN: nil)
+    }
+
+    public func beginPlexReauthentication() {
+        beginPlexReauthentication(service: PlexAuthService(deviceID: accountsProviders.deviceID))
+    }
+
+    func beginPlexReauthentication(service: PlexAuthService) {
+        guard plexPINEntryAvailability == .unavailable,
+              let request = pendingPlexPINRequest,
+              let account = accountsProviders.accounts.first(where: { $0.id == request.accountID }),
+              account.server.provider == .plex,
+              accountsProviders.activeAccountIDs.contains(account.id) else {
+            PlozzLog.auth.error("Plex recovery has no current failed account activation")
+            return
+        }
+        cancelPlexReauthentication()
+        cancelPINRequirementCheck()
+        let id = UUID()
+        let profile = AutomaticSignInStore.Session.ProfileAccess(profilesModel.activeProfile)
+        let binding = profilesModel.activeProfile.homeUserBinding(forPlexAccount: account.id)
+        let proposal = pendingBindingChange
+        let activation = profileActivationGeneration
+        plexReauthenticationID = id
+        plexReauthentication = PlexAuthViewModel(
+            service: service,
+            reconnectingAccount: account,
+            onAuthenticated: { [weak self] session in
+                guard let self, self.plexReauthenticationID == id else { throw AppError.cancelled }
+                guard self.pendingPlexPINRequest == request,
+                      self.profileActivationGeneration == activation,
+                      profile == .init(self.profilesModel.activeProfile),
+                      self.profilesModel.activeProfile.homeUserBinding(forPlexAccount: account.id) == binding,
+                      self.pendingBindingChange?.id == proposal?.id,
+                      self.accountsProviders.activeAccountIDs.contains(account.id),
+                      self.accountsProviders.accounts.first(where: { $0.id == account.id }) == account
+                else {
+                    PlozzLog.auth.info("Plex recovery context changed before completion")
+                    throw AppError.conflict
+                }
+                do {
+                    try self.accountsProviders.accountStore.replaceAuthenticatedSession(session, expected: account)
+                } catch {
+                    PlozzLog.auth.error("Unable to save recovered Plex account")
+                    throw error
+                }
+                self.cancelPlexReauthentication()
+                self.forgetAccount(account.id)
+                self.accountsProviders.registry.invalidate(accountID: account.id)
+                self.accountsProviders.reloadAccounts()
+                if let proposed = proposal?.binding {
+                    self.setPlexHomeUserForActiveProfile(accountID: account.id, user: PlexHomeUser(
+                        id: proposed.homeUserID, name: proposed.name,
+                        requiresPIN: proposed.requiresPIN == true,
+                        isRestricted: proposed.isManaged == true,
+                        avatarURL: proposed.avatarURL.flatMap(URL.init(string:)),
+                        pinRequirementVerified: proposed.pinRequirementVerified == true
+                    ))
+                } else {
+                    self.ensurePlexIdentityForActiveProfile()
+                }
+            }
+        )
+    }
+
+    public func cancelPlexReauthentication() {
+        plexReauthenticationID = nil
+        plexReauthentication?.cancel()
+        plexReauthentication = nil
     }
 
     private func checkPlexPINRequirement(for request: PlexPINRequest, suppliedPIN: String?) {
@@ -851,7 +926,7 @@ public final class PlexHomeUsersModel {
         guard let adminToken = accountsProviders.accountStore.token(for: request.accountID) else {
             PlozzLog.auth.error("Plex PIN status refresh has no account credential acct=\(request.accountID)")
             if pendingPlexPINRequest == request {
-                plexPINError = ProfileLockCopy.plexSwitchFailed
+                plexPINError = AppError.unauthorized.userMessage
                 plexPINEntryAvailability = .unavailable
             }
             return
@@ -905,17 +980,17 @@ public final class PlexHomeUsersModel {
                 expectedGeneration: context.identityGeneration, expectedActivation: context.activation,
                 confirmedUnprotectedUser: user, selectionID: context.selectionID
             )
-            if case .failure = result,
+            if case let .failure(error) = result,
                isCurrentPINRequirementCheck(context, adminToken: adminToken) {
                 plexPINEntryAvailability = .unavailable
-                if plexPINError == nil { plexPINError = ProfileLockCopy.plexSwitchFailed }
+                plexPINError = (error as? AppError)?.userMessage ?? ProfileLockCopy.plexSwitchFailed
             }
         } catch is CancellationError {
             return
         } catch {
             guard isCurrentPINRequirementCheck(context, adminToken: adminToken) else { return }
             PlozzLog.auth.error("Plex PIN status refresh failed acct=\(request.accountID): \(error)")
-            if plexPINError == nil { plexPINError = ProfileLockCopy.plexSwitchFailed }
+            plexPINError = (error as? AppError)?.userMessage ?? ProfileLockCopy.plexSwitchFailed
             plexPINEntryAvailability = .unavailable
         }
     }
@@ -1057,6 +1132,7 @@ public final class PlexHomeUsersModel {
 
     /// Drops all Plex token overrides, falling back to stored (admin) tokens.
     private func clearPlexOverrides() {
+        cancelPlexReauthentication()
         cancelPINRequirementCheck()
         pendingBindingChange = nil
         pendingPlexPINRequest = nil
@@ -1258,6 +1334,7 @@ public final class PlexHomeUsersModel {
     /// the resolved-user marker, and every cached token for it. Called when an
     /// account is removed or signed out.
     public func forgetAccount(_ id: String) {
+        if pendingPlexPINRequest?.accountID == id { cancelPlexReauthentication() }
         if pendingBindingChange?.request.accountID == id { discardPendingBindingChange() }
         if pinRequirementCheck?.context.request.accountID == id { cancelPINRequirementCheck() }
         if pendingPlexPINRequest?.accountID == id {
@@ -1282,6 +1359,7 @@ public final class PlexHomeUsersModel {
     /// the whole token cache, and any pending PIN / user-selection). Used by the
     /// debug "reset to first run" path once every account is gone.
     public func resetAllForDebug() {
+        cancelPlexReauthentication()
         cancelPINRequirementCheck()
         pendingBindingChange = nil
         profileActivationGeneration += 1

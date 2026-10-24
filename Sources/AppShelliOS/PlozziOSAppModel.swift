@@ -693,7 +693,8 @@ final class PlozziOSAppModel {
         self.requiresLaunchProfileSelection = requiresLaunchProfileSelection
         let initialSettings = PlozziOSSettingsModel(
             namespace: profiles.activeNamespace,
-            allowsDiscovery: { !profiles.activeProfile.isKids }
+            allowsDiscovery: { !profiles.activeProfile.isKids },
+            isSeerrConfigured: { seerService.isConfigured }
         )
         self.settings = initialSettings
         self.seriesTrackStore = SeriesTrackPreferenceStore(
@@ -707,7 +708,7 @@ final class PlozziOSAppModel {
             durableStore: durableLocalStateStore,
             mediaShareRuntime: mediaShareRuntime,
             accountsProviders: accountsProviders,
-            settings: initialSettings,
+            settingsNamespace: profiles.activeNamespace,
             authenticatedHTTPResolver: authenticatedHTTPResolver
         )
         self.pendingLibrarySelection = nil
@@ -928,7 +929,7 @@ final class PlozziOSAppModel {
     func applyCrashReportingPreference() {
         crashReportingController.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
         crashReportingController.apply(
-            enabled: crashReporting.settings.isEnabled,
+            enabled: crashReporting.isEnabled,
             context: crashReportContext
         )
     }
@@ -1176,6 +1177,7 @@ final class PlozziOSAppModel {
         /// Whether the launch picker has been satisfied by a switch that actually
         /// completed. See `performSelectProfile`.
         var didCompleteLaunchSelection = false
+        var inlinePlexPINRequest: PlexHomeUsersModel.PlexPINRequest?
     }
 
     /// `PlozziOSRootView` presents the profile-lock PIN screen off this.
@@ -1190,12 +1192,6 @@ final class PlozziOSAppModel {
     var managementRequiresParentalPIN: Bool {
         profiles.managementRequiresParentalPIN || gate.parentalFallThrough != nil
     }
-    /// Message from the last failed unlock attempt.
-
-    /// Profiles unlocked during this app run, so hopping back and forth doesn't
-    /// re-ask. In-memory on purpose: a cold launch always re-asks.
-    private var unlockedProfileIDs: Set<String> = []
-
     /// Where a newly created profile is in its setup sequence.
     ///
     /// An explicit sequence rather than a handful of overlapping optionals: the
@@ -1241,6 +1237,17 @@ final class PlozziOSAppModel {
 
     /// Whether the Settings sheet is on screen. Set by the sheet itself.
     private(set) var isSettingsPresented = false
+
+    /// The exact request owned by an on-screen Plex user chooser, not another modal.
+    var inlinePlexPINRequest: PlexHomeUsersModel.PlexPINRequest? {
+        get { gate.inlinePlexPINRequest }
+        set { gate.inlinePlexPINRequest = newValue }
+    }
+
+    var plexPINRequestForAppPresentation: PlexHomeUsersModel.PlexPINRequest? {
+        let request = plexHomeUsers.pendingPlexPINRequest
+        return request == inlinePlexPINRequest ? nil : request
+    }
 
     func noteSettingsPresented(_ presented: Bool) {
         isSettingsPresented = presented
@@ -1445,7 +1452,7 @@ final class PlozziOSAppModel {
     /// `selectProfile(_:)` (a synced deletion re-pointing at `profiles.first`).
     var activeProfileNeedsUnlock: Bool {
         let active = profiles.activeProfile
-        return active.isLocked && !unlockedProfileIDs.contains(active.id)
+        return active.isLocked && !profiles.isProfileUnlocked(active.id)
             && !plexHomeUsers.isAutomaticallySignedIn(active)
     }
 
@@ -1456,7 +1463,7 @@ final class PlozziOSAppModel {
         )
     }
 
-    /// Switches to `id`, unless it's locked and unproven this run — in which case
+    /// Switches to `id`, unless its lock needs proof for this activation — in which case
     /// the PIN prompt is raised and nothing is re-scoped until it's satisfied.
     ///
     /// The lock rides the synced profile record, so a profile locked on the Apple
@@ -1485,7 +1492,8 @@ final class PlozziOSAppModel {
 
     /// The switch past the parental gate, still subject to the target's own lock.
     private func continueSelect(_ target: Profile) {
-        if target.isLocked, !unlockedProfileIDs.contains(target.id) {
+        if target.isLocked,
+           target.id != profiles.activeProfileID || !profiles.isProfileUnlocked(target.id) {
             gate.lockedSwitch = ParentalSwitchRequest(target: target)
             return
         }
@@ -1517,18 +1525,25 @@ final class PlozziOSAppModel {
     /// Checks `pin` against the pending profile's lock, completing the held-back
     /// switch on a match.
     @discardableResult
-    func submitProfileLockPIN(_ pin: String) -> Bool {
-        guard let profile = gate.lockedSwitch?.target, let lock = profile.lock else { return false }
-        guard lock.matches(pin: pin) else {
+    func submitProfileLockPIN(_ pin: String) async -> Bool {
+        guard let request = gate.lockedSwitch, let lock = request.target.lock else { return false }
+        let selection = profiles.selectionGeneration
+        let matches = await lock.matchesOffMainActor(pin: pin)
+        guard !Task.isCancelled, gate.lockedSwitch?.id == request.id,
+              profiles.selectionGeneration == selection else { return false }
+        guard profiles.profiles.first(where: { $0.id == request.target.id })?.lock == lock else {
+            gate.lockedSwitch?.error = ProfileLockCopy.profileChanged
+            return false
+        }
+        guard matches else {
             gate.lockedSwitch?.error = ProfileLockCopy.incorrectPIN
             return false
         }
-        unlockedProfileIDs.insert(profile.id)
         gate.lockedSwitch = nil
         if lock.matchesPlexPIN {
-            plexHomeUsers.prefillPlexPIN(pin, forProfile: profile.id)
+            plexHomeUsers.prefillPlexPIN(pin, forProfile: request.target.id)
         }
-        performSelectProfile(profile.id)
+        performSelectProfile(request.target.id, unlocking: lock)
         return true
     }
 
@@ -1545,20 +1560,19 @@ final class PlozziOSAppModel {
         profiles.update(profile)
         // Drop any unlock the OLD PIN granted, then re-grant it when a new PIN
         // was just chosen: whoever typed it demonstrably knows it.
-        unlockedProfileIDs.remove(id)
-        if lock != nil { unlockedProfileIDs.insert(id) }
+        profiles.forgetProfileUnlock(id)
+        if lock != nil { profiles.noteProfileUnlocked(id) }
     }
 
-    /// Whether a profile's PIN has been proved this run, so a locked profile's
-    /// settings stay sealed until someone enters it.
+    /// Whether a profile's PIN has been proved since the last profile change.
     func isUnlockedThisRun(_ id: String) -> Bool {
-        unlockedProfileIDs.contains(id)
+        profiles.isProfileUnlocked(id)
     }
 
     /// Records that a profile's PIN was proved outside `submitProfileLockPIN` —
     /// e.g. to edit it. Knowing the PIN is knowing the PIN.
     func noteUnlocked(_ id: String) {
-        unlockedProfileIDs.insert(id)
+        profiles.noteProfileUnlocked(id)
     }
 
     /// Marks a profile as restricted, or lifts the restriction.
@@ -1615,7 +1629,7 @@ final class PlozziOSAppModel {
         return true
     }
 
-    func performSelectProfile(_ id: String) {
+    func performSelectProfile(_ id: String, unlocking lock: ProfileLock? = nil) {
         universalWatchlistRetryScheduler = nil
         profiles.select(id)
         // `select` NO-OPS for an id this device doesn't have — a peer can delete
@@ -1625,6 +1639,7 @@ final class PlozziOSAppModel {
         // profile the gate exists to withhold, so everything below is conditional
         // on the switch having actually landed.
         guard profiles.activeProfileID == id else { return }
+        if let lock, profiles.activeProfile.lock == lock { profiles.noteProfileUnlocked(id) }
         TouchFeedback.shared.invalidatePendingConfirmations()
         plexHomeUsers.beginExplicitProfileActivation()
         // Past both gates, so the hold has done its job. Released here rather
@@ -1651,12 +1666,11 @@ final class PlozziOSAppModel {
         refreshActiveProfileConfiguration()
     }
 
-    /// Reapply settings and reconcile sources without granting a new profile
-    /// activation or discarding an unchanged Plex authentication in progress.
-    func refreshActiveProfileConfiguration() {
+    func refreshActiveProfileSettings() {
         settings = PlozziOSSettingsModel(
             namespace: profiles.activeNamespace,
-            allowsDiscovery: { [profiles] in !profiles.activeProfile.isKids }
+            allowsDiscovery: { [profiles] in !profiles.activeProfile.isKids },
+            isSeerrConfigured: { [seerService] in seerService.isConfigured }
         )
         seriesTrackStore = SeriesTrackPreferenceStore(
             namespace: profiles.activeNamespace
@@ -1664,6 +1678,12 @@ final class PlozziOSAppModel {
         versionPreferences = VersionPreferenceStore(
             namespace: profiles.activeNamespace
         )
+    }
+
+    /// Reapply settings and reconcile sources without granting a new profile
+    /// activation or discarding an unchanged Plex authentication in progress.
+    func refreshActiveProfileConfiguration() {
+        refreshActiveProfileSettings()
         transitionDownloads(to: profiles.activeProfileID)
         reloadAccountsAndCrashContext()
         plexHomeUsers.ensurePlexIdentityForActiveProfile()
@@ -1701,7 +1721,7 @@ final class PlozziOSAppModel {
                 durableStore: self.durableLocalStateStore,
                 mediaShareRuntime: self.mediaShareRuntime,
                 accountsProviders: self.accountsProviders,
-                settings: self.settings,
+                settingsNamespace: self.profiles.activeNamespace,
                 startsActive: self.applicationIsActive,
                 authenticatedHTTPResolver: self.authenticatedHTTPResolver
             )
@@ -2146,7 +2166,7 @@ final class PlozziOSAppModel {
         durableStore: DurableLocalStateStore?,
         mediaShareRuntime: DefaultMediaShareRuntime,
         accountsProviders: AccountsProvidersModel,
-        settings: PlozziOSSettingsModel,
+        settingsNamespace: String?,
         startsActive: Bool = true,
         authenticatedHTTPResolver: ManagedAuthenticatedHTTPResolver
     ) -> PlozziOSDownloadsModel {
@@ -2156,6 +2176,11 @@ final class PlozziOSAppModel {
                 initializationError: "Durable download storage is unavailable."
             )
         }
+        // Read current preferences at download preparation time, not a settings
+        // model that a same-profile cloud update can replace.
+        let playbackStore = PlaybackSettingsStore(namespace: settingsNamespace)
+        let audioPolicyStore = AudioPolicyStore(namespace: settingsNamespace)
+        let artworkStore = ArtworkSettingsStore(namespace: settingsNamespace)
         do {
             return PlozziOSDownloadsModel(
                 profileID: namespace,
@@ -2170,8 +2195,8 @@ final class PlozziOSAppModel {
                     }?.server.provider
                 },
                 preferredAudioLanguages: { item in
-                    let playbackSettings = settings.playback.settings
-                    let policy = settings.audioPolicy.resolvedPolicy(
+                    let playbackSettings = playbackStore.load()
+                    let policy = audioPolicyStore.resolvedPolicy(
                         settings: playbackSettings
                     )
                     return AudioLanguagePolicy.preferredAudioLanguages(
@@ -2184,7 +2209,7 @@ final class PlozziOSAppModel {
                         deviceLanguage: LanguageMatch.deviceLanguageCode
                     )
                 },
-                artworkSettings: { settings.cardStyle.artwork },
+                artworkSettings: { artworkStore.load() },
                 startsActive: startsActive,
                 resolveArtworkItem: { record in
                     guard let accountID = record.snapshot.sourceAccountID
@@ -2487,7 +2512,8 @@ final class PlozziOSAppModel {
             }
             settings = PlozziOSSettingsModel(
                 namespace: profiles.activeNamespace,
-                allowsDiscovery: { [profiles] in !profiles.activeProfile.isKids }
+                allowsDiscovery: { [profiles] in !profiles.activeProfile.isKids },
+                isSeerrConfigured: { [seerService] in seerService.isConfigured }
             )
             seriesTrackStore = SeriesTrackPreferenceStore(
                 namespace: profiles.activeNamespace

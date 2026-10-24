@@ -11,6 +11,7 @@ struct PrototypeBrowseSidebar: View {
     var restoresCategoryFocus = false
     let search: () -> Void
     let enterGuide: () -> Void
+    var selectCategory: ((String?) -> Void)?
     var multiviews: (() -> Void)?
     var manageChannels: (() -> Void)?
     @FocusState private var focused: Control?
@@ -34,31 +35,57 @@ struct PrototypeBrowseSidebar: View {
         VStack(alignment: .leading, spacing: PrototypeLayout.gap) {
             Button(action: search) {
                 Label(isSearching ? "Back to guide" : "Search", systemImage: isSearching ? "chevron.backward" : "magnifyingglass")
+                    #if os(tvOS)
                     .frame(maxWidth: .infinity, minHeight: PrototypeLayout.controlHeight, alignment: .leading)
                     .padding(.horizontal, PrototypeLayout.gap)
+                    #else
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    #endif
             }
+            #if os(tvOS)
             .buttonStyle(PrototypeButtonStyle(padded: false, surface: .control))
+            .padding(PrototypeLayout.controlInset)
+            .background { PrototypeControlSurface() }
+            #else
+            .buttonStyle(.bordered)
+            #endif
             .focused($focused, equals: .search)
             .disabled(isEnteringCategory)
             .accessibilityValue(model.query)
             .accessibilityIdentifier("live-tv-search")
-            .padding(PrototypeLayout.controlInset)
-            .background { PrototypeControlSurface() }
             #if DEBUG
             .modifier(PrototypeBrowseLayoutObservation(element: "sidebar-search"))
             #endif
             if let multiviews {
-                Button("Multiviews", systemImage: "rectangle.split.2x2", action: multiviews)
+                Button(action: multiviews) {
+                    Label("Multiviews", systemImage: "rectangle.split.2x2")
+                        #if os(iOS)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        #endif
+                }
+                    #if os(tvOS)
                     .frame(maxWidth: .infinity, minHeight: PrototypeLayout.controlHeight, alignment: .leading)
                     .buttonStyle(PrototypeButtonStyle(surface: .control))
+                    #else
+                    .buttonStyle(.bordered)
+                    #endif
                     .focused($focused, equals: .multiviews)
                     .disabled(isEnteringCategory)
                     .accessibilityIdentifier("live-tv-multiview-favorites")
             }
             if let manageChannels {
-                Button("Manage channels", systemImage: "slider.horizontal.3", action: manageChannels)
+                Button(action: manageChannels) {
+                    Label("Manage channels", systemImage: "slider.horizontal.3")
+                        #if os(iOS)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        #endif
+                }
+                    #if os(tvOS)
                     .frame(maxWidth: .infinity, minHeight: PrototypeLayout.controlHeight, alignment: .leading)
                     .buttonStyle(PrototypeButtonStyle(surface: .control))
+                    #else
+                    .buttonStyle(.bordered)
+                    #endif
                     .focused($focused, equals: .manageChannels)
                     .disabled(isEnteringCategory)
                     .accessibilityIdentifier("live-tv-manage-channels")
@@ -67,33 +94,45 @@ struct PrototypeBrowseSidebar: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: PrototypeLayout.smallGap) {
-                        ForEach([nil] + model.categories.map(Optional.some), id: \.self) { category in
+                        ForEach([nil] + model.browsingCategories.map { Optional($0.name) }, id: \.self) { category in
                             Button {
-                                model.category = category
+                                if let selectCategory { selectCategory(category) }
+                                else { model.category = category }
                             } label: {
                                 HStack(spacing: PrototypeLayout.smallGap) {
                                     if let category { Text(category) } else { Text("All categories") }
                                     Spacer(minLength: 0)
+                                    Text(model.categoryChannelCount(category), format: .number)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
                                     Image(systemName: "checkmark")
                                         .font(.caption)
                                         .opacity(model.category == category ? 1 : 0)
                                         .accessibilityHidden(true)
                                 }
                                 .lineLimit(2)
+                                #if os(tvOS)
                                 .frame(
                                     maxWidth: .infinity, minHeight: PrototypeLayout.controlHeight, alignment: .leading
                                 )
                                 .padding(.horizontal, PrototypeLayout.gap)
+                                #else
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                #endif
+                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(
-                                PrototypeButtonStyle(
-                                    padded: false, surface: .control
-                                )
-                            )
+                            #if os(tvOS)
+                            .buttonStyle(PrototypeButtonStyle(padded: false, surface: .control))
+                            #else
+                            .buttonStyle(.bordered)
+                            #endif
                             .focused($focused, equals: .category(category))
                             .disabled(isEnteringCategory && category != model.category)
                             .id(Control.category(category))
                             .accessibilityAddTraits(model.category == category ? .isSelected : [])
+                            .accessibilityLabel(category.map { Text(verbatim: $0) } ?? Text("All categories"))
+                            .accessibilityValue(Text("\(model.categoryChannelCount(category)) channels"))
+                            .accessibilityIdentifier("live-tv-sidebar-category-\(category ?? "all")")
                         }
                     }
                     .padding(.vertical, PrototypeLayout.smallGap)
@@ -126,7 +165,9 @@ struct PrototypeBrowseSidebar: View {
                 }
             }
         }
+        #if os(tvOS)
         .font(.system(size: fontSize, weight: .regular))
+        #endif
         .lineLimit(1)
         .focusEffectDisabled()
         #if os(tvOS)

@@ -8,7 +8,7 @@ final class RootPresentationCoordinatorTests: XCTestCase {
         model.update([.sendSetup])
         let others: [RootPresentationCoordinator.Destination] = [
             .accessGate, .serverIdentity, .profileLock, .introduction, .releaseNotes,
-            .profileAppearance, .receiveSetup, .syncErasure, .serverAddresses, .newServer
+            .profileAppearance, .receiveSetup, .syncErasure, .serverAddresses, .accountRecovery, .newServer
         ]
         for other in others {
             model.update([other, .sendSetup])
@@ -42,6 +42,18 @@ final class RootPresentationCoordinatorTests: XCTestCase {
         model.didDismiss()
         model.update([.sendSetup])
         XCTAssertEqual(model.active, .sendSetup)
+    }
+
+    func testRelinkDismissesBeforePresentingRenewedProfileAuthorization() {
+        let model = RootPresentationCoordinator()
+        model.update([.accountRecovery])
+        model.update([.serverIdentity])
+        XCTAssertEqual(model.active, .accountRecovery)
+        XCTAssertFalse(model.isPresented)
+        model.didDismiss()
+        model.update([.serverIdentity])
+        XCTAssertEqual(model.active, .serverIdentity)
+        XCTAssertTrue(model.isPresented)
     }
 
     func testWithdrawnQueuedRequestNeverPresents() {

@@ -157,15 +157,14 @@ public struct PlozzDivider: View {
 /// ``SurfaceStyle`` table — a fill, an optional hairline border (OLED), and an
 /// optional drop shadow (light / dark overlays). Shared by app-owned settings
 /// groups, detail cards and dialogs so both platforms resolve the same theme.
-private struct PlozzSurfaceModifier: ViewModifier {
+private struct PlozzSurfaceModifier<SurfaceShape: InsettableShape>: ViewModifier {
     @Environment(\.themePalette) private var palette
     let level: SurfaceLevel
-    let cornerRadius: CGFloat
+    let shape: SurfaceShape
     var surfaceOverride: SurfaceStyle? = nil
 
     func body(content: Content) -> some View {
         let style = surfaceOverride ?? palette.surface(level)
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         content
             .background {
                 Group {
@@ -201,8 +200,8 @@ struct OptionalSurfaceShadow: ViewModifier {
     }
 }
 
-private struct SettingsGroupSurface: ViewModifier {
-    let cornerRadius: CGFloat
+private struct SettingsGroupSurface<SurfaceShape: InsettableShape>: ViewModifier {
+    let shape: SurfaceShape
     @Environment(\.themePalette) private var palette
     @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
@@ -210,7 +209,7 @@ private struct SettingsGroupSurface: ViewModifier {
     func body(content: Content) -> some View {
         let translucent = gradientEnabled && !reduceTransparency
         content.modifier(PlozzSurfaceModifier(
-            level: .raised, cornerRadius: cornerRadius,
+            level: .raised, shape: shape,
             surfaceOverride: translucent ? palette.gradientSurface : nil
         ))
     }
@@ -225,11 +224,17 @@ public extension View {
     /// Paints an elevated surface behind this view at the given rung, using the
     /// palette's shared elevation table.
     func plozzSurface(_ level: SurfaceLevel, cornerRadius: CGFloat) -> some View {
-        modifier(PlozzSurfaceModifier(level: level, cornerRadius: cornerRadius))
+        modifier(PlozzSurfaceModifier(
+            level: level, shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ))
     }
 
     func settingsGroupSurface(cornerRadius: CGFloat) -> some View {
-        modifier(SettingsGroupSurface(cornerRadius: cornerRadius))
+        modifier(SettingsGroupSurface(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)))
+    }
+
+    func settingsGroupSurface(cornerRadii: RectangleCornerRadii) -> some View {
+        modifier(SettingsGroupSurface(shape: UnevenRoundedRectangle(cornerRadii: cornerRadii, style: .continuous)))
     }
 }
 #endif

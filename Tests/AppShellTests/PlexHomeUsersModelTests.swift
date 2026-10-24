@@ -1,6 +1,7 @@
 import XCTest
 import CoreModels
 import PlozzCoreUI
+import CoreNetworking
 import FeatureAuth
 import FeatureProfiles
 @testable import AppRuntime
@@ -960,6 +961,103 @@ final class PlexHomeUsersModelTests: XCTestCase {
         XCTAssertEqual(profiles.activeProfile.homeUserBinding(forPlexAccount: "a")?.requiresPIN, true)
     }
 
+    func testRevokedPlexAccountShowsExpiredSessionAndCancelPreservesRecovery() async throws {
+        let (model, hub, profiles) = try makeModel(accountIDs: ["a"])
+        model.plexHomeUsersFetch = { _, _ in throw AppError.unauthorized }
+        activateSavedUser(model, profiles: profiles, accountID: "a",
+                          user: PlexHomeUser(id: "parent", name: "Parent", requiresPIN: false))
+        await model.waitForPlexPINRequirementCheck()
+        XCTAssertEqual(model.plexPINEntryAvailability, .unavailable)
+        XCTAssertEqual(model.plexPINError, AppError.unauthorized.userMessage)
+        let request = model.pendingPlexPINRequest
+        model.cancelPlexPIN()
+        XCTAssertEqual(model.pendingPlexPINRequest, request)
+        XCTAssertEqual(model.plexPINError, AppError.unauthorized.userMessage)
+        XCTAssertEqual(hub.accountStore.token(for: "a"), "admin-a")
+        XCTAssertNil(model.resolvedToken(for: "a"))
+        model.beginPlexReauthentication()
+        XCTAssertNotNil(model.plexReauthentication)
+        model.cancelPlexReauthentication()
+        XCTAssertNil(model.plexReauthentication)
+        XCTAssertEqual(model.pendingPlexPINRequest, request)
+        XCTAssertEqual(model.plexPINEntryAvailability, .unavailable)
+    }
+
+    func testPlexRecoveryRechecksHomePINAndKeepsSavedBindings() async throws {
+        for protected in [false, true] {
+            let (model, hub, profiles) = try makeModel(accountIDs: ["a"])
+            model.plexHomeUsersFetch = { token, _ in
+                if token == "admin-a" { throw AppError.unauthorized }
+                XCTAssertEqual(token, "RECOVERED-ADMIN")
+                return [PlexHomeUser(id: "parent", name: "Parent", requiresPIN: protected)]
+            }
+            model.plexHomeUserSwitch = { _, pin, token, _ in
+                XCTAssertEqual(token, "RECOVERED-ADMIN")
+                XCTAssertEqual(pin, protected ? "2468" : nil)
+                return "HOME-CLOUD"
+            }
+            model.plexServerTokenResolve = { _, _, _ in "HOME-SERVER" }
+            activateSavedUser(model, profiles: profiles, accountID: "a",
+                              user: PlexHomeUser(id: "parent", name: "Parent", requiresPIN: protected))
+            await model.waitForPlexPINRequirementCheck()
+            let original = try XCTUnwrap(hub.accounts.first)
+            let selected = hub.activeAccountIDs
+            let http = PlexRecoveryHTTP()
+            model.beginPlexReauthentication(service: PlexAuthService(deviceID: "device", http: http, probeHTTP: http))
+            let linking = try XCTUnwrap(model.plexReauthentication)
+            linking.start()
+            try await waitForRecovery(model)
+            await model.waitForPlexPINRequirementCheck()
+            XCTAssertEqual(hub.accounts.map(\.id), [original.id])
+            XCTAssertEqual(hub.activeAccountIDs, selected)
+            XCTAssertEqual(profiles.activeProfile.homeUserBinding(forPlexAccount: "a")?.homeUserID, "parent")
+            XCTAssertEqual(hub.accountStore.token(for: "a"), "RECOVERED-ADMIN")
+            XCTAssertNotEqual(hub.accounts.first?.credentialRevision, original.credentialRevision)
+            if protected {
+                XCTAssertEqual(model.plexPINEntryAvailability, .available)
+                XCTAssertNotNil(model.pendingPlexPINRequest)
+                XCTAssertNil(model.resolvedToken(for: "a"), "Account linking is not Home-user PIN authorization.")
+                model.submitPlexPIN("2468")
+                await model.waitForPlexPINRequirementCheck()
+            }
+            XCTAssertNil(model.pendingPlexPINRequest)
+            XCTAssertEqual(model.resolvedToken(for: "a"), "HOME-SERVER")
+        }
+    }
+
+    func testCancelledPlexRecoveryCannotPublishLateCredentials() async throws {
+        let (model, hub, profiles) = try makeModel(accountIDs: ["a"])
+        model.plexHomeUsersFetch = { _, _ in throw AppError.unauthorized }
+        activateSavedUser(model, profiles: profiles, accountID: "a",
+                          user: PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true))
+        await model.waitForPlexPINRequirementCheck()
+        let http = PlexRecoveryHTTP(beforeUserResponse: {
+            await MainActor.run { model.cancelPlexReauthentication() }
+        })
+        model.beginPlexReauthentication(service: PlexAuthService(deviceID: "device", http: http, probeHTTP: http))
+        let linking = try XCTUnwrap(model.plexReauthentication)
+        linking.start()
+        try await waitForRecovery(model)
+        XCTAssertEqual(hub.accountStore.token(for: "a"), "admin-a")
+        XCTAssertNotNil(model.pendingPlexPINRequest)
+        XCTAssertNil(model.resolvedToken(for: "a"))
+    }
+
+    private func waitForRecovery(_ model: PlexHomeUsersModel) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while ContinuousClock.now < deadline {
+            if model.plexReauthentication == nil { return }
+            if case let .error(message) = model.plexReauthentication?.phase {
+                XCTFail("Plex recovery failed: \(message)")
+                model.cancelPlexReauthentication()
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Plex recovery did not complete.")
+        model.cancelPlexReauthentication()
+    }
+
     func testCancellingDefaultProfilePINRetainsTheUnresolvedGate() async throws {
         let (model, _, profiles) = try makeModel(accountIDs: ["a"])
         activateSavedUser(model, profiles: profiles,
@@ -971,6 +1069,34 @@ final class PlexHomeUsersModelTests: XCTestCase {
         XCTAssertEqual(model.pendingPlexPINRequest, request)
         XCTAssertNil(model.discoverToken(for: "a"))
         XCTAssertFalse(model.hasResolvedWatchMutationIdentity(forAccountID: "a"))
+    }
+
+    private actor PlexRecoveryHTTP: HTTPClient {
+        let beforeUserResponse: @Sendable () async -> Void
+
+        init(beforeUserResponse: @escaping @Sendable () async -> Void = {}) {
+            self.beforeUserResponse = beforeUserResponse
+        }
+
+        func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+            let json: String
+            switch endpoint.path {
+            case "/api/v2/pins":
+                json = #"{"id":1,"code":"CODE"}"#
+            case "/api/v2/pins/1":
+                json = #"{"id":1,"code":"CODE","authToken":"LINKED"}"#
+            case "/api/v2/resources":
+                json = #"[{"clientIdentifier":"srv-a","name":"Plex a","provides":"server","accessToken":"RECOVERED-ADMIN","connections":[{"uri":"https://a.plex.tv","local":true}]}]"#
+            case "/identity":
+                json = "{}"
+            case "/api/v2/user":
+                await beforeUserResponse()
+                json = #"{"uuid":"user-a","username":"User a"}"#
+            default:
+                throw AppError.notFound
+            }
+            return (Data(json.utf8), HTTPURLResponse(url: baseURL, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
     }
 
     func testCancelledSubmissionLeavesRetainedGateReadyForAnotherPIN() async throws {

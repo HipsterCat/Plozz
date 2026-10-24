@@ -14,8 +14,8 @@ public enum PropfindDepth: String, Sendable {
 /// capability probe and a bounded `PROPFIND`. Pure request construction — no
 /// I/O, so it's trivially unit-testable.
 public enum WebDAVRequestBuilder {
-    /// `OPTIONS` against `url`, used to sniff `DAV`/`Allow` capability
-    /// headers before committing to treating a server as WebDAV-capable.
+    /// `OPTIONS` against `url`, for optional `DAV`/`Allow` capability hints.
+    /// Collection validation uses PROPFIND rather than relying on these hints.
     public static func options(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "OPTIONS"
@@ -33,6 +33,7 @@ public enum WebDAVRequestBuilder {
         request.httpMethod = "PROPFIND"
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue(depth.rawValue, forHTTPHeaderField: "Depth")
+        request.setValue("application/xml, text/xml", forHTTPHeaderField: "Accept")
         request.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.httpBody = Data(

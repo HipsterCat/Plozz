@@ -11,6 +11,7 @@ public struct SpoilerSafeOverviewText: View {
     private let mode: SpoilerSettings.Mode
     private let lineCount: Int
     private let fontSize: CGFloat
+    private let lineSpacing: CGFloat
     private let maxWidth: CGFloat?
     /// When `true` the view always reserves `lineCount` lines of height (via a
     /// hidden placeholder) so it keeps a fixed footprint — needed where several
@@ -24,6 +25,7 @@ public struct SpoilerSafeOverviewText: View {
         mode: SpoilerSettings.Mode,
         lineCount: Int = 3,
         fontSize: CGFloat = 22,
+        lineSpacing: CGFloat = 2,
         maxWidth: CGFloat? = nil,
         reservesSpace: Bool = true
     ) {
@@ -32,6 +34,7 @@ public struct SpoilerSafeOverviewText: View {
         self.mode = mode
         self.lineCount = lineCount
         self.fontSize = fontSize
+        self.lineSpacing = lineSpacing
         self.maxWidth = maxWidth
         self.reservesSpace = reservesSpace
     }
@@ -52,7 +55,7 @@ public struct SpoilerSafeOverviewText: View {
         }
         .font(.system(size: fontSize))
         .plozzForeground(.secondary)
-        .lineSpacing(2)
+        .lineSpacing(lineSpacing)
         .lineLimit(lineCount)
         .frame(maxWidth: maxWidth, alignment: .topLeading)
         .contentTransition(.opacity)

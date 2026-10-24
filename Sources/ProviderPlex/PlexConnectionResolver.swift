@@ -352,7 +352,9 @@ public final class PlexConnectionResolver: Sendable {
         let endpoint = Endpoint(path: "/identity", headers: deviceProfile.headers(token: token),
                                 redirectPolicy: .sameOrigin)
         do {
-            _ = try await probe.send(endpoint, baseURL: url)
+            _ = try await HTTPResponseDiagnostics.$route.withValue(.serverDiscovery) {
+                try await probe.send(endpoint, baseURL: url)
+            }
             return true
         } catch {
             return false

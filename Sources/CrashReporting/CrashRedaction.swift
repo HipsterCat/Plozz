@@ -32,6 +32,14 @@ enum CrashRedaction {
                let value = event.context?[category]?["low_memory"] as? Bool {
                 safe["low_memory"] = value
             }
+            if category == "app" {
+                for key in ["in_foreground", "is_active"] {
+                    if let value = event.context?[category]?[key] as? NSNumber,
+                       CFGetTypeID(value) == CFBooleanGetTypeID() {
+                        safe[key] = value.boolValue
+                    }
+                }
+            }
             if !safe.isEmpty { context[category] = safe }
         }
         if let raw = event.context?[CrashPerformanceContext.key],

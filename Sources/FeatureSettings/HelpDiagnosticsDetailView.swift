@@ -71,7 +71,7 @@ struct HelpDiagnosticsDetailView: View {
     /// Whether the on-demand diagnostics upload can run right now: the build
     /// shipped with a crash-reporting endpoint AND the user has opted in.
     private var canSendDiagnostics: Bool {
-        crashReportingConfigured && crashReporting.settings.isEnabled
+        crashReportingConfigured && crashReporting.isEnabled
     }
 
     private var crashReportingFooter: LocalizedStringResource {
@@ -127,7 +127,7 @@ struct HelpDiagnosticsDetailView: View {
         )
     }
 
-    // MARK: - Crash reporting (channel-aware default; on in beta, opt-in on the App Store)
+    // MARK: - Crash reporting
 
     @ViewBuilder
     private var crashReportingPanel: some View {
@@ -136,7 +136,7 @@ struct HelpDiagnosticsDetailView: View {
                 title: "Crash Reports",
                 footer: crashReportingFooter
             ) {
-                Toggle("Share Crash Reports", isOn: $crashReporting.settings.isEnabled)
+                Toggle("Share Crash Reports", isOn: $crashReporting.isEnabled)
                     .toggleStyle(SettingsSwitchToggleStyle())
             }
         } else {

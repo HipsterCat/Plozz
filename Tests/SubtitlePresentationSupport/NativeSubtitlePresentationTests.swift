@@ -11,6 +11,35 @@ import XCTest
 
 @MainActor
 final class NativeSubtitlePresentationTests: XCTestCase {
+    func testEmbeddedMP4CaptionsRecoverAfterOffAndPausedReselection() async throws {
+        let engine = NativeVideoEngine(startsMuted: true)
+        let model = LiveSubtitleModel()
+        model.beginLiveFeed(permitsTimingOffsets: false)
+        var cues: [SubtitleCue] = []
+        engine.onSubtitleCues = { cues = $0; model.updateLiveCues($0) }
+        let window = try await mount(engine, subtitles: model)
+        defer { engine.stop(); window.isHidden = true }
+        let track = MediaTrack(id: 2, kind: .subtitle, displayTitle: "English", language: "en", codec: "mov_text")
+        await engine.load(request: request(try fixtureURL("embedded.mp4"), tracks: [track]), startPosition: 0)
+        try await waitUntil(timeout: 30) { engine.underlyingPlayer?.currentItem?.status == .readyToPlay }
+        engine.selectSubtitleTrack(track)
+        try await waitUntil { cues.contains { $0.text == "Repeated" && $0.start == 9 } }
+        engine.pause()
+        await engine.seek(to: 6.5)
+        try await waitUntil { model.primary.map(\.text) == ["Repeated"] }
+        let item = try XCTUnwrap(engine.underlyingPlayer?.currentItem)
+        for _ in 0..<3 {
+            engine.selectSubtitleTrack(nil)
+            try await waitUntil { cues.isEmpty && model.primary.isEmpty }
+            engine.selectSubtitleTrack(track)
+            try await waitUntil { model.primary.map(\.text) == ["Repeated"] }
+            XCTAssertTrue(engine.underlyingPlayer?.currentItem === item)
+            XCTAssertTrue(engine.isPaused)
+            XCTAssertEqual(engine.currentTime, 6.5, accuracy: 1.0 / 24)
+            try assertOnlySuppressedOutput(engine)
+        }
+    }
+
     func testLocalASSAnimationFrameBudget() async throws {
         guard let path = ProcessInfo.processInfo.environment["PLOZZ_ASS_ANIMATION_REPRO"] else {
             throw XCTSkip("Requires the explicitly supplied private ASS animation fixture.")
@@ -565,7 +594,12 @@ final class NativeSubtitlePresentationTests: XCTestCase {
         let model = LiveSubtitleModel()
         model.beginLiveFeed(permitsTimingOffsets: false)
         var cues: [SubtitleCue] = []
-        engine.onSubtitleCues = { cues = $0; model.updateLiveCues($0) }
+        var reselectionUpdates: [[SubtitleCue]]?
+        engine.onSubtitleCues = {
+            cues = $0
+            model.updateLiveCues($0)
+            reselectionUpdates?.append($0)
+        }
         let window = try await mount(engine, subtitles: model, liveClock: true)
         defer { engine.stop(); window.isHidden = true }
         let full = MediaTrack(id: 2, kind: .subtitle, displayTitle: "Full", language: "en", codec: "webvtt")
@@ -606,6 +640,7 @@ final class NativeSubtitlePresentationTests: XCTestCase {
         XCTAssertFalse(cues.contains { $0.text == "Alpha" || $0.text == "Bravo" })
         XCTAssertEqual(engine.subtitlePresentationTime, 2.5, accuracy: 1.0 / 24)
         XCTAssertTrue(engine.underlyingPlayer?.currentItem === item)
+        let alternateOption = try XCTUnwrap(item.currentMediaSelection.selectedMediaOption(in: group))
         engine.selectSubtitleTrack(full)
         try await waitUntil(
             detail: "After reselecting Full: visible=\(model.primary.compactMap(\.text)), "
@@ -615,12 +650,28 @@ final class NativeSubtitlePresentationTests: XCTestCase {
         ) {
             return model.primary.compactMap(\.text) == ["Alpha", "Bravo"]
         }
-        let previousOutput = try XCTUnwrap(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.first)
-        engine.selectSubtitleTrack(full)
-        try await waitUntil(detail: "Reselecting the same paused rendition must repopulate the replacement output") {
-            item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.first !== previousOutput
-                && model.primary.compactMap(\.text) == ["Alpha", "Bravo"]
+        reselectionUpdates = []
+        for _ in 0..<3 {
+            let previousOutput = try XCTUnwrap(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.first)
+            engine.selectSubtitleTrack(full)
+            let selection = try XCTUnwrap(engine.defaultSubtitleSelectionTask)
+            await selection.value
+            XCTAssertTrue(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.first === previousOutput,
+                          "An unchanged rendition must retain its working extraction output.")
+            XCTAssertEqual(model.primary.compactMap(\.text), ["Alpha", "Bravo"])
+            XCTAssertTrue(reselectionUpdates?.isEmpty == true,
+                          "Reselecting the current track must not clear or republish its paused captions.")
         }
+        reselectionUpdates = nil
+        let fullOutput = try XCTUnwrap(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.first)
+        item.select(alternateOption, in: group)
+        try await waitUntil { item.currentMediaSelection.selectedMediaOption(in: group) == alternateOption }
+        engine.selectSubtitleTrack(alternate)
+        let selection = try XCTUnwrap(engine.defaultSubtitleSelectionTask)
+        await selection.value
+        XCTAssertFalse(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.first === fullOutput,
+                       "A selection changed outside the engine must still fence the old rendition's output.")
+        try await waitUntil { model.primary.compactMap(\.text) == ["Alternate"] }
         engine.selectSubtitleTrack(nil)
         try await waitUntil {
             item.currentMediaSelection.selectedMediaOption(in: group) == nil && cues.isEmpty
@@ -927,6 +978,10 @@ private final class SidecarTrackHost: SubtitleTrackControllerHost, SubtitleOverl
     func trackRememberedSubtitle(for item: MediaItem) -> RememberedSubtitleSelection? { .off }
     func trackEffectiveSubtitleRule(for item: MediaItem) -> SubtitlePolicy.Rule { .init() }
     func trackRecordAudioSelection(language: String?) {}
+    func trackSelectAudioTrack(_ track: MediaTrack) -> Bool {
+        engine.selectAudioTrack(track)
+        return true
+    }
     func trackRecordSubtitleSelection(_ selection: RememberedSubtitleSelection?) {}
     func trackRefreshSubtitleDelayAvailability() {}
     func trackPlayResolvedForImageSubtitleSwap(_ request: PlaybackRequest, startPosition: TimeInterval) async {

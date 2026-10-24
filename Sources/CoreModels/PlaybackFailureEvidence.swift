@@ -2,8 +2,42 @@ import Foundation
 
 /// Bounded facts, not redacted free text. No field can hold an address or a header value.
 public struct PlaybackFailureEvidence: Codable, Equatable, Sendable {
-    public enum Route: String, Codable, Sendable { case none, nativeHLS, localHLS, software, audio }
-    public enum NativeCapture: String, Codable, Sendable { case captured, noItem, timedOut, busy }
+    public enum Route: String, Codable, Sendable { case none, nativeFile, nativeHLS, localHLS, software, audio }
+    public enum NativeCapture: String, Codable, Sendable { case pending, captured, noItem, timedOut, busy }
+    public enum NativeStatus: String, Codable, Sendable { case unknown, ready, failed }
+
+    public struct NativeAccess: Codable, Equatable, Sendable {
+        public let requests: Int?
+        public let bytesTransferred: Int?
+        public let stalls: Int?
+        public let transferMilliseconds: Int?
+        public let startupMilliseconds: Int?
+        public let observedBitrate: Int?
+        public let indicatedBitrate: Int?
+
+        public init(
+            requests: Int?, bytesTransferred: Int?, stalls: Int?, transferMilliseconds: Int?,
+            startupMilliseconds: Int?, observedBitrate: Int?, indicatedBitrate: Int?
+        ) {
+            func valid(_ value: Int?) -> Int? {
+                value.flatMap { (0...9_007_199_254_740_991).contains($0) ? $0 : nil }
+            }
+            self.requests = valid(requests)
+            self.bytesTransferred = valid(bytesTransferred)
+            self.stalls = valid(stalls)
+            self.transferMilliseconds = valid(transferMilliseconds)
+            self.startupMilliseconds = valid(startupMilliseconds)
+            self.observedBitrate = valid(observedBitrate)
+            self.indicatedBitrate = valid(indicatedBitrate)
+        }
+
+        public var isValid: Bool {
+            [requests, bytesTransferred, stalls, transferMilliseconds, startupMilliseconds,
+             observedBitrate, indicatedBitrate].compactMap { $0 }.allSatisfy {
+                (0...9_007_199_254_740_991).contains($0)
+            }
+        }
+    }
 
     public struct ErrorCode: Codable, Equatable, Sendable {
         public let domain: PlaybackFailureDiagnostic.Domain
@@ -35,11 +69,14 @@ public struct PlaybackFailureEvidence: Codable, Equatable, Sendable {
     public var nativeCapture: NativeCapture?
     public var nativeErrors: [ErrorCode]
     public var nativeLogErrors: [ErrorCode]
+    public var nativeStatus: NativeStatus?
+    public var nativeAccess: NativeAccess?
     public var delivery: PlaybackDeliveryEvidence?
 
     public init(
         route: Route? = nil, firstFrameReady: Bool? = nil, nativeCapture: NativeCapture? = nil,
         nativeErrors: [ErrorCode] = [], nativeLogErrors: [ErrorCode] = [],
+        nativeStatus: NativeStatus? = nil, nativeAccess: NativeAccess? = nil,
         delivery: PlaybackDeliveryEvidence? = nil
     ) {
         self.route = route
@@ -47,12 +84,15 @@ public struct PlaybackFailureEvidence: Codable, Equatable, Sendable {
         self.nativeCapture = nativeCapture
         self.nativeErrors = Array(nativeErrors.prefix(8))
         self.nativeLogErrors = Array(nativeLogErrors.suffix(4))
+        self.nativeStatus = nativeStatus
+        self.nativeAccess = nativeAccess
         self.delivery = delivery
     }
 
     public var isValid: Bool {
         nativeErrors.count <= 8 && nativeErrors.allSatisfy(\.isValid)
             && nativeLogErrors.count <= 4 && nativeLogErrors.allSatisfy(\.isValid)
+            && nativeAccess?.isValid != false
             && delivery?.isValid != false
     }
 }

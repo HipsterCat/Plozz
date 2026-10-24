@@ -39,7 +39,8 @@ final class PlaybackDiagnosticsHostedTests: XCTestCase {
     func testFullDiagnosticsClearRealTransportAndInfoCardWithoutShrinkingText() async throws {
         try await assertControlClearance(diagnostics: fixture, expectedTokens: [
             "AetherEngine", "v7.44.0", "APAC", "7.1.4", "HDMI", "Thermal", "engines 2", "Stalls", "Dropped",
-            "33.2", "82.0", "45.0", "10.0", "24.00", "23 fps live", "P8", "10-bit", "DOVIWITHHDR10"
+            "33.2", "82.0", "45.0", "10.0", "24.00", "23 fps live", "P8", "10-bit", "DOVIWITHHDR10",
+            "Playback cache", "512 MB"
         ])
     }
 
@@ -83,6 +84,7 @@ final class PlaybackDiagnosticsHostedTests: XCTestCase {
             TelevisionDiagnosticsPlacement(controlsLayout: model.subtitleLayout) { width in
                 diagnostics.televisionPanel(width: width)
                     .environment(\.themePalette, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
                     .reportSubtitleControlsFrame { measurement.frame = $0 }
             }
         )
@@ -180,6 +182,7 @@ final class PlaybackDiagnosticsHostedTests: XCTestCase {
             audioOutput: .init(renderingMode: .format("Dolby Atmos"), connections: [.format("HDMI")]),
             subtitleDescription: "SubRip · English", container: "mkv", mode: .plozzigen,
             hdr: .dolbyVision, engineName: "AetherEngine v7.44.0", bufferedSecondsAhead: 10, engineBufferedSecondsAhead: 45,
+            sessionCache: .init(residentBytes: 536_870_912, effectiveBudgetBytes: 2_147_483_648),
             stallCount: 0, droppedVideoFrames: 0, frameRate: 24, observedFps: 23,
             deviceModel: "Apple TV 4K (2nd gen)", deviceMemoryBytes: 3_000_000_000,
             freeDiskBytes: 600_000_000, totalDiskBytes: 32_000_000_000,

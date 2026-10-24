@@ -116,6 +116,12 @@ public struct WatchMutation: Codable, Hashable, Sendable, Identifiable {
     /// Servers still needing this write. The reconciler removes a target as it
     /// succeeds, so a partial fan-out resumes exactly where it left off.
     public var targets: [WatchMutationTarget]
+    struct TargetRetry: Codable, Hashable, Sendable {
+        var failures: Int
+        var notBefore: Date
+    }
+    /// A failed destination stays queued without retrying on every index publication.
+    var targetRetries: [String: TargetRetry] = [:]
     /// Every server copy this intent has targeted, retained after successful writes
     /// are removed from ``targets``. UI replay uses this immutable history so a
     /// partially drained offline mutation still matches already-written copies.
@@ -267,7 +273,7 @@ public struct WatchMutation: Codable, Hashable, Sendable, Identifiable {
         case resumePosition, played, clearResume, targets, optimisticTargets, trakt, traktProgress, traktPending
         case simklPending, anilistPending, malPending
         case wetrakrPending, wetrakrAccountIdentity, wetrakrCapturedAt, wetrakrIdempotencyKey
-        case attempts, episodeOrigin, expansionPending, appliedTargetIDs, expansionStartedAt, identities, kind
+        case attempts, targetRetries, episodeOrigin, expansionPending, appliedTargetIDs, expansionStartedAt, identities, kind
         case anchorTitle, anchorYear, authorization, serverScope, rejectedSourceIDs
     }
 
@@ -360,6 +366,7 @@ public struct WatchMutation: Codable, Hashable, Sendable, Identifiable {
         anilistPending = try container.decodeIfPresent(Bool.self, forKey: .anilistPending) ?? false
         malPending = try container.decodeIfPresent(Bool.self, forKey: .malPending) ?? false
         attempts = try container.decodeIfPresent(Int.self, forKey: .attempts) ?? 0
+        targetRetries = try container.decodeIfPresent([String: TargetRetry].self, forKey: .targetRetries) ?? [:]
         episodeOrigin = try container.decodeIfPresent(EpisodeOrigin.self, forKey: .episodeOrigin)
         expansionPending = try container.decodeIfPresent(Bool.self, forKey: .expansionPending) ?? false
         // Queued before this record existed. Until then every drain re-expanded and
@@ -427,6 +434,9 @@ public struct WatchMutation: Codable, Hashable, Sendable, Identifiable {
         try container.encode(anilistPending, forKey: .anilistPending)
         try container.encode(malPending, forKey: .malPending)
         try container.encode(attempts, forKey: .attempts)
+        if !targetRetries.isEmpty {
+            try container.encode(targetRetries, forKey: .targetRetries)
+        }
         try container.encodeIfPresent(episodeOrigin, forKey: .episodeOrigin)
         try container.encode(expansionPending, forKey: .expansionPending)
         try container.encode(appliedTargetIDs, forKey: .appliedTargetIDs)

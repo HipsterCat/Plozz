@@ -1,9 +1,8 @@
 import Foundation
 
 /// How the player handles skip markers (intros, credits, recaps, previews,
-/// commercials), mirroring the four-way control in Infuse (Off / On / Auto
-/// (delay) / Auto (instant)). One mode covers every kind unless the viewer sets
-/// kinds separately — see ``SkipMarkerModes``.
+/// commercials). These persisted modes also describe the resolved player
+/// behavior; Settings separates enablement, automatic behavior and timing.
 ///
 ///  * `.off` — never skip; markers aren't even fetched.
 ///  * `.on` — show a focusable **Skip** button while inside a marker (manual).
@@ -96,10 +95,18 @@ public enum SkipIntrosMode: String, Codable, CaseIterable, Sendable {
 public struct SkipMarkerModes: Equatable, Sendable {
     public var base: SkipIntrosMode
     public var overrides: [MediaSegment.Kind: SkipIntrosMode]
+    public var automaticDelay: TimeInterval
+    public var automaticDelayOverrides: [MediaSegment.Kind: TimeInterval]
 
-    public init(base: SkipIntrosMode, overrides: [MediaSegment.Kind: SkipIntrosMode] = [:]) {
+    public init(
+        base: SkipIntrosMode, overrides: [MediaSegment.Kind: SkipIntrosMode] = [:],
+        automaticDelay: TimeInterval = SkipIntrosMode.autoSkipDelay,
+        automaticDelayOverrides: [MediaSegment.Kind: TimeInterval] = [:]
+    ) {
         self.base = base
         self.overrides = overrides
+        self.automaticDelay = automaticDelay
+        self.automaticDelayOverrides = automaticDelayOverrides
     }
 
     public static let allOff = SkipMarkerModes(base: .off)
@@ -107,7 +114,17 @@ public struct SkipMarkerModes: Equatable, Sendable {
     /// The mode for segments of `kind`. Unknown segments are never offered.
     public func mode(for kind: MediaSegment.Kind) -> SkipIntrosMode {
         guard kind.isSkippable else { return .off }
-        return overrides[kind] ?? base
+        let mode = overrides[kind] ?? base
+        if mode == .autoDelay, (automaticDelayOverrides[kind] ?? automaticDelay) == 0 {
+            return .autoInstant
+        }
+        return mode
+    }
+
+    public func delay(for kind: MediaSegment.Kind) -> TimeInterval {
+        guard mode(for: kind) == .autoDelay else { return 0 }
+        let delay = automaticDelayOverrides[kind] ?? automaticDelay
+        return delay.isFinite ? min(30, max(1, delay)) : SkipIntrosMode.autoSkipDelay
     }
 
     /// Whether any kind wants markers fetched.

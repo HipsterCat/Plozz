@@ -36,6 +36,8 @@ public enum SettingsFormMetrics {
     public static let relatedControlSpacing = PlozzTheme.Spacing.small
     public static let navigationRowSpacing = PlozzTheme.Spacing.xSmall
     public static let groupCornerRadius = PlozzTheme.Metrics.mediumCardCornerRadius
+    public static let connectedGroupSpacing = PlozzTheme.Spacing.xSmall
+    public static let connectedGroupInnerCornerRadius: CGFloat = 8
     public static let dividerFocusClearance = PlozzTheme.Spacing.xSmall
     public static let illustratedGroupSpacing = PlozzTheme.Spacing.medium
     public static var groupInset: CGFloat {

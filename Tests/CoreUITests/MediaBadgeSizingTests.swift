@@ -40,6 +40,36 @@ final class MediaBadgeSizingTests: XCTestCase {
         #endif
     }
 
+    func testFrenchWarningBadgeIsCompactAndUnknownDescriptionsAreBounded() {
+        let short = size(of: MediaBadgeChip(badge: .init("TP", style: .rating)))
+        let warning = size(of: MediaBadgeChip(badge: .init(
+            "FR/Tous publics avec avertissement", style: .rating
+        )))
+        XCTAssertGreaterThan(warning.width, short.width, "The warning must retain a visible indicator.")
+        XCTAssertLessThan(warning.width, 100, "The screenshot's full description must not fill the hero row.")
+        XCTAssertEqual(warning.height, short.height)
+        let unknown = size(of: MediaBadgeChip(badge: .init(
+            String(repeating: "Unrecognized classification ", count: 10), style: .rating
+        )))
+        XCTAssertLessThanOrEqual(unknown.width, 180, "Unknown descriptions must not recreate the overflow.")
+    }
+
+    func testVisibilityRemovesClassificationButKeepsTechnicalBadges() {
+        let hidden = size(of: MediaBadgeChip(badge: .init("PG-13", style: .rating))
+            .environment(\.plozzShowsContentRatings, false))
+        XCTAssertEqual(hidden, .zero)
+        let technical = MediaBadge("4K", style: .prominent)
+        XCTAssertEqual(
+            size(of: MediaBadgeChip(badge: technical).environment(\.plozzShowsContentRatings, false)),
+            size(of: MediaBadgeChip(badge: technical))
+        )
+        var source = EnvironmentValues()
+        source.plozzShowsContentRatings = false
+        var destination = EnvironmentValues()
+        destination.copyHostedPresentation(from: source)
+        XCTAssertFalse(destination.plozzShowsContentRatings)
+    }
+
     func testMetadataBadgesUsePlatformCompactScale() {
         for badge in badges {
             let original = size(of: MediaBadgeChip(badge: badge)
@@ -194,10 +224,13 @@ final class MediaBadgeSizingTests: XCTestCase {
                 .environment(\.mediaBadgeScale, scale)
                 .environment(\.dynamicTypeSize, .large)
                 let width = 100 + 16 + first.width + max(gaps[index], gaps[next]) * scale + second.width
-                XCTAssertEqual(size(of: row.fixedSize()).width, width, accuracy: 0.5, "\(index), \(scale)")
+                let naturalSize = size(of: row.fixedSize())
+                XCTAssertEqual(naturalSize.width, width, accuracy: 0.5, "\(index), \(scale)")
+                // Separately hosted badges round independently; constrain the measured row instead.
                 XCTAssertEqual(
-                    size(of: row.frame(width: width - 1)).height,
-                    max(30, first.height) + 8 + second.height, accuracy: 0.5, "\(index), \(scale)"
+                    size(of: row.frame(width: naturalSize.width - 1)).height,
+                    max(30, first.height) + 8 + second.height, accuracy: 0.5,
+                    "\(index), \(scale), measured width \(naturalSize.width), summed width \(width)"
                 )
             }
         }

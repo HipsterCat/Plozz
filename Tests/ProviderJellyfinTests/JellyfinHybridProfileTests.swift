@@ -3,8 +3,7 @@ import CoreModels
 @testable import ProviderJellyfin
 
 /// Verifies the capability-expansion policy: turning the hybrid engine on/off
-/// changes exactly the advertised direct-play formats while keeping advertise ⇔
-/// route in lockstep with the display-aware range gates.
+/// selects engine input capabilities rather than imposing native output limits.
 final class JellyfinHybridProfileTests: XCTestCase {
     private func encoded(_ profile: JellyfinCapabilityProfile) throws -> [String: Any] {
         let data = try JSONEncoder().encode(profile)
@@ -58,7 +57,8 @@ final class JellyfinHybridProfileTests: XCTestCase {
     func testHybridOnAddsDTSAndTrueHDToMP4Audio() throws {
         let json = try encoded(.appleTV(capabilities: caps, hybridEngineEnabled: true))
         let direct = try XCTUnwrap(json["DirectPlayProfiles"] as? [[String: Any]])
-        let mp4 = try XCTUnwrap(direct.first { ($0["Container"] as? String) == "mp4,m4v" })
+        let mp4 = try XCTUnwrap(direct.first { ($0["Type"] as? String) == "Video"
+            && (($0["Container"] as? String)?.split(separator: ",").contains("mp4") == true) })
         let audio = try XCTUnwrap(mp4["AudioCodec"] as? String)
         XCTAssertTrue(audio.contains("dts"))
         XCTAssertTrue(audio.contains("truehd"))
@@ -74,26 +74,18 @@ final class JellyfinHybridProfileTests: XCTestCase {
         XCTAssertFalse(audio.contains("truehd"))
     }
 
-    // MARK: MKV direct-play is governed by the global (display-aware) range policy
+    // MARK: Aether owns profile, interlace, and output-range decisions
 
     func testHybridOnAddsNoContainerScopedCodecRestriction() throws {
-        // The hybrid flag advertises the MKV container via a DirectPlayProfile, but
-        // adds NO container-scoped codec profile: a raw MKV is decoded on-device
-        // for every display-supported range (incl. Dolby Vision), so the global
-        // HEVC/AV1 codec profiles govern it. No mkv/webm-scoped codec profile may
-        // exist that would restrict MKV below the global policy.
         let json = try encoded(.appleTV(capabilities: caps, hybridEngineEnabled: true))
         let codecs = try XCTUnwrap(json["CodecProfiles"] as? [[String: Any]])
-        XCTAssertFalse(codecs.contains { ($0["Container"] as? String) != nil },
-                       "MKV must not carry a container-scoped codec restriction; the global policy governs it")
+        XCTAssertTrue(codecs.isEmpty)
     }
 
     func testHybridOnDropsInterlacedCodecRestriction() throws {
         let json = try encoded(.appleTV(capabilities: caps, hybridEngineEnabled: true))
         let codecs = try XCTUnwrap(json["CodecProfiles"] as? [[String: Any]])
-        let h264 = try XCTUnwrap(codecs.first { ($0["Codec"] as? String) == "h264" })
-        let conditions = try XCTUnwrap(h264["Conditions"] as? [[String: Any]])
-        XCTAssertFalse(conditions.contains { ($0["Property"] as? String) == "IsInterlaced" })
+        XCTAssertTrue(codecs.isEmpty)
     }
 
     func testHybridOnAdvertisesAV1Matroska() throws {
@@ -110,9 +102,6 @@ final class JellyfinHybridProfileTests: XCTestCase {
     }
 
     func testHybridOnAdvertisesDoViCapableMatroskaHEVC() throws {
-        // With a DoVi-capable device (HEVC HW decode ⇒ supportsDolbyVision), the
-        // MKV container is advertised and the global hevc profile permits DoVi, so
-        // a DoVi-in-MKV is direct-played to the on-device engine (not transcoded).
         let doviCaps = MediaCapabilities(supportsHEVC: true, supportsDolbyVision: true)
         let json = try encoded(.appleTV(capabilities: doviCaps, hybridEngineEnabled: true))
 
@@ -123,12 +112,7 @@ final class JellyfinHybridProfileTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(mkv["VideoCodec"] as? String).contains("hevc"))
 
         let codecs = try XCTUnwrap(json["CodecProfiles"] as? [[String: Any]])
-        let globalHevc = try XCTUnwrap(codecs.first {
-            ($0["Codec"] as? String) == "hevc" && $0["Container"] == nil
-        })
-        let conditions = try XCTUnwrap(globalHevc["Conditions"] as? [[String: Any]])
-        let range = try XCTUnwrap(conditions.first { ($0["Property"] as? String) == "VideoRangeType" })
-        XCTAssertTrue(try XCTUnwrap(range["Value"] as? String).contains("DOVI"))
+        XCTAssertTrue(codecs.isEmpty)
     }
 
     func testHybridOffHasNoContainerScopedCodecProfiles() throws {
@@ -139,12 +123,10 @@ final class JellyfinHybridProfileTests: XCTestCase {
         XCTAssertFalse(codecs.contains { $0["Container"] != nil })
     }
 
-    func testGlobalHEVCDoViRangesDoNotRegress() throws {
-        // The global hevc codec profile must still advertise DoVi P5/P8 tokens and
-        // preserve HDR10+ without advertising unsupported Profile 7.
+    func testNativeGlobalHEVCDoViRangesDoNotRegress() throws {
         let json = try encoded(.appleTV(
             capabilities: MediaCapabilities(supportsHEVC: true, supportsDolbyVision: true),
-            hybridEngineEnabled: true
+            hybridEngineEnabled: false
         ))
         let codecs = try XCTUnwrap(json["CodecProfiles"] as? [[String: Any]])
         let globalHevc = try XCTUnwrap(codecs.first {

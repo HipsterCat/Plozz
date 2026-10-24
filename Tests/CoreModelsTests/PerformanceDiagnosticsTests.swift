@@ -148,6 +148,38 @@ final class PerformanceDiagnosticsTests: XCTestCase {
         XCTAssertFalse(other.isCurrent(snapshot))
     }
 
+    func testEventSnapshotRequiresTimestampWithinCurrentConsentSession() throws {
+        let clock = DiagnosticsClock()
+        let diagnostics = PerformanceDiagnostics(uptime: { clock.now() }, wallClock: { clock.date() })
+        let beforeStart = clock.date()
+        clock.advance(milliseconds: 1_000)
+        diagnostics.start()
+        let atStart = clock.date()
+        clock.advance(milliseconds: 1_000)
+        let span = try XCTUnwrap(diagnostics.begin(.homeLoad))
+        let duringSession = clock.date()
+        clock.advance(milliseconds: 1_000)
+
+        XCTAssertNil(diagnostics.snapshot(forEventAt: beforeStart))
+        XCTAssertNotNil(diagnostics.snapshot(forEventAt: atStart))
+        XCTAssertEqual(diagnostics.snapshot(forEventAt: duringSession)?.active.count, 1)
+        XCTAssertNotNil(diagnostics.snapshot(forEventAt: clock.date()))
+        XCTAssertNil(diagnostics.snapshot(forEventAt: clock.date().addingTimeInterval(1)))
+        XCTAssertNil(diagnostics.snapshot(forEventAt: Date(timeIntervalSince1970: .nan)))
+        XCTAssertNil(diagnostics.snapshot(forEventAt: Date(timeIntervalSince1970: .infinity)))
+        diagnostics.start()
+        XCTAssertNotNil(diagnostics.snapshot(forEventAt: atStart))
+
+        diagnostics.stop()
+        XCTAssertNil(diagnostics.snapshot(forEventAt: duringSession))
+        clock.advance(milliseconds: 1_000)
+        diagnostics.start()
+        XCTAssertNil(diagnostics.snapshot(forEventAt: duringSession))
+        XCTAssertNotNil(diagnostics.snapshot(forEventAt: clock.date()))
+        span.finish(.failed)
+        XCTAssertTrue(try XCTUnwrap(diagnostics.snapshot()).recent.isEmpty)
+    }
+
     func testConcurrentFinishesHaveOneOutcomeAndCompletion() throws {
         let diagnostics = PerformanceDiagnostics()
         diagnostics.start()
@@ -240,6 +272,9 @@ private final class DiagnosticsClock: @unchecked Sendable {
             readCount += 1
             return value
         }
+    }
+    func date() -> Date {
+        lock.withLock { Date(timeIntervalSince1970: 1_700_000_000 + Double(value) / 1_000_000_000) }
     }
     func advance(milliseconds: Int) {
         lock.withLock { value += UInt64(milliseconds) * 1_000_000 }

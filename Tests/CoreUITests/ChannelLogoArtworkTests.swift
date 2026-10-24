@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import CoreModels
 import SwiftUI
 import UIKit
 import XCTest
@@ -6,44 +7,68 @@ import XCTest
 
 @MainActor
 final class ChannelLogoArtworkTests: XCTestCase {
-    func testPlozzChannelIdentityIsStableAndIndependentOfDisplayName() {
-        XCTAssertEqual(PlozzChannelIdentity(channelID: "plozz-test-channel").paletteIndex, 1)
-        XCTAssertEqual(
-            PlozzChannelIdentity(channelID: "plozz-test-channel"),
-            PlozzChannelIdentity(channelID: "plozz-test-channel")
-        )
-        let indices = Set((0..<50).map { PlozzChannelIdentity(channelID: "channel-\($0)").paletteIndex })
-        XCTAssertEqual(indices, Set(0..<5))
+    func testPlozzWordmarksKeepTheirMoodAcrossSizesAndRespectTheAppTheme() throws {
+        for mood in LibraryChannelArtworkMood.allCases {
+            var themeLuminances: [Double] = []
+            for palette in [ThemePalette.light, .dark, .pureBlack] {
+                var referencePixel: [UInt8]?
+                for size in [CGSize(width: 200, height: 128), CGSize(width: 112, height: 72)] {
+                    let renderer = ImageRenderer(content: ChannelLogoArtwork(
+                        name: "Movies", logoURL: nil, size: size, cornerRadius: 12,
+                        plozzChannelID: "plozz-test-channel", plozzChannelMood: mood
+                    )
+                        .environment(\.themePalette, palette)
+                        .environment(\.colorScheme, palette.isLight ? .dark : .light))
+                    renderer.scale = 1
+                    let image = try XCTUnwrap(renderer.cgImage)
+                    XCTAssertEqual(image.width, Int(size.width))
+                    XCTAssertEqual(image.height, Int(size.height))
+                    let pixels = try rgbaPixels(image)
+                    let offset = ((image.height - 5) * image.width + image.width / 2) * 4
+                    let pixel = Array(pixels[offset..<(offset + 4)])
+                    XCTAssertEqual(pixel[3], 255)
+                    if let referencePixel { XCTAssertEqual(pixel, referencePixel) }
+                    else {
+                        referencePixel = pixel
+                        themeLuminances.append(luminance(pixel))
+                    }
+                    XCTAssertEqual(pixels[3], 0)
+                    let title = inkPoints(pixels, image: image, background: pixel, yRange: 0.12..<0.62)
+                    let signature = inkPoints(pixels, image: image, background: pixel, yRange: 0.65..<0.90)
+                    XCTAssertGreaterThan(title.count, signature.count * 2, "The channel name must dominate.")
+                    let titleLeft = try XCTUnwrap(title.map(\.x).min())
+                    let signatureLeft = try XCTUnwrap(signature.map(\.x).min())
+                    XCTAssertGreaterThanOrEqual(titleLeft, size.width * 0.11)
+                    XCTAssertGreaterThanOrEqual(signatureLeft, size.width * 0.12)
+                    XCTAssertEqual(titleLeft, signatureLeft, accuracy: 3 * size.height / 128)
+                    XCTAssertLessThan(try XCTUnwrap(signature.map(\.y).max()), size.height * 0.84)
+                    XCTAssertGreaterThan(maxContrast(title, pixels: pixels, image: image, background: pixel), 7)
+                    XCTAssertGreaterThan(maxContrast(signature, pixels: pixels, image: image, background: pixel), 4.5)
+                }
+            }
+            XCTAssertGreaterThan(themeLuminances[0], themeLuminances[1])
+            XCTAssertGreaterThan(themeLuminances[1], themeLuminances[2])
+        }
     }
 
-    func testPlozzWordmarksKeepTheirIdentityAcrossGuideAndPlayerSizes() throws {
-        var referencePixel: [UInt8]?
-        for size in [CGSize(width: 200, height: 128), CGSize(width: 112, height: 72)] {
-            for scheme in [ColorScheme.light, .dark] {
-                let renderer = ImageRenderer(content: ChannelLogoArtwork(
-                    name: "Movies", logoURL: nil, size: size, cornerRadius: 12,
-                    plozzChannelID: "plozz-test-channel"
-                ).environment(\.colorScheme, scheme))
-                renderer.scale = 1
-                let image = try XCTUnwrap(renderer.cgImage)
-                XCTAssertEqual(image.width, Int(size.width))
-                XCTAssertEqual(image.height, Int(size.height))
-                let pixels = try rgbaPixels(image)
-                let offset = ((image.height - 5) * image.width + image.width / 2) * 4
-                let pixel = Array(pixels[offset..<(offset + 4)])
-                XCTAssertEqual(pixel[3], 255)
-                if let referencePixel { XCTAssertEqual(pixel, referencePixel) }
-                else { referencePixel = pixel }
-                let titleInk = (Int(size.height * 0.35)..<Int(size.height * 0.9)).reduce(0) { count, y in
-                    count + (0..<image.width).filter { x in
-                        let offset = (y * image.width + x) * 4
-                        return pixels[offset] > 230 && pixels[offset + 1] > 230 && pixels[offset + 2] > 210
-                    }.count
-                }
-                XCTAssertGreaterThan(Double(titleInk) / Double(image.width * image.height), 0.07)
-                XCTAssertEqual(pixels[3], 0)
-            }
+    func testUnknownChannelsUseNeutralArtworkAndMoodOnlyAppliesToPlozzChannels() throws {
+        func render(id: String?, mood: LibraryChannelArtworkMood?, logoURL: URL? = nil) throws -> [UInt8] {
+            let renderer = ImageRenderer(content: ChannelLogoArtwork(
+                name: "Movies", logoURL: logoURL, size: CGSize(width: 200, height: 128),
+                cornerRadius: 12, plozzChannelID: id, plozzChannelMood: mood
+            ))
+            renderer.scale = 1
+            return try rgbaPixels(XCTUnwrap(renderer.cgImage))
         }
+        XCTAssertEqual(try render(id: "a", mood: nil), try render(id: "b", mood: .neutral))
+        XCTAssertNotEqual(try render(id: "a", mood: .calm), try render(id: "a", mood: .intense))
+        XCTAssertEqual(try render(id: nil, mood: nil), try render(id: nil, mood: .playful))
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/logo.png"))
+        XCTAssertEqual(
+            try render(id: "a", mood: .calm, logoURL: url),
+            try render(id: nil, mood: nil, logoURL: url),
+            "A real source-logo URL must take precedence over generated artwork, even before it loads."
+        )
     }
 
     func testPlozzWordmarksFitLongAndNonLatinChannelNames() {
@@ -60,18 +85,21 @@ final class ChannelLogoArtworkTests: XCTestCase {
     }
 
     func testPlozzChannelWordmarkContactSheet() throws {
-        let names = ["Movies", "TV Shows", "Animation", "Documentary & Nature", "Steven Spielberg"]
+        let names = ["Movies", "TV Shows", "Animation", "Documentary & Nature", "Horror", "Science Fiction"]
+        let moods: [LibraryChannelArtworkMood] = [.cinematic, .neutral, .playful, .calm, .mysterious, .imaginative]
         let sheet = VStack(spacing: 20) {
             ForEach(Array(names.enumerated()), id: \.offset) { index, name in
                 HStack(spacing: 20) {
-                    ChannelLogoArtwork(name: name, logoURL: nil, size: CGSize(width: 200, height: 128), cornerRadius: 12)
-                    ChannelLogoArtwork(
-                        name: name, logoURL: nil, size: CGSize(width: 200, height: 128), cornerRadius: 12,
-                        plozzChannelID: "channel-\(index)"
-                    )
+                    ForEach(0..<3) { theme in
+                        ChannelLogoArtwork(
+                            name: name, logoURL: nil, size: CGSize(width: 200, height: 128), cornerRadius: 26,
+                            plozzChannelID: "channel-\(index)", plozzChannelMood: moods[index]
+                        )
+                        .environment(\.themePalette, [ThemePalette.light, .dark, .pureBlack][theme])
+                    }
                     ChannelLogoArtwork(
                         name: name, logoURL: nil, size: CGSize(width: 112, height: 72), cornerRadius: 12,
-                        plozzChannelID: "channel-\(index)"
+                        plozzChannelID: "channel-\(index)", plozzChannelMood: moods[index]
                     )
                 }
             }
@@ -82,9 +110,38 @@ final class ChannelLogoArtworkTests: XCTestCase {
         renderer.scale = 2
         let image = try XCTUnwrap(renderer.uiImage)
         let attachment = XCTAttachment(image: image)
-        attachment.name = "plozz-wordmarks-before-guide-player"
+        attachment.name = "plozz-byline-light-dark-black-compact"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func inkPoints(
+        _ pixels: [UInt8], image: CGImage, background: [UInt8], yRange: Range<Double>
+    ) -> [CGPoint] {
+        (Int(Double(image.height) * yRange.lowerBound)..<Int(Double(image.height) * yRange.upperBound)).flatMap { y in
+            (Int(Double(image.width) * 0.10)..<Int(Double(image.width) * 0.90)).compactMap { x in
+                let offset = (y * image.width + x) * 4
+                let difference = (0..<3).map { abs(Int(pixels[offset + $0]) - Int(background[$0])) }.max() ?? 0
+                return difference > 75 ? CGPoint(x: x, y: y) : nil
+            }
+        }
+    }
+
+    private func luminance(_ pixel: [UInt8]) -> Double {
+        let linear = pixel.prefix(3).map { component -> Double in
+            let value = Double(component) / 255
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+    }
+
+    private func maxContrast(_ points: [CGPoint], pixels: [UInt8], image: CGImage, background: [UInt8]) -> Double {
+        let field = luminance(background)
+        return points.map { point in
+            let offset = (Int(point.y) * image.width + Int(point.x)) * 4
+            let ink = luminance(Array(pixels[offset..<(offset + 4)]))
+            return (max(field, ink) + 0.05) / (min(field, ink) + 0.05)
+        }.max() ?? 0
     }
 
     func testDarkColouredInkGetsASubtleLightBrandTint() {

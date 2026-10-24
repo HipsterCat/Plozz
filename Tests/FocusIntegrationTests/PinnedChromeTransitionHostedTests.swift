@@ -405,6 +405,48 @@ final class PinnedChromeTransitionHostedTests: XCTestCase {
         session.finishImmediately()
     }
 
+    func testLeavingExternalSettingsRestoresPinnedPageFocus() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.model.usesSettingsShell = true
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: fixture.window))
+        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<3 {
+            fixture.model.interaction?.requestOpen()
+            try await waitUntil {
+                self.targets(in: fixture.window).contains { $0 === system.focusedItem }
+            }
+            let settingsRow = try XCTUnwrap(markers(in: fixture.window).max {
+                $0.convert($0.bounds, to: fixture.window).midY
+                    < $1.convert($1.bounds, to: fixture.window).midY
+            })
+            let settingsTarget = try XCTUnwrap(
+                NavigationRowFocusRequester.target(for: settingsRow, in: fixture.window)
+            )
+            let owner = try XCTUnwrap(NavigationRailFocusHostController.containing(settingsRow))
+            XCTAssertTrue(owner.requestFocus(to: settingsTarget, using: system))
+            fixture.model.destinationFocus.begin(.settings)
+            fixture.model.selection = .settings
+            try await waitUntil { fixture.model.settingsButton?.window != nil }
+            let settings = try XCTUnwrap(fixture.model.settingsButton)
+            system.requestFocusUpdate(to: settings)
+            system.updateFocusIfNeeded()
+            try await waitUntil { settings.isFocused }
+
+            fixture.model.selection = .home
+            try await waitUntil {
+                fixture.model.settingsButton?.window == nil && fixture.model.buttonEnabled
+            }
+            try await waitUntil {
+                guard let focused = system.focusedItem,
+                      let frame = NavigationRowFocusRequester.frame(of: focused, relativeTo: fixture.window)
+                else { return false }
+                return frame.midX > NavigationRailMetrics.expandedWidth
+            }
+            XCTAssertFalse(fixture.model.destinationFocus.isWaiting)
+        }
+    }
+
     private func markers(in view: UIView) -> [NavigationRowFocusRequester.RequestView] {
         if let marker = view as? NavigationRowFocusRequester.RequestView { return [marker] }
         return view.subviews.flatMap { markers(in: $0) }
@@ -490,6 +532,9 @@ final class PinnedChromeTransitionHostedTests: XCTestCase {
         var seasonContext = "initial-profile"
         var hostedHeader = false
         var blocksContent = false
+        var usesSettingsShell = false
+        let destinationFocus = NavigationDestinationFocusHandoff()
+        @ObservationIgnored weak var settingsButton: UIButton?
         let scrollTarget = NativeLibraryScrollTarget()
     }
 
@@ -497,17 +542,52 @@ final class PinnedChromeTransitionHostedTests: XCTestCase {
         @Bindable var model: Model
 
         var body: some View {
+            if model.usesSettingsShell {
+                SettingsNavigationShell(style: .rail, showsSettings: model.selection == .settings) { _ in
+                    rail
+                } settings: {
+                    SettingsButton(model: model)
+                        .frame(width: 400, height: 100)
+                }
+            } else {
+                rail
+            }
+        }
+
+        private var rail: some View {
             NavigationRailShell(
                 profile: model.profile, entries: model.entries,
                 destinations: [.home, .search] + model.entries.map(\.destination) + [.settings],
                 selection: $model.selection, onOpenProfileSwitcher: {},
                 chrome: model.chrome,
-                content: PageContent(model: model),
-                contentDestination: model.selection
+                content: Group {
+                    if model.usesSettingsShell && model.selection == .settings {
+                        Color.clear
+                    } else {
+                        PageContent(model: model)
+                    }
+                },
+                contentDestination: model.selection,
+                destinationFocus: model.destinationFocus
             )
             .environment(\.seasonRequestContextID, model.seasonContext)
             .environment(\.themeMusicController, model.musicController)
             .environment(\.themeMusicSettings, model.musicSettings)
+        }
+    }
+
+    private struct SettingsButton: UIViewRepresentable {
+        let model: Model
+
+        func makeUIView(context: Context) -> UIButton {
+            let button = UIButton(type: .system)
+            button.setTitle("Close Settings", for: .normal)
+            model.settingsButton = button
+            return button
+        }
+
+        func updateUIView(_ button: UIButton, context: Context) {
+            button.isEnabled = context.environment.isEnabled
         }
     }
 

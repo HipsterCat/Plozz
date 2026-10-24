@@ -9,6 +9,15 @@ import XCTest
 
 @MainActor
 final class LiveTVPlaybackEntryHostedTests: XCTestCase {
+    private func guideSettings() throws -> LiveTVViewSettingsStore {
+        let suite = "PlaybackEntrySettings.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let store = LiveTVViewSettingsStore(defaults: defaults)
+        store.save(.init(hasChosenAutoPreview: true, startsWithCategories: false))
+        return store
+    }
+
     func testUnansweredPreviewChoiceSurvivesLeavingAndBackgroundingWithoutPlayback() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -17,6 +26,7 @@ final class LiveTVPlaybackEntryHostedTests: XCTestCase {
         let suite = "PreviewChoiceLifecycle.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let store = LiveTVViewSettingsStore(defaults: defaults)
+        store.save(.init(startsWithCategories: false))
         probe.settingsStore = store
         probe.active = true
         probe.phase = .active
@@ -47,6 +57,7 @@ final class LiveTVPlaybackEntryHostedTests: XCTestCase {
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first(where: \.isKeyWindow)
         let probe = PlaybackEntryProbe()
+        probe.settingsStore = try guideSettings()
         let window = UIWindow(windowScene: scene)
         window.rootViewController = UIHostingController(rootView: PlaybackEntryFixture(probe: probe))
         window.makeKeyAndVisible()
@@ -74,6 +85,7 @@ final class LiveTVPlaybackEntryHostedTests: XCTestCase {
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first(where: \.isKeyWindow)
         let probe = PlaybackEntryProbe()
+        probe.settingsStore = try guideSettings()
         probe.active = true
         probe.phase = .active
         probe.authorized = false

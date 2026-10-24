@@ -118,6 +118,7 @@ final class SeerDiscoveryStatusCoordinator {
             var updated = item
             updated.availability = availability.status
             updated.downloadProgress = availability.downloadProgress
+            updated.hasRequestDownloadActivity = availability.hasDownloadActivity
             batch.continuation.yield(Reply(index: index, item: updated))
         } catch {
             guard !Task.isCancelled, liveBatch(id) === batch else { return false }

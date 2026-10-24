@@ -5,15 +5,17 @@ import SwiftUI
 
 public struct ProfileNameLabel: View {
     private let profile: Profile
+    private let showsLock: Bool
 
-    public init(profile: Profile) {
+    public init(profile: Profile, showsLock: Bool? = nil) {
         self.profile = profile
+        self.showsLock = showsLock ?? profile.showsPINLock
     }
 
     public var body: some View {
         HStack(spacing: 6) {
             Text(profile.name)
-            if profile.isLocked {
+            if showsLock {
                 Image(systemName: "lock.fill")
                     .font(.caption2.weight(.semibold))
                     .accessibilityHidden(true)
@@ -21,7 +23,7 @@ public struct ProfileNameLabel: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(profile.name)
-        .accessibilityValue(profile.isLocked ? Text(ProfileLockCopy.title) : Text(verbatim: ""))
+        .accessibilityValue(showsLock ? Text(ProfileLockCopy.title) : Text(verbatim: ""))
     }
 }
 #endif

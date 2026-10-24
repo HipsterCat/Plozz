@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import PlozzCoreUI
+import CoreModels
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -47,23 +48,10 @@ enum HomeHeroLayout {
     static var contentLeadingPadding: CGFloat { PlozzTheme.Metrics.heroLeadingPadding }
 }
 
-/// The one box every tvOS hero wordmark is fitted into — shared by Home (both the
-/// UIKit and SwiftUI renderers) and the detail page.
-///
-/// Home and the detail page have different text columns, 496pt and 620pt, and each
-/// hero used to size its logo against its own. A wide wordmark was therefore drawn
-/// at 496pt on Home and 620pt on the detail page: the same show, a quarter larger
-/// on one screen than the other, for no reason a viewer could see. A logo is the
-/// show's identity rather than a member of the column beneath it, so it is sized
-/// once here and drawn identically wherever it appears.
-///
-/// Held to the **narrower** of the two columns. Taking the detail page's 620pt
-/// instead would push Home's wordmark a quarter past the 496pt column its own
-/// metadata and description are capped to — the exact overhang that cap exists to
-/// prevent — whereas holding the detail page to 496pt overruns nothing.
+/// Home and detail keep the same baseline, with independent profile size choices.
 enum HeroLogoLayout {
     /// Nominal budget: Home's text column, and a wordmark height to match.
-    static let budget = CGSize(width: 496, height: 160)
+    static let budget = HeroLogoSizing.Layout.television.budget
 
     /// The nominal box handed to `HeroLogoArtwork` / `HeroLogoFit.fittedSize`.
     ///
@@ -87,6 +75,10 @@ enum HeroLogoLayout {
             budget: CGSize(width: column, height: budget.height),
             drawnWidth: column
         )
+    }
+
+    static func box(size: HeroLogoSize, availableWidth: CGFloat = .infinity) -> CGSize {
+        HeroLogoSizing.box(for: .television, size: size, availableWidth: availableWidth)
     }
 }
 

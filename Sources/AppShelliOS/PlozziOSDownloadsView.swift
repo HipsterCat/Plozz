@@ -354,11 +354,10 @@ struct PlozziOSDownloadsStorageBar: View {
     private static func deviceCapacity() -> (total: Int64, free: Int64)? {
         let url = URL.documentsDirectory
         guard let values = try? url.resourceValues(forKeys: [
-            .volumeTotalCapacityKey,
-            .volumeAvailableCapacityForImportantUsageKey
+            .volumeTotalCapacityKey
         ]),
             let total = values.volumeTotalCapacity,
-            let free = values.volumeAvailableCapacityForImportantUsage
+            let free = try? DownloadStorageCapacity.device.availableBytes(at: url)
         else {
             return nil
         }

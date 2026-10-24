@@ -19,6 +19,22 @@ And to push the results at the marketing site:
 cd ../plozz-website && npm run shots  # copy the changed masters, re-encode
 ```
 
+## Channel identity theme comparison
+
+`PlozzChannelIdentityCaptureTests/testNativeBylineThemes` in
+`PlozzHomeFixtureTests` captures the Byline artwork in Light, Dark, and Black using the
+production tvOS guide, sidebar, hero, and focus components. Run this selected
+test on an owned Apple TV 4K simulator. The fixture uses identical sample
+channels, category moods, a fixed schedule, and the same focused programme for all images.
+Its screenshots are native simulator captures, not physical-TV captures or
+screenshots of a configured user's library.
+
+The fixture-only `PLOZZ_CHANNEL_IDENTITY_THEME` launch environment selects
+`light`, `dark`, or `black`. The artwork is the production renderer, not a
+Debug-only style override.
+The saved `assets/plozz-oled-icon-concept.svg` and matching PNG are separate
+app-icon explorations, not shipping assets.
+
 ---
 
 ## Why this exists

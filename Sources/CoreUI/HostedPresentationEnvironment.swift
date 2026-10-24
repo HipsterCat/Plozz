@@ -14,6 +14,7 @@ public extension EnvironmentValues {
         scenePhase = source.scenePhase
         themePalette = source.themePalette
         gradientBackgroundsEnabled = source.gradientBackgroundsEnabled
+        plozzShowsContentRatings = source.plozzShowsContentRatings
         artworkGradientTintSaturation = source.artworkGradientTintSaturation
         plozzMetrics = source.plozzMetrics
         plozzCardStyle = source.plozzCardStyle
@@ -24,11 +25,14 @@ public extension EnvironmentValues {
         plozzArtworkProviders = source.plozzArtworkProviders
         plozzArtworkArea = source.plozzArtworkArea
         plozzWatchStatusIndicator = source.plozzWatchStatusIndicator
+        plozzWatchIndicatorColor = source.plozzWatchIndicatorColor
         plozzShowsUnwatchedEpisodeCount = source.plozzShowsUnwatchedEpisodeCount
+        plozzEpisodeCountBadgeStyle = source.plozzEpisodeCountBadgeStyle
         plozzSeerConnected = source.plozzSeerConnected
         plozzReduceTransparency = source.plozzReduceTransparency
         plozzNavigationStyle = source.plozzNavigationStyle
         plozzNavigationContentInset = source.plozzNavigationContentInset
+        mediaRowHeaderTrailingInset = source.mediaRowHeaderTrailingInset
         plozzPinnedSidebarActive = source.plozzPinnedSidebarActive
         plozzPinnedSidebarInteraction = source.plozzPinnedSidebarInteraction
         plozzRowTitleTightening = source.plozzRowTitleTightening

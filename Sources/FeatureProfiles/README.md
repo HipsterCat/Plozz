@@ -9,6 +9,7 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   household's profile tiles (avatar + name), focusable, with an "add
   profile" tile that opens the editor. `AppShell.ProfileSelectionView`
   hosts this for both the launch flow and Settings → Switch Profile.
+  Mobile uses `AppShelliOS.PlozziOSProfileSelectionView` and its touch picker.
 - `ProfileEditorView` — create / rename / restyle a profile (name,
   `avatarSymbol` SF Symbol, color from `ProfileTileColor` palette,
   account subset, Plex Home-user mapping).
@@ -20,10 +21,14 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   and hit target. Palette resolution lives here, not in Foundation-only `CoreModels`.
 - `ProfileTileColor` — the colour palette and the deterministic
   `colorIndex → Color` resolution used by avatar / tile / picker.
+  Avatar choices reuse CoreUI's `ColorSwatchButton`, also used by watch-indicator
+  settings. The 40-color avatar palette, TV grid, mobile compact row/full palette
+  sheet, and neutral emoji option remain independent of the watch-mark palette.
 - `ProfileNameLabel` — shared picker and summary name with an inline lock
-  for profiles with a Plozz Profile Lock. The indicator and VoiceOver value
-  describe the configured lock, not temporary unlock state, Plex PINs, or Kids
-  restrictions. Settings lists retain their existing lock indicators.
+  for a Plozz Profile Lock or a configured PIN-protected Plex Home binding.
+  The indicator and VoiceOver value describe configured protection, not temporary
+  unlock state, source enablement, or Kids restrictions. It does not add a local
+  PIN gate; live Plex checks still decide whether authorization is required.
 - `ProfilePhotoCandidate` — value type for profile photos borrowed from
   connected accounts and Plex Home users.
 - `ProfileActionsList` — shared profile management actions. Settings pages use
@@ -47,6 +52,62 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
 - **Profile-aware everywhere.** Any feature reading per-user state
   (settings, watched, recommendations) must scope through the active
   profile id from `CoreModels.ProfilesModel`.
+- **Continuous mobile selection.** Launch and Settings keep the picker and
+  parental/profile/Plex PIN steps on one opaque surface until authorization
+  finishes.
+  A pending PIN never opens automatically when the picker appears: only a
+  profile tap starts authorization, including when a restored profile is locked.
+  The modal owner sits outside the profile-scoped shell identity;
+  launch keeps that identity stable through PIN entry and cancellation.
+  Cancelling a PIN returns to the retained picker, not Home. Authorization
+  still belongs to the existing profile/Plex models.
+  Selection carries the Plozz profile's own avatar and name into authorization
+  using native matched geometry while the other tiles fade away. PIN type is
+  secondary copy, not a replacement server-user identity. Live Plex verification
+  keeps that identity in place without an avatar spinner; only a longer check
+  shows loading feedback below it. Confirmed PIN keys reveal progressively;
+  unprotected users never mount a keypad. Errors retain the identity and expose
+  Retry/Cancel. Cancelling returns to the retained tile order, while profile
+  details still reflect live edits. Reduce Motion removes the movement and
+  reveal delays. Existing parental and separate-PIN steps remain explicit.
+  A verified local PIN stays visible, with input disabled, while chained Plex
+  authentication finishes. Only a confirmed additional PIN replaces it with a
+  fresh keypad; failures remain retryable. Completion retains the outgoing PIN
+  surface through dismissal rather than clearing it before Home appears.
+  Local PIN verification does not block the UI executor, and cancellation or a
+  changed profile/lock invalidates an in-flight result. Switching away expires
+  local unlock proof on both platforms; returning requires the PIN again.
+  Picker lock badges and accessibility values use each profile's enabled Plex
+  sources, with the same stale-account fallback as activation. A saved binding
+  to a disabled or removed source does not advertise a PIN gate. A separate
+  local Profile Lock remains visible regardless of source enablement. Setup
+  transfer summaries describe configured protection rather than local admission.
+- Mobile Plex identity selection explains playback and watchlist ownership in
+  its scrolling content. Whole-row buttons show pending work immediately;
+  verification, Retry/Cancel, and confirmed PIN entry stay in that chooser.
+  Its exact pending request is excluded from app-level PIN presenters, and the
+  root identity sheet survives Plex identity-generation changes. Settings retains
+  its same-profile presentation until dismissal before rebuilding covered content;
+  a different active profile still invalidates that presentation. A proposed
+  binding is still saved only after authentication succeeds.
+- **Visible mobile entrance.** Launch waits for native presentation to finish;
+  the cancellable in-app switcher starts during presentation instead of adding
+  another pause afterward. Overlapping 450 ms native smooth springs use a subtle
+  lift and 90 ms between profiles for households of up to six. Larger households
+  shorten every interval so the last profile starts within 450 ms; Add tiles
+  continue the same cadence. All visual starts share one presentation transaction,
+  rather than waiting on separate task wake-ups; tasks only admit input when
+  each tile starts appearing. Sixteen profiles should settle within one second.
+  Never clamp later delays into a batch. Reduce Motion reveals everything
+  immediately; newly realized offscreen cells do not wait through earlier slots.
+- **Native editor controls.** On tvOS, the scrollable editor keeps its title
+  separate from one center-aligned row of Back, Delete, and save/revert actions.
+  The navigation owner still supplies Back and its focus-restoration behavior.
+  Actions use native glass, with the shared reduced-transparency/older-OS fallback;
+  Delete is an icon-only destructive button and still requires confirmation.
+  Both platforms share a native name field without custom fills or focus colors.
+  Mobile uses `SettingsSectionGroup`; tvOS keeps its system field surface without
+  a second container. Mobile actions stay in the native toolbar.
 
 ## Where to look first
 

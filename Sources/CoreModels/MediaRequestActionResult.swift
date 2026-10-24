@@ -165,15 +165,18 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
 public struct MediaRequestAvailability: Sendable, Equatable {
     public var status: MediaAvailabilityStatus
     public var downloadProgress: Double?
+    public var hasDownloadActivity: Bool
     public var seasons: [MediaSeasonRequestState]
 
     public init(
         status: MediaAvailabilityStatus,
         downloadProgress: Double? = nil,
+        hasDownloadActivity: Bool = false,
         seasons: [MediaSeasonRequestState] = []
     ) {
         self.status = status
         self.downloadProgress = downloadProgress
+        self.hasDownloadActivity = hasDownloadActivity
         self.seasons = seasons
     }
 

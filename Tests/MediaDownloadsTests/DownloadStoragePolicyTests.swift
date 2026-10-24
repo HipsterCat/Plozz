@@ -4,6 +4,36 @@ import XCTest
 
 final class DownloadStoragePolicyTests: XCTestCase {
 
+    func testCapacityRequestsThePlatformAppropriateResource() throws {
+        let directory = DownloadTestFactory.tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let capacity = DownloadStorageCapacity { url, key in
+            XCTAssertEqual(url, directory)
+            #if os(tvOS)
+            XCTAssertEqual(key, .volumeAvailableCapacityKey)
+            #else
+            XCTAssertEqual(key, .volumeAvailableCapacityForImportantUsageKey)
+            #endif
+            return 96_080_000_000
+        }
+
+        XCTAssertEqual(try capacity.availableBytes(at: directory), 96_080_000_000)
+    }
+
+    func testCapacityUnavailableRemainsUnknown() throws {
+        let capacity = DownloadStorageCapacity { _, _ in nil }
+        XCTAssertNil(try capacity.availableBytes(at: URL.documentsDirectory))
+    }
+
+    func testCapacityReadErrorsArePropagated() {
+        let capacity = DownloadStorageCapacity { _, _ in
+            throw CocoaError(.fileReadNoPermission)
+        }
+        XCTAssertThrowsError(try capacity.availableBytes(at: URL.documentsDirectory)) {
+            XCTAssertEqual(($0 as? CocoaError)?.code, .fileReadNoPermission)
+        }
+    }
+
     func testIOSPolicyUsesBackupExcludedPersistentDirectory() throws {
         let sub = "PlozzDownloadsTest-\(UUID().uuidString)"
         let locator = PlatformDownloadStorageLocator(

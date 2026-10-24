@@ -25,6 +25,7 @@ struct SendDiagnosticsCard: View {
 
     private enum SendState { case idle, sent, failed }
     @State private var sendState: SendState = .idle
+    @State private var isSending = false
     @State private var message: String = ""   // l10n:content — user-typed message text
 
     var body: some View {
@@ -43,12 +44,15 @@ struct SendDiagnosticsCard: View {
                             : recentActivity
                                 + "\n\n--- Persistent playback journal ---\n"
                                 + playbackJournal
-                        let ok = CrashDiagnostics.send(
-                            logText: logText,
-                            note: trimmed.isEmpty ? nil : trimmed
-                        )
-                        sendState = ok ? .sent : .failed
-                        if ok { message = "" }
+                        isSending = true
+                        Task {
+                            defer { isSending = false }
+                            let ok = await CrashDiagnostics.send(
+                                logText: logText, note: trimmed.isEmpty ? nil : trimmed
+                            )
+                            sendState = ok ? .sent : .failed
+                            if ok { message = "" }
+                        }
                     } label: {
                         Label(
                             sendState == .sent ? "Sent" : "Send Recent Activity to Developer",
@@ -57,7 +61,7 @@ struct SendDiagnosticsCard: View {
                         .font(.headline)
                     }
                     .buttonStyle(PlozzOpaquePillButtonStyle())
-                    .disabled(sendState == .sent)
+                    .disabled(sendState == .sent || isSending)
                 }
             }
         } else {

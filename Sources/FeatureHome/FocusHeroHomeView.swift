@@ -85,7 +85,7 @@ enum FocusHeroLayout {
     /// Smaller than the carousel's wordmark box: the column above a pinned poster
     /// row is short, and the description needs its lines more than the logo needs
     /// the extra size.
-    static let logoBox = CGSize(width: 440, height: 124)
+    static let logoBox = HeroLogoSizing.Layout.showcase.budget
     static let logoPresentationPolicy = HeroLogoPresentationPolicy.whenResolved
     /// How much closer a row's title sits to its cards than on the classic Home.
     static let rowTitleTightening: CGFloat = 22
@@ -101,7 +101,8 @@ enum FocusHeroLayout {
     static let rowSpring = Spring(duration: rowSpringDuration, bounce: 0)
     static let rowAnimation = Animation.interpolatingSpring(rowSpring)
     /// Quick enough to read as immediate as focus moves card to card, but not a cut.
-    static let foregroundAnimation = Animation.easeOut(duration: 0.15)
+    static let foregroundTransitionDuration: TimeInterval = 0.15
+    static let foregroundAnimation = Animation.easeOut(duration: foregroundTransitionDuration)
 
     /// Where every pinned row's cards end: low on the screen, with just the next
     /// row's peek beneath. Rows are anchored by this edge, so a shorter row gets
@@ -112,6 +113,34 @@ enum FocusHeroLayout {
 
     static func columnTop(for style: NavigationStyle) -> CGFloat {
         style == .tabBar ? columnTopUnderTabBar : columnTop
+    }
+
+    static func columnOffset(rowHeight: CGFloat) -> CGFloat {
+        max(lowestSlotTop, rowsBottom(rowSpacing: rowSpacing) - rowHeight) - lowestSlotTop
+    }
+
+    static func availableDetailsHeight(columnOffset: CGFloat, minimumTop: CGFloat) -> CGFloat {
+        max(0, lowestSlotTop + columnOffset - columnGap - minimumTop)
+    }
+}
+
+private struct FocusHeroMinimumDetailsTopKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+private struct FocusHeroVisibleDetailsTopKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    var focusHeroMinimumDetailsTop: CGFloat? {
+        get { self[FocusHeroMinimumDetailsTopKey.self] }
+        set { self[FocusHeroMinimumDetailsTopKey.self] = newValue }
+    }
+
+    var focusHeroVisibleDetailsTop: CGFloat? {
+        get { self[FocusHeroVisibleDetailsTopKey.self] }
+        set { self[FocusHeroVisibleDetailsTopKey.self] = newValue }
     }
 }
 
@@ -348,6 +377,7 @@ struct FocusHeroHomeView<RowContent: View>: View {
     let navigationStyle: NavigationStyle
     let isFrontmost: Bool
     let enrich: FocusHeroMetadata.Enrich?
+    let minimumDetailsTop: CGFloat?
     let rowContent: (FocusHeroRow, FocusHeroRowReporter) -> RowContent
 
     init(
@@ -357,6 +387,7 @@ struct FocusHeroHomeView<RowContent: View>: View {
         navigationStyle: NavigationStyle,
         isFrontmost: Bool,
         enrich: FocusHeroMetadata.Enrich? = nil,
+        minimumDetailsTop: CGFloat? = nil,
         @ViewBuilder rowContent: @escaping (FocusHeroRow, FocusHeroRowReporter) -> RowContent
     ) {
         self.rows = rows
@@ -365,6 +396,7 @@ struct FocusHeroHomeView<RowContent: View>: View {
         self.navigationStyle = navigationStyle
         self.isFrontmost = isFrontmost
         self.enrich = enrich
+        self.minimumDetailsTop = minimumDetailsTop
         self.rowContent = rowContent
     }
 
@@ -388,7 +420,9 @@ struct FocusHeroHomeView<RowContent: View>: View {
                 enrich: enrich,
                 settings: settings,
                 spoilerSettings: spoilerSettings,
-                navigationStyle: navigationStyle
+                navigationStyle: navigationStyle,
+                rows: rows,
+                minimumDetailsTop: minimumDetailsTop
             )
             .environment(\.plozzArtworkArea, artworkPolicy.heroPolicy.area)
             FocusHeroScrollingRows(rows: rows, model: model, rowContent: rowContent)
@@ -472,16 +506,20 @@ private struct FocusHeroArtworkPrefetch: View {
 /// hidden, it fixes where the details block, and so the logo, sits above the
 /// pinned row.
 private struct FocusHeroDetailsFootprint: View {
+    let logoHeight: CGFloat
+    let textScale: CGFloat
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Color.clear
-                .frame(height: FocusHeroLayout.logoBox.height)
+                .frame(height: logoHeight)
                 .padding(.bottom, 6)
-            Text(verbatim: " ").font(.system(size: 23, weight: .medium))
+            Text(verbatim: " ").font(.system(size: PlozzTypography.heroMetadata.scaled(by: textScale).pointSize, weight: .medium))
             Text(verbatim: " \n \n ")
-                .font(.system(size: 22))
-                .lineSpacing(2)
+                .font(.system(size: PlozzTypography.heroDescription.scaled(by: textScale).pointSize))
+                .lineSpacing(PlozzTypography.heroDescription.scaled(by: textScale).lineSpacing)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .frame(width: FocusHeroLayout.columnWidth, alignment: .leading)
     }
 }
@@ -737,16 +775,139 @@ struct FocusHeroHeightStop: Equatable {
     }
 }
 
+struct FocusHeroColumnFit: Equatable {
+    let minimumTop: CGFloat
+    let leading: CGFloat
+    let rowHeight: CGFloat
+    var visibleTop: CGFloat? = nil
+}
+
 /// Compositor targets and stable native owners; no per-frame SwiftUI publication.
 @MainActor
 final class FocusHeroRowMotion {
     var height: CGFloat?
     var heightStops: [FocusHeroHeightStop] = []
     weak var column: UIView?
+    weak var columnContent: UIView?
     weak var mask: UIView?
     var rowOffsets: [String: CGFloat] = [:]
     private var rowSurfaces: [String: RowSurface] = [:]
     private static let heightAnimationKey = "plozz.home.viewport-height"
+    private var columnFit: FocusHeroColumnFit?
+    private var columnContentHeight: CGFloat = 0
+    private struct ViewportPath {
+        let column: [CGFloat]
+        let mask: [CGFloat]
+        let duration: TimeInterval
+    }
+    private var viewportPath: ViewportPath?
+
+    func configureColumnFit(_ fit: FocusHeroColumnFit?) {
+        guard columnFit != fit else { return }
+        columnFit = fit
+        applyColumnFit()
+        refitViewport()
+    }
+
+    func recordColumnContentHeight(_ height: CGFloat) {
+        guard abs(height - columnContentHeight) > FocusHeroLayout.measurementTolerance else { return }
+        columnContentHeight = height
+        applyColumnFit()
+        refitViewport()
+    }
+
+    private var columnScale: CGFloat {
+        guard let fit = columnFit, columnContentHeight > 0 else { return 1 }
+        let offset = FocusHeroLayout.columnOffset(rowHeight: fit.rowHeight)
+        return min(1, FocusHeroLayout.availableDetailsHeight(
+            columnOffset: offset, minimumTop: fit.minimumTop
+        ) / columnContentHeight)
+    }
+
+    private var minimumColumnOffset: CGFloat {
+        guard let fit = columnFit else { return -.infinity }
+        return (fit.visibleTop ?? fit.minimumTop) + columnContentHeight * columnScale
+            - (FocusHeroLayout.lowestSlotTop - FocusHeroLayout.columnGap)
+    }
+
+    func applyColumnFit() {
+        guard let view = columnContent else { return }
+        let scale = columnScale
+        let anchor = CGPoint(x: columnFit?.leading ?? 0, y: FocusHeroLayout.lowestSlotTop - FocusHeroLayout.columnGap)
+        let target = CGAffineTransform(
+            a: scale, b: 0, c: 0, d: scale,
+            tx: (anchor.x - view.bounds.midX) * (1 - scale),
+            ty: (anchor.y - view.bounds.midY) * (1 - scale)
+        )
+        guard view.transform != target else { return }
+        UIView.performWithoutAnimation { view.transform = target }
+    }
+
+    private func fittedMaskOffset(_ offset: CGFloat, columnOffset: CGFloat) -> CGFloat {
+        guard columnFit != nil else { return offset }
+        return max(offset, FocusHeroLayout.lowestSlotTop + columnOffset
+                   - FocusHeroLayout.activeTitleLift - 6 - FocusHeroLayout.fadeBand)
+    }
+
+    private func refitViewport() {
+        guard let viewportPath, let column,
+              let clock = (column.layer.animation(forKey: Self.heightAnimationKey)
+                           ?? mask?.layer.animation(forKey: Self.heightAnimationKey)) as? CAKeyframeAnimation else {
+            applyStationaryColumn()
+            return
+        }
+        // Reuse the committed viewport clock when artwork or header clearance
+        // resolves mid-scroll. Only placement changes; the incoming size is final.
+        let elapsed = clock.beginTime == 0 ? 0
+            : max(0, column.layer.convertTime(CACurrentMediaTime(), from: nil) - clock.beginTime)
+        guard elapsed < viewportPath.duration else {
+            self.viewportPath = nil
+            column.layer.removeAnimation(forKey: Self.heightAnimationKey)
+            mask?.layer.removeAnimation(forKey: Self.heightAnimationKey)
+            applyStationaryColumn()
+            return
+        }
+        let index = min(viewportPath.column.count - 1,
+                        Int(elapsed / viewportPath.duration * Double(viewportPath.column.count - 1)))
+        let current = column.layer.presentation()?.affineTransform().ty ?? column.transform.ty
+        let correction = current - max(viewportPath.column[index], minimumColumnOffset)
+        let correctionDuration = min(FocusHeroLayout.foregroundTransitionDuration, viewportPath.duration - elapsed)
+        let offsets = viewportPath.column.enumerated().map { index, offset in
+            let time = viewportPath.duration * Double(index) / Double(viewportPath.column.count - 1)
+            let remaining = max(0, 1 - max(0, time - elapsed) / correctionDuration)
+            return max(minimumColumnOffset, offset + correction * CGFloat(remaining))
+        }
+        installViewportPath(viewportPath, columnOffsets: offsets, clock: clock)
+    }
+
+    private func applyStationaryColumn() {
+        guard let rowHeight = columnFit?.rowHeight ?? height else { return }
+        let offset = max(FocusHeroLayout.columnOffset(rowHeight: rowHeight), minimumColumnOffset)
+        UIView.performWithoutAnimation {
+            column?.transform = CGAffineTransform(translationX: 0, y: offset)
+            let maskOffset = max(0, FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
+                                 - rowHeight - FocusHeroLayout.activeTitleLift - 6 - FocusHeroLayout.fadeBand)
+            mask?.transform = CGAffineTransform(translationX: 0, y: fittedMaskOffset(maskOffset, columnOffset: offset))
+        }
+    }
+
+    private func installViewportPath(_ path: ViewportPath, columnOffsets: [CGFloat], clock: CAKeyframeAnimation? = nil) {
+        func animate(_ view: UIView?, values: [CGFloat]) {
+            guard let view, let last = values.last else { return }
+            let current = view.layer.presentation()?.affineTransform().ty ?? view.transform.ty
+            view.layer.removeAnimation(forKey: Self.heightAnimationKey)
+            UIView.performWithoutAnimation { view.transform = CGAffineTransform(translationX: 0, y: last) }
+            guard values.contains(where: { abs($0 - current) > 0.01 }) else { return }
+            let animation = CAKeyframeAnimation(keyPath: "transform.translation.y")
+            animation.values = values
+            animation.duration = path.duration
+            animation.beginTime = clock?.beginTime ?? 0
+            animation.calculationMode = .linear
+            view.layer.add(animation, forKey: Self.heightAnimationKey)
+        }
+        animate(column, values: columnOffsets)
+        animate(mask, values: zip(path.mask, columnOffsets).map { fittedMaskOffset($0.0, columnOffset: $0.1) })
+    }
 
     @MainActor private struct RowSurface {
         weak var view: UIView?
@@ -771,22 +932,12 @@ final class FocusHeroRowMotion {
                 surface.motion.move(view, to: offset, animated: animated)
             }
         }
-        guard !animated, let height else { return }
-        let bottom = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
-        if let column {
-            column.layer.removeAnimation(forKey: Self.heightAnimationKey)
-            column.transform = CGAffineTransform(
-                translationX: 0,
-                y: max(FocusHeroLayout.lowestSlotTop, bottom - height) - FocusHeroLayout.lowestSlotTop
-            )
-        }
-        if let mask {
-            mask.layer.removeAnimation(forKey: Self.heightAnimationKey)
-            mask.transform = CGAffineTransform(
-                translationX: 0,
-                y: max(0, bottom - height - FocusHeroLayout.activeTitleLift - 6 - FocusHeroLayout.fadeBand)
-            )
-        }
+        guard !animated else { return }
+        viewportPath = nil
+        column?.layer.removeAnimation(forKey: Self.heightAnimationKey)
+        mask?.layer.removeAnimation(forKey: Self.heightAnimationKey)
+        applyColumnFit()
+        applyStationaryColumn()
     }
 
     func followViewport(from departure: CGFloat, to target: CGFloat, velocity: CGFloat) {
@@ -804,34 +955,30 @@ final class FocusHeroRowMotion {
             )
             return FocusHeroHeightStop.height(at: offset, in: heightStops)!
         }
-        func animate(_ view: UIView?, values: [CGFloat]) {
-            guard let view, let first = values.first, let last = values.last else { return }
+        func trajectory(_ view: UIView?, values: [CGFloat]) -> [CGFloat] {
+            guard let view, let first = values.first, let last = values.last else { return values }
             let current = view.layer.presentation()?.affineTransform().ty ?? view.transform.ty
-            view.layer.removeAnimation(forKey: Self.heightAnimationKey)
-            UIView.performWithoutAnimation {
-                view.transform = CGAffineTransform(translationX: 0, y: last)
-            }
-            guard values.contains(where: { abs($0 - current) > 0.01 }) else { return }
             let correction = current - first
-            let animation = CAKeyframeAnimation(keyPath: "transform.translation.y")
-            animation.values = values.enumerated().map { index, value in
+            return values.enumerated().map { index, value in
                 let elapsed = duration * Double(index) / Double(count)
                 return index == count ? last : value + correction
                     - timing.value(target: correction, initialVelocity: 0, time: elapsed)
             }
-            animation.duration = duration
-            animation.calculationMode = .linear
-            view.layer.add(animation, forKey: Self.heightAnimationKey)
         }
-        animate(column, values: heights.map {
-            max(FocusHeroLayout.lowestSlotTop, bottom - $0) - FocusHeroLayout.lowestSlotTop
+        let columnOffsets = trajectory(column, values: heights.map {
+            FocusHeroLayout.columnOffset(rowHeight: $0)
         })
-        animate(mask, values: heights.map {
+        let maskOffsets = trajectory(mask, values: heights.map {
             max(0, bottom - $0 - FocusHeroLayout.activeTitleLift - 6 - FocusHeroLayout.fadeBand)
         })
+        let path = ViewportPath(column: columnOffsets, mask: maskOffsets, duration: duration)
+        viewportPath = path
+        applyColumnFit()
+        installViewportPath(path, columnOffsets: columnOffsets.map { max($0, minimumColumnOffset) })
     }
 
     func stop() {
+        viewportPath = nil
         column?.layer.removeAnimation(forKey: Self.heightAnimationKey)
         mask?.layer.removeAnimation(forKey: Self.heightAnimationKey)
         for surface in rowSurfaces.values { surface.motion.stop() }
@@ -1125,30 +1272,74 @@ private struct FocusHeroBackdropLayer: View {
 
 // MARK: - Hero column
 
-private struct FocusHeroColumn: View {
+struct FocusHeroColumn: View {
     let model: FocusHeroModel
     let metadata: FocusHeroMetadata
     let enrich: FocusHeroMetadata.Enrich?
     let settings: HeroSettings
     let spoilerSettings: SpoilerSettings
     let navigationStyle: NavigationStyle
-    @State private var schedules = HeroScheduleLines()
+    let rows: [FocusHeroRow]
+    let minimumDetailsTop: CGFloat?
+    @State var schedules = HeroScheduleLines()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.plozzNavigationContentInset) private var navigationContentInset
+    @Environment(\.plozzAppTextScale) private var appTextScale
+    @Environment(\.focusHeroMinimumDetailsTop) private var navigationMinimumTop
+    @Environment(\.focusHeroVisibleDetailsTop) private var navigationVisibleTop
+    private var textScale: CGFloat { PlozzTypography.scale(local: settings.showcaseTextSize.scale, app: appTextScale) }
+    private var hasCustomSizing: Bool {
+        settings.showcaseLogoSize != .default || settings.showcaseTextSize != .default || appTextScale != 1
+    }
 
     var body: some View {
-        FocusHeroColumnMotion(content: column, model: model)
+        FocusHeroColumnMotion(
+            content: column.environment(\.metadataTextScale, textScale), model: model,
+            fit: hasCustomSizing ? FocusHeroColumnFit(
+                minimumTop: max(FocusHeroLayout.columnTop,
+                                navigationMinimumTop ?? minimumDetailsTop ?? FocusHeroLayout.columnTop(for: navigationStyle)),
+                leading: PlozzTheme.Metrics.heroLeadingPadding + navigationContentInset,
+                rowHeight: model.activeHeight(in: rows),
+                visibleTop: navigationVisibleTop
+            ) : nil
+        )
+            .task(id: model.subject?.item.map(FocusHeroMetadata.Key.init)) {
+                guard let enrich, let item = model.subject?.item else { return }
+                await metadata.load(item, using: enrich)
+            }
+            .task(id: schedules.fetchKey(for: model.subject?.item)) {
+                guard let item = model.subject?.item else { return }
+                await schedules.loadCached([item])
+                // Fetch only the title the viewer settles on.
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                await schedules.refreshFronted(item)
+            }
     }
 
     @ViewBuilder private var column: some View {
+        let navigationTop = hasCustomSizing ? navigationMinimumTop : navigationVisibleTop ?? navigationMinimumTop
+        if let minimumDetailsTop = navigationTop ?? minimumDetailsTop {
+            constrainedColumn(minimumTop: minimumDetailsTop)
+        } else {
+            standardColumn
+        }
+    }
+
+    private var standardColumn: some View {
         let top = FocusHeroLayout.columnTop(for: navigationStyle)
         let reference = FocusHeroLayout.lowestSlotTop
+        let badgeHeadroom: CGFloat = model.details?.item.map(HeroScheduleLines.canShowLine(for:)) == true
+            ? 36 * textScale + 16 : 0
         // A block of fixed height just above the pinned row, its content pinned
         // to the block's top: the logo holds one place from title to title, and a
         // longer description only reaches further down.
         // The footprint alone sets the block's size; the details are laid over
         // it, so no title can move where the logo sits.
-        FocusHeroDetailsFootprint()
+        return FocusHeroDetailsFootprint(
+            logoHeight: HeroLogoSizing.box(for: .showcase, size: settings.showcaseLogoSize).height,
+            textScale: textScale
+        )
             .hidden()
             .overlay(alignment: .topLeading) {
                 if let subject = model.details {
@@ -1161,6 +1352,9 @@ private struct FocusHeroColumn: View {
                 if model.detailsSwapWithRow { transaction.animation = nil }
             }
         .frame(width: FocusHeroLayout.columnWidth, alignment: .topLeading)
+        .padding(.top, badgeHeadroom)
+        .modifier(FocusHeroContentFit(motion: model.motion))
+        .padding(.top, -badgeHeadroom)
         // Keep Home's proposal around the complete block; framing the footprint
         // before its overlay would move the details into its unused space.
         .frame(height: FocusHeroLayout.detailsFootprintHeight, alignment: .bottomLeading)
@@ -1169,18 +1363,73 @@ private struct FocusHeroColumn: View {
         // The TV's safe area and the rail's inset, exactly as the classic hero.
         .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding + navigationContentInset)
         .allowsHitTesting(false)
-        .task(id: model.subject?.item.map(FocusHeroMetadata.Key.init)) {
-            guard let enrich, let item = model.subject?.item else { return }
-            await metadata.load(item, using: enrich)
+    }
+
+    private func constrainedColumn(minimumTop: CGFloat) -> some View {
+        let minimumTop = max(FocusHeroLayout.columnTop, minimumTop)
+        let motionOffset = FocusHeroLayout.columnOffset(rowHeight: model.activeHeight(in: rows))
+        let top = hasCustomSizing ? minimumTop - motionOffset : max(0, minimumTop - motionOffset)
+        let bottom = FocusHeroLayout.lowestSlotTop - FocusHeroLayout.columnGap
+        return Group {
+            if let item = model.details?.item {
+                let item = metadata.item(for: item)
+                let box = HeroLogoSizing.box(for: .showcase, size: settings.showcaseLogoSize)
+                Group {
+                    if hasCustomSizing {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if HeroScheduleLines.canShowLine(for: item) {
+                                HeroScheduleBadge(text: "Upcoming")
+                                    .lineLimit(1)
+                                    .hidden()
+                                    .accessibilityHidden(true)
+                                    .padding(.bottom, 16)
+                            }
+                            itemColumn(item, reservesLogoHeight: false)
+                        }
+                        .frame(width: FocusHeroLayout.columnWidth, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .modifier(FocusHeroContentFit(motion: model.motion))
+                        .frame(height: max(0, bottom - top), alignment: .bottomLeading)
+                    } else {
+                        defaultConstrainedColumn(item: item, box: box)
+                    }
+                }
+                .frame(width: FocusHeroLayout.columnWidth, height: max(0, bottom - top))
+                .id(model.details?.id)
+                .transition(.opacity)
+            }
         }
-        .task(id: schedules.fetchKey(for: model.subject?.item)) {
-            guard let item = model.subject?.item else { return }
-            await schedules.loadCached([item])
-            // Only the title the viewer settles on is fetched, not every card
-            // passed on the way.
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            await schedules.refreshFronted(item)
+        .transaction(value: model.details?.id) { transaction in
+            if model.detailsSwapWithRow { transaction.animation = nil }
+        }
+        .padding(.top, top)
+        .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding + navigationContentInset)
+        .allowsHitTesting(false)
+    }
+
+    private func defaultConstrainedColumn(item: MediaItem, box: CGSize) -> some View {
+        FocusHeroConstrainedDetailsLayout(logoHeight: box.height) {
+            if HeroScheduleLines.canShowLine(for: item) {
+                // Reserve the native badge height before its data arrives.
+                HeroScheduleBadge(text: "Upcoming")
+                    .lineLimit(1)
+                    .hidden()
+                    .accessibilityHidden(true)
+            } else {
+                Color.clear.frame(height: 0)
+            }
+            GeometryReader { geometry in
+                let scale = min(1, geometry.size.height / box.height)
+                itemLogo(item, box: CGSize(width: box.width * scale, height: box.height * scale))
+            }
+            ViewThatFits(in: .vertical) {
+                itemDetails(item, descriptionLines: 3)
+                    .fixedSize(horizontal: false, vertical: true)
+                itemDetails(item, descriptionLines: 1)
+                    .fixedSize(horizontal: false, vertical: true)
+                itemDetails(item, descriptionLines: 0)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -1192,25 +1441,25 @@ private struct FocusHeroColumn: View {
         case .liveChannel(let channel):
             VStack(alignment: .leading, spacing: 12) {
                 Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 23, weight: .semibold))
+                    .font(.system(size: PlozzTypography.heroMetadata.scaled(by: textScale).pointSize, weight: .semibold))
                 Text(verbatim: channel.name)
-                    .font(.system(size: 64, weight: .bold))
+                    .font(.system(size: PlozzTypography.heroFallbackTitle.scaled(by: textScale).pointSize, weight: .bold))
                     .lineLimit(2)
                     .minimumScaleFactor(0.5)
                 Text(verbatim: channel.sourceName)
-                    .font(.system(size: 23, weight: .medium))
+                    .font(.system(size: PlozzTypography.heroMetadata.scaled(by: textScale).pointSize, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             .modifier(HeroTextLegibilityShadow(colorScheme: colorScheme))
         case .library(let library):
             VStack(alignment: .leading, spacing: 12) {
                 library.library.displayName
-                    .font(.system(size: 64, weight: .bold))
+                    .font(.system(size: PlozzTypography.heroFallbackTitle.scaled(by: textScale).pointSize, weight: .bold))
                     .lineLimit(2)
                     .minimumScaleFactor(0.5)
                 if !library.serverName.isEmpty {
                     Text(verbatim: library.serverName)
-                        .font(.system(size: 23, weight: .medium))
+                        .font(.system(size: PlozzTypography.heroMetadata.scaled(by: textScale).pointSize, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -1218,57 +1467,68 @@ private struct FocusHeroColumn: View {
         }
     }
 
-    private func itemColumn(_ item: MediaItem) -> some View {
-        let hideText = spoilerSettings.shouldHideText(for: item)
-        // Details show once, complete: a row's own record is sparser than what
-        // replaces it, so showing it first would change the text under the viewer.
-        let detailed = enrich == nil || metadata.hasDetails(for: item)
+    private func itemColumn(_ item: MediaItem, reservesLogoHeight: Bool = true) -> some View {
+        let logoBox = HeroLogoSizing.box(for: .showcase, size: settings.showcaseLogoSize)
         return VStack(alignment: .leading, spacing: 12) {
-            HeroLogoArtwork(
-                references: item.artworkReferences(for: .logo),
-                asyncFallbackURL: HomeHeroArtwork.logoFallback(for: item),
-                displayedArtworkID: model.details?.id,
-                maxWidth: FocusHeroLayout.logoBox.width,
-                maxHeight: FocusHeroLayout.logoBox.height,
-                constrainsToBounds: true,
-                presentationPolicy: FocusHeroLayout.logoPresentationPolicy
-            ) {
-                title(for: item, hideText: hideText)
-                    .font(.system(size: 64, weight: .bold))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.5)
-                    .multilineTextAlignment(.leading)
-            }
-            .accessibilityIdentifier("showcase-title-logo")
-            // Every logo and title sits on the same line, whatever its shape.
-            .frame(height: FocusHeroLayout.logoBox.height, alignment: .bottomLeading)
-            // Above the logo, as on the classic hero, in the free space over the
-            // block: it takes no room, so nothing below it moves.
-            .overlay(alignment: .topLeading) {
-                if let scheduleLine = schedules.line(for: item) {
-                    HeroScheduleBadge(text: scheduleLine)
-                        .accessibilityIdentifier("showcase-schedule")
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 16)
-                        .frame(height: 0, alignment: .bottomLeading)
-                }
-            }
-            .padding(.bottom, 6)
+            itemLogo(item, box: logoBox, reservesHeight: reservesLogoHeight)
+                .padding(.bottom, 6)
+            itemDetails(item)
+        }
+    }
 
+    private func itemLogo(_ item: MediaItem, box: CGSize, reservesHeight: Bool = true) -> some View {
+        HeroLogoArtwork(
+            references: item.artworkReferences(for: .logo),
+            asyncFallbackURL: HomeHeroArtwork.logoFallback(for: item),
+            displayedArtworkID: model.details?.id,
+            maxWidth: box.width,
+            maxHeight: box.height,
+            constrainsToBounds: true,
+            presentationPolicy: FocusHeroLayout.logoPresentationPolicy,
+            haloStyle: .showcase
+        ) {
+            title(for: item, hideText: spoilerSettings.shouldHideText(for: item))
+                .font(.system(size: PlozzTypography.heroFallbackTitle.scaled(by: textScale).pointSize, weight: .bold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.5)
+                .multilineTextAlignment(.leading)
+        }
+        .accessibilityIdentifier("showcase-title-logo")
+        .overlay(alignment: .topLeading) {
+            if let line = schedules.line(for: item) {
+                HeroScheduleBadge(text: line)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .accessibilityIdentifier("showcase-schedule")
+                    .frame(width: FocusHeroLayout.columnWidth, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 16)
+                    .frame(height: 0, alignment: .bottomLeading)
+            }
+        }
+        // Home keeps a stable logo baseline. Custom Recommended fits the
+        // actual artwork height instead of charging for empty box space.
+        .frame(height: reservesHeight ? box.height : nil, alignment: .bottomLeading)
+    }
+
+    @ViewBuilder private func itemDetails(_ item: MediaItem, descriptionLines: Int = 3) -> some View {
+        let hideText = spoilerSettings.shouldHideText(for: item)
+        let detailed = enrich == nil || metadata.hasDetails(for: item)
+        VStack(alignment: .leading, spacing: 12) {
             if detailed {
                 HeroMetadataLine(item: item)
                     .modifier(HeroTextLegibilityShadow(colorScheme: colorScheme))
 
                 let ratings = ratingsRow(for: item)
                 let showsRatings = ratings.map { !$0.ratings.isEmpty || $0.age != nil } ?? false
-                if !hideText, let description = item.tagline ?? item.overview {
+                if descriptionLines > 0, !hideText, let description = item.tagline ?? item.overview {
                     // The ratings row takes the room of two description lines.
                     Text(description.overviewPlainText)
                         .accessibilityIdentifier("showcase-description")
-                        .font(.system(size: 22))
+                        .font(.system(size: PlozzTypography.heroDescription.scaled(by: textScale).pointSize))
                         .foregroundStyle(.primary)
-                        .lineSpacing(2)
-                        .lineLimit(showsRatings ? 1 : 3)
+                        .lineSpacing(PlozzTypography.heroDescription.scaled(by: textScale).lineSpacing)
+                        .lineLimit(showsRatings ? 1 : descriptionLines)
                         .frame(maxWidth: 820, alignment: .topLeading)
                         .modifier(HeroTextLegibilityShadow(colorScheme: colorScheme))
                 }
@@ -1308,12 +1568,53 @@ private struct FocusHeroColumn: View {
     }
 }
 
+struct FocusHeroContentFit: ViewModifier {
+    let motion: FocusHeroRowMotion
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGFloat.self) { geometry in
+            geometry.size.height
+        } action: { height in
+            motion.recordColumnContentHeight(height)
+        }
+    }
+}
+
+/// Reserve badge headroom independently of loading, trim description lines first,
+/// then constrain the logo before it can overlap library navigation.
+private struct FocusHeroConstrainedDetailsLayout: Layout {
+    let logoHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? FocusHeroLayout.columnWidth, height: proposal.height ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let badge = subviews[0].sizeThatFits(.init(width: bounds.width, height: nil))
+        let badgeGap: CGFloat = badge.height > 0 ? 16 : 0
+        let detailsGap: CGFloat = 18
+        let details = subviews[2].sizeThatFits(.init(
+            width: bounds.width,
+            height: max(0, bounds.height - badge.height - badgeGap - logoHeight - detailsGap)
+        ))
+        let height = min(logoHeight, max(0, bounds.height - badge.height - badgeGap - details.height - detailsGap))
+        var y = bounds.maxY - badge.height - badgeGap - height - detailsGap - details.height
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: y), proposal: .init(badge))
+        y += badge.height + badgeGap
+        subviews[1].place(at: CGPoint(x: bounds.minX, y: y), proposal: .init(width: bounds.width, height: height))
+        y += height + detailsGap
+        subviews[2].place(at: CGPoint(x: bounds.minX, y: y), proposal: .init(width: bounds.width, height: details.height))
+    }
+}
+
 struct FocusHeroColumnMotion<Content: View>: View {
     let content: Content
     let model: FocusHeroModel
+    var fit: FocusHeroColumnFit? = nil
 
     var body: some View {
-        FocusHeroMotionSurface(content: content, motion: model.motion, kind: .column)
+        FocusHeroMotionSurface(content: content, motion: model.motion, kind: .column, columnFit: fit)
             .accessibilityElement(children: .contain)
     }
 }
@@ -1371,12 +1672,14 @@ private struct FocusHeroMotionSurface<Content: View>: UIViewControllerRepresenta
     let content: Content
     let motion: FocusHeroRowMotion
     let kind: Kind
+    var columnFit: FocusHeroColumnFit? = nil
 
     func makeUIViewController(context: Context) -> Controller {
-        Controller(content: hostedContent(environment: context.environment), motion: motion, kind: kind)
+        Controller(content: hostedContent(environment: context.environment), motion: motion, kind: kind, columnFit: columnFit)
     }
 
     func updateUIViewController(_ controller: Controller, context: Context) {
+        if kind == .column { motion.configureColumnFit(columnFit) }
         controller.host.rootView = hostedContent(environment: context.environment)
     }
 
@@ -1421,13 +1724,15 @@ private struct FocusHeroMotionSurface<Content: View>: UIViewControllerRepresenta
         private let maskView = UIView()
         private let fade = CAGradientLayer()
         private let solid = CALayer()
+        private let columnContainer = UIView()
 
-        init(content: AnyView, motion: FocusHeroRowMotion, kind: Kind) {
+        init(content: AnyView, motion: FocusHeroRowMotion, kind: Kind, columnFit: FocusHeroColumnFit?) {
             host = UIHostingController(rootView: content)
             host.safeAreaRegions = []
             self.motion = motion
             self.kind = kind
             super.init(nibName: nil, bundle: nil)
+            if kind == .column { motion.configureColumnFit(columnFit) }
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1437,11 +1742,17 @@ private struct FocusHeroMotionSurface<Content: View>: UIViewControllerRepresenta
             view.backgroundColor = .clear
             host.view.backgroundColor = .clear
             addChild(host)
-            view.addSubview(host.view)
+            if kind == .column {
+                view.addSubview(columnContainer)
+                columnContainer.addSubview(host.view)
+            } else {
+                view.addSubview(host.view)
+            }
             host.didMove(toParent: self)
             switch kind {
             case .column:
-                motion.column = host.view
+                motion.column = columnContainer
+                motion.columnContent = host.view
             case .row(let id):
                 motion.bindRow(id, view: host.view)
                 return
@@ -1466,8 +1777,13 @@ private struct FocusHeroMotionSurface<Content: View>: UIViewControllerRepresenta
 
         override func viewDidLayoutSubviews() {
             super.viewDidLayoutSubviews()
+            if kind == .column {
+                columnContainer.bounds = CGRect(origin: .zero, size: view.bounds.size)
+                columnContainer.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+            }
             host.view.bounds = CGRect(origin: .zero, size: view.bounds.size)
             host.view.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+            if kind == .column { motion.applyColumnFit() }
             guard kind == .mask else { return }
             let overhang = FocusHeroLayout.maskHorizontalOverhang
             let size = CGSize(width: view.bounds.width + overhang * 2,

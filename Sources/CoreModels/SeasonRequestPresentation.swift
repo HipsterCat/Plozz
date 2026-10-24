@@ -18,7 +18,8 @@ public struct SeasonRequestPresentation: Equatable, Sendable {
         let seasons = availability.canonicalNumberedSeasons
         let pending = seasons.filter { $0.effectiveRequestStatus == .pending }
         let awaitingRelease = seasons.filter {
-            availability.downloadProgress == nil && $0.isAwaitingRelease(now: now, calendar: calendar)
+            availability.downloadProgress == nil && !availability.hasDownloadActivity
+                && $0.isAwaitingRelease(now: now, calendar: calendar)
         }
         let awaitingNumbers = Set(awaitingRelease.map(\.number))
         let processing = seasons.filter {

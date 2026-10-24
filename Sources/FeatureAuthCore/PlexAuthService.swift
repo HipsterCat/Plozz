@@ -21,6 +21,7 @@ public struct PlexAuthService: Sendable {
 
     private let deviceID: String
     private let http: HTTPClient
+    private let probeHTTP: HTTPClient
     private let config: Configuration
     private let now: @Sendable () -> Date
     private let sleep: @Sendable (TimeInterval) async throws -> Void
@@ -28,12 +29,14 @@ public struct PlexAuthService: Sendable {
     public init(
         deviceID: String,
         http: HTTPClient = URLSessionHTTPClient(),
+        probeHTTP: HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
         config: Configuration = Configuration(),
         now: @escaping @Sendable () -> Date = { Date() },
         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
     ) {
         self.deviceID = deviceID
         self.http = http
+        self.probeHTTP = probeHTTP
         self.config = config
         self.now = now
         self.sleep = sleep
@@ -45,7 +48,10 @@ public struct PlexAuthService: Sendable {
     public var pollInterval: TimeInterval { config.pollInterval }
 
     private var client: PlexAuthClient {
-        PlexAuthClient(deviceProfile: PlexDeviceProfile(clientIdentifier: deviceID), http: http)
+        PlexAuthClient(
+            deviceProfile: PlexDeviceProfile(clientIdentifier: deviceID),
+            http: http, probeHTTP: probeHTTP
+        )
     }
 
     /// Issues either a short manual-entry PIN or the strong challenge required

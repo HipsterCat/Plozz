@@ -75,4 +75,66 @@ final class HeroBackgroundSettingsTests: XCTestCase {
             .themeMusic
         )
     }
+
+    func testSilentThemeMusicMigrationPreservesModesInEitherLoadOrder() throws {
+        for mode in HeroBackgroundMode.allCases {
+            for themeLoadsFirst in [false, true] {
+                let suite = "HeroBackgroundSettingsTests.\(UUID().uuidString)"
+                let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+                defer { defaults.removePersistentDomain(forName: suite) }
+                let backgroundStore = HeroBackgroundSettingsStore(defaults: defaults)
+                let musicStore = ThemeMusicSettingsStore(defaults: defaults)
+                var expected = HeroBackgroundSettings(
+                    homeTrailerEnabled: false, homeTrailerMuted: false,
+                    detailMode: mode, detailTrailerMuted: false
+                )
+                backgroundStore.save(expected)
+                musicStore.save(ThemeMusicSettings(isEnabled: true, volume: .off))
+
+                if themeLoadsFirst {
+                    XCTAssertEqual(musicStore.load(), .default)
+                } else {
+                    _ = backgroundStore.load()
+                }
+                if mode == .themeMusic { expected.detailMode = .off }
+                XCTAssertEqual(backgroundStore.load(), expected)
+                XCTAssertEqual(musicStore.load(), .default)
+                XCTAssertEqual(
+                    try JSONDecoder().decode(
+                        HeroBackgroundSettings.self,
+                        from: XCTUnwrap(defaults.data(forKey: "com.plozz.heroBackgroundSettings"))
+                    ),
+                    expected
+                )
+
+                expected.detailMode = .themeMusic
+                backgroundStore.save(expected)
+                XCTAssertEqual(backgroundStore.load(), expected, "A later explicit opt-in must persist.")
+                XCTAssertEqual(musicStore.load().volume, .low)
+            }
+        }
+    }
+
+    func testLegacySilentOptInMigratesOnlyItsOwnProfile() throws {
+        let suite = "HeroBackgroundSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let music = ThemeMusicSettingsStore(defaults: defaults)
+        let otherMusic = ThemeMusicSettingsStore(defaults: defaults, namespace: "other")
+        let background = HeroBackgroundSettingsStore(defaults: defaults)
+        let otherBackground = HeroBackgroundSettingsStore(defaults: defaults, namespace: "other")
+        music.save(ThemeMusicSettings(isEnabled: true, volume: .off))
+        otherMusic.save(ThemeMusicSettings(isEnabled: true, volume: .high))
+
+        XCTAssertEqual(music.load(), .default)
+        XCTAssertEqual(background.load().detailMode, .off)
+        XCTAssertEqual(otherMusic.load(), ThemeMusicSettings(isEnabled: true, volume: .high))
+        XCTAssertEqual(otherBackground.load().detailMode, .themeMusic)
+
+        otherMusic.save(ThemeMusicSettings(isEnabled: true, volume: .off))
+        XCTAssertEqual(otherBackground.load().detailMode, .off)
+        XCTAssertEqual(otherMusic.load(), .default)
+        XCTAssertEqual(background.load().detailMode, .off)
+        XCTAssertEqual(music.load(), .default)
+    }
 }

@@ -91,9 +91,9 @@ let package = Package(
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
         // See docs/playback-engines.md for integration and fork corrections.
         //
-        // Pinned to the playback-corrected fork at
-        // deb90eb3f740fe1ddda74301a64e3937e480877d, integrating upstream main
-        // 3721cec573478bf82bc5056417f13b76d644517b (7.42.0 plus unreleased changes).
+        // Pinned to the playback-corrected fork integrating upstream 7.47.0
+        // (a1a70cd63c1fef89cffcf0e8110456807d0fab05). This retains Plozz's
+        // AAC timing, ASS duration and dynamic-linking corrections.
         //
         // Everything the old `plozz-pin-*` stack existed for is upstream
         // as of 5.23.2:
@@ -120,7 +120,7 @@ let package = Package(
         // claimed over a playhead with nothing resident ahead of it). 5.23.7 bounds
         // the anchor to the fetch sequence and falls back to the playhead outside
         // it. Never take 5.23.4 without 5.23.7.
-        // Tracking upstream releases directly is now strictly better than the fork.
+        // Later fork-only corrections are retained below.
         //
         // Still pinned by exact SHA rather than a version range: the engine is the
         // playback path, so a bump is a deliberate, device-tested change.
@@ -233,14 +233,9 @@ let package = Package(
         // a decoded end nor a source duration are not given a synthetic five-second
         // life.
         //
-        // The current fork retains that correction and exports the engine dynamically:
-        // LibDovi and LibTrueHD's Rust unwind personalities must stay separate
-        // from the host's Objective-C/C++ stack. Upstream 7.44.0 uses FFmpegBuild
-        // 3.9.x for DTS:X heights, removing LibDTSX from the dependency graph.
-        // LibDovi stays at 2.1.x and LibTrueHD at 3.0.x.
-        // Explicit traits preserve the formerly compiled-in features; the
-        // measurement-only TrueHDReferenceRender trait must remain excluded.
-        // Plozz opts tvOS 26+ on-demand playback into TrueHD Atmos and DTS:X rendering.
+        // The current fork retains that correction and exports the engine dynamically.
+        // Enable production spatial conversion, never the measurement-only
+        // TrueHDReferenceRender. Runtime eligibility and profile choice still apply.
         // Progressive segment delivery remains off.
         // Both apps embed the engine framework and its dependency notices.
         //
@@ -252,15 +247,16 @@ let package = Package(
         // bridge; the engine's legacy SMB URL product is not linked.
         .package(
             url: "https://github.com/brandomoore/AetherEngine",
-            revision: "86af70ddfe7bcde27e06356dc7aa81e8997d43c4",
+            revision: "5fe2d42d68524dcfbcfacf07cbefe5b28b618155",
             traits: [
                 "TrueHDObjectAudio", "DTSXObjectAudio",
                 "DualLayerDolbyVision", "DolbyVisionStillReshaping",
             ]
         ),
-        // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only), LibDovi (Dolby Vision
-        // RPU parser) and LibTrueHD are transitive dependencies — AetherEngine
-        // declares and consumes them. The retired hybrid-engine target needed
+        // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only) and LibDovi (Dolby Vision
+        // RPU parser) are transitive dependencies — AetherEngine declares and
+        // consumes them, along with LibTrueHD for TrueHDObjectAudio.
+        // The retired hybrid-engine target needed
         // direct FFmpegBuild/LibDovi declarations; current Plozz targets do not
         // consume those products. AetherEngine owns their version alignment.
 
@@ -290,7 +286,9 @@ let package = Package(
         // upstream as kishikawakatsumi/SMBClient#234; switch back to
         //   .package(url: "https://github.com/kishikawakatsumi/SMBClient", from: "0.3.1"),
         // once that lands.
-        .package(url: "https://github.com/thatcube/SMBClient.git", revision: "2c383ad5e5a7b3063160f6a0d00190c57e295cc3"),
+        // This pin also consumes connection completion once across queued
+        // network-state callbacks, including failure after a successful connect.
+        .package(url: "https://github.com/thatcube/SMBClient.git", revision: "5d5bceb6fa0833c98b0eecc676609c9476bd9423"),
 
         // swift-nio-ssh — Apple's pure-Swift SSH protocol implementation
         // (Apache-2.0), used ONLY by the isolated **MediaTransportSFTP** adapter.
@@ -1213,7 +1211,8 @@ let package = Package(
                 "TestSupportNetworking",
                 "TestSupportPerformance",
                 .product(name: "AetherEngine", package: "AetherEngine"),
-            ]
+            ],
+            resources: [.copy("Fixtures")]
         ),
     ],
     // Pin Swift 5 language mode: bumping tools-version to 6.0 (required for the

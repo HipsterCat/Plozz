@@ -37,6 +37,7 @@ public typealias HeroTrailerResolving = @Sendable (MediaItem) async -> HeroTrail
 public enum HeroTrailerSurfaceRole: Sendable, Equatable {
     case home
     case detail
+    case featured
 }
 
 /// Shared, app-level owner of the **hero trailer** — one muted (by default)
@@ -70,6 +71,8 @@ public final class HeroTrailerController {
     public private(set) var isMuted = true
     public private(set) var pauseStartedAt: Date?
     public private(set) var activeSurfaceRole: HeroTrailerSurfaceRole?
+    public private(set) var featuredOwnerID: UUID?
+    public var isFeaturedReserved: Bool { featuredOwnerID != nil }
     /// The resolved trailer duration in seconds once known (`0` until ready).
     /// Drives the hero's dwell length so the progress bar spans the full trailer.
     public private(set) var duration: TimeInterval = 0
@@ -86,6 +89,7 @@ public final class HeroTrailerController {
     /// pre-rendered invisibly on Home; Home's remains warm under the pop.
     @ObservationIgnored fileprivate let homeSurfaceView = HeroTrailerPlayerSurfaceView()
     @ObservationIgnored fileprivate let detailSurfaceView = HeroTrailerPlayerSurfaceView()
+    @ObservationIgnored fileprivate let featuredSurfaceView = HeroTrailerPlayerSurfaceView()
     #endif
 
     /// Fired on the main actor when the current trailer plays through to its end,
@@ -98,6 +102,7 @@ public final class HeroTrailerController {
     private var hasStartedPlayback = false
     private var autoplayWhenReady = false
     private var requestedPaused = false
+    @ObservationIgnored private var suspendedHeroPause: Bool?
     private var playbackOwners = Set<UUID>()
     public var isPlaybackSuppressed: Bool { !playbackOwners.isEmpty }
     private var captionSelectionTask: Task<Void, Never>?
@@ -112,6 +117,7 @@ public final class HeroTrailerController {
         #if canImport(UIKit)
         homeSurfaceView.playerLayer.player = player
         detailSurfaceView.playerLayer.player = player
+        featuredSurfaceView.playerLayer.player = player
         observeAppLifecycle()
         #endif
     }
@@ -136,7 +142,7 @@ public final class HeroTrailerController {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.isPlaying || self.currentItemID != nil else {
+                guard let self, self.isPlaying || self.currentItemID != nil || self.isFeaturedReserved else {
                     return
                 }
                 self.stop()
@@ -164,6 +170,7 @@ public final class HeroTrailerController {
     /// Marks the frontmost renderer. Touch surfaces use this to keep a Home →
     /// detail handoff alive while still stopping playback when Home truly leaves.
     public func claimSurface(_ role: HeroTrailerSurfaceRole, itemID: String) {
+        guard !isFeaturedReserved || role == .featured else { return }
         guard currentItemID == nil || currentItemID == itemID else { return }
         activeSurfaceRole = role
     }
@@ -183,6 +190,7 @@ public final class HeroTrailerController {
         ownerID: String,
         _ handler: @escaping @MainActor () -> Void
     ) {
+        guard !isFeaturedReserved else { return }
         endHandlerOwnerID = ownerID
         endHandler = handler
     }
@@ -196,9 +204,9 @@ public final class HeroTrailerController {
     /// Loads and plays `resolvedURL` as the trailer for `itemID`. No-op (keeps
     /// playing) if the same item is already showing. `muted` follows the profile's
     /// trailer-audio preference.
-    public func play(itemID: String, resolvedURL: URL, muted: Bool) {
-        guard !isPlaybackSuppressed else { return }
-        prepare(itemID: itemID, resolvedURL: resolvedURL, muted: muted)
+    public func play(itemID: String, resolvedURL: URL, muted: Bool, featuredOwner: UUID? = nil) {
+        guard !isPlaybackSuppressed, featuredOwnerID == featuredOwner else { return }
+        prepare(itemID: itemID, resolvedURL: resolvedURL, muted: muted, featuredOwner: featuredOwner)
         autoplayWhenReady = true
         beginPlaybackIfReady()
     }
@@ -206,8 +214,8 @@ public final class HeroTrailerController {
     /// Queues and preloads a trailer without starting it. Home uses this to make
     /// the item ready behind the still image, then starts one exact 3s+duration
     /// timeline only after readiness is known.
-    public func prepare(itemID: String, resolvedURL: URL, muted: Bool) {
-        guard !isPlaybackSuppressed else { return }
+    public func prepare(itemID: String, resolvedURL: URL, muted: Bool, featuredOwner: UUID? = nil) {
+        guard !isPlaybackSuppressed, featuredOwnerID == featuredOwner else { return }
         if currentItemID == itemID, player.currentItem != nil {
             player.isMuted = muted
             isMuted = muted
@@ -244,15 +252,16 @@ public final class HeroTrailerController {
     }
 
     /// Starts a previously prepared item (or arms it to start when ready).
-    public func startPrepared() {
-        guard !isPlaybackSuppressed else { return }
+    public func startPrepared(featuredOwner: UUID? = nil) {
+        guard !isPlaybackSuppressed, featuredOwnerID == featuredOwner else { return }
         autoplayWhenReady = true
         beginPlaybackIfReady()
     }
 
     /// Applies a live mute change (e.g. the user flips the muted toggle) without
     /// reloading.
-    public func setMuted(_ muted: Bool) {
+    public func setMuted(_ muted: Bool, featuredOwner: UUID? = nil) {
+        guard featuredOwnerID == featuredOwner else { return }
         player.isMuted = muted
         isMuted = muted
     }
@@ -311,7 +320,12 @@ public final class HeroTrailerController {
     /// Freezes/resumes the ambient trailer in lockstep with the hero's
     /// auto-advance pause so the wall-clock progress gauge and picture never
     /// drift apart during remote interaction or recede.
-    public func setPaused(_ paused: Bool) {
+    public func setPaused(_ paused: Bool, featuredOwner: UUID? = nil) {
+        if isFeaturedReserved, featuredOwner == nil {
+            suspendedHeroPause = paused
+            return
+        }
+        guard featuredOwnerID == featuredOwner else { return }
         requestedPaused = paused
         applyPauseState()
     }
@@ -348,10 +362,39 @@ public final class HeroTrailerController {
     /// Stops playback and releases the item. Called on navigate-away / advance /
     /// mode-off so the single player never lingers.
     public func stop() {
+        featuredOwnerID = nil
+        suspendedHeroPause = nil
         guard isPlaying || currentItemID != nil else { return }
         HandoffDiagnostics.emit("trailer STOP item=\(HandoffDiagnostics.correlationID(currentItemID)) owner=\(HandoffDiagnostics.correlationID(endHandlerOwnerID))")
         stopPlayback(resetItem: true)
         PlozzLog.app.info("Hero trailer: stopped")
+    }
+
+    /// A receded Home hero must not stop a focused card's reservation, including
+    /// while that card is still resolving its trailer.
+    public func stopHero() {
+        guard !isFeaturedReserved else { return }
+        stop()
+    }
+
+    public func reserveFeaturedSurface(owner: UUID) -> Bool {
+        guard !isPlaybackSuppressed else { return false }
+        if featuredOwnerID == owner { return true }
+        let heroPause = suspendedHeroPause ?? requestedPaused
+        stop()
+        endHandlerOwnerID = nil
+        endHandler = nil
+        featuredOwnerID = owner
+        suspendedHeroPause = heroPause
+        setPaused(false, featuredOwner: owner)
+        return true
+    }
+
+    public func releaseFeaturedSurface(owner: UUID) {
+        guard featuredOwnerID == owner else { return }
+        let heroPause = suspendedHeroPause ?? false
+        stop()
+        setPaused(heroPause)
     }
 
     /// Stops only if the currently-loaded item is `itemID` (a scoped teardown so a
@@ -508,6 +551,7 @@ public struct HeroTrailerVideoLayer: UIViewRepresentable {
         switch role {
         case .home: controller.homeSurfaceView
         case .detail: controller.detailSurfaceView
+        case .featured: controller.featuredSurfaceView
         }
     }
 

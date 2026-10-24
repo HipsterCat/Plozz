@@ -1,0 +1,4 @@
+# GitHub's preview image is not yet in actionlint's built-in runner labels.
+self-hosted-runner:
+  labels:
+    - xcode-27

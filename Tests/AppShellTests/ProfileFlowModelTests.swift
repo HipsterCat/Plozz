@@ -380,26 +380,28 @@ extension ProfileFlowModelTests {
         XCTAssertEqual(profiles.activeProfileID, original, "the switch must not happen before the PIN")
     }
 
-    func testCorrectPINCompletesTheSwitch() {
+    func testCorrectPINCompletesTheSwitch() async {
         let (model, profiles) = makeModel()
         let original = profiles.activeProfileID
         let locked = addLockedProfile(profiles)
         model.switchProfile(to: original)
 
         model.switchProfile(to: locked.id)
-        XCTAssertTrue(model.submitProfileLockPIN("4821"))
+        let accepted = await model.submitProfileLockPIN("4821")
+        XCTAssertTrue(accepted)
         XCTAssertNil(model.pendingLockedProfile)
         XCTAssertEqual(profiles.activeProfileID, locked.id)
     }
 
-    func testWrongPINKeepsThePromptUpAndDoesNotSwitch() {
+    func testWrongPINKeepsThePromptUpAndDoesNotSwitch() async {
         let (model, profiles) = makeModel()
         let original = profiles.activeProfileID
         let locked = addLockedProfile(profiles)
         model.switchProfile(to: original)
 
         model.switchProfile(to: locked.id)
-        XCTAssertFalse(model.submitProfileLockPIN("0000"))
+        let accepted = await model.submitProfileLockPIN("0000")
+        XCTAssertFalse(accepted)
         XCTAssertNotNil(model.pendingLockedProfile)
         XCTAssertNotNil(model.profileLockError)
         XCTAssertEqual(profiles.activeProfileID, original)
@@ -417,31 +419,34 @@ extension ProfileFlowModelTests {
         XCTAssertEqual(profiles.activeProfileID, original)
     }
 
-    /// Having proved the PIN once, hopping back shouldn't re-ask for the rest of
-    /// the run — but only for that profile.
-    func testUnlockIsRememberedForTheRunPerProfile() {
+    func testSwitchingAwayRevokesLocalPINProof() async {
         let (model, profiles) = makeModel()
         let original = profiles.activeProfileID
         let locked = addLockedProfile(profiles)
         model.switchProfile(to: original)
 
         model.switchProfile(to: locked.id)
-        XCTAssertTrue(model.submitProfileLockPIN("4821"))
+        let accepted = await model.submitProfileLockPIN("4821")
+        XCTAssertTrue(accepted)
+        model.switchProfile(to: locked.id)
+        XCTAssertNil(model.pendingLockedProfile, "Remaining in the same activation preserves proof.")
 
         model.switchProfile(to: original)
+        XCTAssertFalse(model.isUnlockedThisRun(locked.id))
         model.switchProfile(to: locked.id)
-        XCTAssertNil(model.pendingLockedProfile, "already proved this run")
-        XCTAssertEqual(profiles.activeProfileID, locked.id)
+        XCTAssertEqual(model.pendingLockedProfile?.id, locked.id)
+        XCTAssertEqual(profiles.activeProfileID, original)
     }
 
-    func testChangingThePINRevokesTheRunUnlock() {
+    func testChangingThePINRevokesTheRunUnlock() async {
         let (model, profiles) = makeModel()
         let original = profiles.activeProfileID
         var locked = addLockedProfile(profiles)
         model.switchProfile(to: original)
 
         model.switchProfile(to: locked.id)
-        XCTAssertTrue(model.submitProfileLockPIN("4821"))
+        let accepted = await model.submitProfileLockPIN("4821")
+        XCTAssertTrue(accepted)
 
         // Simulate Settings changing the PIN.
         locked.lock = Self.lock(pin: "9999")
@@ -451,8 +456,46 @@ extension ProfileFlowModelTests {
         model.switchProfile(to: original)
         model.switchProfile(to: locked.id)
         XCTAssertEqual(model.pendingLockedProfile?.id, locked.id, "a new PIN must be proved again")
-        XCTAssertFalse(model.submitProfileLockPIN("4821"), "the old PIN must not work")
-        XCTAssertTrue(model.submitProfileLockPIN("9999"))
+        let oldAccepted = await model.submitProfileLockPIN("4821")
+        XCTAssertFalse(oldAccepted, "the old PIN must not work")
+        let newAccepted = await model.submitProfileLockPIN("9999")
+        XCTAssertTrue(newAccepted)
+    }
+
+    func testInvoluntarySwitchRevokesPreviouslyProvedFallback() async {
+        let (model, profiles) = makeModel()
+        let original = profiles.activeProfileID
+        let locked = addLockedProfile(profiles)
+        model.switchProfile(to: locked.id)
+        let accepted = await model.submitProfileLockPIN("4821")
+        XCTAssertTrue(accepted)
+        profiles.select(original)
+        profiles.select(locked.id)
+        XCTAssertTrue(model.enforceLockOnActiveProfile())
+        XCTAssertTrue(model.activeProfileAwaitsUnlock)
+    }
+
+    func testCancellationDuringVerificationCannotUnlockAReplacementPrompt() async throws {
+        let (model, profiles) = makeModel()
+        let original = profiles.activeProfileID
+        var locked = addLockedProfile(profiles)
+        locked.lock = try XCTUnwrap(ProfileLock.make(pin: "4821"))
+        profiles.update(locked)
+        model.switchProfile(to: original)
+        model.switchProfile(to: locked.id)
+        let started = expectation(description: "Verification started")
+        let attempt = Task {
+            started.fulfill()
+            return await model.submitProfileLockPIN("4821")
+        }
+        await fulfillment(of: [started], timeout: 2)
+        model.cancelProfileLockPrompt()
+        model.switchProfile(to: locked.id)
+        let accepted = await attempt.value
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(profiles.activeProfileID, original)
+        XCTAssertEqual(model.pendingLockedProfile?.id, locked.id)
+        XCTAssertFalse(model.isUnlockedThisRun(locked.id))
     }
 
     /// Regression: deleting your own profile used to drop you straight into the

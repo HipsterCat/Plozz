@@ -43,7 +43,7 @@ public struct DetailOpenEnvironment {
     public let detailMetadataResolver: @Sendable (MediaItem) async -> MetadataEnrichment
     /// Refreshes a discovery (Seerr) title's request/availability. `nil` when Seerr
     /// isn't wired.
-    public let discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)?
+    public let discoveryStatusRefresh: (@Sendable (MediaItem) async -> MediaRequestAvailability?)?
     /// Loads a series season's complete canonical episode metadata roster.
     /// `nil` leaves roster-backed season coverage unavailable.
     public let loadSeasonEpisodeRoster:
@@ -64,7 +64,7 @@ public struct DetailOpenEnvironment {
         continueWatchingSnapshot: @escaping @MainActor () -> [MediaItem] = { [] },
         ratingsProvider: any ExternalRatingsProviding = DisabledRatingsProvider(),
         detailMetadataResolver: @escaping @Sendable (MediaItem) async -> MetadataEnrichment = { _ in MetadataEnrichment() },
-        discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)? = nil,
+        discoveryStatusRefresh: (@Sendable (MediaItem) async -> MediaRequestAvailability?)? = nil,
         loadSeasonEpisodeRoster:
             (@Sendable (MediaItem, Int) async -> SeasonEpisodeRosterResult)? = nil,
         makeRelatedTitlesLoader:

@@ -98,13 +98,18 @@ private struct SettingsWorkspaceDestination<Content: View>: View {
             content()
         } else {
             content()
-                .environment(\.settingsPageBackButton, AnyView(SettingsBackButton {
+                .environment(\.settingsPageBackButton, AnyView(SettingsBackButton(usesGlass: usesGlassBackButton) {
                     dismiss()
                 }.settingsWorkspaceEntry(route: route)
                     .settingsPageEntryFocus(enabled: !route.usesFullScreenDetail)
                     .accessibilityIdentifier(page?.depth == 1 ? "settings-category-back" : "settings-workspace-back")))
                 .toolbar(.hidden, for: .tabBar)
         }
+    }
+
+    private var usesGlassBackButton: Bool {
+        if case .profileAppearance = route { return true }
+        return false
     }
 }
 

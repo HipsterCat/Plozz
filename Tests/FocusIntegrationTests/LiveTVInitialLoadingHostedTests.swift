@@ -53,11 +53,14 @@ final class LiveTVInitialLoadingHostedTests: XCTestCase {
         let sources = InitialEmptySources()
         let name = "LiveTVInitialLoading.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let viewSettings = LiveTVViewSettingsStore(defaults: defaults)
+        viewSettings.save(.init(hasChosenAutoPreview: true, startsWithCategories: false))
         let approval = LiveTVSourceApprovalContext(
             profile: Profile(id: profileID, name: "Fixture"), parentalPIN: nil, activeAccountIDs: ["account"]
         )
         let geometry = LiveTVLoadingGeometry()
         let page = LiveTVPrototypeView(
+            viewSettingsStore: viewSettings,
             sourceStore: sources,
             onExpandedChange: geometry.setNavigationSuppressed,
             profileID: profileID, preferencesNamespace: name,

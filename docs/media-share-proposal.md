@@ -191,8 +191,8 @@ that's out of scope for v1.
   AVPlayer-native path cannot. On a custom reader the native path re-muxes to
   cleartext fMP4 on the loopback cache (fine for at-rest content).
 - **No transcoding.** Playback is limited to what the device + AetherEngine can
-  decode on-device (which is wide — MKV, HEVC/AV1, DoVi, Atmos, DTS/TrueHD
-  bridged). There is **no server-side downscale fallback**, so a very high-bitrate
+  decode on-device (which is wide — MKV, HEVC/AV1, Dolby Vision, spatial audio
+  and bridged multichannel audio). There is **no server-side downscale fallback**, so a very high-bitrate
   4K file over a slow remote link may buffer with no graceful degradation.
 - SMB support is **read-only, NTLMv2 / guest auth (no Kerberos)**.
 
@@ -309,7 +309,7 @@ share slots in as:
 ## 8. Phasing
 
 1. **Playback spike** — add `AetherEngineSMB` + a `load(source:)` path + tvOS
-   entitlements; prove SMB bytes → DoVi/Atmos pipeline end-to-end on the Apple TV.
+   entitlements; prove SMB bytes → HDR/spatial-audio pipeline end-to-end on the Apple TV.
    ✅ **Done** — plays + seeks, guest and password, on-device. Had to swap the SMB
    transport off libsmb2 to get there (see §5.1); that fix wants upstreaming into
    AetherEngine.

@@ -235,6 +235,7 @@ public extension MediaItem {
         item.isFavorite = false
         item.availability = item.availability ?? .unknown
         item.downloadProgress = nil
+        item.hasRequestDownloadActivity = nil
         return item
     }
 }

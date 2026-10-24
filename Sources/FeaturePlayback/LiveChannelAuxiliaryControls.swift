@@ -15,9 +15,9 @@ struct LiveChannelSubtitleSurface: View {
                 isHDR: model.subtitles.isHDR,
                 videoRect: viewport != nil ? viewport?.videoRect : model.videoZoom.settings.videoRect(
                     in: CGRect(origin: .zero, size: geometry.size),
-                    aspectRatio: model.engine.videoAspectRatio
+                    aspectRatio: model.videoAspectRatio
                 ),
-                sourceVideoAspectRatio: model.videoZoom.settings.mode == .stretch ? model.engine.videoAspectRatio : nil,
+                sourceVideoAspectRatio: model.videoZoom.settings.mode == .stretch ? model.videoAspectRatio : nil,
                 controlsFrames: model.subtitles.controlsLayout.frames
             )
         }

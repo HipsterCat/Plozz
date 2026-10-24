@@ -21,15 +21,18 @@ import SwiftUI
 /// same gesture on both platforms, it can't summon a keyboard over the dots, and
 /// it restricts entry to digits by construction.
 ///
-/// Unlike the Plex prompt there's no network round-trip — the verdict is a local
-/// hash comparison — so there's no submitting state to show.
+/// Local verification runs away from the UI executor. The entered keypad stays
+/// visible through verification and any continuation into Plex authentication.
 public struct ProfileLockPINView: View {
     private let profile: Profile
     private let errorMessage: LocalizedStringResource?
     private let isSyncEnabled: Bool
     private let sequenceStep: PINSequenceStep?
-    private let onSubmit: (String) -> Void
+    private let isSubmitting: Bool
+    private let onSubmit: (String) async -> Void
     private let onCancel: () -> Void
+    @Environment(\.pinProfileTransition) private var profileTransition
+    @State private var submission: Task<Void, Never>?
 
     /// - Parameter isSyncEnabled: whether these settings currently reach the
     ///   user's other devices. Drives the caveat: with Sync off the lock only
@@ -40,13 +43,15 @@ public struct ProfileLockPINView: View {
         errorMessage: LocalizedStringResource?,
         isSyncEnabled: Bool,
         sequenceStep: PINSequenceStep? = nil,
-        onSubmit: @escaping (String) -> Void,
+        isSubmitting: Bool = false,
+        onSubmit: @escaping (String) async -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.profile = profile
         self.errorMessage = errorMessage
         self.isSyncEnabled = isSyncEnabled
         self.sequenceStep = sequenceStep
+        self.isSubmitting = isSubmitting
         self.onSubmit = onSubmit
         self.onCancel = onCancel
     }
@@ -55,14 +60,26 @@ public struct ProfileLockPINView: View {
         PINEntryScaffold(
             title: ProfileLockCopy.unlockTitle,
             name: Text(verbatim: profile.name),
+            showsLock: true,
             errorMessage: errorMessage,
+            isSubmitting: isSubmitting || submission != nil,
             footnote: isSyncEnabled ? nil : ProfileLockCopy.lockIsDeviceOnly,
             sequenceStep: sequenceStep,
-            onSubmit: onSubmit,
-            onCancel: onCancel
+            onSubmit: { pin in
+                guard submission == nil, !isSubmitting else { return }
+                submission = Task {
+                    await onSubmit(pin)
+                    submission = nil
+                }
+            },
+            onCancel: {
+                submission?.cancel()
+                onCancel()
+            }
         ) {
-            ProfileAvatarView(profile: profile, size: PINLayout.badgeSize)
+            ProfileAvatarView(profile: profile, size: profileTransition?.avatarSize ?? PINLayout.badgeSize)
         }
+        .onDisappear { submission?.cancel() }
     }
 }
 #endif

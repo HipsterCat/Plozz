@@ -24,9 +24,14 @@ protocol NextEpisodeCoordinatorHost: AnyObject {
     var upNextAuthoritativeRange: SourceDynamicRange? { get }
     var upNextCurrentEngineKind: PlaybackEngineKind { get }
     var upNextBringUpStartedAt: Date? { get }
+    func upNextDidPresentFirstFrame()
     func upNextResolveAndRoute(
-        itemID: String, mediaSourceID: String?, forceTranscode: Bool
+        item: MediaItem, forceTranscode: Bool
     ) async throws -> PlayerViewModel.PrefetchedPlayback
+}
+
+extension NextEpisodeCoordinatorHost {
+    func upNextDidPresentFirstFrame() {}
 }
 
 /// Owns the fast-hand-off next-episode machinery extracted from
@@ -181,7 +186,7 @@ final class NextEpisodeCoordinator {
         try Task.checkCancellation()
         guard let host else { throw CancellationError() }
         var resolved = try await host.upNextResolveAndRoute(
-            itemID: episode.id, mediaSourceID: episode.selectedVersionID, forceTranscode: false
+            item: episode, forceTranscode: false
         )
         if !Task.isCancelled, resolved.engineKind == .plozzigen,
            let probe = engineFactory.probeSourceDynamicRange {
@@ -360,6 +365,7 @@ final class NextEpisodeCoordinator {
     private func finishFirstFrameWait() {
         awaitingFirstFrame = false
         firstFrameTask = nil
+        host?.upNextDidPresentFirstFrame()
         if let host, let start = host.upNextBringUpStartedAt {
             HandoffDiagnostics.emit("first-frame PRESENTED total=\(HandoffDiagnostics.ms(start)) engine=\(host.upNextCurrentEngineKind.rawValue)")
         }

@@ -5,6 +5,139 @@ import XCTest
 
 @MainActor
 final class LiveTVPrototypeModelTests: XCTestCase {
+    func testCategoryCountsIgnoreCurrentCategoryAndQueryButHonorEligibility() {
+        let grouped = LiveTVPrototypeChannel(
+            id: "shared", number: 1, name: "Arena", category: "Sports", symbol: "tv", accent: 0,
+            source: .iptv, tagline: "", groups: ["Sports", "News", "Spórts"]
+        )
+        let model = LiveTVPrototypeModel(channels: [
+            grouped, searchChannel("world", 2, "World", category: "Sports"),
+            searchChannel("news", 3, "Daily News", category: "News", source: .jellyfin)
+        ], preferencesStore: HiddenChannelsFixtureStore())
+        XCTAssertEqual(model.categoryChannelCount(nil), 3)
+        XCTAssertEqual(model.categoryChannelCount("Sports"), 2)
+        XCTAssertEqual(model.categoryChannelCount("Spórts"), 2)
+        XCTAssertEqual(model.categoryChannelCount("News"), 2)
+        model.category = "Sports"
+        model.query = "arena"
+        XCTAssertEqual(model.visibleChannels.count, 1)
+        XCTAssertEqual(model.categoryChannelCount("Sports"), 2)
+        XCTAssertEqual(model.categoryChannelCount("News"), 2)
+        model.source = .jellyfin
+        XCTAssertEqual(model.categoryChannelCount(nil), 1)
+        XCTAssertEqual(model.browsingCategories.map(\.name), ["News"])
+        model.source = nil
+        model.setScanHiddenChannelIDs(["shared"])
+        XCTAssertEqual(model.categoryChannelCount("Sports"), 1)
+        XCTAssertEqual(model.categoryChannelCount("News"), 1)
+        model.toggleFavorite("world")
+        model.favoritesOnly = true
+        XCTAssertEqual(model.browsingCategories.map(\.name), ["Sports"])
+        XCTAssertEqual(model.categoryChannelCount(nil), 1)
+    }
+
+    func testCategoryFirstFocusDoesNotRequestGuideFocusOrPreviewPlayback() {
+        let model = LiveTVPrototypeModel(channels: [searchChannel("arena", 1, "Arena", category: "Sports")])
+        let preview = LiveTVPreviewController(model: model, followsFocus: true)
+        XCTAssertFalse(preview.requestInitialCategoryFocus(isActive: false, hasOverlay: false))
+        XCTAssertFalse(preview.requestInitialCategoryFocus(isActive: true, hasOverlay: true))
+        XCTAssertTrue(preview.requestInitialCategoryFocus(isActive: true, hasOverlay: false))
+        XCTAssertTrue(preview.hasRequestedInitialGuideFocus)
+        XCTAssertFalse(preview.isRestoringGuideFocus)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertNil(model.playingChannelID)
+        XCTAssertFalse(preview.requestInitialCategoryFocus(isActive: true, hasOverlay: false))
+        XCTAssertNil(preview.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+    }
+
+    func testCategorySearchReturnsDistinctCategoryMatchesAlongsideChannelMatches() {
+        let model = LiveTVPrototypeModel(channels: [
+            searchChannel("arena", 1, "Arena", category: "Spórts"),
+            searchChannel("stadium", 2, "Stadium", category: "Spórts"),
+            searchChannel("world", 3, "World", category: "International Sports"),
+            searchChannel("review", 4, "Sports Review", category: "Entertainment"),
+            searchChannel("news", 5, "Daily News", category: "News")
+        ])
+        XCTAssertTrue(model.matchingCategories.isEmpty)
+        model.query = " SPORT "
+        XCTAssertEqual(model.matchingCategories, ["International Sports", "Spórts"])
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["arena", "stadium", "review", "world"])
+        model.query = "arena"
+        XCTAssertTrue(model.matchingCategories.isEmpty, "A channel-name match must not imply a category-name match")
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["arena"])
+        model.query = "  "
+        XCTAssertTrue(model.matchingCategories.isEmpty)
+        XCTAssertEqual(model.visibleChannels.count, 5)
+    }
+
+    func testCategorySearchRespectsSourceLanguageCountryFavoritesAndHiddenChannels() {
+        let model = LiveTVPrototypeModel(channels: [
+            searchChannel("local", 1, "Arena", category: "Sports", sourceID: "first", language: "en", country: "US"),
+            searchChannel("world", 2, "World", category: "World Sports", sourceID: "second", language: "fr", country: "FR"),
+            searchChannel("server", 3, "Stadium", category: "Live Sports", source: .jellyfin, sourceID: "server")
+        ], preferencesStore: HiddenChannelsFixtureStore())
+        model.query = "sports"
+        XCTAssertEqual(model.matchingCategories, ["Live Sports", "Sports", "World Sports"])
+        model.source = .iptv
+        XCTAssertEqual(model.matchingCategories, ["Sports", "World Sports"])
+        model.playlistSourceID = "first"
+        XCTAssertEqual(model.matchingCategories, ["Sports"])
+        model.playlistSourceID = nil
+        model.language = "fr"
+        XCTAssertEqual(model.matchingCategories, ["World Sports"])
+        model.language = nil
+        model.country = "US"
+        XCTAssertEqual(model.matchingCategories, ["Sports"])
+        model.country = nil
+        model.toggleFavorite("world")
+        model.favoritesOnly = true
+        XCTAssertEqual(model.matchingCategories, ["World Sports"])
+        model.favoritesOnly = false
+        model.setScanHiddenChannelIDs(["local"])
+        XCTAssertEqual(model.matchingCategories, ["World Sports"])
+        XCTAssertTrue(model.hideChannel(model.channel(id: "world")!))
+        XCTAssertTrue(model.matchingCategories.isEmpty)
+        model.resetFilters()
+        XCTAssertTrue(model.matchingCategories.isEmpty)
+    }
+
+    func testCategorySearchHonorsSelectedCategoryAndGuideCoverage() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let grouped = LiveTVPrototypeChannel(
+            id: "shared", number: 1, name: "Arena", category: "Sports", symbol: "tv", accent: 0,
+            source: .iptv, tagline: "", groups: ["Sports", "News", "Sports"]
+        )
+        let model = LiveTVPrototypeModel(now: now, channels: [
+            grouped, searchChannel("world", 2, "World", category: "World Sports")
+        ], preferencesStore: HiddenChannelsFixtureStore())
+        model.query = "sports"
+        model.category = "News"
+        XCTAssertEqual(model.matchingCategories, ["Sports"])
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["shared"])
+        model.guideOnly = true
+        XCTAssertTrue(model.matchingCategories.isEmpty)
+        try model.replacePrograms([
+            .init(id: "program", channelID: "shared", title: "Live match", subtitle: "",
+                  start: now, end: now.addingTimeInterval(3_600))
+        ])
+        XCTAssertEqual(model.matchingCategories, ["Sports"])
+        model.guideOnly = false
+        model.category = nil
+        XCTAssertTrue(model.setMetadataOverride(.init(category: "Sports Classics"), channelID: "shared"))
+        XCTAssertEqual(model.matchingCategories, ["Sports Classics", "World Sports"])
+        try model.replaceChannels([searchChannel("news", 3, "Daily News", category: "News")])
+        XCTAssertTrue(model.matchingCategories.isEmpty)
+    }
+
+    private func searchChannel(
+        _ id: String, _ number: Int, _ name: String, category: String,
+        source: LiveTVPrototypeSource = .iptv, sourceID: String = "sample",
+        language: String? = nil, country: String? = nil
+    ) -> LiveTVPrototypeChannel {
+        .init(id: id, number: number, name: name, category: category, symbol: "tv", accent: 0,
+              source: source, tagline: "", configuredSourceID: sourceID, language: language, country: country)
+    }
+
     func testCategorySelectionInLargeCatalogDoesNotRescanEveryChannel() async throws {
         let channels = await Task.detached {
             (0..<100_000).map { index in

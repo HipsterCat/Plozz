@@ -62,6 +62,25 @@ final class LibraryLiveChannelEngineTests: XCTestCase {
         await adapter.drainTransport()
     }
 
+    func testOnlyActualStreamsForwardTheStartupCushion() async throws {
+        let fixture = try UniversalLiveFixture()
+        let adapter = fixture.adapter
+        fixture.decoder.liveStartupBuffer = .fortyFiveSeconds
+        XCTAssertEqual(adapter.liveStartupBuffer, .automatic)
+        try await adapter.loadChannel(streamA)
+        XCTAssertEqual(adapter.liveStartupBuffer, .fortyFiveSeconds)
+        fixture.factoryHook = { [weak adapter] in
+            XCTAssertEqual(adapter?.liveStartupBuffer, .automatic)
+        }
+        try await adapter.loadChannel(fixture.inputA)
+        XCTAssertEqual(adapter.liveStartupBuffer, .automatic)
+        try await adapter.loadChannel(streamB)
+        XCTAssertEqual(adapter.liveStartupBuffer, .fortyFiveSeconds)
+        adapter.stop()
+        XCTAssertEqual(adapter.liveStartupBuffer, .automatic)
+        await adapter.drainTransport()
+    }
+
     func testSameChannelWithNewAuthorizationReloadsUsingSuppliedGeneration() async throws {
         let fixture = try UniversalLiveFixture()
         let previousInput = fixture.inputA
@@ -964,6 +983,7 @@ private final class UniversalLiveGate {
 
 @MainActor
 private final class UniversalLiveDecoder: LiveChannelEngine {
+    var liveStartupBuffer: LivePlaybackBuffer = .automatic
     var status: VideoEngineStatus = .idle
     var isPaused = false
     var preventsDisplaySleep = true

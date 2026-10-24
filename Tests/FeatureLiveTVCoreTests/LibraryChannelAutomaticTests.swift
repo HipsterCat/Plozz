@@ -39,6 +39,22 @@ final class LibraryChannelAutomaticTests: XCTestCase {
         return try XCTUnwrap(state.snapshots.first { $0.id == snapshotID }).items
     }
 
+    func testGeneratedGuideCarriesCategoryMoodIntoPlayback() async throws {
+        let items = (0..<5).map { index in
+            var item = movie("m\(index)")
+            item.genres = index < 4 ? ["Documentary"] : ["Comedy"]
+            return item
+        }
+        let (service, _, _) = try await service(items: items)
+        _ = try await service.refreshAutomaticChannels(at: now)
+        let definition = try XCTUnwrap(service.definitions.first { $0.automaticKey == "v1/genre/documentary" })
+        let channel = try XCTUnwrap(service.channels.first { $0.id == definition.catalogID })
+        XCTAssertEqual(channel.plozzChannelMood, .calm)
+        XCTAssertEqual(channel.playerItem(program: nil).plozzChannelMood, .calm)
+        let movies = try XCTUnwrap(service.definitions.first { $0.automaticKey == "v1/movies" })
+        XCTAssertEqual(service.channels.first { $0.id == movies.catalogID }?.plozzChannelMood, .cinematic)
+    }
+
     func testCatchallsCoverAllEligibleConcreteContentWithOnePaginationPass() async throws {
         var items = (0..<501).map { movie("m\($0)") }
         for index in 0..<251 {
@@ -407,18 +423,195 @@ final class LibraryChannelAutomaticTests: XCTestCase {
         ).item.itemID, "movie")
     }
 
-    func testInvalidItemMetadataFailsWithoutReplacingDurableLineup() async throws {
+    func testEntirelyMalformedCatalogueRetainsSavedLineupAndReportsUnavailable() async throws {
         let store = LibraryDefinitionMemory()
         let (service, provider, _) = try await service(items: [movie("good")], store: store)
         _ = try await service.refreshAutomaticChannels(at: now)
         let previous = try store.load()
         await provider.replaceItems([movie("https://unsafe.invalid")])
-        do {
-            _ = try await service.refreshAutomaticChannels(at: now)
-            XCTFail("Malformed addressing must not publish")
-        } catch { XCTAssertEqual(error as? LibraryChannelError, .invalidSnapshot) }
+        let result = try await service.refreshAutomaticChannels(at: now)
+        XCTAssertEqual(result.eligibleItemCount, 0)
+        XCTAssertEqual(result.skippedItemCount, 1)
+        XCTAssertEqual(result.unavailableSources.map(\.accountID), ["account"])
+        XCTAssertEqual(result.unavailableSources.first?.reason, .invalidResponse)
         XCTAssertEqual(try store.load(), previous)
         XCTAssertEqual(service.definitions, previous)
+        XCTAssertTrue(service.channels.isEmpty)
+
+        await provider.replaceItems([movie("good")])
+        let recovered = try await service.refreshAutomaticChannels(at: now)
+        XCTAssertTrue(recovered.unavailableSources.isEmpty)
+        XCTAssertEqual(recovered.skippedItemCount, 0)
+        XCTAssertEqual(service.definitions, previous)
+        XCTAssertEqual(service.channels.count, 1)
+    }
+
+    func testMalformedItemsAcrossPagesDoNotDiscardHealthyCatalogue() async throws {
+        var invalid = [movie(""), movie(""), movie("https://unsafe.invalid")]
+        var badSource = movie("source")
+        badSource.selectedVersionID = "source?token=fixture"
+        invalid.append(badSource)
+        var badRevision = movie("revision")
+        badRevision.versions = [MediaVersion(
+            id: "source", sourceMetadata: MediaSourceMetadata(sourceRevision: "invalid/revision")
+        )]
+        invalid.append(badRevision)
+        var badSize = movie("size")
+        badSize.versions = [MediaVersion(id: "source", sizeBytes: -1)]
+        invalid.append(badSize)
+        var badParent = movie("parent")
+        badParent.seriesID = "invalid/parent"
+        invalid.append(badParent)
+        var badTitle = movie("title")
+        badTitle.title = String(repeating: "x", count: 8_193)
+        invalid.append(badTitle)
+        var badRating = movie("rating")
+        badRating.officialRating = String(repeating: "x", count: 513)
+        invalid.append(badRating)
+        let healthy = (0..<501).map { movie("good-\($0)") }
+        let (service, provider, _) = try await service(
+            items: [invalid[0]] + healthy + Array(invalid.dropFirst()) + [movie("duration", runtime: nil)]
+        )
+        let summary = try await service.refreshAutomaticChannels(at: now)
+        XCTAssertEqual(summary.eligibleItemCount, healthy.count)
+        XCTAssertEqual(summary.skippedItemCount, invalid.count + 1)
+        XCTAssertTrue(summary.unavailableSources.isEmpty)
+        XCTAssertEqual(Set(try currentItems("v1/movies", service: service).map(\.itemID)), Set(healthy.map(\.id)))
+        let queries = await provider.queries
+        XCTAssertEqual(queries.filter { $0.kind == .movie }.map(\.page.startIndex), [0, 250, 500])
+        try service.portableState().validate()
+    }
+
+    func testSkippingMalformedItemPreservesPreviouslyPublishedPrograms() async throws {
+        let (service, provider, _) = try await service(items: [movie("good"), movie("later-invalid")])
+        _ = try await service.refreshAutomaticChannels(at: now)
+        let channel = try XCTUnwrap(service.definitions.first)
+        let from = now
+        let to = now.addingTimeInterval(300)
+        let programs = try service.programmes(channelIDs: [channel.catalogID], from: from, to: to)
+        var invalid = movie("later-invalid")
+        invalid.selectedVersionID = "invalid/source"
+        await provider.replaceItems([movie("good"), invalid])
+        let result = try await service.refreshAutomaticChannels(at: now.addingTimeInterval(10))
+        XCTAssertEqual(result.skippedItemCount, 1)
+        XCTAssertEqual(try currentItems("v1/movies", service: service).map(\.itemID), ["good"])
+        XCTAssertEqual(try service.programmes(channelIDs: [channel.catalogID], from: from, to: to), programs)
+    }
+
+    func testMalformedSourceDoesNotBlockHealthySource() async throws {
+        for failure in [LibraryChannelError.invalidSnapshot, .catalogChanged] {
+            let (service, healthy, _) = try await service(items: [movie("healthy")])
+            let malformed = LibraryCatalogFixture(items: [movie("bad")])
+            service.setContexts([
+                LibraryChannelProviderContext(
+                    accountID: "account", authorizationID: "auth", provider: healthy, allowedLibraryIDs: ["library"]),
+                LibraryChannelProviderContext(
+                    accountID: "malformed", authorizationID: "auth", provider: malformed, allowedLibraryIDs: ["library"])
+            ])
+            await malformed.beforeNextPage { throw failure }
+            let result = try await service.refreshAutomaticChannels(at: now)
+            XCTAssertEqual(result.eligibleItemCount, 1)
+            XCTAssertEqual(result.unavailableSources.map(\.accountID), ["malformed"])
+            XCTAssertEqual(result.unavailableSources.first?.reason, .invalidResponse)
+            XCTAssertEqual(try currentItems("v1/movies", service: service).map(\.itemID), ["healthy"])
+        }
+    }
+
+    func testInvalidSourceIdentityFailsBeforeReadingAnyPages() async throws {
+        let invalidSession = UserSession(
+            server: MediaServer(id: "invalid/server", name: "Server", baseURL: URL(string: "https://server.invalid")!,
+                                provider: .jellyfin),
+            userID: "user", userName: "User", deviceID: "device", accessToken: "fixture"
+        )
+        let (service, _, _) = try await service(items: [])
+        let provider = LibraryCatalogFixture(items: (0..<501).map { movie("good-\($0)") }, session: invalidSession)
+        service.setContexts([LibraryChannelProviderContext(
+            accountID: "account", authorizationID: "auth", provider: provider, allowedLibraryIDs: ["library"]
+        )])
+        let result = try await service.refreshAutomaticChannels(at: now)
+        let queries = await provider.queries
+        XCTAssertTrue(queries.isEmpty)
+        XCTAssertEqual(result.unavailableSources.first?.reason, .invalidResponse)
+        XCTAssertTrue(service.definitions.isEmpty)
+    }
+
+    func testUnexpectedMediaTypeIsSkippedButWrongLibraryDiscardsSource() async throws {
+        for wrongLibrary in [false, true] {
+            let (service, provider, _) = try await service(items: [movie("good"), movie("bad")])
+            await provider.transformPages { page in
+                var items = page.items
+                if let index = items.firstIndex(where: { $0.id == "bad" }) {
+                    if wrongLibrary { items[index].libraryID = "not-authorized" }
+                    else { items[index].kind = .folder }
+                }
+                return MediaPage(items: items, startIndex: page.startIndex, totalCount: page.totalCount)
+            }
+            let result = try await service.refreshAutomaticChannels(at: now)
+            if wrongLibrary {
+                XCTAssertEqual(result.unavailableSources.first?.reason, .invalidResponse)
+                XCTAssertTrue(service.definitions.isEmpty)
+            } else {
+                XCTAssertEqual(result.skippedItemCount, 1)
+                XCTAssertTrue(result.unavailableSources.isEmpty)
+                XCTAssertEqual(try currentItems("v1/movies", service: service).map(\.itemID), ["good"])
+            }
+        }
+    }
+
+    func testFatalLibraryErrorsAreNotConvertedIntoPartialSuccess() async throws {
+        for failure in [LibraryChannelError.authorizationChanged, .catalogTooLarge, .storageFailed] {
+            let store = LibraryDefinitionMemory()
+            let (service, provider, _) = try await service(items: [movie("good")], store: store)
+            _ = try await service.refreshAutomaticChannels(at: now)
+            let previous = try store.load()
+            await provider.beforeNextPage { throw failure }
+            do {
+                _ = try await service.refreshAutomaticChannels(at: now)
+                XCTFail("Fatal failure must still abort publication")
+            } catch { XCTAssertEqual(error as? LibraryChannelError, failure) }
+            XCTAssertEqual(try store.load(), previous)
+        }
+    }
+
+    func testLatePaginationFailureDiscardsPartialSourceButKeepsHealthyServer() async throws {
+        let (service, healthy, _) = try await service(items: [movie("healthy")])
+        let malformed = LibraryCatalogFixture(items: (0..<501).map { movie("partial-\($0)") })
+        await malformed.transformPages { page in
+            MediaPage(
+                items: page.items, startIndex: page.startIndex,
+                totalCount: page.startIndex > 0 ? page.totalCount + 1 : page.totalCount
+            )
+        }
+        service.setContexts([
+            LibraryChannelProviderContext(
+                accountID: "account", authorizationID: "auth", provider: healthy, allowedLibraryIDs: ["library"]),
+            LibraryChannelProviderContext(
+                accountID: "malformed", authorizationID: "auth", provider: malformed, allowedLibraryIDs: ["library"])
+        ])
+        let result = try await service.refreshAutomaticChannels(at: now)
+        XCTAssertEqual(result.unavailableSources.map(\.accountID), ["malformed"])
+        XCTAssertEqual(result.unavailableSources.first?.reason, .invalidResponse)
+        XCTAssertEqual(try currentItems("v1/movies", service: service).map(\.itemID), ["healthy"])
+        let queries = await malformed.queries
+        XCTAssertEqual(queries.filter { $0.kind == .movie }.map(\.page.startIndex), [0, 250])
+    }
+
+    func testAccessRevocationWinsOverMalformedResponse() async throws {
+        let (service, provider, _) = try await service(items: [movie("good")])
+        let gate = LibraryAutomaticGate()
+        await provider.beforeNextPage {
+            await gate.pause()
+            throw LibraryChannelError.invalidSnapshot
+        }
+        let refresh = Task { try await service.refreshAutomaticChannels(at: now) }
+        await gate.entered()
+        service.setContexts([])
+        await gate.resume()
+        do {
+            _ = try await refresh.value
+            XCTFail("Revoked access must not become a partial success")
+        } catch { XCTAssertEqual(error as? LibraryChannelError, .authorizationChanged) }
+        XCTAssertTrue(service.definitions.isEmpty)
     }
 
     func testProviderCancellationRecordsCancelledWithoutCancellingCaller() async throws {
@@ -587,16 +780,15 @@ final class LibraryChannelAutomaticTests: XCTestCase {
         XCTAssertTrue(service.channels.isEmpty)
     }
 
-    func testDuplicateProviderItemsAbortWithoutChangingDurableLineup() async throws {
+    func testDuplicateProviderItemsRejectSourceWithoutChangingDurableLineup() async throws {
         let store = LibraryDefinitionMemory()
         let (service, provider, _) = try await service(items: [movie("old")], store: store)
         _ = try await service.refreshAutomaticChannels(at: now)
         let original = try store.load()
         await provider.replaceItems([movie("duplicate"), movie("duplicate")])
-        do {
-            _ = try await service.refreshAutomaticChannels(at: now.addingTimeInterval(10))
-            XCTFail("Unstable pagination must not publish")
-        } catch { XCTAssertEqual(error as? LibraryChannelError, .catalogChanged) }
+        let result = try await service.refreshAutomaticChannels(at: now.addingTimeInterval(10))
+        XCTAssertEqual(result.unavailableSources.first?.reason, .invalidResponse)
+        XCTAssertEqual(result.eligibleItemCount, 0)
         XCTAssertEqual(service.definitions, original)
         XCTAssertEqual(try store.load(), original)
     }

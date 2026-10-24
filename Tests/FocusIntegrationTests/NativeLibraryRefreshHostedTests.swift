@@ -15,6 +15,95 @@ import XCTest
 final class NativeLibraryRefreshHostedTests: XCTestCase {
     private var savedProviders = MetadataProviderSettings.default
 
+    func testLibraryShowcaseKeepsScheduleAndLogoBelowNavigationAtEverySize() async throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 500, height: 250), format: format).image { _ in
+            ("SILO" as NSString).draw(at: CGPoint(x: 10, y: 0), withAttributes: [
+                .font: UIFont.boldSystemFont(ofSize: 200), .foregroundColor: UIColor.red
+            ])
+        }
+        let url = try XCTUnwrap(URL(string: "https://library-logo.example.test/\(UUID()).png"))
+        let cache = try XCTUnwrap(ArtworkSession.shared.configuration.urlCache)
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: url, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "image/png", "Cache-Control": "max-age=3600"]
+        ))
+        cache.storeCachedResponse(
+            CachedURLResponse(response: response, data: try XCTUnwrap(image.pngData())), for: URLRequest(url: url)
+        )
+        defer { cache.removeCachedResponse(for: URLRequest(url: url)) }
+        let item = MediaItem(
+            id: UUID().uuidString, title: "Schedule layout fixture", kind: .series,
+            overview: "A long description exercises the space between the logo, title information and recommended rows.",
+            logoURL: url, allowsTitleBasedMetadataMatching: false
+        )
+        let now = Date()
+        let upcoming = UpcomingEpisode(
+            seriesIdentity: .external(source: "fixture", value: item.id), seasonNumber: 2, episodeNumber: 1,
+            airDate: now.addingTimeInterval(7 * 86400), datePrecision: .dateOnly, source: .tvmaze, refreshedAt: now
+        )
+        await SeriesScheduleStore.shared.store(.init(
+            seriesKey: MetadataQuery(item).seriesScoped.enrichmentCacheKey,
+            upcomingEpisode: upcoming, upcomingEpisodes: [upcoming],
+            refreshedAt: now, refreshDueAt: now.addingTimeInterval(3600)
+        ))
+        for style in [NavigationStyle.tabBar, .sidebar, .rail] {
+            try await withNavigatedLibrary(style: style, heroItem: item) { root, window, model in
+                let controller = try XCTUnwrap(window.rootViewController)
+                let header = try XCTUnwrap(self.findController(NativeLibraryHeaderController.self, in: controller))
+                let headerFrame = header.view.convert(header.view.bounds, to: window)
+                let source = try XCTUnwrap(self.findSource(item.stablePresentationID, in: root))
+                var rowFrame: CGRect?
+                var previousLogo: CGRect?
+                for step in [-10, 0, 10] {
+                    model.presentation.settings.logoSize = HeroLogoSize(rawValue: step)
+                    try await Task.sleep(for: .milliseconds(350))
+                    window.layoutIfNeeded()
+                    let capture = self.capture(window, name: "library-logo-\(style)-\(step)", drawsHierarchy: true)
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.recognitionLanguages = ["en-US"]
+                    try VNImageRequestHandler(cgImage: XCTUnwrap(capture.cgImage)).perform([request])
+                    let results = request.results ?? []
+                    let badge = try XCTUnwrap(results.first {
+                        $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains("New season") == true
+                    }, "A new-season badge must remain visible below \(style) library navigation.")
+                    let logo = try XCTUnwrap(HeroLogoPresentationHostedTests.colorBounds(in: capture, channel: 0))
+                    func frame(_ observation: VNRecognizedTextObservation) -> CGRect {
+                        let box = observation.boundingBox
+                        return CGRect(
+                            x: box.minX * window.bounds.width, y: (1 - box.maxY) * window.bounds.height,
+                            width: box.width * window.bounds.width, height: box.height * window.bounds.height
+                        )
+                    }
+                    XCTAssertGreaterThan(frame(badge).minY, headerFrame.maxY + 16)
+                    XCTAssertGreaterThan(logo.minY, frame(badge).maxY + 10)
+                    XCTAssertLessThan(logo.minY - frame(badge).maxY, 42,
+                                      "The badge follows the fitted logo, not the top of its sizing slot.")
+                    let currentRow = try XCTUnwrap(source.reference?.geometry(in: window)?.frame)
+                    XCTAssertLessThan(logo.maxY, currentRow.minY - 40)
+                    if let rowFrame { XCTAssertEqual(currentRow, rowFrame) }
+                    rowFrame = currentRow
+                    if let previousLogo {
+                        if style == .sidebar, step == 10 {
+                            // The sidebar page button leaves room for roughly the
+                            // default logo. Larger sizes must cap before the badge
+                            // reaches navigation, not force the rows down.
+                            XCTAssertGreaterThanOrEqual(logo.height, previousLogo.height - 1)
+                            XCTAssertLessThan(logo.height, previousLogo.height * 1.5 - 3)
+                        } else {
+                            let ratio: CGFloat = step == 0 ? 2 : 1.5
+                            XCTAssertEqual(logo.height, previousLogo.height * ratio, accuracy: 3,
+                                           "Allow the rasterized wordmark's antialiased edge, not OCR padding.")
+                        }
+                    }
+                    previousLogo = logo
+                }
+            }
+        }
+    }
+
     func testLibraryHeaderShowcaseAndEveryGridShareVisibleLeadingEdge() async throws {
         continueAfterFailure = false
         for navigationInset: CGFloat in [64, 0] {
@@ -213,7 +302,9 @@ final class NativeLibraryRefreshHostedTests: XCTestCase {
                 let firstControl = try XCTUnwrap(self.focusItems(in: header.host.view).compactMap {
                     NavigationRowFocusRequester.frame(of: $0, relativeTo: window)
                 }.min { $0.minX < $1.minX })
-                XCTAssertEqual(firstControl.minX, window.safeAreaInsets.left + (style == .rail ? 144 : 0) + 6,
+                XCTAssertEqual(firstControl.minX,
+                               window.safeAreaInsets.left
+                                   + (style == .rail ? LibraryNavigationLayoutFixture.railInset : 0) + 6,
                                accuracy: 1, "Pinned rail clearance must remain on the foreground, not the artwork.")
                 for mode: LibraryContentMode in [.titles, .collections, .playlists, .recommended] {
                     await model.setContentMode(mode)
@@ -320,6 +411,7 @@ final class NativeLibraryRefreshHostedTests: XCTestCase {
         style: NavigationStyle,
         artwork: ArtworkSettings = .default,
         posterURL: URL? = nil,
+        heroItem: MediaItem? = nil,
         pinnedHandoff: Bool = false,
         stagedLibraryEntry: Bool = false,
         shareLibrary: Bool = false,
@@ -328,7 +420,7 @@ final class NativeLibraryRefreshHostedTests: XCTestCase {
     ) async throws {
         let provider = RefreshLibraryProvider(
             kind: shareLibrary ? .mediaShare : .jellyfin,
-            supportsModes: !shareLibrary, recommendationHub: !shareLibrary, posterURL: posterURL
+            supportsModes: !shareLibrary, recommendationHub: !shareLibrary, posterURL: posterURL, heroItem: heroItem
         )
         let name = "LibraryNativeNavigation.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -749,7 +841,13 @@ final class NativeLibraryRefreshHostedTests: XCTestCase {
                                "Offscreen rows must still leave the displayed set.")
                 XCTAssertLessThan(collection.visibleCells.count, 50, "Do not keep the entire library mounted.")
                 collection.setContentOffset(CGPoint(x: 0, y: origin), animated: true)
-                try await Task.sleep(for: .milliseconds(500))
+                let returnDeadline = ContinuousClock.now + .seconds(5)
+                while abs(collection.contentOffset.y - origin) > 0.5, ContinuousClock.now < returnDeadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertEqual(collection.contentOffset.y, origin, accuracy: 0.5,
+                               "Measure the returning row after its native scroll reaches the original offset.")
+                collection.layoutIfNeeded()
                 let restored = try await self.waitForGridItem(itemID, at: path, in: collection)
                 let restoredArtwork = try self.libraryArtwork(in: restored)
                 XCTAssertEqual(restoredArtwork.convert(restoredArtwork.bounds, to: window).minY,
@@ -2033,6 +2131,7 @@ private final class LibraryNavigationSwitch {
 }
 
 private struct LibraryNavigationLayoutFixture: View {
+    static let railInset: CGFloat = 128
     let model: LibraryBrowseViewModel
     let style: NavigationStyle
     let artwork: ArtworkSettings
@@ -2056,7 +2155,7 @@ private struct LibraryNavigationLayoutFixture: View {
                 )
             } else if style == .rail {
                 NavigationStack { library }
-                    .environment(\.plozzNavigationContentInset, 128)
+                    .environment(\.plozzNavigationContentInset, Self.railInset)
                     .environment(\.plozzPinnedSidebarActive, true)
             } else if style == .sidebar {
                 tabs.tabViewStyle(.sidebarAdaptable)
@@ -2122,13 +2221,15 @@ private actor RefreshLibraryProvider: MediaLibraryQueryProviding, CapabilityRepo
     private var secondaryRecommendationHub = false
     nonisolated let supportsFilters: Bool
     private let posterURL: URL?
+    private let heroItem: MediaItem?
     init(kind: ProviderKind = .mediaShare, supportsModes: Bool = false, recommendationHub: Bool = false,
-         supportsFilters: Bool = false, posterURL: URL? = nil) {
+         supportsFilters: Bool = false, posterURL: URL? = nil, heroItem: MediaItem? = nil) {
         self.kind = kind
         self.capabilities = supportsModes ? [.libraryCollections, .videoPlaylists] : []
         self.recommendationHub = recommendationHub
         self.supportsFilters = supportsFilters
         self.posterURL = posterURL
+        self.heroItem = heroItem
         self.session = UserSession(
             server: MediaServer(
                 id: "fixture", name: "Fixture", baseURL: URL(string: "https://fixture.test")!,
@@ -2223,7 +2324,8 @@ private actor RefreshLibraryProvider: MediaLibraryQueryProviding, CapabilityRepo
         var result: [LibrarySection] = []
         if recommendationHub { result.append(LibrarySection(
             id: "featured", title: "Featured",
-            items: (0..<4).map { MediaItem(id: "Featured-\($0)", title: "Featured \($0)", kind: .movie) }
+            items: heroItem.map { [$0] }
+                ?? (0..<4).map { MediaItem(id: "Featured-\($0)", title: "Featured \($0)", kind: .movie) }
         )) }
         if secondaryRecommendationHub { result.append(LibrarySection(
             id: "secondary", title: "Secondary",

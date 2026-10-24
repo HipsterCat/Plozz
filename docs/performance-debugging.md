@@ -62,6 +62,9 @@ included. Repeated sync failures are reported once per profile/operation/stage
 until recovery. Expected schedule deferrals and cancellation are not failures.
 Numeric SDK memory measurements and its low-memory flag survive redaction;
 device names, installation IDs and arbitrary contexts do not.
+The SDK's original `app.in_foreground` and `app.is_active` booleans also survive.
+Missing activity evidence remains absent; it is never replaced with the state
+of the process uploading a recovered crash.
 The `PLZLTVSYNC` local log uses the same non-secret vocabulary.
 
 Manual **Send to Developer** reports additionally attach the persistent,
@@ -89,6 +92,12 @@ entries; item/row counts remain available without walking the larger metadata fe
 
 This adds no automatic tracing, timer, polling task, file logging, or additional
 Sentry events. Serialization happens only when an existing report is captured.
+The event timestamp must fall within the current reporting-consent session.
+Native crashes or watchdog reports recovered on a later launch do not receive
+that launch's operation timeline; their in-memory pre-crash timeline is unavailable.
+Fatal reports omit this context even when the SDK falls back to a current timestamp.
+Missing or future timestamps also omit this context without dropping the report.
+Wall-clock boundaries used for this check remain local and are not serialized.
 Opting out clears the buffer and invalidates old spans, including across a later
 opt-in. The final scrub accepts only the typed schema and bounded numeric values;
 URLs, request paths, server/profile names, credentials, media identities/titles,

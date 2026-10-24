@@ -2,6 +2,37 @@ import XCTest
 @testable import CoreModels
 
 final class ProfileModelTests: XCTestCase {
+    @MainActor
+    func testUnlockProofIsBoundToLockAndCurrentSelection() throws {
+        let suite = "ProfileUnlockSession.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let profiles = ProfilesModel(store: ProfileStore(defaults: defaults))
+        var original = profiles.activeProfile
+        original.lock = try XCTUnwrap(ProfileLock.make(pin: "1357", iterations: 64))
+        profiles.update(original)
+        let other = profiles.add(name: "Other")
+        profiles.noteProfileUnlocked(original.id)
+        XCTAssertTrue(profiles.isProfileUnlocked(original.id))
+        let generation = profiles.selectionGeneration
+        profiles.select(original.id)
+        XCTAssertEqual(profiles.selectionGeneration, generation)
+        XCTAssertTrue(profiles.isProfileUnlocked(original.id))
+
+        profiles.select(other.id)
+        XCTAssertGreaterThan(profiles.selectionGeneration, generation)
+        XCTAssertFalse(profiles.isProfileUnlocked(original.id))
+        profiles.select(original.id)
+        XCTAssertFalse(profiles.isProfileUnlocked(original.id))
+        profiles.noteProfileUnlocked(original.id)
+        original.replaceLock(with: ProfileLock.make(pin: "2468", iterations: 64))
+        profiles.update(original)
+        XCTAssertFalse(profiles.isProfileUnlocked(original.id), "A changed verifier invalidates old proof.")
+        profiles.noteProfileUnlocked(original.id)
+        profiles.forgetProfileUnlock(original.id)
+        XCTAssertFalse(profiles.isProfileUnlocked(original.id))
+    }
+
     func testPlexProtectionVerificationSurvivesRoundTripButLegacyFlagsRemainUnverified() throws {
         let binding = PlexHomeUserBinding(homeUserID: "parent", name: "Parent", requiresPIN: false)
         let encoded = try JSONEncoder().encode(binding)

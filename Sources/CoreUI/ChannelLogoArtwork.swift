@@ -11,6 +11,7 @@ public struct ChannelLogoArtwork: View {
     private let cornerRadius: CGFloat
     private let artworkInset: CGFloat
     private let plozzChannelID: String?
+    private let plozzChannelMood: LibraryChannelArtworkMood?
     @State private var loaded: LoadedLogo?
     /// Steers the plate: light themes default to light backing, dark to dark.
     @Environment(\.themePalette) private var palette
@@ -21,7 +22,8 @@ public struct ChannelLogoArtwork: View {
         size: CGSize,
         cornerRadius: CGFloat,
         artworkInset: CGFloat? = nil,
-        plozzChannelID: String? = nil
+        plozzChannelID: String? = nil,
+        plozzChannelMood: LibraryChannelArtworkMood? = nil
     ) {
         self.name = name
         self.logoURL = logoURL
@@ -29,6 +31,7 @@ public struct ChannelLogoArtwork: View {
         self.cornerRadius = cornerRadius
         self.artworkInset = artworkInset ?? size.height * 20 / 128
         self.plozzChannelID = plozzChannelID
+        self.plozzChannelMood = plozzChannelMood
     }
 
     private var current: LoadedLogo? {
@@ -42,9 +45,9 @@ public struct ChannelLogoArtwork: View {
 
     public var body: some View {
         Group {
-            if let plozzChannelID, logoURL == nil {
+            if plozzChannelID != nil, logoURL == nil {
                 PlozzChannelWordmark(
-                    name: name, identity: PlozzChannelIdentity(channelID: plozzChannelID),
+                    name: name, mood: plozzChannelMood ?? .neutral,
                     size: size, cornerRadius: cornerRadius
                 )
             } else {

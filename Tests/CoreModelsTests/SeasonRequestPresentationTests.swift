@@ -86,6 +86,9 @@ final class SeasonRequestPresentationTests: XCTestCase {
         XCTAssertEqual(english(SeasonRequestPresentation(
             availability: .init(status: .processing, downloadProgress: 0.25, seasons: [base]), now: now
         ).title), "S1 Processing")
+        XCTAssertEqual(english(SeasonRequestPresentation(
+            availability: .init(status: .processing, hasDownloadActivity: true, seasons: [base]), now: now
+        ).title), "S1 Processing")
     }
 
     func testMixedReleaseWaitCountsDoNotCallEverySeasonUnreleased() throws {

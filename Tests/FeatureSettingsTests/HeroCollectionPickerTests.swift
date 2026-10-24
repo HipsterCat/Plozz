@@ -53,6 +53,11 @@ final class HeroCollectionPickerTests: XCTestCase {
             [.init(accountID: "a", libraryID: nil), .init(accountID: "a", libraryID: "movies")]
         )
         XCTAssertTrue(HeroCollectionPickerSource.available(libraries: [library], accounts: []).isEmpty)
+        XCTAssertEqual(
+            HeroCollectionPickerSource.available(libraries: [library], accounts: [account]).map(\.providerKind),
+            [.plex, .plex],
+            "Every library and account-only source uses the active account's brand."
+        )
     }
 
     @MainActor

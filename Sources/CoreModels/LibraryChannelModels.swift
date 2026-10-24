@@ -195,11 +195,9 @@ public struct LibraryChannelItem: Codable, Hashable, Identifiable, Sendable {
     }
 
     public init(item: MediaItem, library: LibraryChannelLibrary, serverID: String, userID: String) throws {
+        try Self.validateSource(library: library, serverID: serverID, userID: userID)
         guard (item.kind == .movie || item.kind == .episode),
               Self.isNativeIdentifier(item.id),
-              Self.isNativeIdentifier(library.libraryID),
-              LibraryChannelLibrary.isSafeAccountIdentifier(library.accountID),
-              Self.isNativeIdentifier(serverID), Self.isNativeIdentifier(userID),
               item.selectedVersionID.map(Self.isNativeIdentifier) ?? true,
               (item.versions.first?.id).map(Self.isNativeIdentifier) ?? true,
               let runtime = item.runtime, runtime.isFinite,
@@ -226,11 +224,10 @@ public struct LibraryChannelItem: Codable, Hashable, Identifiable, Sendable {
     }
 
     public func validate() throws {
+        try Self.validateSource(library: library, serverID: serverID, userID: userID)
         guard kind == .movie || kind == .episode,
               (1...604_800).contains(durationSeconds),
-              Self.isNativeIdentifier(itemID), Self.isNativeIdentifier(library.libraryID),
-              LibraryChannelLibrary.isSafeAccountIdentifier(library.accountID),
-              Self.isNativeIdentifier(serverID), Self.isNativeIdentifier(userID),
+              Self.isNativeIdentifier(itemID),
               mediaSourceID.map(Self.isNativeIdentifier) ?? true,
               seriesID.map(Self.isNativeIdentifier) ?? true,
               sourceRevision.map(Self.isNativeIdentifier) ?? true,
@@ -239,6 +236,14 @@ public struct LibraryChannelItem: Codable, Hashable, Identifiable, Sendable {
               seriesTitle.map({ $0.utf8.count <= 8_192 }) ?? true,
               edition.map({ $0.utf8.count <= 1_024 }) ?? true,
               rating.map({ $0.utf8.count <= 512 }) ?? true else {
+            throw LibraryChannelError.invalidSnapshot
+        }
+    }
+
+    public static func validateSource(library: LibraryChannelLibrary, serverID: String, userID: String) throws {
+        guard Self.isNativeIdentifier(library.libraryID),
+              LibraryChannelLibrary.isSafeAccountIdentifier(library.accountID),
+              Self.isNativeIdentifier(serverID), Self.isNativeIdentifier(userID) else {
             throw LibraryChannelError.invalidSnapshot
         }
     }

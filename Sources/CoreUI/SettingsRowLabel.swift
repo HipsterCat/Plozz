@@ -45,9 +45,11 @@ private extension VerticalAlignment {
 public struct SettingsRowLabel<Secondary: View, Trailing: View>: View {
     private let icon: String?
     private let assetIcon: String?
+    private let customIcon: AnyView?
     private let title: Text
     private let secondary: Secondary
     private let trailing: Trailing
+    private let contentInsets: EdgeInsets?
 
     private var titleFont: Font {
         #if os(tvOS)
@@ -80,19 +82,57 @@ public struct SettingsRowLabel<Secondary: View, Trailing: View>: View {
     ) {
         self.icon = icon
         self.assetIcon = assetIcon
+        self.customIcon = nil
+        self.contentInsets = nil
         self.title = title
         self.secondary = secondary()
         self.trailing = trailing()
     }
 
+    public init<Icon: View>(
+        title: Text,
+        contentInsets: EdgeInsets? = nil,
+        @ViewBuilder icon: () -> Icon,
+        @ViewBuilder secondary: () -> Secondary = { EmptyView() },
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() }
+    ) {
+        self.icon = nil
+        self.assetIcon = nil
+        self.customIcon = AnyView(icon())
+        self.title = title
+        self.contentInsets = contentInsets
+        self.secondary = secondary()
+        self.trailing = trailing()
+    }
+
     public var body: some View {
+        Group {
+            if let contentInsets {
+                rowContent.padding(contentInsets)
+            } else {
+                #if os(tvOS)
+                rowContent.settingsFormRowLayout()
+                #else
+                rowContent
+                    .padding(.horizontal, SettingsRowMetrics.horizontalPadding)
+                    .padding(.vertical, 12)
+                #endif
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 16) {
             // Icon + text share a custom alignment so the icon centers on the
             // TITLE line, not the two-line block. The trailing accessory stays in
             // the outer HStack (default center), so the chevron keeps centering on
             // the full row height.
             HStack(alignment: .rowTitleIcon, spacing: SettingsRowMetrics.iconTitleSpacing) {
-                if let assetIcon {
+                if let customIcon {
+                    customIcon
+                        .alignmentGuide(.rowTitleIcon) { $0[VerticalAlignment.center] }
+                } else if let assetIcon {
                     // Custom (non–SF Symbol) glyph from the asset catalog. It's
                     // rendered as a TEMPLATE so it inherits the same tint / focus
                     // inversion as the SF Symbols, and sized to ~22pt (the symbols'
@@ -122,9 +162,6 @@ public struct SettingsRowLabel<Secondary: View, Trailing: View>: View {
             Spacer(minLength: 12)
             trailing
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, SettingsRowMetrics.horizontalPadding)
-        .contentShape(Rectangle())
     }
 }
 #endif

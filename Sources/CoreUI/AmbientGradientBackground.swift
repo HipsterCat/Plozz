@@ -22,6 +22,14 @@ public struct AmbientGradientBackground: View {
         self.tint = tint
     }
 
+    private var restoresPaletteWithoutAnimation: Bool {
+        #if os(tvOS)
+        reduceMotion || DetailTransitionNavigation.isRestoringSourcePage
+        #else
+        reduceMotion
+        #endif
+    }
+
     public var body: some View {
         let colors = Self.meshColors(tint: tint, palette: palette, tintSaturation: tintSaturation)
         Self.mesh(colors: colors)
@@ -31,12 +39,12 @@ public struct AmbientGradientBackground: View {
                     NativeGradientViewport(
                         surface: ambient.cardSurface,
                         style: .init(colors: colors, palette: palette),
-                        reduceMotion: reduceMotion
+                        reduceMotion: restoresPaletteWithoutAnimation
                     )
                 }
             }
             #endif
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.8), value: colors)
+            .animation(restoresPaletteWithoutAnimation ? nil : .easeInOut(duration: 0.8), value: colors)
             .ignoresSafeArea()
             .allowsHitTesting(false)
             .accessibilityHidden(true)

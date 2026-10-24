@@ -25,6 +25,9 @@ public struct JellyfinClient: Sendable {
     /// One-way latch flipped the first time any request through this connection
     /// succeeds. See ``hasConfirmedReachableConnection``.
     private let reachability: ReachabilityLatch
+    private let playbackRequests: PlaybackInfoRequestCoordinator
+    private let playbackServerKey: String
+    private let inventoryScope = UUID()
 
     public init(
         baseURL: URL,
@@ -36,8 +39,11 @@ public struct JellyfinClient: Sendable {
         capabilityProfile: JellyfinCapabilityProfile = .detected(),
         serverID: String? = nil,
         alternateURLs: [URL] = [],
-        addressProbe: any HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery)
+        addressProbe: any HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
+        playbackRequests: PlaybackInfoRequestCoordinator = .shared
     ) {
+        self.playbackRequests = playbackRequests
+        self.playbackServerKey = "\(providerKind.rawValue)|\(serverID ?? baseURL.absoluteString)"
         let latch = ReachabilityLatch()
         let resolver: ServerAddressResolver?
         if let serverID {
@@ -90,8 +96,12 @@ public struct JellyfinClient: Sendable {
         http: HTTPClient,
         interactiveHTTP: HTTPClient,
         capabilityProfile: JellyfinCapabilityProfile,
-        addressResolver: ServerAddressResolver?
+        addressResolver: ServerAddressResolver?,
+        playbackRequests: PlaybackInfoRequestCoordinator,
+        playbackServerKey: String
     ) {
+        self.playbackRequests = playbackRequests
+        self.playbackServerKey = playbackServerKey
         self.savedBaseURL = baseURL
         self.addressResolver = addressResolver
         self.deviceProfile = deviceProfile
@@ -139,7 +149,9 @@ public struct JellyfinClient: Sendable {
             http: http,
             interactiveHTTP: interactiveHTTP,
             capabilityProfile: capabilityProfile,
-            addressResolver: addressResolver
+            addressResolver: addressResolver,
+            playbackRequests: playbackRequests,
+            playbackServerKey: playbackServerKey
         )
     }
 
@@ -150,14 +162,6 @@ public struct JellyfinClient: Sendable {
     }
 
     // MARK: System
-
-    func watchHistorySystemInfo() async throws -> JellyfinWatchHistoryInfo {
-        try await http.decode(
-            JellyfinWatchHistoryInfo.self,
-            from: Endpoint(path: "/System/Info/Public", redirectPolicy: .sameOrigin),
-            baseURL: baseURL
-        )
-    }
 
     /// `GET /System/Info/Public` — used to validate a manual URL and read the
     /// server's identity/name. No auth required.
@@ -371,7 +375,9 @@ public struct JellyfinClient: Sendable {
             queryItems: queryItems,
             headers: authHeaders
         )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        return try await HTTPResponseDiagnostics.$route.withValue(.resumeItems) {
+            try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        }
     }
 
     /// `GET /Shows/NextUp` — the next unwatched episode for each series the user
@@ -440,7 +446,9 @@ public struct JellyfinClient: Sendable {
             queryItems: queryItems,
             headers: authHeaders
         )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        return try await HTTPResponseDiagnostics.$route.withValue(.nextUp) {
+            try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        }
     }
 
     /// Drains a MediaBrowser item feed in fixed-size pages. Some servers return
@@ -693,8 +701,9 @@ public struct JellyfinClient: Sendable {
             ],
             headers: authHeaders
         )
-        let result = try await interactiveHTTP.decode(BaseItemDto.self, from: endpoint, baseURL: baseURL)
-        return result
+        return try await HTTPResponseDiagnostics.$route.withValue(.itemDetail) {
+            try await interactiveHTTP.decode(BaseItemDto.self, from: endpoint, baseURL: baseURL)
+        }
     }
 
     /// `GET /Items/{id}/ThemeSongs`. Parent inheritance lets season and episode
@@ -1102,18 +1111,28 @@ public struct JellyfinClient: Sendable {
 
     var canRequestHEVC: Bool { capabilityProfile.canRequestHEVC }
 
-    /// GET enumerates sources without a device profile, stream opening, or
-    /// playback reporting. Its generated PlaySessionId is not an encoding lease.
+    /// Explicit source discovery. GET can trigger server-side probing; it is not
+    /// a passive metadata read. Its PlaySessionId is not an encoding lease.
     func playbackSourceInventory(userID: String, itemID: String) async throws -> PlaybackInfoResponse {
-        try await interactiveHTTP.decode(
-            PlaybackInfoResponse.self,
-            from: Endpoint(
-                path: "/Items/\(itemID)/PlaybackInfo",
-                queryItems: [URLQueryItem(name: "UserId", value: userID)],
-                headers: authHeaders
-            ),
-            baseURL: baseURL
-        )
+        let result = try await HTTPResponseDiagnostics.$route.withValue(.playbackInventory) {
+            try await playbackRequests.run(
+                server: playbackServerKey,
+                inventoryKey: .init(scope: inventoryScope, userID: userID, itemID: itemID)
+            ) {
+                try await interactiveHTTP.decode(
+                    PlaybackInfoResponse.self,
+                    from: Endpoint(
+                        path: "/Items/\(itemID)/PlaybackInfo",
+                        queryItems: [URLQueryItem(name: "UserId", value: userID)],
+                        headers: authHeaders,
+                        allowsAutomaticAddressRetry: false
+                    ),
+                    baseURL: baseURL
+                )
+            }
+        }
+        try Task.checkCancellation()
+        return result
     }
 
     func playbackInfo(
@@ -1195,7 +1214,14 @@ public struct JellyfinClient: Sendable {
             AllowVideoStreamCopy: allowStreamCopy,
             AllowAudioStreamCopy: allowStreamCopy
         ))
-        guard streaming != nil else {
+        let request = endpoint
+        return try await playbackRequests.run(server: playbackServerKey) {
+            try await sendPlaybackInfo(request, streaming: streaming != nil)
+        }
+    }
+
+    private func sendPlaybackInfo(_ endpoint: Endpoint, streaming: Bool) async throws -> PlaybackInfoResponse {
+        guard streaming else {
             return try await http.decode(PlaybackInfoResponse.self, from: endpoint, baseURL: baseURL)
         }
         let (data, response) = try await http.sendRaw(endpoint, baseURL: baseURL)
@@ -1743,16 +1769,22 @@ public struct JellyfinClient: Sendable {
         case .thumb: typeSegment = "Thumb"
         case .logo: typeSegment = "Logo"
         }
+        return itemImageURL(itemID: itemID, typeSegment: typeSegment, maxWidth: maxWidth, tag: tag, index: index)
+    }
+
+    func chapterImageURL(itemID: String, index: Int, tag: String) -> URL? {
+        itemImageURL(itemID: itemID, typeSegment: "Chapter", maxWidth: 480, tag: tag, index: index)
+    }
+
+    private func itemImageURL(
+        itemID: String, typeSegment: String, maxWidth: Int?, tag: String?, index: Int?
+    ) -> URL? {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         let basePath = components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path
         components.path = basePath + "/Items/\(itemID)/Images/\(typeSegment)"
-        // Only `Backdrop` holds more than one image, and the *index* is what
-        // selects between them — it belongs in the path, not the query. `tag`
-        // alone does not: the server reads it for cache validation and still
-        // serves index 0, so a second backdrop requested by tag came back as the
-        // first one. Index 0 keeps the bare path it has always used, so every
-        // existing URL (and anything cached under it) is byte-identical.
-        if let index, index > 0 {
+        // Backdrop and Chapter images use path indexes; tags only validate caches.
+        // Preserve existing backdrop-zero URLs, but chapters require explicit zero.
+        if let index, index > 0 || typeSegment == "Chapter" {
             components.path += "/\(index)"
         }
         var query: [URLQueryItem] = []

@@ -57,6 +57,41 @@ final class LiveTVSourceDiagnosticsTests: XCTestCase {
         ])
     }
 
+    func testDeduplicationKeepsIdentityAndPartitionScopesIndependent() throws {
+        let recorder = LiveTVSourceDiagnostics(url: try journalURL())
+        let identityKinds: [LiveTVSourceDiagnostics.Identity] = [
+            .namespace, .profile, .account, .catalog, .source
+        ]
+        var scopes: [[LiveTVSourceDiagnostics.Identity: String]] = [[:]]
+        for identity in identityKinds {
+            scopes.append([identity: identity.rawValue])
+        }
+        let partitions: [Bool?] = [nil, false, true]
+        for _ in 0..<2 {
+            for identities in scopes {
+                for partition in partitions {
+                    var flags: [LiveTVSourceDiagnostics.Flag: Bool] = [:]
+                    flags[.sharedPartition] = partition
+                    recorder.record(.sourceRead, identities: identities, flags: flags, deduplicate: true)
+                }
+            }
+        }
+        XCTAssertEqual(try decode(recorder.report()).entries.count, scopes.count * partitions.count)
+    }
+
+    func testKeychainReadDeduplicationKeepsStorageKeysIndependent() throws {
+        let recorder = LiveTVSourceDiagnostics(url: try journalURL())
+        for _ in 0..<2 {
+            for storageKey in ["first", "second"] {
+                recorder.record(
+                    .keychainRead, identities: [.namespace: "namespace", .storageKey: storageKey],
+                    flags: [.sharedPartition: true], deduplicate: true
+                )
+            }
+        }
+        XCTAssertEqual(try decode(recorder.report()).entries.count, 2)
+    }
+
     func testEntryAndByteLimitsExposeDiscardedEvidenceAndKeepNewestState() throws {
         let url = try journalURL()
         let recorder = LiveTVSourceDiagnostics(url: url)

@@ -77,8 +77,13 @@ struct PlozziOSSettingsView: View {
             )
             .presentationSizing(.page)
         }
+        .plozzSheet(item: $providerSetupRouter.reauthenticationAccount) { account in
+            PlozziOSAccountReauthenticationView(appModel: appModel, account: account)
+                .presentationSizing(.page)
+        }
         .onChange(of: appModel.profiles.activeProfileID) { _, _ in
             providerSetupRouter.addressAccount = nil
+            providerSetupRouter.reauthenticationAccount = nil
         }
         .onChange(of: appModel.liveTVAdmissionDiagnostic, initial: true) { _, diagnostic in
             HandoffDiagnostics.emit("SOURCES event=appAdmission \(diagnostic)")
@@ -169,7 +174,7 @@ struct PlozziOSSettingsView: View {
         Binding<PlexHomeUsersModel.PlexPINRequest?>
     {
         Binding(
-            get: { appModel.plexHomeUsers.pendingPlexPINRequest },
+            get: { appModel.plexPINRequestForAppPresentation },
             set: { request in
                 if request == nil {
                     appModel.plexHomeUsers.dismissPlexPINIfPresented()
@@ -357,7 +362,7 @@ private struct PlozziOSProfileSettingsPage: View {
             LiveTVSettingsView(
                 store: LiveTVViewSettingsStore(namespace: appModel.profiles.activeNamespace),
                 preferencesStore: LiveTVPreferencesStore(namespace: appModel.profiles.activeNamespace),
-                sourceManagement: {
+                sourceManagement: { preferences in
                     AnyView(PlozziOSLiveTVSourcesDestination(
                         profileID: appModel.profiles.activeProfile.id,
                         preferencesNamespace: appModel.profiles.activeNamespace,
@@ -365,7 +370,8 @@ private struct PlozziOSProfileSettingsPage: View {
                         connectServer: onAddServer,
                         didConfigurePlaylist: { _ = appModel.recordSuccessfulIPTVSetup() },
                         isPresented: isPresented,
-                        isProfileAuthorized: { [appModel] in appModel.isLiveTVProfileAuthorized }
+                        isProfileAuthorized: { [appModel] in appModel.isLiveTVProfileAuthorized },
+                        settingsPreferences: preferences
                     ))
                 }
             )
@@ -1446,6 +1452,7 @@ struct PlozziOSProfileSettingsRoute: Hashable {
 
 struct PlozziOSAccountDetailView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
 
     let appModel: PlozziOSAppModel
     let account: Account
@@ -1490,6 +1497,11 @@ struct PlozziOSAccountDetailView: View {
             }
 
             SettingsSectionGroup {
+                if account.server.provider.supportsAccountReauthentication, let providerSetupRouter {
+                    Button("Sign In Again", systemImage: "arrow.clockwise") {
+                        providerSetupRouter.reauthenticationAccount = account
+                    }
+                }
                 Button("Remove Server", role: .destructive) {
                     confirmRemoval = true
                 }
@@ -1587,111 +1599,6 @@ private struct PlozziOSShareScanSection: View {
     }
 }
 
-struct PlozziOSPlexHomeUserSettingsView: View {
-    let appModel: PlozziOSAppModel
-    let account: Account
-    @State private var users: [PlexHomeUser] = []
-    @State private var isLoading = false
-
-    var body: some View {
-        List {
-            SettingsSectionGroup("Account owner") {
-                let owner = users.first(where: \.isAdmin)
-                userButton(
-                    name: owner?.name ?? (account.userName.isEmpty ? "Plex Account Owner" : account.userName),
-                    avatarURL: owner?.avatarURL,
-                    requiresPIN: owner?.requiresPIN ?? false,
-                    user: owner
-                )
-                .disabled(owner == nil)
-            }
-
-            SettingsSectionGroup("Home users") {
-                if isLoading {
-                    HStack {
-                        ProgressView()
-                        Text("Loading Plex Home…")
-                    }
-                } else if users.isEmpty {
-                    Text("No additional Plex Home users were found.")
-                        .plozzForeground(.secondary)
-                } else {
-                    ForEach(users.filter { !$0.isAdmin }) { user in
-                        userButton(
-                            name: user.name,
-                            avatarURL: user.avatarURL,
-                            requiresPIN: user.requiresPIN,
-                            user: user
-                        )
-                    }
-                }
-            } footer: {
-                Text("PIN-protected users must unlock when their Plozz profile becomes active.")
-            }
-        }
-        .settingsPageSurface()
-        .navigationTitle("Plex User")
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            isLoading = true
-            users = await appModel.plexHomeUsers.plexHomeUsers(
-                forAccountID: account.id
-            )
-            isLoading = false
-        }
-    }
-
-    private func userButton(
-        name: String,
-        avatarURL: URL?,
-        requiresPIN: Bool,
-        user: PlexHomeUser?
-    ) -> some View {
-        Button {
-            appModel.plexHomeUsers.setPlexHomeUserForActiveProfile(
-                accountID: account.id,
-                user: user
-            )
-        } label: {
-            HStack(spacing: 12) {
-                AsyncImage(url: avatarURL) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Image(systemName: "person.crop.circle.fill")
-                        .resizable()
-                        .plozzForeground(.secondary)
-                }
-                .frame(width: 40, height: 40)
-                .clipShape(Circle())
-
-                Text(name)
-                    .foregroundStyle(.primary)
-                if requiresPIN {
-                    Image(systemName: "lock.fill")
-                        .font(.caption)
-                        .plozzForeground(.secondary)
-                }
-                Spacer()
-                if isSelected(user) {
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(.tint)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func isSelected(_ user: PlexHomeUser?) -> Bool {
-        let binding = appModel.profiles.activeProfile.homeUserBinding(
-            forPlexAccount: account.id
-        )
-        if let user {
-            return binding?.homeUserID == user.id || (binding == nil && user.isAdmin)
-        }
-        return binding == nil
-    }
-}
-
 struct PlozziOSAppearanceSettingsView: View {
     let appModel: PlozziOSAppModel
     @Bindable var theme: ThemeSettingsModel
@@ -1703,14 +1610,13 @@ struct PlozziOSAppearanceSettingsView: View {
     @State private var destination: Page?
 
     private enum Page: String, CaseIterable, Identifiable {
-        case theme, cards, artwork, spoilers, circadian
+        case theme, cards, artwork, circadian
         var id: Self { self }
         var title: LocalizedStringResource {
             switch self {
             case .theme: "Theme"
             case .cards: "Cards"
             case .artwork: "Artwork"
-            case .spoilers: "Spoiler Protection"
             case .circadian: "Circadian Mode"
             }
         }
@@ -1739,8 +1645,6 @@ struct PlozziOSAppearanceSettingsView: View {
                 PlozziOSArtworkSettingsView(
                     appModel: appModel, cardStyle: cardStyle, canManageProviders: canManageProviders
                 )
-            case .spoilers:
-                PlozziOSSpoilerSettingsView(model: appModel.settings.spoilers)
             case .circadian:
                 PlozziOSNightShiftSettingsView(model: appModel.settings.nightShift)
             }
@@ -1779,21 +1683,32 @@ private struct PlozziOSScreensNavigationSettingsView: View {
     @State private var destination: Page?
 
     private enum Page: String, CaseIterable, Identifiable {
-        case home, navigation, detail
+        case home, libraries, navigation, detail, spoilers
         var id: Self { self }
         var title: LocalizedStringResource {
             switch self {
             case .home: "Customize Home"
+            case .libraries: "Customize Libraries"
             case .navigation: "Navigation"
             case .detail: "Detail Page"
+            case .spoilers: "Spoiler Protection"
             }
         }
     }
 
     var body: some View {
         List {
-            SettingsSectionGroup {
-                ForEach(Page.allCases) { page in
+            SettingsSectionGroup("All screens") {
+                ContentRatingToggle(model: appModel.settings.contentRatings)
+                ForEach([Page.spoilers, .navigation]) { page in
+                    Button { destination = page } label: {
+                        SettingsDisclosureLabel { Text(page.title) }
+                    }
+                    .accessibilityIdentifier("screens-\(page.rawValue)")
+                }
+            }
+            SettingsSectionGroup("Customize individual screens") {
+                ForEach([Page.home, .libraries, .detail]) { page in
                     Button { destination = page } label: {
                         SettingsDisclosureLabel { Text(page.title) }
                     }
@@ -1804,18 +1719,33 @@ private struct PlozziOSScreensNavigationSettingsView: View {
         .navigationTitle("Screens & Navigation")
         .navigationDestination(item: $destination) { page in
             switch page {
+            case .spoilers:
+                PlozziOSSpoilerSettingsView(model: appModel.settings.spoilers)
             case .home:
                 PlozziOSHomeSettingsView(
                     hero: appModel.settings.hero, heroBackground: appModel.settings.heroBackground,
                     cards: appModel.settings.cardStyle,
                     visibility: appModel.settings.homeVisibility,
-                    accounts: appModel.accountsProviders.resolvedActiveAccounts
+                    accounts: appModel.accountsProviders.resolvedActiveAccounts,
+                    spoilerSettings: appModel.settings.spoilers.settings
                 )
                 .id(ObjectIdentifier(appModel.settings.homeVisibility))
             case .navigation:
                 PlozziOSNavigationSettingsView(appModel: appModel)
+            case .libraries:
+                LibraryPresentationSettingsView(
+                    model: appModel.settings.libraryPresentation, cards: appModel.settings.cardStyle,
+                    visibility: appModel.settings.homeVisibility,
+                    accounts: appModel.accountsProviders.resolvedActiveAccounts,
+                    loader: LibraryPresentationLoader(
+                        settings: appModel.settings.libraryPresentation,
+                        namespace: appModel.profiles.activeNamespace
+                    )
+                )
+                .id(ObjectIdentifier(appModel.settings.libraryPresentation))
             case .detail:
                 PlozziOSDetailPageSettingsView(
+                    cards: appModel.settings.cardStyle,
                     heroBackground: appModel.settings.heroBackground,
                     themeMusic: appModel.settings.themeMusic, detailPage: appModel.settings.detailPage
                 )
@@ -1928,6 +1858,7 @@ struct PlozziOSHomeSettingsView: View {
     let cards: CardStyleSettingsModel
     let visibility: HomeLibraryVisibilityModel
     let accounts: [ResolvedAccount]
+    var spoilerSettings: SpoilerSettings = .default
     @State private var librarySnapshot: (scope: HomeSectionCatalogModel.RequestID, choices: [HomeLibraryChoice])?
 
     private var libraryRequestID: HomeSectionCatalogModel.RequestID {
@@ -1940,7 +1871,10 @@ struct PlozziOSHomeSettingsView: View {
     }
 
     var body: some View {
-        HomeRowsSettingsView(libraries: aggregatedHomeLibraries, accounts: accounts, visibility: visibility)
+        HomeRowsSettingsView(
+            libraries: aggregatedHomeLibraries, accounts: accounts, visibility: visibility,
+            spoilerSettings: spoilerSettings
+        )
         .id(ObjectIdentifier(visibility))
         .environment(hero)
         .environment(heroBackground)
@@ -2006,12 +1940,21 @@ private struct HomeLibraryChoice {
 }
 
 private struct PlozziOSDetailPageSettingsView: View {
+    let cards: CardStyleSettingsModel
     @Bindable var heroBackground: HeroBackgroundSettingsModel
     @Bindable var themeMusic: ThemeMusicSettingsModel
     @Bindable var detailPage: DetailPageSettingsModel
 
     var body: some View {
         List {
+            SettingsSectionGroup("Card labels") {
+                CardCaptionSettingsControls(cards: cards, scope: .detail)
+            }
+            SettingsSectionGroup {
+                HeroLogoSizeControl(
+                    size: $detailPage.settings.logoSize, textSize: $detailPage.settings.textSize, surface: .detail
+                )
+            }
             SettingsSectionGroup("Review scores") {
                 Toggle("Show review scores", isOn: $detailPage.settings.showsHeaderRatings)
                 if detailPage.settings.showsHeaderRatings {
@@ -2046,7 +1989,7 @@ private struct PlozziOSDetailPageSettingsView: View {
                         "Theme music volume",
                         selection: $themeMusic.settings.volume
                     ) {
-                        ForEach(ThemeMusicVolume.allCases, id: \.self) {
+                        ForEach(ThemeMusicVolume.playbackLevels, id: \.self) {
                             Text($0.displayName).tag($0)
                         }
                     }
@@ -2115,27 +2058,6 @@ struct PlozziOSPlaybackSettingsView: View {
             .language($0.code)
         }
 
-    /// On seeds every kind with the current mode, so turning it on changes
-    /// nothing until a kind is set; off returns every kind to the one mode.
-    private var perKindSkipBinding: Binding<Bool> {
-        Binding(
-            get: { !model.settings.skipModeOverrides.isEmpty },
-            set: { on in
-                let base = model.settings.skipIntros
-                model.settings.skipModeOverrides = on
-                    ? Dictionary(uniqueKeysWithValues: MediaSegment.Kind.skippable.map { ($0, base) })
-                    : [:]
-            }
-        )
-    }
-
-    private func skipModeBinding(for kind: MediaSegment.Kind) -> Binding<SkipIntrosMode> {
-        Binding(
-            get: { model.settings.skipMarkerModes.mode(for: kind) },
-            set: { model.settings.skipModeOverrides[kind] = $0 }
-        )
-    }
-
     var body: some View {
         List {
             PlozziOSStreamingSettings(
@@ -2144,6 +2066,7 @@ struct PlozziOSPlaybackSettingsView: View {
                 onShowAdvanced: { showsAdvancedStreaming = true }
             )
             PlaybackReadAheadControl()
+            LivePlaybackBufferControl()
             if UIDevice.current.userInterfaceIdiom == .phone {
                 SettingsSectionGroup {
                     Picker("Player orientation", selection: $model.settings.orientation) {
@@ -2154,43 +2077,7 @@ struct PlozziOSPlaybackSettingsView: View {
                     .accessibilityIdentifier("playback-orientation")
                 }
             }
-            SettingsSectionGroup("Skip intros, credits & more") {
-                if model.settings.skipModeOverrides.isEmpty {
-                    Picker("Skip", selection: $model.settings.skipIntros) {
-                        ForEach(SkipIntrosMode.allCases, id: \.self) {
-                            Text($0.title).tag($0)
-                        }
-                    }
-                }
-                Toggle("Set each marker separately", isOn: perKindSkipBinding)
-                if !model.settings.skipModeOverrides.isEmpty {
-                    ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
-                        Picker(selection: skipModeBinding(for: kind)) {
-                            ForEach(SkipIntrosMode.allCases, id: \.self) {
-                                Text($0.title).tag($0)
-                            }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(kind.settingsTitle)
-                                if let hint = kind.settingsHint {
-                                    Text(hint)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-                Toggle(isOn: $model.settings.useCommunityMarkers) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Use community markers")
-                        Text("Looks up missing markers on IntroDB and TheIntroDB using IMDb/TMDB IDs.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
+            SkipMarkerSettingsControl(model: model)
 
             SettingsSectionGroup("Skipping") {
                 Picker("Skip backward", selection: $model.settings.skipBackwardInterval) {
@@ -2274,7 +2161,7 @@ struct PlozziOSPlaybackSettingsView: View {
                     }
                 }
                 Toggle(
-                    "Remember audio per series",
+                    "Remember audio language per series",
                     isOn: $model.settings.rememberAudioTrackPerSeries
                 )
                 Toggle(

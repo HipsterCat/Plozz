@@ -117,7 +117,9 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
         XCTAssertLessThan(try pixel(curved, at: CGPoint(x: 226, y: 55))[0], 250,
                           "The shadow must extend below the tile's 52pt boundary")
         XCTAssertEqual(try pixel(curved, at: CGPoint(x: 145, y: 75))[0], 255)
-        let floating = try render(show, enabled: true, scheme: .dark, indicator: .watched, background: .white)
+        let floating = try render(
+            show, enabled: true, scheme: .dark, indicator: .watched, background: .white, countStyle: .floating
+        )
         XCTAssertEqual(try pixel(floating, at: CGPoint(x: 230, y: 8))[0], 255,
                        "The floating tile must retain its top/right clearance")
         XCTAssertNotEqual(curved.pngData(), floating.pngData())
@@ -134,6 +136,23 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
                     background: .white, metrics: metrics, width: 120, radius: radius)
                 XCTAssertLessThan(try pixel(image, at: CGPoint(x: 119, y: 1))[0], 80,
                                   "The tile must reach the outer corner; only the card may round it.")
+            }
+        }
+    }
+
+    func testBothCountStylesAreIndependentOfWatchModeAndDoNotRestyleMovieMarks() throws {
+        let series = MediaItem(id: "show", title: "Show", kind: .series, unwatchedEpisodeCount: 21)
+        for style in EpisodeCountBadgeStyle.allCases {
+            XCTAssertEqual(
+                try render(series, enabled: true, scheme: .dark, indicator: .watched, countStyle: style).pngData(),
+                try render(series, enabled: true, scheme: .dark, indicator: .unwatched, countStyle: style).pngData()
+            )
+            for mode in WatchStatusIndicator.allCases {
+                let movie = MediaItem(id: "movie", title: "Movie", kind: .movie, isPlayed: mode == .watched)
+                XCTAssertEqual(
+                    try render(movie, enabled: true, scheme: .dark, indicator: mode, countStyle: style).pngData(),
+                    try render(movie, enabled: true, scheme: .dark, indicator: mode, countStyle: .attached).pngData()
+                )
             }
         }
     }
@@ -157,10 +176,12 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
         let item = MediaItem(id: "show", title: "Show", kind: .series, unwatchedEpisodeCount: 12345)
         for density in UIDensity.allCases {
             let metrics = PlozzMetrics.touch(density: density).scalingPosters(by: 0.6)
-            for indicator in WatchStatusIndicator.allCases {
+            for (indicator, style) in WatchStatusIndicator.allCases.flatMap({ mode in
+                EpisodeCountBadgeStyle.allCases.map { (mode, $0) }
+            }) {
                 let image = try render(item, enabled: true, scheme: .dark, indicator: indicator,
-                                       metrics: metrics, width: 86, radius: 12)
-                attach(image, name: "touch-count-\(density)-\(indicator)")
+                                       metrics: metrics, width: 86, radius: 12, countStyle: style)
+                attach(image, name: "touch-count-\(density)-\(indicator)-\(style)")
                 XCTAssertTrue(try recognizedText(image).contains { $0.text == "12345" },
                               "Exact counts must fit an 86pt touch poster at \(density)")
             }
@@ -204,7 +225,7 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
         }
     }
 
-    func testMobileArtworkProgressRendersEightPointHeight() throws {
+    func testArtworkProgressRendersSharedDetailedBarHeight() throws {
         for density in UIDensity.allCases {
             let metrics = PlozzMetrics.touch(density: density)
             for kind in [MediaItemKind.movie, .series] {
@@ -218,7 +239,10 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
                         filledRows += 1
                     }
                 }
-                XCTAssertEqual(filledRows, 8, "The actual \(kind) bar must be 8pt tall at \(density)")
+                XCTAssertEqual(
+                    filledRows, Int(metrics.resumeChipBarHeight),
+                    "The actual \(kind) bar must match the Detailed bar at \(density)"
+                )
             }
         }
     }
@@ -314,16 +338,18 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
         var item = MediaItem(
             id: "same-show", title: "Show", kind: .series, playedPercentage: 0.3,
             unwatchedEpisodeCount: 8, allowsTitleBasedMetadataMatching: false)
-        let configurations: [(Bool, WatchStatusIndicator)] = [
-            (false, .watched), (true, .watched), (true, .unwatched), (false, .unwatched)
+        let configurations: [(Bool, WatchStatusIndicator, EpisodeCountBadgeStyle)] = [
+            (false, .watched, .attached), (true, .watched, .attached), (true, .watched, .floating),
+            (true, .unwatched, .floating), (true, .unwatched, .attached), (false, .unwatched, .attached)
         ]
         for scheme in [ColorScheme.dark, .light] {
             environment.colorScheme = scheme
             environment.themePalette = scheme == .dark ? .dark : .light
             cell.frame = CGRect(x: 300, y: 200, width: 320, height: NativeTVLibraryCell.height(for: 320, environment: environment))
-            for (enabled, indicator) in configurations {
+            for (enabled, indicator, style) in configurations {
                 environment.plozzWatchStatusIndicator = indicator
                 environment.plozzShowsUnwatchedEpisodeCount = enabled
+                environment.plozzEpisodeCountBadgeStyle = style
                 if enabled { item.unwatchedEpisodeCount = 12345 }
                 cell.configure(item: item, spoilerSettings: .default, environment: environment)
                 cell.updateConfiguration(using: cell.configurationState)
@@ -335,7 +361,7 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
                     let image = snapshot(cell)
                     hasCount = try recognizedText(image).contains { $0.text == "12345" }
                     if hasCount == enabled {
-                        attach(image, name: "native-episode-count-\(scheme)-\(indicator)-\(enabled)")
+                        attach(image, name: "native-episode-count-\(scheme)-\(indicator)-\(style)-\(enabled)")
                         break
                     }
                 } while ContinuousClock.now < deadline
@@ -358,7 +384,7 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
         _ item: MediaItem, enabled: Bool, scheme: ColorScheme, hidesStatus: Bool = false,
         indicator: WatchStatusIndicator = .watched, background: Color = .gray,
         metrics: PlozzMetrics = .standard, width: CGFloat = 240, radius: CGFloat = 21,
-        seerConnected: Bool = false, progressHeight: CGFloat = 0
+        seerConnected: Bool = false, progressHeight: CGFloat = 0, countStyle: EpisodeCountBadgeStyle = .attached
     ) throws -> UIImage {
         let renderer = ImageRenderer(content:
             MediaCardPlaybackIndicators(
@@ -372,6 +398,7 @@ final class UnwatchedEpisodeBadgeHostedTests: XCTestCase {
                 .environment(\.themePalette, scheme == .dark ? .dark : .light)
                 .environment(\.plozzWatchStatusIndicator, indicator)
                 .environment(\.plozzShowsUnwatchedEpisodeCount, enabled)
+                .environment(\.plozzEpisodeCountBadgeStyle, countStyle)
                 .environment(\.plozzSeerConnected, seerConnected)
         )
         renderer.scale = 3

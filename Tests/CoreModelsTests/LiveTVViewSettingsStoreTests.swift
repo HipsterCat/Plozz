@@ -23,6 +23,7 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
         XCTAssertFalse(settings.wifiOnly)
         XCTAssertTrue(settings.previewAfterWatching)
         XCTAssertTrue(settings.showsRecentChannels)
+        XCTAssertTrue(settings.startsWithCategories)
     }
 
     func testAllValuesRoundTripAcrossStoreInstances() {
@@ -36,7 +37,8 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
             wifiOnly: true,
             previewAfterWatching: false,
             showsRecentChannels: false,
-            hasChosenAutoPreview: true
+            hasChosenAutoPreview: true,
+            startsWithCategories: false
         )
 
         LiveTVViewSettingsStore(defaults: defaults).save(settings)
@@ -60,6 +62,24 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
         }
         XCTAssertFalse(LiveTVViewSettingsStore(defaults: defaults).load().hasChosenAutoPreview)
         XCTAssertFalse(LiveTVViewSettingsStore(defaults: defaults).load().allowsAutomaticPreview)
+    }
+
+    func testCategoryEntryDefaultsApplyToExistingProfilesAndGuideChoiceIsIsolated() {
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: LiveTVViewSettingsStore.sortByNameKey)
+        let primary = LiveTVViewSettingsStore(defaults: defaults)
+        let secondary = LiveTVViewSettingsStore(defaults: defaults, namespace: "secondary")
+        XCTAssertTrue(primary.load().startsWithCategories)
+        XCTAssertTrue(secondary.load().startsWithCategories)
+        var settings = secondary.load()
+        settings.startsWithCategories = false
+        secondary.save(settings)
+        XCTAssertFalse(LiveTVViewSettingsStore(defaults: defaults, namespace: "secondary").load().startsWithCategories)
+        XCTAssertTrue(primary.load().startsWithCategories)
+        XCTAssertTrue(primary.load().sortByName)
+        settings.favoritesOnly = true
+        secondary.save(settings)
+        XCTAssertFalse(secondary.load().startsWithCategories)
     }
 
     func testLegacyPreviewValuesArePreservedButDoNotImplyAChoice() {

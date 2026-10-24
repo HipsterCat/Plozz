@@ -14,6 +14,7 @@ import UIKit
 /// tags are the defining metadata.
 struct DetailExtrasView: View {
     let item: MediaItem
+    @Environment(\.plozzShowsContentRatings) private var showsContentRatings
     var selectedSource: MediaSourceRef? = nil
     var selectedVersion: MediaVersion? = nil
     /// Leading inset so the cast row and chip strips align with the hero text
@@ -92,7 +93,7 @@ struct DetailExtrasView: View {
             || item.productionYear != nil
             || item.releaseDate != nil
             || item.runtime != nil
-            || item.officialRating != nil
+            || (showsContentRatings && item.ratingBadge != nil)
             || item.originalTitle != nil
             || !item.genres.isEmpty
             || !item.studios.isEmpty

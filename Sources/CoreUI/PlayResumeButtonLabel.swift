@@ -170,6 +170,7 @@ public struct PlayResumeButtonLabel: View {
     /// width-constrained caller can request a shorter form to avoid wrapping.
     public var resumeTrailingStyle: ResumeTrailingStyle
     public var isPlaceholder: Bool
+    public var isLoading: Bool
     public var separatesEpisodeText: Bool
     public var wrapsText: Bool
 
@@ -187,6 +188,7 @@ public struct PlayResumeButtonLabel: View {
         barHeight: CGFloat? = nil,
         resumeTrailingStyle: ResumeTrailingStyle = .full,
         isPlaceholder: Bool = false,
+        isLoading: Bool = false,
         separatesEpisodeText: Bool = false,
         wrapsText: Bool = false
     ) {
@@ -200,6 +202,7 @@ public struct PlayResumeButtonLabel: View {
         self.barHeight = barHeight
         self.resumeTrailingStyle = resumeTrailingStyle
         self.isPlaceholder = isPlaceholder
+        self.isLoading = isLoading
         self.separatesEpisodeText = separatesEpisodeText
         self.wrapsText = wrapsText
     }
@@ -256,7 +259,7 @@ public struct PlayResumeButtonLabel: View {
 
     private var placeholderContent: some View {
         HStack(spacing: spacing) {
-            Image(systemName: "play.fill")
+            playIcon
             Text(title)
                 .lineLimit(1)
                 .hidden()
@@ -271,7 +274,7 @@ public struct PlayResumeButtonLabel: View {
 
     private var resolvedContent: some View {
         HStack(spacing: spacing) {
-            Image(systemName: "play.fill")
+            playIcon
             if let resumeProgress {
                 ResumeProgressCapsule(
                     progress: resumeProgress,
@@ -292,6 +295,10 @@ public struct PlayResumeButtonLabel: View {
                     .fixedSize(horizontal: false, vertical: wrapsText)
             }
         }
+    }
+
+    private var playIcon: some View {
+        ActionProgressIcon(systemName: "play.fill", isLoading: isLoading, onLight: onLight)
     }
 }
 

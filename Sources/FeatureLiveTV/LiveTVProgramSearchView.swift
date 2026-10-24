@@ -235,15 +235,18 @@ public struct LiveTVProgramDetailsView: View {
                     if let rating = details.rating { Text(rating) }
                     if details.endWasInferred { Text("End time estimated from the next program.").font(.caption) }
                 }
-                Button(action: watch) { Text(watchTitle) }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                HStack {
+                    Button(action: watch) { Text(watchTitle) }
+                        .plozzActionButton()
+                }
+                .accessibilityElement(children: .contain)
                 if let item = program.libraryItem, let openLibraryItem {
                     LibraryChannelNavigationButton(item: item, action: openLibraryItem)
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .buttonStyle(SettingsFormButtonStyle())
                 }
                 if let toggleFavorite {
                     Button(isFavorite ? "Remove from Favorites" : "Add to Favorites", action: toggleFavorite)
-                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .buttonStyle(SettingsFormButtonStyle())
                 }
             } footer: {
                 Text("Watching tunes the channel live, not this program from the beginning.")

@@ -627,7 +627,9 @@ public struct ItemDetailView: View {
             availability: effectiveAvailability,
             downloadProgress: detail.item.downloadProgress,
             hasValidatedPlayableSource: hasValidatedPlayableSource,
-            seerConnected: seerConnected
+            seerConnected: seerConnected,
+            releaseDate: detail.item.releaseDate,
+            hasDownloadActivity: detail.item.hasRequestDownloadActivity == true
         )
         let discoveryStatusLine: LocalizedStringResource? = {
             guard usesExternalDetail else { return nil }
@@ -690,6 +692,8 @@ public struct ItemDetailView: View {
                             Task { await viewModel.retryPlaybackInventory(for: detail.item) }
                         } : nil,
                         isRetryingPlaybackInventory: viewModel.isRetryingPlaybackInventory(for: detail.item),
+                        allowsDeferredActivation: isPageVisible && !hasChildOnTop,
+                        deferredActionOwner: ObjectIdentifier(viewModel),
                         playProgress: canPlay ? detail.item.resumeProgressFraction : nil,
                         playRemainingText: canPlay ? detail.item.resumeRemainingText : nil,
                         playSeasonEpisodeText: canPlay ? HeroForegroundModelBuilder.seasonEpisodeButtonText(for: detail.item) : nil,
@@ -697,6 +701,7 @@ public struct ItemDetailView: View {
                         versions: usesExternalDetail ? [] : effectiveVersions,
                         selectedVersionID: effectiveVersionID,
                         onSelectVersion: { id in selectVersion(id, for: detail.item) },
+                        loadVersions: viewModel.playbackVersionsLoader(for: detail.item),
                         sources: usesExternalDetail ? [] : serverChoices,
                         offlineSourceAccountIDs: viewModel.unreachableSourceAccountIDs,
                         selectedSourceAccountID: effectiveSource?.accountID,

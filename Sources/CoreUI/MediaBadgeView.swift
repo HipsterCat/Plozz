@@ -38,15 +38,36 @@ private struct MediaBadgeScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = 1
 }
 
+private struct MetadataTextScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
+private struct ContentRatingVisibilityKey: EnvironmentKey {
+    static let defaultValue = ContentRatingSettingsStore.defaultShowsRatings
+}
+
 extension EnvironmentValues {
+    public var plozzShowsContentRatings: Bool {
+        get { self[ContentRatingVisibilityKey.self] }
+        set { self[ContentRatingVisibilityKey.self] = newValue }
+    }
+
     public var mediaBadgeScale: CGFloat {
         get { self[MediaBadgeScaleKey.self] }
         set { self[MediaBadgeScaleKey.self] = newValue }
     }
+
+    /// Scales text and its badge artwork together, independently of compact badge styling.
+    public var metadataTextScale: CGFloat {
+        get { self[MetadataTextScaleKey.self] }
+        set { self[MetadataTextScaleKey.self] = newValue }
+    }
 }
 
 public struct MediaBadgeRow: View {
-    @Environment(\.mediaBadgeScale) private var scale
+    @Environment(\.mediaBadgeScale) private var containerScale
+    @Environment(\.metadataTextScale) private var textScale
+    private var scale: CGFloat { containerScale * textScale }
     private let badges: [MediaBadge]
 
     public init(badges: [MediaBadge]) {
@@ -68,6 +89,7 @@ public struct MetadataMediaBadgeChip: View {
     private let adjacentSpacing: CGFloat?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.mediaBadgeScale) private var containerScale
+    @Environment(\.metadataTextScale) private var contentScale
 
     public init(badge: MediaBadge, adjacentSpacing: CGFloat? = nil) {
         self.badge = badge
@@ -77,7 +99,7 @@ public struct MetadataMediaBadgeChip: View {
     public var body: some View {
         MediaBadgeChip(
             badge: badge,
-            adjacentSpacing: adjacentSpacing ?? MetadataBadgeSpacing.betweenBadges * containerScale * textScale
+            adjacentSpacing: adjacentSpacing ?? MetadataBadgeSpacing.betweenBadges * containerScale * textScale * contentScale
         )
             .environment(\.mediaBadgeScale, containerScale * compactScale * textScale)
     }
@@ -100,7 +122,10 @@ public struct MediaBadgeChip: View {
     private let badge: MediaBadge
     private let adjacentSpacing: CGFloat?
     @Environment(\.themePalette) private var palette
-    @Environment(\.mediaBadgeScale) private var scale
+    @Environment(\.mediaBadgeScale) private var containerScale
+    @Environment(\.metadataTextScale) private var textScale
+    private var scale: CGFloat { containerScale * textScale }
+    @Environment(\.plozzShowsContentRatings) private var showsContentRatings
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
@@ -111,6 +136,12 @@ public struct MediaBadgeChip: View {
     }
 
     public var body: some View {
+        if badge.style != .rating || showsContentRatings {
+            visibleBadge
+        }
+    }
+
+    private var visibleBadge: some View {
         Group {
             if badge.style == .rating {
                 certificate
@@ -174,17 +205,27 @@ public struct MediaBadgeChip: View {
     }
 
     private var certificate: some View {
-        Text(verbatim: badge.label.uppercased())
-            .font(.custom("Bungee-Regular", size: ratingFontSize * scale))
-            .foregroundStyle(palette.primaryText)
+        let rating = ContentRatingPresentation(badge.label)
+        return HStack(spacing: 4 * scale) {
+            Text(verbatim: rating.label)
+                .font(.custom("Bungee-Regular", size: ratingFontSize * scale))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 150 * scale)
+            if rating.hasWarning {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: ratingFontSize * scale, weight: .semibold))
+            }
+        }
             .tracking(0.5 * scale)
-            .lineLimit(1)
             .padding(.horizontal, ratingHPadding * scale)
             .frame(height: ratingHeight * scale)
             .overlay {
                 RoundedRectangle(cornerRadius: 6 * scale, style: .continuous)
-                    .strokeBorder(palette.primaryText.opacity(0.65), lineWidth: ratingBorderWidth * scale)
+                    .strokeBorder(lineWidth: ratingBorderWidth * scale)
+                    .opacity(0.65)
             }
+            .plozzForeground(.primary)
     }
 
     private var ratingFontSize: CGFloat {

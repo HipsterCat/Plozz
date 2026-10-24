@@ -3,31 +3,6 @@ import Observation
 import CoreModels
 import CoreNetworking
 
-public enum LibraryContentMode: String, CaseIterable, Sendable {
-    case recommended
-    case titles
-    case collections
-    case playlists
-
-    public var displayName: LocalizedStringResource {
-        switch self {
-        case .recommended: "Recommended"
-        case .titles: "Browse"
-        case .collections: "Collections"
-        case .playlists: "Playlists"
-        }
-    }
-
-    public var cardCaptionView: CardCaptionView {
-        switch self {
-        case .recommended: .recommended
-        case .titles: .browse
-        case .collections: .collections
-        case .playlists: .playlists
-        }
-    }
-}
-
 public enum LibraryBrowseScope: String, Hashable, Sendable {
     case library
     case collectionMembers
@@ -102,6 +77,15 @@ public final class LibraryBrowseViewModel {
     private let preferencesStore: LibraryBrowsePreferencesStore
     private let preferenceAccountID: String
     private let settingsNamespace: String?
+    public let presentation: LibraryPresentationSettingsModel
+
+    public var recommendedRowsAddress: String {
+        LibraryPresentationSettings.rowAddress(accountID: preferenceAccountID, libraryID: containerID)
+    }
+
+    public func visibleRecommendedRows(_ rows: [LibrarySection]) -> [LibrarySection] {
+        presentation.settings.visibleRows(rows, at: recommendedRowsAddress)
+    }
     private var capabilitiesRevision: Int {
         get { queryPresentation.capabilitiesRevision }
         set { queryPresentation.capabilitiesRevision = newValue }
@@ -146,10 +130,14 @@ public final class LibraryBrowseViewModel {
             && (provider as? any CapabilityReporting)?.capabilities.contains(.videoPlaylists) == true
     }
 
-    public var availableContentModes: [LibraryContentMode] {
+    public var supportedContentModes: [LibraryContentMode] {
         (supportsRecommendations ? [.recommended] : []) + [.titles]
             + (supportsCollections ? [.collections] : [])
             + (supportsPlaylists ? [.playlists] : [])
+    }
+
+    public var availableContentModes: [LibraryContentMode] {
+        presentation.settings.visibleModes(supported: supportedContentModes)
     }
 
     /// Invalidates cells only when replacing the browsing destination/order.
@@ -304,7 +292,8 @@ public final class LibraryBrowseViewModel {
         sourceAccountID: String? = nil,
         browseScope: LibraryBrowseScope = .library,
         initialContentMode: LibraryContentMode? = nil,
-        settingsNamespace: String? = nil
+        settingsNamespace: String? = nil,
+        presentation: LibraryPresentationSettingsModel? = nil
     ) {
         self.provider = provider
         self.containerID = containerID
@@ -317,6 +306,9 @@ public final class LibraryBrowseViewModel {
         self.sortKeySuffix = sortKeySuffix
         self.sourceAccountID = sourceAccountID
         self.settingsNamespace = settingsNamespace
+        self.presentation = presentation ?? LibraryPresentationSettingsModel(
+            store: LibraryPresentationSettingsStore(defaults: defaults, namespace: settingsNamespace)
+        )
         self.preferencesStore = LibraryBrowsePreferencesStore(namespace: settingsNamespace, defaults: defaults)
         self.preferenceAccountID = sourceAccountID ?? "\(provider.session.server.id):\(provider.session.userID)"
         self.querySession = LibraryQuerySession(provider: provider, containerID: containerID, kind: containerKind)
@@ -327,7 +319,7 @@ public final class LibraryBrowseViewModel {
             let field = availableSortFields.first ?? .name
             self.sort = CoreModels.SortDescriptor(field: field, direction: field.defaultDirection)
         }
-        let defaultMode: LibraryContentMode = supportsRecommendations ? .recommended : .titles
+        let defaultMode = availableContentModes.first ?? .titles
         self.contentMode = initialContentMode.flatMap {
             availableContentModes.contains($0) ? $0 : nil
         } ?? defaultMode
@@ -920,8 +912,8 @@ public final class LibraryBrowseViewModel {
         await loadFirstPage()
     }
 
-    /// Mode belongs to this destination, not a global preference. Returning from
-    /// detail keeps it; opening another library/account always starts with titles.
+    /// Returning from detail keeps this destination's selection. Newly opened
+    /// libraries start with the first supported tab in the shared arrangement.
     public func setContentMode(_ newMode: LibraryContentMode) async {
         guard newMode != contentMode, availableContentModes.contains(newMode) else { return }
         contentMode = newMode
@@ -942,6 +934,12 @@ public final class LibraryBrowseViewModel {
         }
         restorePreferences()
         await loadFirstPage()
+    }
+
+    public func reconcileContentMode() async {
+        guard !availableContentModes.contains(contentMode),
+              let first = availableContentModes.first else { return }
+        await setContentMode(first)
     }
 
     private var preferenceAddress: String {

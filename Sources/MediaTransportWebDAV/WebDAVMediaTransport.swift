@@ -163,22 +163,13 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
     }
 
     func validate() async throws {
-        guard let url = root.origin.url(path: root.path) else {
-            throw MediaTransportError.invalidInput(reason: "invalid WebDAV root URL")
-        }
         do {
-            let headers = try await client.capabilities(
-                url: url,
+            try await client.validateCollection(
+                root: root,
                 sessionKey: sessionKey,
                 credential: credential,
                 trustPolicy: trustPolicy
             )
-            // A WebDAV server MUST advertise a `DAV` compliance-class header on
-            // OPTIONS (RFC 4918 §10.1). Its absence means this is a plain HTTP
-            // server, not a browsable share — fail closed rather than pretend.
-            guard headers["dav"] != nil else {
-                throw MediaTransportError.protocolViolation(reason: "server did not advertise WebDAV (no DAV header)")
-            }
         } catch {
             throw mapWebDAVError(error)
         }

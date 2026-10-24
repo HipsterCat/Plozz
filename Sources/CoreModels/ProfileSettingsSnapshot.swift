@@ -32,6 +32,7 @@ public enum ProfileSettingsTransfer {
     ///  - `com.plozz.uiDensity` (touch vs. TV density — platform-specific)
     ///  - `navigationStyle` (tab bar vs. sidebar — platform-specific)
     ///  - `preventsAccidentalExit` (tvOS remote behavior — platform-specific)
+    ///  - `detailZoomEnabled` (tvOS title transitions — platform-specific)
     ///  - `com.plozz.diagnosticsSettings` (device-local debugging)
     ///  - `com.plozz.syncSetup.enabled` (the sync flag itself — must not propagate)
     ///  - `com.plozz.musicAvailability` (a per-device capability, not a preference)
@@ -40,12 +41,15 @@ public enum ProfileSettingsTransfer {
     public static let transferableBaseKeys: [String] = [
         "com.plozz.appTheme",
         ThemeSettingsStore.gradientStorageKey,
+        ContentRatingSettingsStore.storageKey,
         "transparencyPreference",
         "com.plozz.cardStyle",
         CardCaptionSettingsStore.storageKey,
         ArtworkSettingsStore.storageKey,
         "com.plozz.watchStatusIndicator",
         WatchStatusIndicatorSettingsStore.episodeCountStorageKey,
+        WatchStatusIndicatorSettingsStore.episodeCountStyleStorageKey,
+        WatchStatusIndicatorSettingsStore.colorStorageKey,
         "com.plozz.nightShift",
         "com.plozz.playbackSettings",
         "com.plozz.playback.preferredVersions",
@@ -61,6 +65,7 @@ public enum ProfileSettingsTransfer {
         "com.plozz.heroSettings",
         "com.plozz.homeLibraryVisibility",
         LibraryBrowsePreferencesStore.storageKey,
+        LibraryPresentationSettingsStore.storageKey,
         "com.plozz.homeLayout.v2",
         "home-content",
         "com.plozz.musicLandingLayout",
@@ -106,7 +111,8 @@ public enum ProfileSettingsTransfer {
     /// Normalize a persisted settings value into a byte-stable form. A `Data` blob
     /// that is really JSON (the common case — most settings stores persist
     /// `JSONEncoder().encode(...)` output) is re-serialized with SORTED keys so
-    /// dictionary ordering can't vary run-to-run. Everything else is returned
+    /// dictionary ordering can't vary run-to-run. Known set-valued fields are
+    /// sorted without changing ordered arrays. Everything else is returned
     /// unchanged: property-list scalars/strings/arrays already serialize
     /// deterministically, and a non-JSON `Data` blob is left as its (stable) bytes.
     static func canonicalize(_ value: Any, baseKey: String? = nil) -> Any {
@@ -117,6 +123,11 @@ public enum ProfileSettingsTransfer {
             // Old clients/snapshots still contain the retired profile field.
             playback.removeValue(forKey: "externalPlayer")
             object = playback
+        }
+        if baseKey == "com.plozz.heroSettings", var hero = object as? [String: Any],
+           let libraries = hero["randomLibraryKeys"] as? [String] {
+            hero["randomLibraryKeys"] = Set(libraries).sorted()
+            object = hero
         }
         guard let canonical = try? JSONSerialization.data(
                 withJSONObject: object, options: [.sortedKeys, .fragmentsAllowed])

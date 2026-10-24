@@ -321,6 +321,8 @@ public struct PlaybackRequest: Hashable, Sendable {
     public var playSessionID: String?
     public var audioTracks: [MediaTrack]
     public var subtitleTracks: [MediaTrack]
+    /// Optional server-authored chapters. Empty sources expose no chapter controls.
+    public var chapters: [MediaChapter] = []
     /// Provider stream index already encoded into this rendition's video pixels.
     /// The client must not draw it again; changing it requires a new rendition.
     public var burnedInSubtitleTrackID: Int?
@@ -376,8 +378,7 @@ public struct PlaybackRequest: Hashable, Sendable {
     /// express no preference (engine uses the container default). Not part of the
     /// memberwise init so the many provider construction sites stay untouched.
     public var preferredAudioLanguages: [String] = []
-    /// TrueHD Atmos/DTS:X profile preference, not inferred from provider metadata.
-    /// Unsupported platforms and playback paths ignore this request.
+    /// Profile preference, not inferred from provider metadata; unsupported paths ignore it.
     public var trueHDAtmosEnabled: Bool = PlaybackSettings.default.trueHDAtmosEnabled
     public var dolbyVisionFELEnabled: Bool = PlaybackSettings.default.dolbyVisionFELEnabled
     /// Explicit provider/container stream index used only when a resolved

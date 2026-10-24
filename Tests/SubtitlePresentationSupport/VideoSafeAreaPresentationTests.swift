@@ -8,6 +8,72 @@ import XCTest
 
 @MainActor
 final class VideoSafeAreaPresentationTests: XCTestCase {
+    func testFirstLiveFrameUsesItsLateDimensionsWithoutChangingZoom() async throws {
+        try await waitUntil {
+            UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = VideoSafeAreaTestWindow(windowScene: scene)
+        window.testInsets = UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)
+        let engine = SafeAreaVideoEngine()
+        engine.videoAspectRatio = nil
+        engine.liveSnapshot.firstFrameReady = false
+        let host = UIHostingController(rootView: LiveChannelPlayerView(
+            channelID: "late-dimensions", title: "Live channel",
+            streamURL: URL(string: "https://fixture.invalid/live.m3u8")!, logoURL: nil,
+            makeEngine: { engine }, onPreviousChannel: {}, onNextChannel: {},
+            isFavorite: false, canToggleFavorite: false, onToggleFavorite: {}
+        ).environment(\.scenePhase, .active))
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        window.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
+        host.view.frame = window.bounds
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await waitUntil("Live output must mount before dimensions arrive") {
+            window.layoutIfNeeded()
+            return engine.output.superview is VideoPresentationView && engine.output.bounds.width > 0
+                && engine.transportCalls.contains("loadLive")
+        }
+        let video = try XCTUnwrap(engine.output.superview as? VideoPresentationView)
+        let layer = engine.output.layer
+        let initialCalls = engine.transportCalls
+        engine.videoAspectRatio = 16 / 9
+        engine.liveSnapshot.firstFrameReady = true
+        let expected = try XCTUnwrap(PlayerVideoZoom().videoRect(
+            in: video.bounds, aspectRatio: 16 / 9, fitBounds: video.fitBounds
+        ))
+        func usesExpectedGeometry() -> Bool {
+            window.layoutIfNeeded()
+            guard let actual = video.videoRect else { return false }
+            return self.rect(actual, matches: expected)
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !usesExpectedGeometry(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(usesExpectedGeometry(),
+                      "Normal must refresh without a zoom change: actual=\(String(describing: video.videoRect)) "
+                          + "expected=\(expected) bounds=\(video.bounds) fit=\(String(describing: video.fitBounds)) "
+                          + "aspect=\(String(describing: video.sourceAspectRatio)) calls=\(engine.transportCalls)")
+        let source = try XCTUnwrap(SubtitleOverlayGeometry.aspectFitRect(
+            in: engine.output.bounds, aspectRatio: 16 / 9
+        ))
+        let initialPicture = engine.output.convert(source, to: video)
+        assertRect(initialPicture, equals: expected)
+        video.update(zoom: PlayerVideoZoom(mode: .fill), fitsInsideSafeArea: true)
+        video.update(zoom: PlayerVideoZoom(), fitsInsideSafeArea: true)
+        assertRect(engine.output.convert(source, to: video), equals: initialPicture)
+        XCTAssertTrue(engine.output.layer === layer)
+        XCTAssertEqual(engine.transportCalls, initialCalls)
+    }
+
     func testHostedWindowInsetsAndSubtitleCoordinatesAcrossPhoneAndTabletViewports() async throws {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
@@ -162,10 +228,13 @@ final class VideoSafeAreaPresentationTests: XCTestCase {
         XCTAssertTrue(rect(actual, matches: expected), "\(actual) != \(expected)", file: file, line: line)
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
+    private func waitUntil(
+        _ message: String = "Video/subtitle safe-area geometry did not settle.",
+        file: StaticString = #filePath, line: UInt = #line, _ condition: () -> Bool
+    ) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        XCTAssertTrue(condition(), "Video/subtitle safe-area geometry did not settle.")
+        XCTAssertTrue(condition(), message, file: file, line: line)
     }
 }
 
@@ -194,7 +263,7 @@ private final class VideoSafeAreaTestWindow: UIWindow {
 }
 
 @MainActor
-private final class SafeAreaVideoEngine: VideoEngine, PictureInPicturePresentingEngine {
+private final class SafeAreaVideoEngine: LiveChannelEngine, PictureInPicturePresentingEngine {
     let output = UIView()
     var videoAspectRatio: Double? = 16 / 9
     var transportCalls: [String] = []
@@ -215,6 +284,13 @@ private final class SafeAreaVideoEngine: VideoEngine, PictureInPicturePresenting
     var continuesPlaybackInBackground = false
     var externalPlaybackRouteName: String?
     var onPresentationLayerChanged: (() -> Void)?
+    var onLiveSourceReset: (@MainActor () -> Void)?
+    var liveSnapshot = LiveChannelEngineSnapshot(
+        phase: .playing, firstFrameReady: true, position: 10,
+        bufferedPosition: 20, seekableRange: 0...20, route: .nativeHLS
+    )
+    func loadLive(url: URL, httpHeaders: [String: String]) async { transportCalls.append("loadLive") }
+    func seekToLiveEdge() async { transportCalls.append("liveEdge") }
     func load(request: PlaybackRequest, startPosition: TimeInterval) async { transportCalls.append("load") }
     func play() { transportCalls.append("play") }
     func pause() { transportCalls.append("pause") }

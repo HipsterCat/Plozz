@@ -22,6 +22,7 @@ import PlozzCoreUI
 /// (The type + `.myLibraries` route keep their earlier names.)
 public struct MyLibrariesDetailView: View {
     public let scope: ProfileLibrariesScope
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
 
     public init(scope: ProfileLibrariesScope) { self.scope = scope }
 
@@ -443,8 +444,12 @@ public struct MyLibrariesDetailView: View {
                 .font(.footnote)
                 .plozzForeground(.secondary)
                 Spacer()
-                if failure.requiresSignIn, let account {
-                    Button("Sign In") { scope.onAddUser(account.server) }
+                if failure.requiresSignIn, let account,
+                   account.server.provider.supportsAccountReauthentication, let providerSetupRouter {
+                    Button("Sign In Again") { providerSetupRouter.reauthenticationAccount = account }
+                } else if failure.requiresSignIn, let account,
+                          account.server.provider == .iptv, let providerSetupRouter {
+                    Button("Edit connection") { providerSetupRouter.connectIPTV(account: account) }
                 } else {
                     Button { Task { await scope.reloadLibraries() } } label: {
                         Label("Retry", systemImage: "arrow.clockwise")

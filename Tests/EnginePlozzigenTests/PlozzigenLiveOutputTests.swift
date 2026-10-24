@@ -1,8 +1,49 @@
 import AetherEngine
+import CoreModels
 import XCTest
 @testable import EnginePlozzigen
 
 final class PlozzigenLiveOutputTests: XCTestCase {
+    func testEveryCushionPreservesRoutingStorageAndAudioPolicy() throws {
+        for path in ["live.ts", "live.m3u8"] {
+            let url = try XCTUnwrap(URL(string: "https://example.invalid/\(path)"))
+            for buffer in LivePlaybackBuffer.allCases {
+                let options = PlozzigenVideoEngine.liveLoadOptions(
+                    httpHeaders: ["X-Fixture": "live"], url: url, buffer: buffer
+                )
+                XCTAssertEqual(options.liveEdgeCushionSeconds, buffer.seconds)
+                XCTAssertTrue(options.isLive)
+                XCTAssertEqual(options.nativeRemoteHLS, path.hasSuffix("m3u8"))
+                XCTAssertEqual(options.objectAudioRendering, .off)
+                XCTAssertNil(options.forwardBufferSegments)
+                XCTAssertNil(options.sessionCacheByteBudget)
+                XCTAssertNil(options.dvrWindowSeconds)
+                XCTAssertEqual(options.softwarePacketCacheStorage, .automatic)
+            }
+        }
+    }
+
+    @MainActor
+    func testCushionAndStartupAllowanceAreSampledTogetherForEachLoadAndResetOnStop() throws {
+        var preference = LivePlaybackBuffer.automatic
+        let engine = try PlozzigenVideoEngine(liveBufferPreference: { preference })
+        defer { engine.stop() }
+        XCTAssertEqual(engine.liveStartupBuffer, .automatic)
+        XCTAssertNil(engine.liveLoadOptions(httpHeaders: [:]).liveEdgeCushionSeconds)
+        preference = .fortyFiveSeconds
+        let options = engine.liveLoadOptions(httpHeaders: [:])
+        XCTAssertEqual(options.liveEdgeCushionSeconds, 45)
+        XCTAssertEqual(engine.liveStartupBuffer, .fortyFiveSeconds)
+        preference = .tenSeconds
+        XCTAssertEqual(engine.liveStartupBuffer, .fortyFiveSeconds)
+        XCTAssertEqual(options.liveEdgeCushionSeconds, 45)
+        XCTAssertEqual(engine.liveLoadOptions(httpHeaders: [:]).liveEdgeCushionSeconds, 10)
+        XCTAssertEqual(engine.liveStartupBuffer, .tenSeconds)
+        engine.stop()
+        XCTAssertEqual(engine.liveStartupBuffer, .automatic)
+        XCTAssertNil(try PlozzigenVideoEngine().liveLoadOptions(httpHeaders: [:]).liveEdgeCushionSeconds)
+    }
+
     func testRawTransportStreamsDoNotUseTheHLSOnlyNativeBypass() throws {
         for suffix in ["ts", "m2ts", "mts", "TS"] {
             let url = try XCTUnwrap(URL(string: "http://127.0.0.1/opaque.\(suffix)"))

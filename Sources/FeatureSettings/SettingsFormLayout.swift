@@ -32,6 +32,7 @@ struct SettingsFormLayout: View {
 
     private func rowSpacing(at index: Int) -> CGFloat {
         guard index > 0 else { return 0 }
+        if rows[index].sectionStart != nil { return SettingsFormMetrics.sectionSpacing }
         return rows[(index - 1)...index].allSatisfy { $0.route != nil || $0.presentation == .page }
             ? SettingsFormMetrics.navigationRowSpacing : SettingsFormMetrics.sectionSpacing
     }
@@ -66,8 +67,21 @@ private struct SettingsFormRow: View {
     let isEntry: Bool
 
     var body: some View {
-        content
-            .settingsWorkspaceEntry(isEntry)
+        VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+            switch row.sectionStart {
+            case .heading(let title):
+                title
+                    .font(.headline)
+                    .padding(.horizontal, SettingsFormMetrics.headingInset)
+                    .accessibilityAddTraits(.isHeader)
+            case .divider:
+                Divider()
+            case nil:
+                EmptyView()
+            }
+            content
+        }
+        .settingsWorkspaceEntry(isEntry)
     }
 
     @ViewBuilder private var content: some View {
@@ -107,7 +121,10 @@ private struct SettingsFormRow: View {
             .settingsGroupSurface(cornerRadius: SettingsFormMetrics.groupCornerRadius)
             .accessibilityIdentifier("settings-group-\(row.id)")
         } else {
-            SettingsFormGroup(title: row.title, description: row.description, illustrated: row.hasIllustratedContent) {
+            SettingsFormGroup(
+                title: row.title, description: row.description,
+                illustrated: row.hasIllustratedContent, hasGroupedContent: row.hasGroupedContent
+            ) {
                 row.detail()
             }
             .accessibilityIdentifier("settings-group-\(row.id)")
@@ -119,6 +136,7 @@ struct SettingsFormGroup<Content: View>: View {
     let title: Text
     var description: Text?
     var illustrated = false
+    var hasGroupedContent = false
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -127,7 +145,11 @@ struct SettingsFormGroup<Content: View>: View {
                 .font(.headline)
                 .padding(.horizontal, SettingsFormMetrics.headingInset)
                 .accessibilityAddTraits(.isHeader)
-            SettingsControlGroup(illustrated: illustrated, content: content)
+            if hasGroupedContent {
+                content()
+            } else {
+                SettingsControlGroup(illustrated: illustrated, content: content)
+            }
             if let description {
                 description
                     .settingsHelperText()
@@ -141,6 +163,12 @@ struct SettingsFormGroup<Content: View>: View {
 struct SettingsControlGroup<Content: View>: View {
     var illustrated = false
     var dividerLeadingInset: CGFloat? = nil
+    var cornerRadii = RectangleCornerRadii(
+        topLeading: SettingsFormMetrics.groupCornerRadius,
+        bottomLeading: SettingsFormMetrics.groupCornerRadius,
+        bottomTrailing: SettingsFormMetrics.groupCornerRadius,
+        topTrailing: SettingsFormMetrics.groupCornerRadius
+    )
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -153,10 +181,35 @@ struct SettingsControlGroup<Content: View>: View {
         }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(SettingsFormMetrics.groupInset)
-            .settingsGroupSurface(cornerRadius: SettingsFormMetrics.groupCornerRadius)
+            .settingsGroupSurface(cornerRadii: cornerRadii)
             .toggleStyle(SettingsSwitchToggleStyle(flushLeading: false))
             .environment(\.settingsFormRowsFlushLeading, false)
             .environment(\.settingsFormTextInset, SettingsRowMetrics.horizontalPadding)
+    }
+}
+
+struct SettingsConnectedControlGroups<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SettingsFormMetrics.connectedGroupSpacing) {
+            Group(subviews: content()) { groups in
+                ForEach(groups) { group in
+                    SettingsControlGroup(cornerRadii: .init(
+                        topLeading: group.id == groups.first?.id
+                            ? SettingsFormMetrics.groupCornerRadius : SettingsFormMetrics.connectedGroupInnerCornerRadius,
+                        bottomLeading: group.id == groups.last?.id
+                            ? SettingsFormMetrics.groupCornerRadius : SettingsFormMetrics.connectedGroupInnerCornerRadius,
+                        bottomTrailing: group.id == groups.last?.id
+                            ? SettingsFormMetrics.groupCornerRadius : SettingsFormMetrics.connectedGroupInnerCornerRadius,
+                        topTrailing: group.id == groups.first?.id
+                            ? SettingsFormMetrics.groupCornerRadius : SettingsFormMetrics.connectedGroupInnerCornerRadius
+                    )) {
+                        group
+                    }
+                }
+            }
+        }
     }
 }
 

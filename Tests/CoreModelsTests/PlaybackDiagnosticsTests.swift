@@ -313,7 +313,7 @@ final class PlaybackDiagnosticsFormattingTests: XCTestCase {
         XCTAssertEqual(d.sourceProviderText, "Plex")
         XCTAssertEqual(d.videoCodecTagText, "dvh1")
         XCTAssertEqual(d.dolbyVisionProfile, 5)
-        XCTAssertEqual(d.dolbyVisionText, "Profile 5 (single-layer · no HDR10 fallback)")
+        XCTAssertEqual(d.videoFormatText, "Dolby Vision P5 · 10-bit · PQ (ST 2084) · DOVI")
         XCTAssertEqual(d.colorText, "10-bit · PQ (ST 2084) · DOVI")
     }
 
@@ -353,20 +353,29 @@ final class PlaybackDiagnosticsEnrichedTests: XCTestCase {
         XCTAssertNil(PlaybackDiagnostics.seekWindowFacts(start: nil, end: nil, duration: 7104))
     }
 
-    func testDolbyVisionDescription() {
-        XCTAssertEqual(
-            PlaybackDiagnostics.dolbyVisionDescription(profile: 5),
-            "Profile 5 (single-layer · no HDR10 fallback)"
+    func testVideoFormatDescribesSourceWithoutClaimingFELProcessing() {
+        for profile in [5, 7, 8, 10] {
+            let diagnostics = PlaybackDiagnostics(hdr: .dolbyVision, videoBitDepth: 10, dolbyVisionProfile: profile)
+            XCTAssertEqual(diagnostics.videoFormatText, "Dolby Vision P\(profile) · 10-bit")
+        }
+    }
+
+    func testVideoFormatPreservesReportedColorFactsWithoutInferringCompatibility() {
+        let diagnostics = PlaybackDiagnostics(
+            hdr: .dolbyVision, videoBitDepth: 10, dolbyVisionProfile: 8,
+            colorTransfer: "arib-std-b67", videoRangeType: "DOVIWITHHLG"
         )
-        XCTAssertEqual(
-            PlaybackDiagnostics.dolbyVisionDescription(profile: 8),
-            "Profile 8 (single-layer · HDR10-compatible)"
-        )
-        XCTAssertEqual(
-            PlaybackDiagnostics.dolbyVisionDescription(profile: 7),
-            "Profile 7 (dual-layer · hybrid engine)"
-        )
-        XCTAssertNil(PlaybackDiagnostics.dolbyVisionDescription(profile: nil))
+        XCTAssertEqual(diagnostics.videoFormatText, "Dolby Vision P8 · 10-bit · HLG · DOVIWITHHLG")
+        XCTAssertEqual(PlaybackDiagnostics(hdr: .hdr10Plus, videoBitDepth: 10).videoFormatText, "HDR10+ · 10-bit")
+        XCTAssertEqual(PlaybackDiagnostics(hdr: .sdr, videoBitDepth: 8).videoFormatText, "SDR · 8-bit")
+    }
+
+    func testVideoFormatKeepsPartialFactsAndOmitsUnknownValues() {
+        XCTAssertEqual(PlaybackDiagnostics(hdr: .dolbyVision).videoFormatText, "Dolby Vision")
+        XCTAssertEqual(PlaybackDiagnostics(videoBitDepth: 10).videoFormatText, "10-bit")
+        XCTAssertEqual(PlaybackDiagnostics(dolbyVisionProfile: 7).videoFormatText, "P7")
+        XCTAssertEqual(PlaybackDiagnostics(videoBitDepth: 0).videoFormatText, "—")
+        XCTAssertEqual(PlaybackDiagnostics().videoFormatText, "—")
     }
 
     func testTransferFunctionLabel() {

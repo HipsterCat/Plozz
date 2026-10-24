@@ -296,35 +296,46 @@ private struct ManagedServerSignInView: View {
     @State private var usesPassword: Bool
     let server: MediaServer
     let appModel: PlozziOSAppModel
-    let onComplete: () -> Void
+    let onAuthenticated: (UserSession) throws -> Void
+    let verificationOnly: Bool
+    let onCancel: (() -> Void)?
 
     init(
         server: MediaServer,
         appModel: PlozziOSAppModel,
-        onComplete: @escaping () -> Void
+        onComplete: @escaping () -> Void,
+        verificationOnly: Bool = false,
+        onCancel: (() -> Void)? = nil,
+        onAuthenticated: ((UserSession) throws -> Void)? = nil
     ) {
         self.server = server
         self.appModel = appModel
-        self.onComplete = onComplete
+        self.verificationOnly = verificationOnly
+        self.onCancel = onCancel
+        self.onAuthenticated = onAuthenticated ?? {
+            guard appModel.persist([$0]) else { throw AppError.unknown("") }
+            onComplete()
+        }
         _usesPassword = State(initialValue: server.provider == .emby)
     }
 
     var body: some View {
         if server.provider == .silo {
             SiloSignInView(
-                server: server, deviceID: appModel.deviceID,
+                server: server, deviceID: appModel.deviceID, verificationOnly: verificationOnly,
                 onAuthenticated: { session in
+                    try onAuthenticated(session)
                     var store = UserDefaultsLastServerStore()
                     store.remember(session.server)
-                    appModel.persist([session])
-                    onComplete()
                 },
-                onCancel: { dismiss() })
+                onCancel: {
+                    if let onCancel { onCancel() } else { dismiss() }
+                })
         } else if usesPassword {
             PasswordServerSignInView(
                 server: server,
                 appModel: appModel,
-                onComplete: onComplete,
+                onAuthenticated: onAuthenticated,
                 onUseQuickConnect: server.provider == .jellyfin
                     ? { usesPassword = false }
                     : nil
@@ -333,7 +344,7 @@ private struct ManagedServerSignInView: View {
             QuickConnectServerSignInView(
                 server: server,
                 appModel: appModel,
-                onComplete: onComplete,
+                onAuthenticated: onAuthenticated,
                 onUsePassword: { usesPassword = true }
             )
         }
@@ -348,7 +359,7 @@ private struct QuickConnectServerSignInView: View {
     init(
         server: MediaServer,
         appModel: PlozziOSAppModel,
-        onComplete: @escaping () -> Void,
+        onAuthenticated: @escaping (UserSession) throws -> Void,
         onUsePassword: @escaping () -> Void
     ) {
         self.server = server
@@ -359,10 +370,7 @@ private struct QuickConnectServerSignInView: View {
                     server: server,
                     deviceID: appModel.deviceID
                 ),
-                onAuthenticated: {
-                    appModel.persist([$0])
-                    onComplete()
-                }
+                onAuthenticated: onAuthenticated
             )
         )
     }
@@ -476,17 +484,15 @@ private struct PasswordServerSignInView: View {
     @State private var viewModel: PasswordSignInViewModel
 
     private let server: MediaServer
-    private let onComplete: () -> Void
     private let onUseQuickConnect: (() -> Void)?
 
     init(
         server: MediaServer,
         appModel: PlozziOSAppModel,
-        onComplete: @escaping () -> Void,
+        onAuthenticated: @escaping (UserSession) throws -> Void,
         onUseQuickConnect: (() -> Void)? = nil
     ) {
         self.server = server
-        self.onComplete = onComplete
         self.onUseQuickConnect = onUseQuickConnect
         _viewModel = State(
             initialValue: PasswordSignInViewModel(
@@ -494,10 +500,7 @@ private struct PasswordServerSignInView: View {
                     server: server,
                     deviceID: appModel.deviceID
                 ),
-                onAuthenticated: {
-                    appModel.persist([$0])
-                    onComplete()
-                }
+                onAuthenticated: onAuthenticated
             )
         )
     }
@@ -568,11 +571,11 @@ private struct PlexServerSignInView: View {
             initialValue: PlexAuthViewModel(
                 service: PlexAuthService(deviceID: appModel.deviceID),
                 onAuthenticated: {
-                    appModel.persist([$0])
+                    guard appModel.persist([$0]) else { throw AppError.unknown("") }
                     onComplete()
                 },
                 onAuthenticatedMany: {
-                    appModel.persist($0)
+                    guard appModel.persist($0) else { throw AppError.unknown("") }
                     onComplete()
                 }
             )
@@ -630,6 +633,53 @@ private struct PlexServerSignInView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { viewModel.startIfNeeded() }
         .onDisappear { viewModel.cancel() }
+    }
+}
+
+struct PlozziOSAccountReauthenticationView: View {
+    @Environment(\.dismiss) private var dismiss
+    let appModel: PlozziOSAppModel
+    let account: Account
+
+    var body: some View {
+        if account.server.provider == .plex {
+            recoveryContent
+        } else {
+            NavigationStack { recoveryContent }
+        }
+    }
+
+    private var recoveryContent: some View {
+        AccountReauthenticationView(
+            model: appModel.accountsProviders.makeAccountReauthentication(
+                account: account,
+                isAuthorized: {
+                    appModel.isActiveProfileAuthorized && !appModel.managementRequiresParentalPIN
+                },
+                onComplete: {
+                    dismiss()
+                    appModel.plexHomeUsers.ensurePlexIdentityForActiveProfile()
+                }
+            ),
+            onCancel: { dismiss() }
+        ) { model in
+            ManagedServerSignInView(
+                server: account.server, appModel: appModel, onComplete: {},
+                verificationOnly: true,
+                onCancel: {
+                    model.cancel(); dismiss()
+                },
+                onAuthenticated: model.complete
+            )
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        model.cancel()
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 #endif

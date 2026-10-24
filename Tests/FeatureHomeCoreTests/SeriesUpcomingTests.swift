@@ -9,6 +9,21 @@ final class SeriesUpcomingTests: XCTestCase {
     private let calendar = Calendar(identifier: .gregorian)
     private let now = Date(timeIntervalSince1970: 1_900_000_000)
 
+    func testHeroBadgeHeadroomEligibilityDoesNotRequireLoadedData() {
+        let schedules = HeroScheduleLines()
+        for kind: MediaItemKind in [.series, .season, .episode] {
+            let item = MediaItem(id: kind.rawValue, title: "Fixture", kind: kind)
+            XCTAssertNil(schedules.line(for: item))
+            XCTAssertTrue(HeroScheduleLines.canShowLine(for: item))
+        }
+        for kind: MediaItemKind in [.movie, .video, .folder, .collection, .unknown] {
+            var item = MediaItem(id: kind.rawValue, title: "Fixture", kind: kind)
+            XCTAssertFalse(HeroScheduleLines.canShowLine(for: item))
+            item.availability = .unknown
+            XCTAssertEqual(HeroScheduleLines.canShowLine(for: item), kind == .movie || kind == .video)
+        }
+    }
+
     private func upcoming(
         season: Int?,
         episode: Int?,

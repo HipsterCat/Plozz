@@ -21,6 +21,7 @@ public struct ParentalPINView: View {
     private let isCompact: Bool
     private let onSubmit: (String) -> Void
     private let onCancel: () -> Void
+    @Environment(\.pinProfileTransition) private var profileTransition
 
     /// - Parameter destination: the profile being opened, when this gate is
     ///   holding a switch. Naming it answers "why am I being asked?" without a
@@ -54,7 +55,7 @@ public struct ParentalPINView: View {
             onCancel: onCancel
         ) {
             if let destination {
-                ProfileAvatarView(profile: destination, size: PINLayout.badgeSize)
+                ProfileAvatarView(profile: destination, size: profileTransition?.avatarSize ?? PINLayout.badgeSize)
             } else {
                 PINBadge {
                     Image(systemName: "figure.and.child.holdinghands")

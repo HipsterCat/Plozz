@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 final class PlozziOSSettingsModel {
     let theme: ThemeSettingsModel
+    let contentRatings: ContentRatingSettingsModel
     let transparency: TransparencyPreferenceModel
     let cardStyle: CardStyleSettingsModel
     let density: UIDensitySettingsModel
@@ -20,13 +21,21 @@ final class PlozziOSSettingsModel {
     let hero: HeroSettingsModel
     let heroBackground: HeroBackgroundSettingsModel
     let detailPage: DetailPageSettingsModel
+    let libraryPresentation: LibraryPresentationSettingsModel
     let themeMusic: ThemeMusicSettingsModel
     let homeVisibility: HomeLibraryVisibilityModel
     let diagnostics: DiagnosticsSettingsModel
 
-    init(namespace: String? = nil, allowsDiscovery: @escaping @MainActor () -> Bool = { true }) {
+    init(
+        namespace: String? = nil,
+        allowsDiscovery: @escaping @MainActor () -> Bool = { true },
+        isSeerrConfigured: @escaping @MainActor () -> Bool = { false }
+    ) {
         theme = ThemeSettingsModel(
             store: ThemeSettingsStore(namespace: namespace)
+        )
+        contentRatings = ContentRatingSettingsModel(
+            store: ContentRatingSettingsStore(namespace: namespace)
         )
         transparency = TransparencyPreferenceModel(
             store: TransparencyPreferenceStore(namespace: namespace)
@@ -79,11 +88,15 @@ final class PlozziOSSettingsModel {
             store: HeroSettingsStore(namespace: namespace)
         )
         hero.setDiscoveryPolicy(allowsDiscovery)
+        hero.setSeerrConnection(isSeerrConfigured)
         heroBackground = HeroBackgroundSettingsModel(
             store: HeroBackgroundSettingsStore(namespace: namespace)
         )
         detailPage = DetailPageSettingsModel(
             store: DetailPageSettingsStore(namespace: namespace)
+        )
+        libraryPresentation = LibraryPresentationSettingsModel(
+            store: LibraryPresentationSettingsStore(namespace: namespace)
         )
         themeMusic = ThemeMusicSettingsModel(
             store: ThemeMusicSettingsStore(namespace: namespace)

@@ -3,6 +3,53 @@ import XCTest
 
 @MainActor
 final class PlayerLayoutInteractionTests: XCTestCase {
+    func testChapterOpeningDoesNotFadeUntilARealScrollAndResetsOnReopen() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.PresentationHost")
+        XCUIDevice.shared.orientation = .portrait
+        app.launchArguments = ["--player-layout-fixture", "--chapter-scroll-fixture"]
+        app.launch()
+        defer { app.terminate() }
+        let tab = app.buttons["player-tab-chapters"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 10))
+        for opening in 0..<2 {
+            tab.tap()
+            let panel = app.descendants(matching: .any)["player-chapters"].firstMatch
+            let current = app.buttons["player-chapter-6"]
+            XCTAssertTrue(current.waitForExistence(timeout: 5))
+            wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                panel.exists && abs(current.frame.minY - panel.frame.minY) < 1
+            }, object: nil)], timeout: 5)
+            capture(app, name: "Chapter opening \(opening) at current chapter")
+            let frame = panel.frame
+            let originalY = current.frame.minY
+            func band(_ offset: CGFloat) -> CGRect {
+                CGRect(x: frame.maxX - 30, y: frame.minY + offset, width: 4, height: 2)
+            }
+            let initial = XCUIScreen.main.screenshot().image
+            let backdrop = try brightness(initial, in: band(-6), screen: app.frame)
+            let top = try brightness(initial, in: band(2), screen: app.frame)
+            let interior = try brightness(initial, in: band(23), screen: app.frame)
+            XCTAssertGreaterThan(backdrop - top, (backdrop - interior) * 0.85,
+                                 "The current chapter must open fully opaque, including after reopening.")
+
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: frame.midX, dy: frame.minY + 100))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(
+                    CGVector(dx: frame.midX, dy: frame.minY + 80)
+                ), withVelocity: .slow, thenHoldForDuration: 0.3)
+            XCTAssertLessThan(current.frame.minY, originalY - 5, "Exercise a real scroll, not just a touch.")
+            capture(app, name: "Chapter opening \(opening) after manual scroll")
+            let scrolled = XCUIScreen.main.screenshot().image
+            let edge = try brightness(scrolled, in: band(2), screen: app.frame)
+            let middle = try brightness(scrolled, in: band(12), screen: app.frame)
+            let inner = try brightness(scrolled, in: band(23), screen: app.frame)
+            XCTAssertGreaterThan(edge, middle + 0.02)
+            XCTAssertGreaterThan(middle, inner + 0.02, "A real scroll must enable the progressive top fade.")
+            tab.tap()
+            XCTAssertTrue(panel.waitForNonExistence(timeout: 5))
+        }
+    }
+
     func testLiveHeaderKeepsIdentityAndTimelineStableAcrossPlaybackStates() {
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.PresentationHost")
         defer {

@@ -8,21 +8,24 @@ struct CustomizeHomeDetailView: View {
     let discoveredLibraries: LoadState<[AggregatedLibrary]>
     let homeVisibility: HomeLibraryVisibilityModel
     let accounts: [ResolvedAccount]
+    let spoilerSettings: SpoilerSettings
 
     init(
         discoveredLibraries: LoadState<[AggregatedLibrary]>,
         homeVisibility: HomeLibraryVisibilityModel,
         seerConfigured _: Bool,
-        accounts: [ResolvedAccount] = []
+        accounts: [ResolvedAccount] = [], spoilerSettings: SpoilerSettings = .default
     ) {
         self.discoveredLibraries = discoveredLibraries
         self.homeVisibility = homeVisibility
         self.accounts = accounts
+        self.spoilerSettings = spoilerSettings
     }
 
     var body: some View {
         HomeRowsSettingsView(
-            libraries: discoveredLibraries.value ?? [], accounts: accounts, visibility: homeVisibility
+            libraries: discoveredLibraries.value ?? [], accounts: accounts, visibility: homeVisibility,
+            spoilerSettings: spoilerSettings
         )
         .id(ObjectIdentifier(homeVisibility))
     }

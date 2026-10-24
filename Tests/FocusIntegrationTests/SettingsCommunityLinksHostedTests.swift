@@ -215,7 +215,10 @@ final class SettingsCommunityLinksHostedTests: XCTestCase {
         for code in codes {
             XCTAssertGreaterThan(code.bounds.width, minimumCodeWidth, "Keep the expected scan size.")
         }
-        return decoded.sorted { ($0.messageString ?? "") < ($1.messageString ?? "") }
+        return decoded.sorted {
+            $0.messageString == AppLinks.discord.absoluteString
+                && $1.messageString != AppLinks.discord.absoluteString
+        }
     }
 
     private func focusItems(in window: UIWindow) -> [any UIFocusItem] {

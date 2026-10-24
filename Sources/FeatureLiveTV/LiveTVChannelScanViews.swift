@@ -124,10 +124,10 @@ public struct LiveTVScanImportOffer: View {
                 Button("Scan channels", systemImage: "checkmark.magnifyingglass") {
                     if coordinator.start(sourceID: sourceID) { skip() }
                 }
-                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                .buttonStyle(SettingsFormButtonStyle())
                 .accessibilityIdentifier("live-tv-import-scan")
                 Button("Not now", action: skip)
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
                     .accessibilityIdentifier("live-tv-skip-scan")
             }
         }
@@ -168,14 +168,14 @@ public struct LiveTVScanResultsView: View {
                     Button("Restore hidden channels", systemImage: "eye") {
                         coordinator.restoreAll(sourceID: sourceID)
                     }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
                     .accessibilityIdentifier("live-tv-scan-restore-all")
                 }
                 if coordinator.canScan(sourceID: sourceID), !coordinator.isScanning {
                     Button("Rescan channels", systemImage: "arrow.clockwise") {
                         coordinator.start(sourceID: sourceID)
                     }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
                 }
                 LiveTVScanIssueContent(coordinator: coordinator)
             }
@@ -206,7 +206,7 @@ private struct LiveTVScanProgressContent: View {
         }
         .accessibilityIdentifier("live-tv-scan-progress")
         Button("Cancel scan", systemImage: "xmark") { coordinator.cancel() }
-            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+            .buttonStyle(SettingsFormButtonStyle())
             .accessibilityIdentifier("live-tv-cancel-scan")
     }
 }
@@ -238,7 +238,7 @@ private struct LiveTVScanResultRow: View {
             }
             if row.isScanHidden {
                 Button("Restore channel", systemImage: "eye", action: restore)
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
                     .accessibilityIdentifier("live-tv-scan-restore-channel")
             }
         }
@@ -257,7 +257,7 @@ private struct LiveTVScanIssueContent: View {
             }
             if issue == .healthSaveFailed {
                 Button("Retry saving") { coordinator.retrySaving() }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .buttonStyle(SettingsFormButtonStyle())
             }
         }
     }

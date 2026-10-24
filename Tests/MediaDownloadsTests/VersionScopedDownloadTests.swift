@@ -2,16 +2,8 @@ import CoreModels
 import XCTest
 @testable import MediaDownloads
 
-/// A title can exist as several files (4K, 1080p, a remux). Downloads used to be
-/// keyed by title identity alone, which had two consequences:
-///
-///  * only one version of a title could be downloaded — a second overwrote the
-///    first's record;
-///  * playback matched on the title, so whichever copy happened to be on disk
-///    was played for EVERY version the user picked. Nothing errored; you just
-///    silently got the wrong file.
-///
-/// These tests pin the version-scoped behaviour that fixes both.
+/// Download management keeps separate files independent; playback can prefer
+/// one of these copies without requiring the selected server version on disk.
 final class VersionScopedDownloadTests: XCTestCase {
     private func makeRegistry() -> DownloadedMediaRegistry {
         DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
@@ -64,9 +56,7 @@ final class VersionScopedDownloadTests: XCTestCase {
         XCTAssertEqual(found?.identityKey, hd.identityKey)
     }
 
-    /// The regression itself: selecting a version that ISN'T downloaded must
-    /// report nothing, so playback streams it instead of substituting the
-    /// downloaded one.
+    /// Download controls must allow another version to be saved separately.
     func testUndownloadedVersionReportsNoLocalCopy() async throws {
         let registry = makeRegistry()
         let identity = DownloadTestFactory.imdbIdentity("tt1375666")
@@ -81,7 +71,7 @@ final class VersionScopedDownloadTests: XCTestCase {
         )
         XCTAssertNil(
             found,
-            "4K isn't downloaded, so it must stream — not silently play the 1080p file"
+            "4K isn't downloaded, so its download control must not manage the 1080p file"
         )
     }
 

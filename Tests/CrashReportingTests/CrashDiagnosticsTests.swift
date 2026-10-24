@@ -7,6 +7,26 @@ import XCTest
 
 final class CrashDiagnosticsTests: XCTestCase {
     @MainActor
+    func testPlaybackEvidenceSharesTheConsentedAttachment() {
+        for enabled in [false, true] {
+            var captures = 0
+            XCTAssertEqual(CrashDiagnostics.send(
+                logText: "activity", note: nil, isEnabled: enabled,
+                playbackDiagnostics: "bounded playback evidence",
+                captureEvent: { _, attachment in
+                    captures += 1
+                    XCTAssertEqual(attachment.data, Data(
+                        "activity\n\n--- Structured playback diagnostics ---\nbounded playback evidence".utf8
+                    ))
+                    return SentryId()
+                },
+                captureFeedback: { _ in SentryId() }
+            ), enabled)
+            XCTAssertEqual(captures, enabled ? 1 : 0)
+        }
+    }
+
+    @MainActor
     func testEveryDiagnosticSendAppendsSourceSnapshotAfterConsentCheck() {
         var snapshots = 0
         XCTAssertFalse(CrashDiagnostics.send(

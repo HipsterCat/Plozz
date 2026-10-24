@@ -3,9 +3,7 @@ import CoreModels
 @testable import ProviderPlex
 
 /// Verifies the Plex capability-expansion policy: the `hybridEngineEnabled` flag
-/// flips exactly the extra direct-play formats the on-device hybrid engine can
-/// handle (Matroska + transport-stream containers; DTS/DTS-HD/TrueHD/Opus/Vorbis
-/// audio), while keeping range decisions display-aware.
+/// advertises the linked engine's input formats independently of native output.
 final class PlexHybridDirectPlayTests: XCTestCase {
 
     private func makeClient(_ caps: MediaCapabilities, hybrid: Bool) -> PlexClient {
@@ -82,9 +80,7 @@ final class PlexHybridDirectPlayTests: XCTestCase {
                       "DoVi-in-MKV must direct-play on the on-device engine, not transcode")
     }
 
-    func testDolbyVisionMatroskaTranscodesWhenDeviceLacksDoVi() throws {
-        // If the device can't present Dolby Vision, fall back to a transcode rather
-        // than direct-playing a DoVi signal it can't handle.
+    func testDolbyVisionOutputConversionBelongsToAether() throws {
         let json = """
         {"id":1,"container":"mkv","videoCodec":"hevc","audioCodec":"ac3",
          "Part":[{"id":2,"key":"/library/parts/2/16000/file.mkv","container":"mkv","Stream":[
@@ -93,7 +89,7 @@ final class PlexHybridDirectPlayTests: XCTestCase {
          ]}]}
         """
         let caps = MediaCapabilities(supportsHEVC: true, supportsDolbyVision: false)
-        XCTAssertFalse(try canDirectPlay(json, caps: caps, hybrid: true))
+        XCTAssertTrue(try canDirectPlay(json, caps: caps, hybrid: true))
     }
 
     func testHDR10MatroskaDirectPlaysOnHDRDisplayWithHybridOn() throws {
@@ -110,9 +106,7 @@ final class PlexHybridDirectPlayTests: XCTestCase {
         XCTAssertTrue(try canDirectPlay(json, caps: caps, hybrid: true))
     }
 
-    func testHDR10MatroskaTranscodesOnSDRDisplay() throws {
-        // On a display that can't present HDR10, the HDR10 MKV transcodes (the
-        // server tonemaps) rather than direct-playing into an SDR panel.
+    func testHDR10OutputConversionBelongsToAether() throws {
         let json = """
         {"id":1,"container":"mkv","videoCodec":"hevc","audioCodec":"dts",
          "Part":[{"id":2,"key":"/library/parts/2/16000/file.mkv","container":"mkv","Stream":[
@@ -121,10 +115,10 @@ final class PlexHybridDirectPlayTests: XCTestCase {
          ]}]}
         """
         let caps = MediaCapabilities(supportsHEVC: true, supportsHDR10: false, supportsHLG: false)
-        XCTAssertFalse(try canDirectPlay(json, caps: caps, hybrid: true))
+        XCTAssertTrue(try canDirectPlay(json, caps: caps, hybrid: true))
     }
 
-    func testHDR10PlusPreservesDirectPlayAndStillRejectsSDROutputs() throws {
+    func testHDR10PlusKeepsNativeOutputGateOnlyForNativeHosts() throws {
         for (container, hybrid) in [("mkv", true), ("mp4", false)] {
             let json = """
             {"id":1,"container":"\(container)","videoCodec":"hevc","audioCodec":"aac",
@@ -135,7 +129,7 @@ final class PlexHybridDirectPlayTests: XCTestCase {
             """
             for hdr10 in [false, true] {
                 let caps = MediaCapabilities(supportsHEVC: true, supportsHDR10: hdr10, supportsDolbyVision: false)
-                XCTAssertEqual(try canDirectPlay(json, caps: caps, hybrid: hybrid), hdr10)
+                XCTAssertEqual(try canDirectPlay(json, caps: caps, hybrid: hybrid), hybrid || hdr10)
             }
         }
     }
@@ -303,7 +297,7 @@ final class PlexHybridDirectPlayTests: XCTestCase {
         XCTAssertTrue(try canDirectPlay(json, caps: caps, hybrid: true))
     }
 
-    func testHEVCM2TSWithHDR10TranscodesOnSDRDisplay() throws {
+    func testHEVCM2TSWithHDR10LeavesSDRConversionToAether() throws {
         let json = """
         {"id":1,"container":"m2ts","videoCodec":"hevc","audioCodec":"eac3",
          "Part":[{"id":2,"key":"/library/parts/2/16000/file.m2ts","container":"m2ts","Stream":[
@@ -312,6 +306,7 @@ final class PlexHybridDirectPlayTests: XCTestCase {
          ]}]}
         """
         let caps = MediaCapabilities(supportsHEVC: true, supportsHDR10: false, supportsHLG: false)
-        XCTAssertFalse(try canDirectPlay(json, caps: caps, hybrid: true))
+        XCTAssertTrue(try canDirectPlay(json, caps: caps, hybrid: true))
+        XCTAssertFalse(try canDirectPlay(json, caps: caps, hybrid: false))
     }
 }

@@ -12,6 +12,7 @@ struct PlayerLayoutFixture: View {
     @State private var model: PlayerViewModel
     @State private var timelineSampleIndex = 0
     @State private var scrubStarts = 0
+    private let chapterScrollFixture = ProcessInfo.processInfo.arguments.contains("--chapter-scroll-fixture")
 
     init() {
         let provider = PlayerLayoutProvider()
@@ -67,7 +68,8 @@ struct PlayerLayoutFixture: View {
 
     var body: some View {
         ZStack {
-            (ProcessInfo.processInfo.arguments.contains("--white-video") ? Color.white : .black)
+            (chapterScrollFixture ? Color(red: 0.25, green: 0.45, blue: 0.65)
+                : ProcessInfo.processInfo.arguments.contains("--white-video") ? Color.white : .black)
                 .ignoresSafeArea()
             if ProcessInfo.processInfo.arguments.contains("--native-avkit") {
                 NativePlayerGlassFixture(showsControls: true).ignoresSafeArea()
@@ -96,6 +98,19 @@ struct PlayerLayoutFixture: View {
         .environment(\.colorScheme, light ? .light : .dark)
         .preferredColorScheme(light ? .light : .dark)
         .environment(\.plozzMetrics, .touch(density: .standard))
+        .transformEnvironment(\.plozzReduceTransparency) { value in
+            if chapterScrollFixture { value = true }
+        }
+        .task {
+            guard chapterScrollFixture else { return }
+            await model.load()
+            model.controls.duration = 3_600
+            model.controls.currentSeconds = 910
+            model.controls.controlsVisible = true
+            model.controls.infoCard.chapters = (0..<20).map {
+                .init(start: Double($0) * 180, title: "Scene \($0 + 1)")
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if ProcessInfo.processInfo.arguments.contains("--timeline-rollovers") {
                 Button("Advance time") {

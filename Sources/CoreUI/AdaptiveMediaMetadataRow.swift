@@ -9,6 +9,7 @@ public struct AdaptiveMediaMetadataRow: View {
     private let familyGuidanceAge: Double?
     private let badges: [MediaBadge]
     private let centered: Bool
+    @Environment(\.metadataTextScale) private var textScale
 
     public init(
         facts: [String],
@@ -27,7 +28,7 @@ public struct AdaptiveMediaMetadataRow: View {
     public var body: some View {
         if !facts.isEmpty || !ratings.isEmpty || !badges.isEmpty || familyGuidanceAge != nil {
             ViewThatFits(in: .horizontal) {
-                WrappingHStackLayout(spacing: 12, lineSpacing: 8) {
+                WrappingHStackLayout(spacing: 12 * textScale, lineSpacing: 8 * textScale) {
                     MetadataFactsText(facts: facts)
                     if let familyGuidanceAge {
                         FamilyGuidanceAgeBadge(age: familyGuidanceAge)
@@ -41,7 +42,7 @@ public struct AdaptiveMediaMetadataRow: View {
                 }
                 .fixedSize(horizontal: true, vertical: false)
 
-                VStack(alignment: centered ? .center : .leading, spacing: 8) {
+                VStack(alignment: centered ? .center : .leading, spacing: 8 * textScale) {
                     if !facts.isEmpty || !badges.isEmpty {
                         MetadataFactsAndFormats(
                             facts: facts,
@@ -52,8 +53,8 @@ public struct AdaptiveMediaMetadataRow: View {
                     if !ratings.isEmpty || familyGuidanceAge != nil {
                         WrappingHStackLayout(
                             alignment: centered ? .center : .leading,
-                            spacing: 12,
-                            lineSpacing: 8,
+                            spacing: 12 * textScale,
+                            lineSpacing: 8 * textScale,
                             balancesLastRow: true
                         ) {
                             if let familyGuidanceAge {
@@ -75,10 +76,11 @@ private struct MetadataFactsAndFormats: View {
     let facts: [String]
     let badges: [MediaBadge]
     let centered: Bool
+    @Environment(\.metadataTextScale) private var textScale
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            WrappingHStackLayout(spacing: 12, lineSpacing: 8) {
+            WrappingHStackLayout(spacing: 12 * textScale, lineSpacing: 8 * textScale) {
                 MetadataFactsText(facts: facts)
                 ForEach(badges) { badge in
                     MetadataMediaBadgeChip(badge: badge)
@@ -86,14 +88,14 @@ private struct MetadataFactsAndFormats: View {
             }
             .fixedSize(horizontal: true, vertical: false)
 
-            VStack(alignment: centered ? .center : .leading, spacing: 8) {
+            VStack(alignment: centered ? .center : .leading, spacing: 8 * textScale) {
                 MetadataFactsText(facts: facts, wraps: true)
                     .multilineTextAlignment(centered ? .center : .leading)
                 if !badges.isEmpty {
                     WrappingHStackLayout(
                         alignment: centered ? .center : .leading,
-                        spacing: 12,
-                        lineSpacing: 8,
+                        spacing: 12 * textScale,
+                        lineSpacing: 8 * textScale,
                         balancesLastRow: true
                     ) {
                         ForEach(badges) { badge in
@@ -109,11 +111,13 @@ private struct MetadataFactsAndFormats: View {
 private struct MetadataFactsText: View {
     let facts: [String]
     var wraps = false
+    @Environment(\.metadataTextScale) private var textScale
+    @ScaledMetric(relativeTo: .subheadline) private var fontSize: CGFloat = 15
 
     var body: some View {
         if !facts.isEmpty {
             Text(facts.joined(separator: "  \u{00B7}  "))
-                .font(.subheadline.weight(.medium))
+                .font(textScale == 1 ? .subheadline.weight(.medium) : .system(size: fontSize * textScale, weight: .medium))
                 .plozzForeground(.primary)
                 .lineLimit(wraps ? nil : 1)
                 .fixedSize(horizontal: !wraps, vertical: true)

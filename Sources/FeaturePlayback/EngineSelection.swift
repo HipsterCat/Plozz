@@ -1,109 +1,37 @@
 import CoreModels
-import CoreNetworking
 import Foundation
 
-/// The pure engine-routing decision extracted from `PlayerViewModel.routeEngine`.
-///
-/// Given a resolved `PlaybackRequest` and the current engine/subtitle context,
-/// it picks which `PlaybackEngineKind` should play it — with *no* engine
-/// mutation, network, or actor state — so the decision matrix (networkFile →
-/// Plozzigen, local-remux-eligible → Plozzigen, image-subtitle default →
-/// Plozzigen, everything else → the router's native/hybrid choice) is directly
-/// unit-testable.
-///
-/// Dual-provider/engine safety: this only *chooses*; the caller still owns
-/// engine construction and hand-off. Keeping it pure means Plex and Jellyfin
-/// requests route through exactly the same code path.
+/// Choose the playback owner, not its decoder. Aether probes the actual stream
+/// and owns native HLS, local remuxing, and software decoding.
 enum EngineSelection {
     static func route(
         request: PlaybackRequest,
-        forceTranscode: Bool,
-        plozzigenAvailable: Bool,
-        capabilities: MediaCapabilities,
-        subtitleRule: SubtitlePolicy.Rule,
-        hearingImpairedPreference: HearingImpairedPreference? = nil,
-        audioRouteIsAirPlay: Bool = false
+        plozzigenAvailable: Bool
     ) -> PlaybackEngineKind {
-        if request.streamingOptions != nil, request.isTranscoding { return .native }
-        if let streamURL = request.streamURL, streamURL.isFileURL {
-            if streamURL.pathExtension.lowercased() == "movpkg" {
-                // Legacy failed Plex rendition records can retain this filename
-                // after switching from HLS packages to progressive MKV. A real
-                // package is a directory; a progressive file needs Plozzigen.
-                let isDirectory = (
-                    try? streamURL.resourceValues(
-                        forKeys: [.isDirectoryKey]
-                    ).isDirectory
-                ) == true
-                if isDirectory || !FileManager.default.fileExists(
-                    atPath: streamURL.path
-                ) {
-                    return .native
-                }
-            }
-            if plozzigenAvailable {
-                return .plozzigen
-            }
-        }
         if case .some(.networkFile) = request.playbackSource {
+            // Never hand a credential-scoped transport to a native URL loader.
             return .plozzigen
         }
-
-        var kind: PlaybackEngineKind
-        if !forceTranscode, plozzigenAvailable,
-           let descriptor = request.localRemuxSource,
-           case .eligible = descriptor.plozzigenEligibility {
-            // Plozzigen handles the full pipeline: FFmpeg demux → HLS-fMP4 →
-            // localhost → AVPlayer. Covers HEVC/H.264/VP9/AV1 video with any
-            // audio (stream-copy or lossless bridge). The engine reads
-            // localRemuxSource.originalSource directly.
-            kind = .plozzigen
-        } else {
-            kind = EngineRouter.selectEngine(
-                source: request.sourceMetadata,
-                capabilities: capabilities,
-                isTranscoding: request.isTranscoding,
-                // Plozzigen is the on-device decode engine, so "hybrid available"
-                // (needs-on-device-decode is routable) == Plozzigen available.
-                // When it isn't wired in, the router stays native.
-                hybridAvailable: plozzigenAvailable
-            )
-            // The router's `.hybrid` return is its abstract "needs on-device
-            // decode" signal; Plozzigen (AetherEngine) is that engine. Resolve
-            // `.hybrid` to it. (The former backing engine is retired.)
-            if kind == .hybrid, plozzigenAvailable {
-                kind = .plozzigen
+        if request.streamingOptions != nil, request.isTranscoding, request.isManifestStream,
+           request.negotiatedStreamingVideoCodec == .hevc {
+            // This route owns the provider fMP4 empty-sdtp repair. Its custom
+            // AVAsset resource loader cannot be attached to Aether's URL load.
+            return .native
+        }
+        if request.externalAudioURL != nil {
+            // Separate trailer audio is an AVComposition, not Aether's single
+            // URL/IOReader input.
+            return .native
+        }
+        if let url = request.streamURL, url.isFileURL,
+           url.pathExtension.lowercased() == "movpkg" {
+            // AVAssetDownload packages are OS-managed assets. Legacy progressive
+            // downloads can share this extension but are ordinary media files.
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            if isDirectory || !FileManager.default.fileExists(atPath: url.path) {
+                return .native
             }
         }
-
-        // If the subtitle that would be shown by default is image-based
-        // (PGS/DVB/DVD/VOBSUB), AVPlayer can't render it — route to Plozzigen,
-        // which decodes bitmap subtitle packets into image cues that Plozz's
-        // overlay draws (no server burn-in). Only when direct-playing and
-        // Plozzigen is wired in; a no-op when already routed to Plozzigen.
-        if kind == .native, !request.isTranscoding, plozzigenAvailable,
-           request.subtitleTracks.defaultSubtitleNeedsHybridEngine(
-               mode: subtitleRule.mode,
-               preferredLanguage: subtitleRule.preferredLanguage,
-               hearingImpairedPreference: hearingImpairedPreference) {
-            PlozzLog.playback.info("Default subtitle is image-based; routing to Plozzigen so it can be rendered on-device")
-            kind = .plozzigen
-        }
-
-        // AirPlay audio (a HomePod or stereo pair as the TV's speakers): AVPlayer
-        // reading a progressive file sends the speakers a stream that has to be
-        // renegotiated on every seek, and it falls silent there and mid-title
-        // with no event (docs/airplay-audio-recovery.md; measured on device with
-        // MP4 over native). Plozzigen hands AVPlayer one continuous local HLS
-        // stream instead, the shape that holds up. Server transcodes are HLS
-        // already and stay native.
-        if kind == .native, !request.isTranscoding, plozzigenAvailable, audioRouteIsAirPlay {
-            PlozzLog.playback.info("Audio route is AirPlay; routing direct play to Plozzigen")
-            kind = .plozzigen
-        }
-
-        let v = request.sourceMetadata?.video
-        HandoffDiagnostics.emit("route kind=\(kind.rawValue) container=\(request.sourceMetadata?.container ?? "-") vcodec=\(v?.codec ?? "-") tag=\(v?.codecTag ?? "-") range=\(v?.videoRange ?? "-") rangeType=\(v?.videoRangeType ?? "-") transfer=\(v?.colorTransfer ?? "-") profile=\(v?.profile ?? "-")")
-        return kind
+        return plozzigenAvailable ? .plozzigen : .native
     }
 }

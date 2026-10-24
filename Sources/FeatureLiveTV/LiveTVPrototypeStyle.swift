@@ -243,7 +243,8 @@ struct PrototypeStationMark: View {
         ChannelLogoArtwork(
             name: channel.name, logoURL: channel.logoURL, size: dimensions,
             cornerRadius: cornerRadius, artworkInset: artworkInset,
-            plozzChannelID: channel.source == .plozz ? channel.id : nil
+            plozzChannelID: channel.source == .plozz ? channel.id : nil,
+            plozzChannelMood: channel.plozzChannelMood
         )
     }
 }

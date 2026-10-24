@@ -13,10 +13,9 @@ public enum MediaIdentityKey {
     ///
     /// A title can exist as several files — 4K, 1080p, a remux — and each is a
     /// separately downloadable thing. Keying on the identity alone means one
-    /// record per title, so a second version can't be stored and, worse,
-    /// whichever version happened to be downloaded gets played back for every
-    /// version the user picks. Appending the version id keeps each file its own
-    /// record and its own on-disk folder.
+    /// record per title, so a second version can't be stored. Appending the
+    /// version id keeps each file its own record and its own on-disk folder,
+    /// allowing playback to prefer a particular locally available version.
     ///
     /// A `nil`/empty version keeps the historic un-suffixed key, so records that
     /// genuinely have no version concept are unchanged.

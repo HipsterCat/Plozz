@@ -465,6 +465,7 @@ final class HomeRowCustomizationTests: XCTestCase {
             target.removePersistentDomain(forName: targetSuite)
         }
         let model = HomeLibraryVisibilityModel(store: HomeLibraryVisibilityStore(defaults: source, namespace: "one"))
+        model.setContinueWatchingAction(.openDetails)
         let choices = HomeRowChoice.shared
         model.applyRows(
             .init(enabled: [.libraries, .global(.continueWatching)],
@@ -475,6 +476,7 @@ final class HomeRowCustomizationTests: XCTestCase {
         ProfileSettingsTransfer.apply(entries, namespace: "one", defaults: target)
         let restored = HomeLibraryVisibilityStore(defaults: target, namespace: "one").load()
         XCTAssertEqual(restored, model.visibility)
+        XCTAssertEqual(restored.continueWatchingAction, .openDetails)
         XCTAssertEqual(HomeLibraryVisibilityStore(defaults: target, namespace: "two").load(), .default)
         XCTAssertEqual(
             ProfileSettingsTransfer.capture(namespace: "one", defaults: target), entries

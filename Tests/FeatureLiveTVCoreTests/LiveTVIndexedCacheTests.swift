@@ -358,6 +358,60 @@ final class LiveTVIndexedCacheTests: XCTestCase {
         XCTAssertNotNil(originalSettings)
     }
 
+    func testGuideLanguageSelectionPersistsAndInvalidatesDifferentLanguageRestores() async throws {
+        let fixture = try CacheFixture()
+        defer { fixture.removeOwnedFiles() }
+        let url = try XCTUnwrap(URL(string: "https://example.test/guide.xml"))
+        let xml = Data("""
+        <tv><channel><display-name>Unusable declaration</display-name></channel>
+          <programme channel="g0" start="20260101000000" stop="20260101010000">
+            <title lang="en">News</title><title lang="fr">Journal</title>
+            <desc lang="en">English synopsis</desc><desc lang="fr">French synopsis</desc><desc/>
+          </programme>
+        </tv>
+        """.utf8)
+        let range = DateInterval(start: now, duration: 3_600)
+        _ = try await fixture.cache.importGuide(
+            data: xml, sourceID: "guide", channels: [channel(0)], provider: nil, now: now,
+            sourceURL: url, preferredLanguage: " fr_CA "
+        )
+        let restored = try await fixture.reopen().guide(
+            sourceID: "guide", sourceURL: url, preferredLanguage: "fra"
+        )
+        let differentLanguage = try await fixture.cache.guide(
+            sourceID: "guide", sourceURL: url, preferredLanguage: "en"
+        )
+        let noPreference = try await fixture.cache.guide(
+            sourceID: "guide", sourceURL: url, preferredLanguage: nil
+        )
+        XCTAssertNotNil(restored)
+        XCTAssertNil(differentLanguage)
+        XCTAssertNil(noPreference)
+        let french = try await fixture.reopen().programs(
+            sourceID: "guide", channelIDs: ["raw-0"], range: range, sourceURL: url
+        )
+        XCTAssertEqual(french.map(\.title), ["Journal"])
+        XCTAssertEqual(french.first?.details?.description, "French synopsis")
+
+        _ = try await fixture.cache.importGuide(
+            data: xml, sourceID: "guide", channels: [channel(0)], provider: nil, now: now,
+            sourceURL: url, preferredLanguage: "eng"
+        )
+        let english = try await fixture.reopen().programs(
+            sourceID: "guide", channelIDs: ["raw-0"], range: range, sourceURL: url
+        )
+        XCTAssertEqual(english.map(\.title), ["News"])
+        XCTAssertEqual(english.first?.details?.description, "English synopsis")
+        let staleLanguage = try await fixture.reopen().guide(
+            sourceID: "guide", sourceURL: url, preferredLanguage: "fr"
+        )
+        XCTAssertNil(staleLanguage)
+        let oldSearch = try await fixture.cache.searchPrograms(
+            query: "Journal", sourceIDs: ["guide"], range: range, sourceURLs: ["guide": url]
+        )
+        XCTAssertTrue(oldSearch.isEmpty)
+    }
+
     @MainActor
     func testDisabledAndUnapprovedSourcesNeverEnterRestoredCatalogOrGuideWindows() async throws {
         let fixture = try CacheFixture()

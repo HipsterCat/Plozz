@@ -123,7 +123,7 @@ struct SelectLibrariesView: View {
                 } label: {
                     Label("Try Again", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(SettingsFocusButtonStyle())
+                .plozzActionButton(role: .secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 

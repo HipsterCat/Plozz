@@ -42,6 +42,21 @@ final class ServerAddressResolverTests: XCTestCase {
         XCTAssertNil(resolver.confirmed)
     }
 
+    func testDiscoveryFailuresAreNotMisattributedToTheInventoryRequest() async {
+        let resolver = ServerAddressResolver(baseURL: remote, alternatives: [local]) { _ in
+            HTTPResponseDiagnostics.recordTransportFailure(URLError(.cannotConnectToHost))
+            throw AppError.serverUnreachable
+        }
+        let captured = await HTTPResponseDiagnostics.$route.withValue(.playbackInventory) {
+            await HTTPResponseDiagnostics.capture { try await resolver.resolved() }
+        }
+        guard case .failure(let error) = captured.result else {
+            return XCTFail("Unreachable addresses must remain a failure.")
+        }
+        XCTAssertEqual(error as? AppError, .serverUnreachable)
+        XCTAssertEqual(captured.transport.map(\.route), [.serverDiscovery, .serverDiscovery])
+    }
+
     func testReadRetriesAnotherAddressButMutationDoesNotReplay() async throws {
         for method in [HTTPMethod.get, .post, .delete, .patch] {
             let local = local
@@ -74,6 +89,21 @@ final class ServerAddressResolverTests: XCTestCase {
             let calls = await transport.calls
             XCTAssertEqual(calls.count, 1)
         }
+    }
+
+    func testProbeCapableGETDoesNotReplayOnAnotherServerAddress() async {
+        let resolver = ServerAddressResolver(baseURL: remote, alternatives: [local]) { _ in }
+        let transport = AddressTransport(failing: local)
+        let client = ServerAddressHTTPClient(wrapped: transport, resolver: resolver)
+        do {
+            _ = try await client.send(
+                Endpoint(path: "/Items/movie/PlaybackInfo", allowsAutomaticAddressRetry: false),
+                baseURL: remote
+            )
+            XCTFail("An ambiguous probe failure must reach the caller.")
+        } catch { XCTAssertEqual(error as? AppError, .serverUnreachable) }
+        let calls = await transport.calls
+        XCTAssertEqual(calls.map(\.0), [local])
     }
 
     func testRetryDoesNotJoinSweepThatStillIncludesTheFailedAddress() async throws {

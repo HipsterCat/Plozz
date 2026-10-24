@@ -43,7 +43,9 @@ final class NativePosterIndicatorCacheTests: XCTestCase {
         }
         let changes: [(inout EnvironmentValues) -> Void] = [
             { $0.plozzWatchStatusIndicator = .unwatched },
+            { $0.plozzWatchIndicatorColor = .purple },
             { $0.plozzShowsUnwatchedEpisodeCount = false },
+            { $0.plozzEpisodeCountBadgeStyle = .floating },
             { $0.plozzSeerConnected = true },
             { $0.locale = Locale(identifier: "ar") },
             { $0.layoutDirection = .rightToLeft },
@@ -89,6 +91,58 @@ final class NativePosterIndicatorCacheTests: XCTestCase {
             Key(resumedInputs, environment: environment, layer: .foreground),
             "Progress that changes the visible watched status must not reuse that badge."
         )
+    }
+
+    func testWatchColorsInvalidateNativeRowAndLibraryCachesAndChangePixels() throws {
+        for mode in WatchStatusIndicator.allCases {
+            let item = MediaItem(id: "movie", title: "Movie", kind: .movie, isPlayed: mode == .watched)
+            let inputs = NativePosterIndicators.playback(MediaCardPlaybackIndicators(item: item, badgeInset: 12).bitmapInputs)
+            var environment = environment()
+            environment.plozzWatchStatusIndicator = mode
+            let whiteKey = Key(inputs, environment: environment)
+            let whiteImage = try render(whiteKey, environment: environment)
+            let whiteLibrary = NativeLibraryPosterBitmap.Presentation(
+                item: item, spoilerSettings: .default, environment: environment
+            )
+            for color in WatchIndicatorColor.allCases where color != .white {
+                environment.plozzWatchIndicatorColor = color
+                let key = Key(inputs, environment: environment)
+                XCTAssertNotEqual(key, whiteKey)
+                XCTAssertNotEqual(try render(key, environment: environment).pngData(), whiteImage.pngData())
+                XCTAssertNotEqual(NativeLibraryPosterBitmap.Presentation(
+                    item: item, spoilerSettings: .default, environment: environment
+                ), whiteLibrary)
+            }
+        }
+    }
+
+    func testEpisodeCountStyleInvalidatesBothNativeCachesIndependentlyOfWatchMode() throws {
+        let item = MediaItem(id: "series", title: "Series", kind: .series, unwatchedEpisodeCount: 8)
+        let input = indicators(progress: 0.2)
+        for mode in WatchStatusIndicator.allCases {
+            var attached = environment()
+            attached.plozzWatchStatusIndicator = mode
+            attached.plozzEpisodeCountBadgeStyle = .attached
+            var floating = attached
+            floating.plozzEpisodeCountBadgeStyle = .floating
+            for layer in [NativePosterIndicatorLayer.combined, .background, .foreground] {
+                let attachedKey = Key(input, environment: attached, layer: layer)
+                let floatingKey = Key(input, environment: floating, layer: layer)
+                XCTAssertNotEqual(attachedKey, floatingKey)
+                if case .croppedCount = attachedKey.overlayPlacement {} else {
+                    XCTFail("Attached counts must clip at the artwork boundary in both watch modes.")
+                }
+                if case .floating = floatingKey.overlayPlacement {} else {
+                    XCTFail("Floating counts must retain their inset in both watch modes.")
+                }
+                XCTAssertNotEqual(try render(attachedKey, environment: attached).pngData(),
+                                  try render(floatingKey, environment: floating).pngData())
+            }
+            XCTAssertNotEqual(
+                NativeLibraryPosterBitmap.Presentation(item: item, spoilerSettings: .default, environment: attached),
+                NativeLibraryPosterBitmap.Presentation(item: item, spoilerSettings: .default, environment: floating)
+            )
+        }
     }
 
     func testCacheRemainsBoundedAndPurgesOnMemoryWarning() throws {

@@ -89,16 +89,14 @@ public struct PlayerView: View {
         }
         .modifier(DisplaySettleObserver { hdrTransition.displayDidSettle() })
         .onChange(of: scenePhase) { _, phase in
-            // The TV Home button / sleep / app suspension never fires the view's
-            // onDisappear, so stop() (and its final convergence write) would never
-            // run on that path — and the engine would keep decoding audio behind the
-            // Home screen until the OS suspends us. Pause on inactive, record the
-            // real background transition, then rebuild the engine when active again.
+            // System overlays make tvOS inactive without backgrounding playback.
+            // Home/sleep still needs an explicit pause and checkpoint because
+            // that transition does not necessarily fire onDisappear.
             switch phase {
             case .active:
                 Task { await viewModel.resumeAfterBackground() }
             case .inactive:
-                viewModel.suspendForBackground()
+                viewModel.didBecomeInactive()
             case .background:
                 viewModel.didEnterBackground()
             @unknown default:

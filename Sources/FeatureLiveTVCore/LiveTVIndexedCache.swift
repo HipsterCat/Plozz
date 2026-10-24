@@ -73,6 +73,7 @@ public actor LiveTVIndexedCache {
         let lookbackDays: Int
         let lookaheadDays: Int
         let mappingsDigest: String
+        let preferredLanguage: String?
     }
 
     private struct GuideDocument: Codable {
@@ -564,7 +565,8 @@ public actor LiveTVIndexedCache {
 
     public func guide(
         sourceID: String, sourceURL: URL? = nil, provider: LiveTVGuideProvider? = nil,
-        lookbackDays: Int = 1, lookaheadDays: Int = 7
+        lookbackDays: Int = 1, lookaheadDays: Int = 7,
+        preferredLanguage: String? = LanguageMatch.deviceLanguageCode
     ) throws -> LiveTVGuideImport? {
         let db = try database()
         let binding = try sourceBinding(kind: "guide", sourceID: sourceID, url: sourceURL)
@@ -577,7 +579,7 @@ public actor LiveTVIndexedCache {
             .mapValues(\.guideChannelID)
         let settings = try guideSettings(
             provider: provider, lookbackDays: lookbackDays, lookaheadDays: lookaheadDays,
-            overrides: overrides
+            overrides: overrides, preferredLanguage: preferredLanguage
         )
         guard document.settings == settings else { return nil }
         return document.guide
@@ -601,7 +603,8 @@ public actor LiveTVIndexedCache {
     public func importGuide(
         data: Data, sourceID: String, channels: [LiveTVPrototypeChannel],
         provider: LiveTVGuideProvider?, now: Date,
-        lookbackDays: Int = 1, lookaheadDays: Int = 7, sourceURL: URL? = nil
+        lookbackDays: Int = 1, lookaheadDays: Int = 7, sourceURL: URL? = nil,
+        preferredLanguage: String? = LanguageMatch.deviceLanguageCode
     ) throws -> LiveTVGuideImport {
         let db = try database()
         let binding = try sourceBinding(kind: "guide", sourceID: sourceID, url: sourceURL)
@@ -609,7 +612,7 @@ public actor LiveTVIndexedCache {
             .mapValues(\.guideChannelID)
         let settings = try guideSettings(
             provider: provider, lookbackDays: lookbackDays, lookaheadDays: lookaheadDays,
-            overrides: overrides
+            overrides: overrides, preferredLanguage: preferredLanguage
         )
         var result: LiveTVGuideImport?
         var insertedProgramCount = 0
@@ -617,7 +620,7 @@ public actor LiveTVIndexedCache {
             try db.execute("DELETE FROM program_search WHERE source=?", [.text(sourceID)])
             try db.execute("DELETE FROM programs WHERE source=?", [.text(sourceID)])
             try db.execute("DELETE FROM guide_channels WHERE source=?", [.text(sourceID)])
-            result = try LiveTVXMLTVParser(provider: provider).parseIndexed(
+            result = try LiveTVXMLTVParser(provider: provider, preferredLanguage: preferredLanguage).parseIndexed(
                 data: data, channels: channels, now: now, overrides: overrides,
                 lookbackDays: lookbackDays, lookaheadDays: lookaheadDays
             ) { program in
@@ -859,7 +862,7 @@ public actor LiveTVIndexedCache {
 
     private func guideSettings(
         provider: LiveTVGuideProvider?, lookbackDays: Int, lookaheadDays: Int,
-        overrides: [String: String]
+        overrides: [String: String], preferredLanguage: String?
     ) throws -> GuideSettings {
         guard (0...7).contains(lookbackDays), (1...28).contains(lookaheadDays) else {
             throw LiveTVCacheError.invalidRange
@@ -867,9 +870,12 @@ public actor LiveTVIndexedCache {
         let entries = overrides.keys.sorted().map { [$0, overrides[$0] ?? ""] }
         let data = try catalogEncoder.encode(entries)
         return GuideSettings(
-            version: 1, provider: provider?.rawValue, lookbackDays: lookbackDays, lookaheadDays: lookaheadDays,
+            version: 2, provider: provider?.rawValue, lookbackDays: lookbackDays, lookaheadDays: lookaheadDays,
             mappingsDigest: LiveTVChannelIdentity(key: try identityKey()).fingerprint(
                 String(decoding: data, as: UTF8.self)
+            ),
+            preferredLanguage: LanguageMatch.normalized(
+                preferredLanguage?.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         )
     }

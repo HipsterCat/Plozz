@@ -1,4 +1,4 @@
-import CoreModels
+@testable import CoreModels
 import CoreNetworking
 import Foundation
 import XCTest
@@ -99,7 +99,11 @@ final class EmbyWatchStateTests: XCTestCase {
         XCTAssertTrue(beforeRetry.Played)
 
         await http.setReadFailure(nil)
-        let restarted = WatchStateReconciler(store: store, applier: EmbyWatchApplier(provider: provider))
+        let retryAt = try XCTUnwrap(store.load().pending.first?.targetRetries.values.first?.notBefore)
+        let restarted = WatchStateReconciler(
+            store: store, applier: EmbyWatchApplier(provider: makeProvider(http: http)),
+            now: { retryAt }
+        )
         await restarted.drain()
         XCTAssertTrue(store.load().pending.isEmpty)
         let afterRetry = await http.state

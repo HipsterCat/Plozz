@@ -43,6 +43,7 @@ final class HeroDiscoveryServiceTests: XCTestCase {
 
     func testSourcesInterleaveAndMergeAttributionWithoutClaimingOwnership() async {
         var first = Self.item("shared", tmdb: "42")
+        first.hasRequestDownloadActivity = true
         first.metadataProvenance[.title] = .init(
             source: .tmdb, sourceURL: URL(string: "https://www.themoviedb.org/movie/42")
         )
@@ -63,6 +64,7 @@ final class HeroDiscoveryServiceTests: XCTestCase {
         XCTAssertEqual(items[0].discoveryURLs["tvdb"]?.absoluteString, "https://thetvdb.com/movies/9/shared")
         XCTAssertEqual(items[0].discoveryURLs["tmdb"]?.absoluteString, "https://www.themoviedb.org/movie/42")
         XCTAssertTrue(items.allSatisfy { !$0.locallyValidatedPlayableSource })
+        XCTAssertTrue(items.allSatisfy { $0.hasRequestDownloadActivity == nil })
         XCTAssertTrue(items.allSatisfy { $0.sourceAccountID == nil && $0.sources.isEmpty })
     }
 

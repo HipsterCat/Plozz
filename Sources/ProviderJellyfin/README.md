@@ -22,6 +22,9 @@ supported capability remains at parity.
   parameterised by whether the on-device decode engine (Plozzigen) is linked
   so the server allows MKV / DTS / TrueHD / etc. to direct play when we can
   decode them locally.
+  Aether-enabled profiles use `PlozzigenMediaFormats` for linked container,
+  video and audio families rather than native hardware-only restrictions.
+  Native-only profiles and server conversion limits remain independent.
 - `JellyfinMusicProvider` — music-library queries (artists, albums, tracks)
   surfaced through the shared provider abstraction.
 
@@ -41,6 +44,14 @@ supported capability remains at parity.
   implementation; provider-specific branches are limited to API differences.
 - **Co-equal with `ProviderPlex`.** Any new `MediaProvider` capability must be
   implemented here whenever it's implemented for Plex (and vice versa).
+
+## Playback chapters
+
+Playback detail's `Chapters` array supplies chapter navigation on both backends.
+Offsets use 100-nanosecond ticks; chapter image paths retain the original array
+index even when invalid entries or Emby intro/credit markers are filtered out.
+Only ordinary chapter entries become `PlaybackRequest.chapters`; the skip-marker
+path remains separate. Missing chapter images never remove navigation entries.
 
 ## Episode identity and order
 
@@ -71,6 +82,11 @@ Provider-style Home separates `/Items/Resume` from each TV library's
 recommendation shelves per library. Resume-only Home requests do not call Next
 Up; disabled Next Up rows are not fetched. Other consumers of `continueWatching`
 retain the existing combined feed and its independent-endpoint failure handling.
+Useful items survive failure of the companion endpoint, but an empty successful
+feed cannot turn that failure into authoritative empty history. Home and
+series-resume callers receive the failure instead. Support details identify
+Resume and Next Up separately; bounded recent activity records only scope,
+endpoint counts and the number of successful feeds, without media or account IDs.
 
 Series-specific resume lookups allow resumable `/Shows/NextUp` candidates.
 Compatible bridges can return an empty series-scoped `/Items/Resume` even when
@@ -80,18 +96,22 @@ remain intact. Ordinary Home Next Up requests continue excluding resumable
 episodes. This does not bypass excluded libraries or change server-owned
 minimum-resume thresholds.
 
-AIOStreams is the explicit exception to library-filtered Home history. Its
-`/System/Info/Public` extension (`aiostreams.features.history`) identifies
-account-wide watch state that cannot be attributed to its virtual catalogs.
-For that verified server identity, combined Continue Watching, resume-only Home,
-and account-wide native Resume/Next Up rows stay unfiltered even when some or all
-catalogs are disabled. Returned history is not stamped with an invented library.
-Catalog visibility still controls browsing and catalog-specific rows; active
-account, server-user, and profile boundaries remain unchanged.
-Ordinary Jellyfin/Emby retain library filtering. Empty feeds, display names,
-URLs, and advertised Jellyfin version numbers never enable this exception.
-Capability results are kept only for the current provider session; a missing
-endpoint retains ordinary scoping, while other failures and cancellation propagate.
+Global Home history is account-wide on every provider, including Jellyfin and
+Emby. Combined Continue Watching, resume-only Home, and account-wide server
+Resume/Next Up rows do not apply catalog visibility as a history filter.
+They use the signed-in server user's history even when catalogs are hidden or
+cannot be enumerated. Shared Home aggregation, not server-name or extension
+detection, selects that scope.
+
+Explicit library-scoped callers still use the standard `ParentId` parameter
+and stamp returned items with that library; an empty scope makes no requests.
+An empty scoped feed never triggers an unscoped retry. The synthetic Collections
+directory is never treated as a media library. History requests need no separate
+system-info probe, catalog scan, or extra compatibility retry.
+Account, server-user, and profile boundaries, independent-endpoint error handling,
+and cancellation remain unchanged. `JellyfinHistoryVisibilityTests` covers these
+explicit scope rules for both providers; the shared Home visibility tests cover
+account-wide selection independently of library availability.
 
 Home recommendations are opt-in individual rows on every platform. Their Home
 identity is the recommendation type and its occurrence within that type, not
@@ -141,9 +161,8 @@ This does not scan or cap the library; empty, all-Z and non-Latin libraries rema
 valid. The compatibility result is logged without server or library identifiers.
 
 This handles virtual catalogs without matching profile names, hosts or server
-branding. For example, [AIOStreams' library handler](https://github.com/Viren070/AIOStreams/blob/6ca32ed21e3036d87c35c49b24f2cf507d065ed1/packages/server/src/routes/jellyfin/library.ts)
-clamps `Limit` to at least one, preserves catalog order and does not implement
-`NameLessThan`/`NameStartsWith` counts. Its page totals are not alphabet offsets.
+branding. Catalog page totals are not alphabet offsets when the endpoint ignores
+count-only requests or the `NameLessThan`/`NameStartsWith` predicates.
 The result applies only to that scoped request; another library or refresh can
 still supply an index. No unsupported flag is persisted on the profile/account.
 
@@ -201,17 +220,20 @@ Description languages never create selectable audio tracks, change playback
 preferences, override codecs, or leak into other versions.
 
 Remote movie/episode detail responses sometimes expose one generic source while
-`GET /Items/{id}/PlaybackInfo?UserId=...` contains the actual inventory. During
-browsing, only that explicitly remote single-source case requests the inventory. Each
-version retains its original source ID and its own technical/audio-language
-facts; generic item streams must not overwrite the real default source.
-The playback gate uses `playbackItem(id:)`, which always requests this inventory
-for movies and episodes and requires it to succeed. Add-on servers can resolve
+`GET /Items/{id}/PlaybackInfo?UserId=...` contains the actual inventory.
+`item(id:)` is strictly presentation metadata: Home rows, focused heroes, detail
+pages and episode badges never request PlaybackInfo as background enrichment.
+GET is not proof of a cheap read: Jellyfin can refresh STRM metadata and run
+media probes while producing its playback inventory.
+
+Play and explicitly opening Version use `playbackItem(id:)`, which requests this
+inventory for movies and episodes and requires it to succeed. Each version retains
+its original source ID and its own technical/audio-language facts; generic item
+streams must not overwrite the real default source. Compatible servers can resolve
 their streams lazily at this endpoint; item-detail source counts and `IsRemote`
 flags do not establish completeness, even after an earlier playback.
-Browsing can retain lightweight metadata after a failed inventory request, but
-playback cannot mistake that fallback for a confirmed single-version title.
-Both paths use GETs without selecting or starting a source. Missing or duplicate
+Browsing remains available without an inventory request, but playback cannot
+mistake lightweight metadata for a confirmed single-version title. Missing or duplicate
 IDs and unsupported/failed inventory requests block playback through its error
 presentation while leaving browsing available. Cancellation still propagates.
 An explicitly remote source whose ID is the item ID and whose description starts
@@ -223,8 +245,35 @@ An all-placeholder inventory throws `StreamingQualityError.noStreams`, distinct
 from a missing item, malformed response or connection failure. Detail pages can
 therefore offer a truthful, retryable `No streams found` action without treating
 a temporary error as proof that a title has no streams.
-Both backends advertise deferred inventory enrichment so detail menus can refresh
-through the same authoritative endpoint after their hero has painted.
+Both backends expose Version even when the cached list has zero or one source.
+Opening the overflow menu alone does not load it. The version page owns loading,
+failure and explicit Retry, and shares alternate-file resolution with the Play gate.
+
+`PlaybackInfoRequestCoordinator` admits one VOD inventory GET or negotiation POST
+per server in this app process, with at most 16 queued requests. Concurrent inventory
+readers for the same client, user and item share in-flight work; changed credentials
+do not share results. Queued work retains its caller's task-local diagnostics and
+authorization context. Cancelling a queued caller removes its work. Cancelling a
+started inventory reader does not free admission before the transport finishes;
+started negotiation responses still reach playback-session cleanup.
+An ambiguous timeout, connection failure, invalid response (including HTTP 5xx),
+or decoding failure stops queued requests and rejects new ones for at least
+30 seconds; longer numeric Retry-After values are safely bounded and honored.
+Nothing retries automatically when that pause expires. Inventory GET also disables address-failover
+replay, so a lost response cannot trigger a second probe through the same server's
+other address.
+
+This is client-side containment, not a server FFprobe limit: a single request can
+still probe multiple files, and other clients, plugins and scans remain independent.
+It does not establish the cause or resolution of a reported server OOM.
+
+Version-preparation diagnostics distinguish the item-detail GET from the inventory
+GET, transport timeouts from HTTP failures, and decoding from source validation.
+Validation identifies an empty inventory, missing/blank/duplicate source IDs,
+an explicit unavailable placeholder, or server refusal without retaining source
+IDs or payloads. The shared version gate and explicit detail/episode discovery
+capture these facts through `PlaybackPreparationDiagnostics`; failures remain
+visible without converting an unavailable inventory into a playable fallback.
 
 Inventory GET does not send a device profile, open a stream, or report playback.
 Its generated `PlaySessionId` is not an owned encoding session and needs no stop
@@ -248,6 +297,21 @@ release the owned session. Best-effort remux pins the selected source and
 releases whichever decision is abandoned. Cleanup is awaited independently of
 the caller's cancellation and always includes both device and play-session IDs.
 Server/network cleanup failures remain diagnostic failures, not proof of release.
+
+Decoder-backed hosts keep a server-approved direct file on the local engine.
+The legacy extra server-remux negotiation for Dolby Vision MKV and `hev1` MP4
+is native-only: the linked engine already owns container repair and native
+display signaling. Server-required conversion, explicit forced conversion,
+quality limits, selected versions and tracks remain authoritative on both
+Jellyfin and Emby. Regression fixtures cover both affected file shapes, the
+native-only remux path, and required conversions.
+
+This ownership was cross-checked against
+[Sodalite's stream selection](https://github.com/superuser404notfound/Sodalite/blob/31799bde53e2d93384216b3f9b2523600896ef2b/Sodalite/Player/PlaybackStreamSelection.swift),
+[Swiftfin's playback builder](https://github.com/jellyfin/Swiftfin/blob/b0cb3127b1cef57b6508581be1cfe9addd5539a2/Shared/Objects/MediaPlayerManager/MediaPlayerItem/MediaPlayerItem%2BBuild.swift),
+and the [linked engine's pipeline contract](https://github.com/superuser404notfound/AetherEngine/blob/5fe2d42d68524dcfbcfacf07cbefe5b28b618155/docs/architecture.md).
+These are protocol/design references, not copied implementations. Client
+differences do not establish the cause of an individual playback failure.
 
 Protocol references: Jellyfin's pinned
 [`MediaInfoHelper`](https://github.com/jellyfin/jellyfin/blob/e53a6d3e6ae29cb05c55c7b8edf2d237a1f75c16/Jellyfin.Api/Helpers/MediaInfoHelper.cs),
@@ -335,11 +399,8 @@ server user or a server-filtered subset. Do not enumerate library media and
 collection members to impose stricter client-side filtering.
 
 Compatible endpoints can serve virtual catalogs rather than indexed local media.
-[AIOMetadata's Jellyfin server](https://github.com/cedya77/aiometadata/blob/dev/docs/jellyfin.md)
-and [AIOStreams' Jellyfin server](https://github.com/Viren070/AIOStreams/blob/main/packages/docs/content/docs/reference/jellyfin-extensions.mdx)
-are separate implementations, even when AIOStreams uses AIOMetadata as an addon.
 Use verified endpoint capabilities and response contracts for optimizations;
-neither an addon name nor a server version establishes collection scoping.
+neither server branding nor a server version establishes collection scoping.
 
 The compatible strategy reads only the BoxSet list in 500-item pages, retaining
 primary image tags. Collection-list responses are much smaller than full media

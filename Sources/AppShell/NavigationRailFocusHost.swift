@@ -36,11 +36,13 @@ struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
             target.themeMusicSettings = source.themeMusicSettings
             target.themeMusicAuthenticatedHTTPResolver = source.themeMusicAuthenticatedHTTPResolver
             target.seasonRequestContextID = source.seasonRequestContextID
+            target.libraryPresentationLoader = source.libraryPresentationLoader
             target[NavigationChromeModel.self] = source[NavigationChromeModel.self]
             target[ProfilesModel.self] = source[ProfilesModel.self]
             target[HeroTrailerController.self] = source[HeroTrailerController.self]
             target[HeroBackgroundSettingsModel.self] = source[HeroBackgroundSettingsModel.self]
             target[HeroSettingsModel.self] = source[HeroSettingsModel.self]
+            target[LibraryPresentationSettingsModel.self] = source[LibraryPresentationSettingsModel.self]
             target[ShareScanStatusModel.self] = source[ShareScanStatusModel.self]
             target[MusicPlayerSettingsModel.self] = source[MusicPlayerSettingsModel.self]
             target[UIDensitySettingsModel.self] = source[UIDensitySettingsModel.self]

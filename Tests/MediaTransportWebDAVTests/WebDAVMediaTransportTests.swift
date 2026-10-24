@@ -71,18 +71,29 @@ final class WebDAVMediaTransportTests: XCTestCase {
 
     // MARK: - validate
 
-    func testValidateSucceedsWhenServerAdvertisesDAV() async throws {
+    func testValidateProvesCollectionWithoutOptionsOrDAVHeader() async throws {
+        let request = LockedValue<URLRequest?>(nil)
+        let xml = """
+        <multistatus xmlns="DAV:"><response>
+          <href>/dav/movies/</href>
+          <propstat><prop><resourcetype><collection/></resourcetype></prop>
+          <status>HTTP/1.1 200 OK</status></propstat>
+        </response></multistatus>
+        """
         StubURLProtocol.queue(
-            StubResponse(statusCode: 200, headers: ["DAV": "1,2"]),
+            StubResponse(statusCode: 207, body: Data(xml.utf8), onRequest: { request.set($0) }),
             for: URL(string: "https://nas.example.com/dav/movies")!
         )
         let session = try await makeAdapter().connect(for: try makeKey())
         try await session.fileSystem.validate()
+        XCTAssertEqual(request.get()?.httpMethod, "PROPFIND")
+        XCTAssertEqual(request.get()?.value(forHTTPHeaderField: "Depth"), "0")
+        await session.shutdown()
     }
 
-    func testValidateFailsClosedWithoutDAVHeader() async throws {
+    func testValidateRejectsPlainHTTPResponseEvenWithDAVHeader() async throws {
         StubURLProtocol.queue(
-            StubResponse(statusCode: 200, headers: ["Allow": "GET"]),
+            StubResponse(statusCode: 200, headers: ["DAV": "1,2"], body: Data("<html/>".utf8)),
             for: URL(string: "https://nas.example.com/dav/movies")!
         )
         let session = try await makeAdapter().connect(for: try makeKey())
@@ -94,6 +105,31 @@ final class WebDAVMediaTransportTests: XCTestCase {
                 return XCTFail("expected protocolViolation, got \(error)")
             }
         }
+        await session.shutdown()
+    }
+
+    func testValidateRejectsFileRoot() async throws {
+        let xml = """
+        <multistatus xmlns="DAV:"><response>
+          <href>/dav/movies</href>
+          <propstat><prop><resourcetype/></prop>
+          <status>HTTP/1.1 200 OK</status></propstat>
+        </response></multistatus>
+        """
+        StubURLProtocol.queue(
+            StubResponse(statusCode: 207, body: Data(xml.utf8)),
+            for: URL(string: "https://nas.example.com/dav/movies")!
+        )
+        let session = try await makeAdapter().connect(for: try makeKey())
+        do {
+            try await session.fileSystem.validate()
+            XCTFail("expected protocolViolation")
+        } catch let error as MediaTransportError {
+            guard case .protocolViolation = error else {
+                return XCTFail("expected protocolViolation, got \(error)")
+            }
+        }
+        await session.shutdown()
     }
 
     // MARK: - list
@@ -257,12 +293,12 @@ final class WebDAVMediaTransportTests: XCTestCase {
         let url = URL(string: "https://nas.example.com/dav/movies/Movie.mkv")!
         queueStat()
         let observedIfMatch = LockedValue<String?>(nil)
-        // 1) range probe: 206 + strong ETag + Content-Range 0-0/1000, 1-byte body.
+        // 1) range probe: 206 + strong ETag + Content-Range 0-1/1000, 2-byte body.
         StubURLProtocol.queue(
             StubResponse(
                 statusCode: 206,
-                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-0/1000"],
-                body: Data([0x00])
+                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-1/1000"],
+                body: Data([0x00, 0x00])
             ),
             for: url
         )
@@ -295,8 +331,8 @@ final class WebDAVMediaTransportTests: XCTestCase {
         StubURLProtocol.queue(
             StubResponse(
                 statusCode: 206,
-                headers: ["ETag": "\"changed\"", "Content-Range": "bytes 0-0/1000"],
-                body: Data([0x00])
+                headers: ["ETag": "\"changed\"", "Content-Range": "bytes 0-1/1000"],
+                body: Data([0x00, 0x00])
             ),
             for: url
         )
@@ -323,7 +359,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
         XCTAssertTrue(bytes.prefix(length / 2).allSatisfy { $0 == 42 })
         XCTAssertTrue(bytes.suffix(length / 2).allSatisfy { $0 == 42 })
         let reads = StubURLProtocol.requests(for: url).filter {
-            $0.httpMethod == "GET" && $0.value(forHTTPHeaderField: "Range") != "bytes=0-0"
+            $0.httpMethod == "GET" && $0.value(forHTTPHeaderField: "Range") != "bytes=0-1"
         }
         XCTAssertEqual(reads.count, 1)
         XCTAssertEqual(Set(reads.compactMap { $0.value(forHTTPHeaderField: "Range") }), [
@@ -426,8 +462,8 @@ final class WebDAVMediaTransportTests: XCTestCase {
         StubURLProtocol.queue(
             StubResponse(
                 statusCode: 206,
-                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-0/\(total)"],
-                body: Data([42])
+                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-1/\(total)"],
+                body: Data([42, 42])
             ), for: url
         )
         let session = try await makeAdapter().connect(for: try makeKey(revision: revision, role: .playback))
@@ -466,8 +502,8 @@ final class WebDAVMediaTransportTests: XCTestCase {
         StubURLProtocol.queue(
             StubResponse(
                 statusCode: 206,
-                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-0/1000"],
-                body: Data([0x00])
+                headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-1/1000"],
+                body: Data([0x00, 0x00])
             ),
             for: url
         )
@@ -516,7 +552,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
         let date = try XCTUnwrap(HTTPDate.parse(modified))
         queueStat(etag: nil, modified: modified)
         StubURLProtocol.queue(
-            StubResponse(statusCode: 206, headers: ["Last-Modified": modified, "Content-Range": "bytes 0-0/1000"], body: Data([0])),
+            StubResponse(statusCode: 206, headers: ["Last-Modified": modified, "Content-Range": "bytes 0-1/1000"], body: Data([0, 0])),
             for: url
         )
         StubURLProtocol.queue(
@@ -547,7 +583,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
         let url = URL(string: "https://nas.example.com/dav/movies/Movie.mkv")!
         queueStat(etag: nil)
         StubURLProtocol.queue(
-            StubResponse(statusCode: 206, headers: ["ETag": "\"get-only\"", "Content-Range": "bytes 0-0/1000"], body: Data([0])),
+            StubResponse(statusCode: 206, headers: ["ETag": "\"get-only\"", "Content-Range": "bytes 0-1/1000"], body: Data([0, 0])),
             for: url
         )
         let session = try await makeAdapter().connect(for: makeKey())
@@ -567,9 +603,9 @@ final class WebDAVMediaTransportTests: XCTestCase {
                 statusCode: 206,
                 headers: [
                     "ETag": "\"replacement\"", "Last-Modified": "Thu, 15 Oct 2026 12:00:00 GMT",
-                    "Content-Range": "bytes 0-0/1000"
+                    "Content-Range": "bytes 0-1/1000"
                 ],
-                body: Data([0])
+                body: Data([0, 0])
             ), for: url
         )
         let locator = try NetworkFileLocator(
@@ -598,7 +634,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
             queueStat(etag: nil)
             StubURLProtocol.queue(redirect: StubRedirect(location: target), for: url)
             StubURLProtocol.queue(
-                StubResponse(statusCode: 206, headers: ["ETag": "\"1\"", "Content-Range": "bytes 0-0/1000"], body: Data([0])),
+                StubResponse(statusCode: 206, headers: ["ETag": "\"1\"", "Content-Range": "bytes 0-1/1000"], body: Data([0, 0])),
                 for: target
             )
             let session = try await makeAdapter().connect(for: makeKey())
@@ -616,7 +652,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
         let url = URL(string: "https://nas.example.com/dav/movies/Movie.mkv")!
         let target = URL(string: "https://cdn.example.com/other?signature=ephemeral")!
         let response = StubResponse(
-            statusCode: 206, headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-0/1000"], body: Data([0])
+            statusCode: 206, headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-1/1000"], body: Data([0, 0])
         )
         queueStat(etag: nil)
         StubURLProtocol.queue(response, for: url)
@@ -641,7 +677,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
         let url = URL(string: "https://nas.example.com/dav/movies/Movie.mkv")!
         queueStat(etag: nil)
         StubURLProtocol.queue(
-            StubResponse(statusCode: 206, headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-0/1000"], body: Data([0])),
+            StubResponse(statusCode: 206, headers: ["ETag": "\"strong-1\"", "Content-Range": "bytes 0-1/1000"], body: Data([0, 0])),
             for: url
         )
         StubURLProtocol.queue(
@@ -666,7 +702,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
         let url = URL(string: "https://nas.example.com/dav/movies/Movie.mkv")!
         queueStat(etag: nil)
         StubURLProtocol.queue(
-            StubResponse(statusCode: 206, headers: ["Content-Range": "bytes 0-0/1000"], body: Data([0])),
+            StubResponse(statusCode: 206, headers: ["Content-Range": "bytes 0-1/1000"], body: Data([0, 0])),
             for: url
         )
         let session = try await makeAdapter().connect(for: makeKey())
@@ -710,7 +746,7 @@ final class WebDAVMediaTransportTests: XCTestCase {
         queueStat()
         StubURLProtocol.queue(redirect: StubRedirect(location: cdn), for: url)
         StubURLProtocol.queue(
-            StubResponse(statusCode: 206, headers: ["ETag": "\"cdn-1\"", "Content-Range": "bytes 0-0/1000"], body: Data([0])),
+            StubResponse(statusCode: 206, headers: ["ETag": "\"cdn-1\"", "Content-Range": "bytes 0-1/1000"], body: Data([0, 0])),
             for: cdn
         )
         StubURLProtocol.queue(

@@ -202,7 +202,7 @@ public struct ProfileSeerrSetupView: View {
                     } label: {
                         Label("Connect", systemImage: "link")
                     }
-                    .buttonStyle(SettingsFocusButtonStyle(size: .prominent))
+                    .plozzActionButton()
                     .disabled(!canConnect)
                 }
 
@@ -250,7 +250,7 @@ public struct ProfileSeerrSetupView: View {
                     } label: {
                         Label("Retry loading users", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(SettingsFocusButtonStyle())
+                    .plozzActionButton(role: .secondary)
                 case .empty:
                     VStack(alignment: .leading, spacing: 10) {
                         if profile.seerrRequestIdentity.userID != nil {

@@ -134,7 +134,13 @@ struct PresentationHostApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--hero-request-controls-fixture") {
+            if ProcessInfo.processInfo.arguments.contains("--source-settings") {
+                SourceOnboardingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--featured-card-fixture") {
+                FeaturedCardInteractionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--collection-settings-fixture") {
+                CollectionSettingsInteractionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--hero-request-controls-fixture") {
                 HeroRequestControlsFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--home-hero-fixture") {
                 HomeHeroInteractionFixture()
@@ -150,6 +156,8 @@ struct PresentationHostApp: App {
                 ServerAddressNavigationFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--iptv-organization-fixture") {
                 IPTVOrganizationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--category-search-fixture") {
+                LiveTVCategorySearchFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--sync-erasure-fixture") {
                 SyncErasureInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--watchlist-feedback-fixture") {
@@ -158,6 +166,10 @@ struct PresentationHostApp: App {
                 TouchFeedbackFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--rotation-player-fixture") {
                 PlayerRotationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--plex-user-chooser-fixture") {
+                PlexUserChooserInteractionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--profile-selection-fixture") {
+                ProfileSelectionInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--profile-picker-fixture") {
                 ProfilePickerInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--downloads-interaction-fixture") {
@@ -175,6 +187,79 @@ struct PresentationHostApp: App {
             }
         }
     }
+}
+
+private struct CollectionSettingsInteractionFixture: View {
+    private let provider = CollectionSettingsProvider()
+    @State private var hero = HeroSettingsModel(store: InMemoryHeroSettingsStore())
+    @State private var background = HeroBackgroundSettingsModel(store: InMemoryHeroBackgroundSettingsStore())
+    @State private var cards: CardStyleSettingsModel
+    @State private var visibility: HomeLibraryVisibilityModel
+
+    init() {
+        let suite = "CollectionSettingsInteractionFixture"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        _cards = State(initialValue: CardStyleSettingsModel(
+            store: CardStyleSettingsStore(defaults: defaults),
+            focusStore: CardFocusStyleSettingsStore(defaults: defaults),
+            captionStore: CardCaptionSettingsStore(defaults: defaults),
+            artworkStore: ArtworkSettingsStore(defaults: defaults)
+        ))
+        _visibility = State(initialValue: HomeLibraryVisibilityModel(
+            store: HomeLibraryVisibilityStore(defaults: defaults)
+        ))
+    }
+
+    var body: some View {
+        // Inject through the production page, not above the navigation stack where it masks missing handoffs.
+        NavigationStack {
+            PlozziOSHomeSettingsView(
+                hero: hero, heroBackground: background, cards: cards, visibility: visibility,
+                accounts: [ResolvedAccount(account: Account(from: provider.session), provider: provider)]
+            )
+        }
+        .environment(\.locale, Locale(identifier: "en_US"))
+        .environment(\.themePalette, .dark)
+        .environment(\.plozzMetrics, .touch(density: .standard))
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct CollectionSettingsProvider: MediaProvider, CapabilityReporting {
+    let kind: ProviderKind = .plex
+    let capabilities: ProviderCapability = [.libraryCollections]
+    let session = UserSession(
+        server: MediaServer(
+            id: "collection-settings", name: "Collection server",
+            baseURL: URL(string: "https://collection-settings.example.test")!, provider: .plex
+        ),
+        userID: "viewer", userName: "Viewer", deviceID: "fixture", accessToken: "fixture"
+    )
+
+    func libraries() async throws -> [MediaLibrary] {
+        [.init(id: "movies", title: "Movies", kind: .movie)]
+    }
+    func collections(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        .init(items: [
+            .init(id: "weekend", title: "Weekend picks", kind: .collection),
+            .init(id: "favorites", title: "Favorites", kind: .collection)
+        ], startIndex: 0, totalCount: 2)
+    }
+    func collectionMembers(of collectionID: String, page: PageRequest) async throws -> MediaPage {
+        .init(items: [.init(id: "orbit", title: "Orbit", kind: .movie)], startIndex: 0, totalCount: 1)
+    }
+    func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
+    func latest(limit: Int) async throws -> [MediaItem] { [] }
+    func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        .init(items: [], startIndex: page.startIndex, totalCount: 0)
+    }
+    func item(id: String) async throws -> MediaItem { throw AppError.notFound }
+    func children(of itemID: String) async throws -> [MediaItem] { [] }
+    func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
+    func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }
+    func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
+    func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }
 
 private struct SourceRetryFixture: View {

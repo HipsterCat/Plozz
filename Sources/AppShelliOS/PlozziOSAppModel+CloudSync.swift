@@ -241,6 +241,10 @@ extension PlozziOSAppModel {
     // MARK: Apply side (V3 exact apply)
 
     func applySyncRecords(_ changes: SyncLocalChanges) {
+        let outgoingProfile = profiles.activeProfile
+        let outgoingNamespace = profiles.activeNamespace
+        let outgoingMembership = profiles.storedActiveAccountIDs(for: outgoingProfile.id).map { Set($0) }
+        let outgoingAccounts = accountsProviders.accounts
         var profileUpserts: [String: ProfileSyncDTO] = [:]
         var profileDeletes: Set<String> = []
         var membershipSet: [String: [String]] = [:]
@@ -312,10 +316,6 @@ extension PlozziOSAppModel {
         // questions the user has already answered — or declined — and a remote
         // rename would silently re-gate their imports.
         let knownProfileIDs = Set(profiles.profiles.map(\.id))
-        // Captured BEFORE anything is applied: a synced delete of the ACTIVE
-        // Kids Profile re-points the selection with no user action, and the
-        // parental gate can only tell that happened if it knows where we were.
-        let outgoingProfile = profiles.activeProfile
         if !profileUpserts.isEmpty || !profileDeletes.isEmpty {
             for profileID in profileDeletes {
                 removeMediaAliases(forProfileID: profileID)
@@ -381,8 +381,16 @@ extension PlozziOSAppModel {
         // profile would discard its Plex PIN proof, including an in-flight entry.
         if outgoingProfile.id != profiles.activeProfileID {
             selectProfile(profiles.activeProfileID)
-        } else {
+        } else if outgoingProfile != profiles.activeProfile
+            || outgoingNamespace != profiles.activeNamespace
+            || outgoingMembership != profiles.storedActiveAccountIDs(for: profiles.activeProfileID).map({ Set($0) })
+            || outgoingAccounts != accountsProviders.accounts {
             refreshActiveProfileConfiguration()
+        } else if settingWrites.contains(where: { $0.pid == profiles.activeProfileID })
+            || settingRemoves.contains(where: { $0.pid == profiles.activeProfileID }) {
+            // Preferences do not change source identity. Keep providers, indexing,
+            // tracker imports and in-flight downloads alive across their updates.
+            refreshActiveProfileSettings()
         }
 
         // If synced profiles just established an already-set-up household, dismiss any

@@ -80,6 +80,7 @@ final class ForegroundReloadCoordinator {
         var recoveryArmed = false
     }
     private var suspension: Suspension?
+    private var inactiveSnapshot: Suspension?
 
     var preservedPosition: TimeInterval? {
         guard let host, let suspension,
@@ -94,6 +95,38 @@ final class ForegroundReloadCoordinator {
 
     init(host: ForegroundReloadCoordinatorHost) {
         self.host = host
+    }
+
+    /// A fallback for coalesced scene notifications, not a frozen playback clock.
+    func captureBeforeInactivity() {
+        guard let host, !host.reloadDidStop, host.reloadPhase == .ready else { return }
+        let position = host.reloadPosition
+        guard position.isFinite, position >= 0 else {
+            PlozzLog.playback.error("Cannot checkpoint an invalid playback position before inactivity.")
+            return
+        }
+        inactiveSnapshot = .init(
+            engine: host.reloadEngineToken, playback: host.reloadPlaybackIdentity, position: position
+        )
+    }
+
+    /// Preserve the existing clock-reset recovery if SwiftUI omitted `.background`.
+    func captureCoalescedBackground() -> Bool {
+        defer { inactiveSnapshot = nil }
+        guard let host, let inactiveSnapshot,
+              !isRecovering, pendingForegroundReloadGeneration == nil, preservedPosition == nil,
+              !host.reloadDidStop, host.reloadPhase == .ready,
+              host.reloadEngineToken == inactiveSnapshot.engine,
+              host.reloadPlaybackIdentity == inactiveSnapshot.playback,
+              inactiveSnapshot.position > 2,
+              host.reloadEngine.currentTime.isFinite,
+              (0...1).contains(host.reloadEngine.currentTime) else { return false }
+        suspension = inactiveSnapshot
+        markEnteredBackground()
+        HandoffDiagnostics.emit(
+            "foreground CLOCK_RESET_AFTER_INACTIVITY saved=\(String(format: "%.3f", inactiveSnapshot.position))"
+        )
+        return true
     }
 
     /// Marks a genuine tvOS background entry, arming exactly one pending
@@ -121,8 +154,12 @@ final class ForegroundReloadCoordinator {
     }
 
     func noteUserSeek(to position: TimeInterval) {
-        guard preservedPosition != nil, position.isFinite, position >= 0 else { return }
-        suspension?.position = position
+        guard position.isFinite, position >= 0 else { return }
+        if preservedPosition != nil { suspension?.position = position }
+        if let host, inactiveSnapshot?.engine == host.reloadEngineToken,
+           inactiveSnapshot?.playback == host.reloadPlaybackIdentity {
+            inactiveSnapshot?.position = position
+        }
     }
 
     /// Restores the engine after a real background round-trip while preserving

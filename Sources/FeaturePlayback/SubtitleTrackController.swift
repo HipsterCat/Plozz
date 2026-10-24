@@ -32,6 +32,7 @@ protocol SubtitleTrackControllerHost: AnyObject {
     func trackRememberedSubtitle(for item: MediaItem) -> RememberedSubtitleSelection?
     func trackEffectiveSubtitleRule(for item: MediaItem) -> SubtitlePolicy.Rule
     func trackRecordAudioSelection(language: String?)
+    @discardableResult func trackSelectAudioTrack(_ track: MediaTrack) -> Bool
     func trackRecordSubtitleSelection(_ selection: RememberedSubtitleSelection?)
     func trackRefreshSubtitleDelayAvailability()
     /// Re-route playback onto Plozzigen at the current position so a manually
@@ -70,6 +71,13 @@ final class SubtitleTrackController {
         var secondary: MediaTrack?
     }
 
+    private var activeAudioTrackID: Int? {
+        if let request = host?.trackRequest, request.isTranscoding, let streaming = request.streamingOptions {
+            return streaming.selectedAudio(in: request.audioTracks)?.id
+        }
+        return host?.trackEngine.currentAudioTrackID
+    }
+
     func streamSnapshot() -> StreamSnapshot {
         let subtitles = (host?.trackEngine.subtitleTracks ?? []) + hotLoadedSubtitleTracks
         return StreamSnapshot(
@@ -95,8 +103,8 @@ final class SubtitleTrackController {
                 }
         }
         let engine = host.trackEngine
-        if let audio = match(snapshot.audio, in: engine.audioTracks), engine.currentAudioTrackID != audio.id {
-            engine.selectAudioTrack(audio)
+        if let audio = match(snapshot.audio, in: engine.audioTracks), activeAudioTrackID != audio.id {
+            guard host.trackSelectAudioTrack(audio) else { return false }
             selectedAudioTrackID = audio.id
         }
         let subs = engine.subtitleTracks + hotLoadedSubtitleTracks
@@ -210,7 +218,7 @@ final class SubtitleTrackController {
         let audioResolution = TrackMenuBuilder.resolveSelectedAudioTrackID(
             current: selectedAudioTrackID,
             pending: pendingAudioTrackID,
-            engineActive: engine.currentAudioTrackID,
+            engineActive: activeAudioTrackID,
             tracks: audio
         )
         selectedAudioTrackID = audioResolution.selected
@@ -326,8 +334,8 @@ final class SubtitleTrackController {
         guard let host else { return }
         let engine = host.trackEngine
         guard let track = engine.audioTracks.first(where: { $0.id == id }) else { return }
+        guard host.trackSelectAudioTrack(track) else { return }
         viewerChangedAudioThisSession = true
-        engine.selectAudioTrack(track)
         // Remember this language for the series so later episodes start here.
         host.trackRecordAudioSelection(language: track.language)
         // Show the target immediately; the engine's reload-to-switch lags, so we
@@ -347,9 +355,12 @@ final class SubtitleTrackController {
         guard let track = engine.audioTracks.first(where: {
             LanguageMatch.matches($0.language, language)
         }) else { return }
+        guard track.id != activeAudioTrackID, track.id != pendingAudioTrackID else {
+            crossServerAudioImportLanguage = nil
+            return
+        }
+        guard host.trackSelectAudioTrack(track) else { return }
         crossServerAudioImportLanguage = nil
-        guard track.id != engine.currentAudioTrackID, track.id != pendingAudioTrackID else { return }
-        engine.selectAudioTrack(track)
         pendingAudioTrackID = track.id
         selectedAudioTrackID = track.id
         loadTrackOptions()
@@ -785,7 +796,7 @@ final class SubtitleTrackController {
         if let selectedAudioTrackID,
            selectedAudioTrackID != recoveringEngine.currentAudioTrackID,
            let track = recoveringEngine.audioTracks.first(where: { $0.id == selectedAudioTrackID }) {
-            recoveringEngine.selectAudioTrack(track)
+            host.trackSelectAudioTrack(track)
         }
         if let selectedSubtitleTrackID,
            let track = recoveringEngine.subtitleTracks.first(where: { $0.id == selectedSubtitleTrackID }) {

@@ -169,6 +169,13 @@ These Home and device-login contracts were checked at upstream revision
   requests carry an idempotent stop identifier.
 - Watched state and the native Silo watchlist write back to Silo. Batched resume
   synchronization checks each result, not only HTTP success.
+  Watched writes use `POST /api/v2/watched/{id}`; unwatched writes use `DELETE`.
+  Both accept the native `204 No Content` response and retain the selected
+  server-profile headers. This contract is pinned in the
+  [native API specification](https://github.com/Silo-Server/silo-server/blob/3bc9e58c51970f261d41848ff411713894d53243/contracts/api/v2/openapi.json).
+  Failed outbox targets retain their watch intent and use the shared persisted
+  retry cooldown rather than retrying on every index or configuration update.
+  HTTP 429 honors both numeric and HTTP-date `Retry-After` values.
 
 ### Watch indicators
 

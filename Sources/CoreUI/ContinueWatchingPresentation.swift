@@ -31,4 +31,20 @@ public extension ContinueWatchingPlaybackDetails {
         }
     }
 }
+
+public extension ContinueWatchingAction {
+    var displayName: LocalizedStringResource {
+        switch self {
+        case .play: "Play"
+        case .openDetails: "Open detail page"
+        }
+    }
+
+    var detail: LocalizedStringResource {
+        switch self {
+        case .play: "Selecting a movie or episode on Home starts playback."
+        case .openDetails: "Selecting a movie or episode on Home opens its detail page."
+        }
+    }
+}
 #endif

@@ -48,6 +48,7 @@ struct ViewCustomizationFixture: View {
         .environment(models.navigationStyleModel)
         .environment(models.transparencyModel)
         .environment(models.appLanguageModel)
+        .environment(models.contentRatingModel)
         .environment(models.heroSettingsModel)
         .environment(\.plozzNavigationStyle, previewNavigationStyle)
         .environment(\.themePalette, .dark)

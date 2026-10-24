@@ -90,6 +90,33 @@ final class TransportSessionDelegateTests: XCTestCase {
         }
     }
 
+    func testWindowsAuthenticationAllowsNextSupportedChallengeWithoutCredentials() {
+        for policy in [PasswordAuthPolicy.automatic, .basicAllowed, .digestOnly] {
+            let delegate = TransportSessionDelegate(
+                credential: .password(username: "user", password: "fixture", policy: policy),
+                trustPolicy: .system, origin: origin
+            )
+            for method in [NSURLAuthenticationMethodNTLM, NSURLAuthenticationMethodNegotiate] {
+                let space = URLProtectionSpace(
+                    host: origin.host, port: origin.port, protocol: origin.scheme,
+                    realm: "fixture", authenticationMethod: method
+                )
+                XCTAssertEqual(delegate.unsupportedChallengeDisposition(space), .rejectProtectionSpace)
+            }
+        }
+    }
+
+    func testAnonymousDeliveryDoesNotNegotiateAnotherAuthenticationScheme() {
+        let delegate = TransportSessionDelegate(
+            credential: .anonymous, trustPolicy: .system, origin: origin, isAnonymousMediaSession: true
+        )
+        let space = URLProtectionSpace(
+            host: origin.host, port: origin.port, protocol: origin.scheme,
+            realm: "fixture", authenticationMethod: NSURLAuthenticationMethodNTLM
+        )
+        XCTAssertEqual(delegate.unsupportedChallengeDisposition(space), .cancelAuthenticationChallenge)
+    }
+
     private func evaluateChallenge(
         host: String = "nas.example.com",
         authenticationMethod: String,

@@ -77,7 +77,8 @@ enum SeerMapper {
             providerIDs: ["Tmdb": String(result.id)],
             availability: status,
             locallyValidatedPlayableSource: false,
-            downloadProgress: downloadProgress(from: result.mediaInfo?.downloadStatus)
+            downloadProgress: downloadProgress(from: result.mediaInfo?.downloadStatus),
+            hasRequestDownloadActivity: result.mediaInfo?.downloadStatus.map { !$0.isEmpty }
         )
     }
 
@@ -212,6 +213,7 @@ enum SeerMapper {
         return MediaRequestAvailability(
             status: details.mediaInfo?.status.flatMap(MediaAvailabilityStatus.init(rawValue:)) ?? .unknown,
             downloadProgress: downloadProgress(from: details.mediaInfo?.downloadStatus),
+            hasDownloadActivity: details.mediaInfo?.downloadStatus?.isEmpty == false,
             seasons: seasons
         )
     }
