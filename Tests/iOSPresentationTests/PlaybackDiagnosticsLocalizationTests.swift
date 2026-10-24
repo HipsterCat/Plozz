@@ -298,6 +298,37 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         }
     }
 
+    func testAudioEncodingDescriptionsUseTheSameTranslationInBothPresentations() throws {
+        let bundleURL = try XCTUnwrap(Bundle.main.url(forResource: "cs", withExtension: "lproj"))
+        let bundle = try XCTUnwrap(Bundle(url: bundleURL))
+        for (pipeline, key) in [
+            ("DTS → FLAC bridge", "Lossless encoding"),
+            ("DTS → EAC3 bridge", "Lossy encoding"),
+            ("Stream-copy (EAC3)", "No re-encoding"),
+            ("libavcodec DTS → CoreAudio", "Decoded to PCM")
+        ] {
+            var diagnostics = fixture(mode: .plozzigen)
+            diagnostics.audioPipelineDescription = pipeline
+            for presentation in [PlaybackDiagnosticsOverlay.Presentation.mobile, .television] {
+                let panel = PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: presentation)
+                let text: String
+                if presentation == .mobile {
+                    text = try renderedText(
+                        panel.mobileContent(width: 390).frame(width: 390)
+                            .fixedSize(horizontal: false, vertical: true), locale: "cs"
+                    )
+                } else {
+                    text = try renderedText(panel.televisionPanel(width: 1280), locale: "cs")
+                }
+                for source in ["Encoding", key] {
+                    let translated = bundle.localizedString(forKey: source, value: nil, table: "Localizable")
+                    XCTAssertNotEqual(translated, source)
+                    XCTAssertTrue(normalized(text).contains(normalized(translated)), text)
+                }
+            }
+        }
+    }
+
     func testUnreportedSystemOutputIsOmittedInsteadOfReplacingItWithAnExpectation() throws {
         var diagnostics = fixture(mode: .plozzigen)
         diagnostics.audioOutput = nil
