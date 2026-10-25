@@ -1,29 +1,33 @@
-# Screenshots and original demo media
+# Screenshots and media credits
 
 The README uses real Plozz simulator captures. Home and library views use a
-catalog of 37 original titles, including eight in-progress titles at different
-playback positions. Posters, backdrops, videos, descriptions and subtitles were
-created for this project. Online metadata and artwork are disabled for capture.
+catalog of 20 real film titles, including multiple in-progress films at distinct
+playback positions. Full-bleed covers use licensed film frames and historical
+public-domain artwork. Online metadata and artwork are disabled for capture.
+The demonstration library is not bundled with Plozz.
 
 ## Provenance
 
 - [Image records](assets/screenshots/provenance.json) identify the app revision,
-  capture bootstrap, original PNG hashes and published JPEG hashes.
-- [Demo source archive](assets/screenshots/demo-media-source.zip) contains the
-  original media generator, loopback catalog fixture, capture-only bootstrap
-  patch, media inventory and font/license notices.
-- The original procedural media is supplied under the MIT license. Manrope is
-  supplied under SIL OFL 1.1. Plozz's interface retains the app's own license.
+  original PNG hashes and published JPEG hashes.
+- [Media records](assets/screenshots/media-credits.json) and
+  [public credits](https://plozz.app/media-credits/) identify creators, source
+  evidence, licenses and crop/adaptation notices. Third-party media is not
+  licensed under Plozz's MIT license.
+- The separately retained `demo-media-source.zip` describes the previous
+  procedural collection, not the current screenshots.
 
-The catalog fixture supplies original data to Plozz's normal media-provider
+The catalog fixture supplies reviewed data to Plozz's normal media-provider
 client; it is not a real Jellyfin deployment or an interoperability test.
 The capture bootstrap configures this local source and completes onboarding
 through existing app paths. It also keeps the internal screenshot router from
 cancelling its own navigation before an acknowledgement. It does not recreate,
 paint over or replace the application interface.
 
-The player and subtitle-editor captures use the earlier version of the same
-original-media collection. Their exact source hashes are recorded separately.
+The player and subtitle editor show the actual licensed film Wing It!.
+Scene-description captions were prepared for demonstration, not presented as
+official film dialogue or translations. Watch progress is synthetic but stays
+within the real editions' runtimes. Archive editions may be incomplete.
 
 ## Preparing captures
 
@@ -32,9 +36,9 @@ or libraries. Follow the repository's build-lease and signing procedures. Do not
 reset or reuse another session's simulator, and do not deploy capture builds to
 physical devices.
 
-Generate media from the archived source with CairoSVG, Pillow, FontTools,
-ImageMagick and FFmpeg, then serve it through the included loopback fixture.
-The capture environment points to that fixture. The legacy NFS capture variable
+Acquire only the precisely identified source editions and retain their rights
+records. Use matching full-bleed artwork without padding, then serve the reviewed
+catalog through an owned loopback fixture. The legacy NFS capture variable
 enables the existing command channel; it does not require connecting a personal
 share.
 
@@ -44,9 +48,8 @@ Documents directory:
 ```text
 home
 library
-detail?title=Orbital%20Drift
-play?title=Orbital%20Drift&at=45&pause=1&subs=0
-play?title=Tidal%20Light&at=40&panel=subtitleStyle&pause=1
+play?title=Wing%20It%21&at=66.625&pause=1&subs=0
+play?title=Wing%20It%21&at=66.625&panel=subtitleStyle&pause=1&subs=1
 ```
 
 Require a successful acknowledgement and loaded artwork before capturing the

@@ -1,56 +1,101 @@
 {
-  "schemaVersion": 1,
-  "capturedAt": "2026-10-25T00:23:57.455017+00:00",
-  "appRevision": "e4c5919399e0ad0bc95c00cc31eb41ce32a6022e",
-  "captureBootstrapSha256": "dcba68310ce4ae273d8afe7d3b5df664a0a0721d8fabca0127a1135dbed43428",
-  "libraryTitles": 37,
-  "inProgressTitles": 8,
-  "media": "Original procedural artwork, video, descriptive text and subtitles; no external metadata or artwork.",
-  "mediaLicense": "MIT; Manrope typeface under SIL OFL 1.1. Plozz UI retains its app license.",
-  "sourceArchive": "demo-media-source.zip",
-  "sourceArchiveSha256": "c557260d8415e3769d9ccf8a4bae6a1ef260fb019df500bdbc680b36bccf7b44",
-  "images": [
+  "appRevision": "ce355f2bc1d1e427ce07475a19e3121930929c8c",
+  "mediaInventorySha256": "8765eed31888846922088a9d0e2b33ddf80f620f9794b77346033d6ad7e29678",
+  "catalogSha256": "c29dd609fbea7ab6b036fe71f15f04b5fb8ff96d5503ca5030d9bf5704b1c37a",
+  "method": "simctl-framebuffer",
+  "onlineMetadata": false,
+  "mediaCredits": "https://plozz.app/media-credits/",
+  "scope": "20 real film identities; reviewed licensed/public-domain art, synthetic watch progress. Not legal certification or a provider interoperability test.",
+  "screenshots": [
     {
-      "file": "tv-home-originals-9916fb8071.jpg",
-      "sourceSha256": "9916fb807102248bb1880a3b6eb0298a04ab4d1fdb3088b9c341ce9a1b1ef15e",
-      "sha256": "eee56f4cd4c64a8167b1cdf4bb182646c4370c5b2c0c0fdf34fd47df8506178f",
-      "source": "simulator-framebuffer",
-      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+      "file": "tv-home-licensed-1fb96bffee.jpg",
+      "sha256": "c755d7b89bbef571be66cf071050a905110e06145d379181c7c1f3ce90fc0e0f",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "native_dimensions": [
+        1920,
+        1080
+      ],
+      "native_sha256": "1fb96bffee6343cb31d5430d70d56edcf72cbeb2c307c1b27068736bea8eb61e",
+      "capture": "tv-home",
+      "operation": "proportionate resize and JPEG encoding; no UI retouching"
     },
     {
-      "file": "tv-library-originals-c1df89807c.jpg",
-      "sourceSha256": "c1df89807c349a130ec7013db7d19dd5e79bb877b16851cb631a9217b18c03ee",
-      "sha256": "31b5d940bd89f036c468168d181c00aa92badeb80a49a4727de448c00fc43039",
-      "source": "simulator-framebuffer",
-      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+      "file": "tv-library-licensed-aea97840a6.jpg",
+      "sha256": "6777b6b5d392eb591ac9e19ff805258782dd206dcd23306402a1115472540a83",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "native_dimensions": [
+        1920,
+        1080
+      ],
+      "native_sha256": "aea97840a66914c0536aa315eca8c52c054f96c39fcf5a46575888702d8c9484",
+      "capture": "tv-library",
+      "operation": "proportionate resize and JPEG encoding; no UI retouching"
     },
     {
-      "file": "tv-player-originals-04d957e08c.jpg",
-      "sourceSha256": "04d957e08cd0bb37d67de62e41549b19c00a5265d282d31848b1f729577ec301",
-      "sha256": "0cd46b81b0923781ab43fed3afa904ef7e2c08286821ed99787dd2704e8b02de",
-      "source": "simulator-framebuffer",
-      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+      "file": "tv-player-licensed-96e9b81d2f.jpg",
+      "sha256": "c434a99e9a7b9913a602955555d34d62a8bb318d44dfd8542525b078fdcea937",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "native_dimensions": [
+        1920,
+        1080
+      ],
+      "native_sha256": "96e9b81d2f5485be6bc234cbbbc356da407e881af9150e1b85c370628e50e841",
+      "capture": "tv-player",
+      "operation": "proportionate resize and JPEG encoding; no UI retouching"
     },
     {
-      "file": "tv-subtitles-originals-b0b1faa0c6.jpg",
-      "sourceSha256": "b0b1faa0c6924019ed2dc9162a32e53bd51089ae742a8a9e5e6b9b8f6dc442a3",
-      "sha256": "6c95a480764acc8cfe4ac586f5bf88e895ae813aa1520f5698803fe4e90aafbb",
-      "source": "simulator-framebuffer",
-      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+      "file": "tv-subtitles-licensed-a7ae03ca39.jpg",
+      "sha256": "972a34adf88ca146451540af096bd09d46a5ae2152bbb5bb2a29040b9b825b0f",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "native_dimensions": [
+        1920,
+        1080
+      ],
+      "native_sha256": "a7ae03ca39eb766af1468f189cb8359eee153a0b66b6aa85166238fccb6b2cb8",
+      "capture": "tv-subtitles",
+      "operation": "proportionate resize and JPEG encoding; no UI retouching"
     },
     {
-      "file": "iphone-library-originals-e08873291e.jpg",
-      "sourceSha256": "e08873291e150a5b70610d5395b8d3dc152f263a1798109cb422af16bbb2a6a9",
-      "sha256": "8e797976082871e1688edb52dcc5b1677cb313904c819da315b1435b3fc63f8c",
-      "source": "simulator-framebuffer",
-      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+      "file": "iphone-library-licensed-c25db35ada.jpg",
+      "sha256": "49c8048440ad19edfda4985b49cd4a1c56a7d447162688225f2679047fd6604a",
+      "dimensions": [
+        883,
+        1920
+      ],
+      "native_dimensions": [
+        1206,
+        2622
+      ],
+      "native_sha256": "c25db35ada456fd9daad45cba41fdeade08d08763b562fc6f34a35c9548c9926",
+      "capture": "iphone-library",
+      "operation": "proportionate resize and JPEG encoding; no UI retouching"
     },
     {
-      "file": "ipad-home-originals-2efe2b04c6.jpg",
-      "sourceSha256": "2efe2b04c6eb2433044ab5b5aec46f11cd5c0d4650823b768b69d4d38a190cf3",
-      "sha256": "7141f326e1c42406e24c27d879ee2f8953095dbd52b4cfe7b97499e2c9ffac60",
-      "source": "simulator-framebuffer",
-      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+      "file": "ipad-home-licensed-4a234f3e0d.jpg",
+      "sha256": "c96a9243dd919736a70d46747c031bc7ca0945932f0cf49c42c0740b904278fa",
+      "dimensions": [
+        1440,
+        1920
+      ],
+      "native_dimensions": [
+        2064,
+        2752
+      ],
+      "native_sha256": "4a234f3e0d05a8af69bfc1c7bed046bbcacc0341ff64536b2f3af5854e51369f",
+      "capture": "ipad-home",
+      "operation": "proportionate resize and JPEG encoding; no UI retouching"
     }
   ]
 }
