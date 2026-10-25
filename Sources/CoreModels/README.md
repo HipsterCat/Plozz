@@ -85,6 +85,17 @@ language every other module speaks.
 
 ## Public surface, at a glance
 
+Technical badges use the same stream classifier for detail heroes, version
+pickers, and cached share facts. Confirmed Dolby Vision compatibility is one
+badge (`DV HDR10+`, `DV HDR10`, or `DV HLG`), with the full format names retained
+for accessibility. Missing or unrecognized range metadata is not evidence of
+SDR. A profile number alone never establishes a compatible Dolby Vision base
+layer. Resolution uses effective dimensions, including cropped 4K and 8K.
+Audio keeps the selected track's carrier codec, spatial format, and channel
+layout together. Stereo codecs remain in detailed format information rather
+than adding headline badges. Video codecs remain separate version/diagnostic
+facts; these badges describe source metadata, not the active output format.
+
 `RuntimeFeatureFlags.buildDefault` is the shared application rollout selection.
 Debug and Release builds share `productionDefault`, with WeTrakr enabled,
 including TestFlight and App Store builds.

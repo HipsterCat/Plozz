@@ -480,8 +480,13 @@ public extension PlaybackDiagnostics {
     static public func friendlyAudioName(codec: String?, profile: String?) -> String? {  // l10n:content — audio codec/spatial-format brand names (Dolby Atmos, DTS:X, ...), never translated
         if let profile = profile?.trimmingCharacters(in: .whitespaces), !profile.isEmpty {
             let lower = profile.lowercased()
-            if lower.contains("atmos") { return "Dolby Atmos" }
-            if lower.contains("dts:x") || lower.contains("dts-x") || lower.contains("dts x") { return "DTS:X" }
+            if lower.contains("atmos")
+                || (friendlyCodecName(codec) == "Dolby Digital+"
+                    && lower.split(whereSeparator: { !$0.isLetter }).contains("joc")) {
+                return "Dolby Atmos"
+            }
+            if lower.contains("dts:x") || lower.contains("dts-x") || lower.contains("dts x")
+                || lower.contains("dtsx") { return "DTS:X" }
             if lower.contains("truehd") { return "Dolby TrueHD" }
             if lower.contains("dts-hd ma") || lower.contains("dts-hd master") { return "DTS-HD MA" }
             if lower.contains("dts-hd") { return "DTS-HD" }
