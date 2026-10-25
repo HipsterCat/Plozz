@@ -162,6 +162,7 @@ public struct PlozziOSRootView: View {
             PlozziOSProfileOnboardingCover(appModel: appModel)
         }
         .task { appModel.resumeProfileOnboardingIfNeeded() }
+        .liveChannelSystemOverlays()
         .onAppear { PlozziOSScreenshotSeed.applyIfRequested(to: appModel) }
         .background(PlozziOSCrashScreenObserver(controller: appModel.crashReportingController))
         .task {

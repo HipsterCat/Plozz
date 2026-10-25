@@ -72,6 +72,41 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         verifyFullscreenRoundTrip(orientation: "auto")
     }
 
+    func testFullscreenControlsAndStatusBarAutoHideAndReturnTogether() {
+        let app = launch(guideFirst: true)
+        defer { app.terminate() }
+        let arena = channel("Arena One", in: app)
+        XCTAssertTrue(arena.waitForExistence(timeout: 15))
+        arena.tap()
+        let preview = app.otherElements["category-search-playback"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["category-preview-frame"].wait(
+            for: \.label, toEqual: "Frame: ready", timeout: 10
+        ))
+        let fullscreen = app.buttons["live-channel-fullscreen"]
+        if !fullscreen.isHittable {
+            preview.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.25)).tap()
+        }
+        fullscreen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitForPresentation("Fullscreen", preview: preview)
+        let loads = app.staticTexts["category-preview-loads"].label
+        let close = app.buttons["live-channel-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        capture("fullscreen-controls-visible", in: app)
+        XCTAssertTrue(close.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(app.statusBars.firstMatch.waitForNonExistence(timeout: 5))
+        capture("fullscreen-controls-hidden", in: app)
+        preview.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        capture("fullscreen-controls-revealed", in: app)
+        XCTAssertEqual(app.staticTexts["category-preview-loads"].label, loads)
+        close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitForPresentation("Preview", preview: preview)
+        XCTAssertTrue(arena.isHittable)
+        XCTAssertEqual(app.staticTexts["category-preview-loads"].label, loads)
+        capture("fullscreen-returned-to-preview", in: app)
+    }
+
     func testPhoneAutoRotationExpandsPreviewAndClosingRequiresUprightBeforeReopening() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         XCUIDevice.shared.orientation = .portrait

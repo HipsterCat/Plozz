@@ -51,6 +51,7 @@ struct LiveTVCategorySearchFixture: View {
         .environment(\.colorScheme, .dark)
         .background { AppBackground(palette: .dark) }
         #if os(iOS)
+        .liveChannelSystemOverlays()
         .plozziOSLivePlayerOrientation(
             isPresented: isExpanded,
             orientation: ProcessInfo.processInfo.arguments.contains("--category-preview-landscape") ? .landscape

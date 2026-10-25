@@ -94,6 +94,10 @@ On iPhone and iPad, the Live TV guide's inline preview uses the shared
 previous/play-pause/next controls and an in-place fullscreen action.
 Fullscreen also exposes a bottom-trailing inward-arrow action to return to the
 preview, matching the expand control's placement; the top-left Close remains.
+Mobile fullscreen video fits the full player bounds, independently of the safe
+area used by controls and subtitles. Showing or hiding controls does not resize
+the picture. The status bar and persistent system overlays hide with the
+fullscreen controls and return when controls are revealed or fullscreen ends.
 The engine, video surface, and its native parent remain mounted across expansion, return,
 and rotation. Inline previews mirror that same compositor surface above, below,
 and into available side gutters, including the space around a fitted picture.

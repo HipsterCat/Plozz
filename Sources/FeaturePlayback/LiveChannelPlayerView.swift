@@ -30,6 +30,31 @@ public struct LiveChannelRotationTargetKey: PreferenceKey {
         value = nextValue() ?? value
     }
 }
+
+private struct LiveChannelSystemOverlaysHiddenKey: PreferenceKey {
+    static var defaultValue: Bool { false }
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = nextValue() || value
+    }
+}
+
+private struct LiveChannelSystemOverlays: ViewModifier {
+    @State private var hidden = false
+
+    func body(content: Content) -> some View {
+        content
+            .onPreferenceChange(LiveChannelSystemOverlaysHiddenKey.self) { hidden = $0 }
+            .statusBarHidden(hidden)
+            .persistentSystemOverlays(hidden ? .hidden : .automatic)
+    }
+}
+
+public extension View {
+    /// Apply outside navigation containers so their hosting controller owns the request.
+    func liveChannelSystemOverlays() -> some View {
+        modifier(LiveChannelSystemOverlays())
+    }
+}
 #endif
 
 /// Playback host for live channels.
@@ -349,7 +374,6 @@ public struct LiveChannelPlayerView: View {
                 VideoSurfaceContainer(
                     engine: model.engine, zoom: model.videoZoom.settings,
                     aspectRatio: model.videoAspectRatio,
-                    fitsInsideSafeArea: liveSubtitleViewport != nil && !model.continuesExternally,
                     subtitleViewport: liveSubtitleViewport,
                     reflectionHeight: showsReflection ? previewReflectionHeight : 0,
                     topReflectionHeight: showsReflection ? previewTopReflectionHeight : 0,
@@ -574,6 +598,12 @@ public struct LiveChannelPlayerView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: controlsVisible)
+        #if os(iOS)
+        .preference(
+            key: LiveChannelSystemOverlaysHiddenKey.self,
+            value: isActive && isAuthorized && isExpanded && !isMultiview && !controlsVisible
+        )
+        #endif
         #if os(tvOS)
         .onReceive(NotificationCenter.default.publisher(for: LiveTVGuideButton.pressed)) { _ in
             guard isExpanded, isActive, guideOverlay != nil else { return }
@@ -664,6 +694,9 @@ public struct LiveChannelPlayerView: View {
         .plozzFullScreenCover(isPresented: $fullscreenPresented, onDismiss: fullscreenDidDismiss) {
             playerSurface
                 .ignoresSafeArea()
+                #if os(iOS)
+                .liveChannelSystemOverlays()
+                #endif
         }
         .onChange(of: wantsNativeFullscreen, initial: true) { _, presented in
             returnsToGuideAfterFullscreen = presented
