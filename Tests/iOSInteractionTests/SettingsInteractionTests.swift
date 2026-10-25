@@ -62,8 +62,9 @@ final class SettingsInteractionTests: XCTestCase {
     private func verifyNavigationRetention(directPresentation: Bool, settingsFirst: Bool = false) {
         launchNavigation(directPresentation: directPresentation, settingsFirst: settingsFirst)
         let settings = directPresentation
-            ? app.buttons["fixture-open-settings"] : app.buttons["Settings"].firstMatch
-        let downloads = app.buttons["Downloads"].firstMatch
+            ? app.buttons["fixture-open-settings"]
+            : app.buttons.matching(NSPredicate(format: "label == %@", "Settings")).firstMatch
+        let downloads = app.buttons.matching(NSPredicate(format: "label == %@", "Downloads")).firstMatch
         XCTAssertTrue(downloads.waitForExistence(timeout: 10), app.debugDescription)
         settings.tap()
         XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5))
@@ -76,13 +77,14 @@ final class SettingsInteractionTests: XCTestCase {
             settings.tap()
             XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5), app.debugDescription)
             capture("settings-over-downloads-\(iteration)")
-            XCTAssertTrue(downloads.isSelected, "Settings must not replace the selected content tab.")
+            XCTAssertTrue(app.buttons.matching(identifier: "Downloads").allElementsBoundByIndex.contains { $0.isSelected },
+                          "Settings must not replace the selected content tab.")
             app.buttons["Close"].tap()
             XCTAssertTrue(app.buttons["Download Settings"].waitForExistence(timeout: 5))
         }
 
         app.buttons["Download Settings"].tap()
-        let back = app.navigationBars.buttons["BackButton"]
+        let back = app.buttons["BackButton"]
         XCTAssertTrue(back.waitForExistence(timeout: 5), app.debugDescription)
         app.collectionViews.firstMatch.swipeUp()
         let retainedRow = app.switches["Download Failed"]
@@ -92,7 +94,7 @@ final class SettingsInteractionTests: XCTestCase {
         settings.tap()
         XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5))
         capture("settings-over-pushed-downloads")
-        XCTAssertTrue(downloads.isSelected)
+        XCTAssertTrue(app.buttons.matching(identifier: "Downloads").allElementsBoundByIndex.contains { $0.isSelected })
         app.buttons["Close"].tap()
         XCTAssertTrue(back.waitForExistence(timeout: 5), "The pushed page must survive the drawer.")
         XCTAssertEqual(retainedRow.frame.minY, retainedY, accuracy: 2, "Closing Settings must retain scroll position.")
@@ -139,6 +141,47 @@ final class SettingsInteractionTests: XCTestCase {
             }
             capture("adaptive-\(title)-\(Int(app.frame.width))x\(Int(app.frame.height))")
             if title == "Settings" { app.buttons["Close"].tap() }
+        }
+    }
+
+    func testSearchInputRemainsReadableAndEditableAcrossThemes() {
+        XCUIDevice.shared.orientation = .portrait
+        for (theme, arguments) in [
+            ("dark", [String]()),
+            ("light", ["--search-light-theme"]),
+            ("black", ["--search-black-theme"])
+        ] {
+            launchNavigation(settingsInMore: true, arguments: arguments)
+            let search = app.buttons["Search"].firstMatch
+            if search.waitForExistence(timeout: 2), search.isHittable {
+                search.tap()
+            } else {
+                let more = app.tabBars.buttons["More"]
+                XCTAssertTrue(more.waitForExistence(timeout: 5), app.debugDescription)
+                more.tap()
+                let row = app.tables.cells.containing(.staticText, identifier: "Search").firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+                row.tap()
+            }
+            let field = app.textFields["Search your libraries"]
+            XCTAssertTrue(field.waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertTrue(field.isHittable)
+            let settingsTab = app.buttons["Settings"].firstMatch
+            if settingsTab.exists, settingsTab.isHittable {
+                XCTAssertTrue(app.buttons["search-settings-avatar"].waitForNonExistence(timeout: 5))
+            } else {
+                XCTAssertTrue(app.buttons["search-settings-avatar"].exists)
+            }
+            capture("search-\(theme)-empty")
+            field.tap()
+            field.typeText("Sample")
+            XCTAssertEqual(field.value as? String, "Sample")
+            capture("search-\(theme)-editing")
+            let clear = app.buttons["Clear search"]
+            XCTAssertTrue(clear.isHittable)
+            clear.tap()
+            XCTAssertEqual(field.value as? String, "Movies, shows, and episodes")
+            XCTAssertFalse(clear.exists)
         }
     }
 
@@ -1810,11 +1853,12 @@ final class SettingsInteractionTests: XCTestCase {
     private func launchNavigation(
         settingsInMore: Bool = false,
         directPresentation: Bool = false,
-        settingsFirst: Bool = false
+        settingsFirst: Bool = false,
+        arguments: [String] = []
     ) {
         app.launchArguments = [
             "--navigation-interaction-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"
-        ]
+        ] + arguments
         if settingsInMore { app.launchArguments.append("--settings-in-more") }
         if directPresentation { app.launchArguments.append("--settings-direct-presentation") }
         if settingsFirst { app.launchArguments.append("--settings-first") }

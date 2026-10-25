@@ -8,6 +8,7 @@ import UIKit
 final class LiveTVCategorySearchInteractionTests: XCTestCase {
     #if os(iOS)
     func testChannelAndProgrammeTapsStartTheTopPreviewWithoutOpeningFullscreen() {
+        XCUIDevice.shared.orientation = .portrait
         let app = launch(guideFirst: true)
         defer { app.terminate() }
         let arena = channel("Arena One", in: app)
@@ -44,8 +45,9 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         if !fullscreen.isHittable {
             preview.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.25)).tap()
         }
-        XCTAssertTrue(fullscreen.waitForExistence(timeout: 5))
-        app.buttons["live-channel-play-pause"].tap()
+        let playPause = app.buttons["live-channel-play-pause"]
+        XCTAssertTrue(playPause.exists)
+        playPause.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 5))
         capture("channel-tap-starts-top-preview", in: app)
         let loads = app.staticTexts["category-preview-loads"].label
@@ -58,6 +60,12 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         XCTAssertEqual(app.staticTexts["category-preview-loads"].label, loads, "Fullscreen must not reload the stream.")
         XCTAssertFalse(channel("Arena One", in: app).isHittable)
         capture("live-preview-fullscreen", in: app)
+        let collapse = app.buttons["live-channel-exit-fullscreen"]
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["live-channel-close"].exists, "Keep the top-left close action too.")
+        collapse.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitForPresentation("Preview", preview: preview)
+        XCTAssertEqual(app.staticTexts["category-preview-loads"].label, loads)
     }
 
     func testPreviewFullscreenRoundTripWithAutomaticRotation() {

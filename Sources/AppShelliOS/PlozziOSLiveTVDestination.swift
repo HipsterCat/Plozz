@@ -150,6 +150,8 @@ struct PlozziOSLiveTVDestination: View {
                 onExpandPreview: playback.expandPreview,
                 previewReflectionHeight: playback.previewReflectionHeight,
                 previewTopReflectionHeight: playback.previewTopReflectionHeight,
+                previewLeadingReflectionWidth: playback.previewLeadingReflectionWidth,
+                previewTrailingReflectionWidth: playback.previewTrailingReflectionWidth,
                 isActive: playback.isPlaybackActive,
                 onReturnToGuide: playback.returnToGuide,
                 playPauseRequest: playback.playPauseRequest,

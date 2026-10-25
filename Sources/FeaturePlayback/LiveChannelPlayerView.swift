@@ -55,6 +55,8 @@ public struct LiveChannelPlayerView: View {
     private let onExpandPreview: (() -> Void)?
     private let previewReflectionHeight: CGFloat
     private let previewTopReflectionHeight: CGFloat
+    private let previewLeadingReflectionWidth: CGFloat
+    private let previewTrailingReflectionWidth: CGFloat
     private let usesNativeFullscreen: Bool
     private let isActive: Bool
     private let onReturnToGuide: (() -> Void)?
@@ -174,6 +176,8 @@ public struct LiveChannelPlayerView: View {
         onExpandPreview: (() -> Void)? = nil,
         previewReflectionHeight: CGFloat = 0,
         previewTopReflectionHeight: CGFloat = 0,
+        previewLeadingReflectionWidth: CGFloat = 0,
+        previewTrailingReflectionWidth: CGFloat = 0,
         usesNativeFullscreen: Bool = false,
         isActive: Bool = true,
         onReturnToGuide: (() -> Void)? = nil,
@@ -224,6 +228,8 @@ public struct LiveChannelPlayerView: View {
         self.onExpandPreview = onExpandPreview
         self.previewReflectionHeight = previewReflectionHeight
         self.previewTopReflectionHeight = previewTopReflectionHeight
+        self.previewLeadingReflectionWidth = previewLeadingReflectionWidth
+        self.previewTrailingReflectionWidth = previewTrailingReflectionWidth
         self.usesNativeFullscreen = usesNativeFullscreen
         self.isActive = isActive
         self.onReturnToGuide = onReturnToGuide
@@ -328,7 +334,7 @@ public struct LiveChannelPlayerView: View {
 
     private var playerSurface: some View {
         ZStack {
-            Color.black
+            (hasInlineControls ? Color.clear : Color.black)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.all, edges: hasInlineControls ? [] : .all)
 
@@ -346,7 +352,10 @@ public struct LiveChannelPlayerView: View {
                     fitsInsideSafeArea: liveSubtitleViewport != nil && !model.continuesExternally,
                     subtitleViewport: liveSubtitleViewport,
                     reflectionHeight: showsReflection ? previewReflectionHeight : 0,
-                    topReflectionHeight: showsReflection ? previewTopReflectionHeight : 0
+                    topReflectionHeight: showsReflection ? previewTopReflectionHeight : 0,
+                    leadingReflectionWidth: showsReflection ? previewLeadingReflectionWidth : 0,
+                    trailingReflectionWidth: showsReflection ? previewTrailingReflectionWidth : 0,
+                    previewCornerRadius: hasInlineControls ? PlozzTheme.Metrics.Radius.content : 0
                 )
                     .ignoresSafeArea(.all, edges: hasInlineControls ? [] : .all)
 
@@ -451,6 +460,8 @@ public struct LiveChannelPlayerView: View {
                                 if $0 { touchGestures.cancel() }
                             },
                             onExpandPreview: hasInlineControls ? onExpandPreview : nil,
+                            onCollapsePreview: isExpanded && !isMultiview && onExpandPreview != nil
+                                ? dismissPlayer : nil,
                             previewStatus: sourceMatches ? model.interruption?.title : nil
                         )
                         .onAppear(perform: focusPlaybackControlIfNeeded)
@@ -645,7 +656,7 @@ public struct LiveChannelPlayerView: View {
 
     private var presentationObservedRoot: some View {
         ZStack {
-            Color.black
+            (hasInlineControls ? Color.clear : Color.black)
             if !fullscreenOwnsSurface {
                 playerSurface
             }

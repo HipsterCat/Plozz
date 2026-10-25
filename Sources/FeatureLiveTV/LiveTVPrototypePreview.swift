@@ -24,7 +24,7 @@ struct PrototypePreviewLayout {
 
     var videoReflectionHeight: CGFloat {
         #if os(iOS)
-        guard heroHeight > 0, bounds.height > bounds.width else { return 0 }
+        guard heroHeight > 0 else { return 0 }
         return min(videoFrame.height, (bounds.maxY - videoFrame.maxY) * 0.65)
         #else
         return 0
@@ -34,6 +34,16 @@ struct PrototypePreviewLayout {
     var videoTopReflectionHeight: CGFloat {
         guard videoReflectionHeight > 0 else { return 0 }
         return min(videoFrame.height, max(0, videoFrame.minY - bounds.minY))
+    }
+
+    var videoLeadingReflectionWidth: CGFloat {
+        guard videoReflectionHeight > 0 else { return 0 }
+        return min(videoFrame.height, max(0, videoFrame.minX - bounds.minX))
+    }
+
+    var videoTrailingReflectionWidth: CGFloat {
+        guard videoReflectionHeight > 0 else { return 0 }
+        return min(videoFrame.height, max(0, bounds.maxX - videoFrame.maxX))
     }
 
     /// The gap between the info bar, the toolbar and the guide.
@@ -203,18 +213,26 @@ struct PrototypePreviewLayout {
 struct PrototypeVideoClip: Shape {
     var reflectionHeight: CGFloat
     var topReflectionHeight: CGFloat = 0
+    var leftReflectionWidth: CGFloat = 0
+    var rightReflectionWidth: CGFloat = 0
     var cornerRadius: CGFloat
-    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
-        get { AnimatablePair(AnimatablePair(reflectionHeight, topReflectionHeight), cornerRadius) }
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat>> {
+        get {
+            AnimatablePair(AnimatablePair(reflectionHeight, topReflectionHeight),
+                           AnimatablePair(AnimatablePair(leftReflectionWidth, rightReflectionWidth), cornerRadius))
+        }
         set {
             reflectionHeight = newValue.first.first
             topReflectionHeight = newValue.first.second
-            cornerRadius = newValue.second
+            leftReflectionWidth = newValue.second.first.first
+            rightReflectionWidth = newValue.second.first.second
+            cornerRadius = newValue.second.second
         }
     }
 
     func path(in rect: CGRect) -> Path {
-        Path(roundedRect: CGRect(x: rect.minX, y: rect.minY - topReflectionHeight, width: rect.width,
+        Path(roundedRect: CGRect(x: rect.minX - leftReflectionWidth, y: rect.minY - topReflectionHeight,
+                                width: rect.width + leftReflectionWidth + rightReflectionWidth,
                                 height: rect.height + reflectionHeight + topReflectionHeight),
              cornerRadius: cornerRadius)
     }

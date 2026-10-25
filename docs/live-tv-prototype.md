@@ -135,16 +135,18 @@ In wide mobile layouts, the category sidebar retains its full height and scroll
 position; only the channel guide sits below the video in the adjacent column.
 Preview transport controls are centered on the video independently of its title
 row, with a larger Play/Pause button than Previous/Next.
-In portrait, the playing surface is reflected below the preview and upward behind
-the toolbar, without moving the video or controls. Both reflections use
-a native blur with a light tint and an immediate, gradual fade into the guide
+The playing surface is reflected below the preview, upward behind the toolbar,
+and into available side gutters, without moving the video or controls. This
+also fills the space around a fitted picture on folded and unfolded devices.
+When both horizontal sides have room, the sharp picture uses the shared content
+corner radius. The surrounding reflection uses native blur and a gradual fade into the guide
 background. The reflection starts at full intensity, then follows a quadratic
 falloff with a faint tail rather than a steep final cutoff. One transparency
 mask fades both the reflected video and its blur into the actual background,
 avoiding a flat-color edge where the reflection ends. The reflection sits
 behind guide content, adds no layout height, and shares the original video
 surface rather than opening another player or copying decoded frames. It is
-disabled in landscape, fullscreen, multiview, Reduce Transparency, and when the
+disabled in fullscreen, multiview, Reduce Transparency, and when the
 preview is inactive, interrupted, or continuing on an external presentation.
 Apple TV keeps its existing browsing info bar and focus-driven preview.
 

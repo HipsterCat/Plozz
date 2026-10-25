@@ -29,6 +29,8 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             XCTAssertEqual(layout.contentFrame.minX, leading ? 0 : 16)
             XCTAssertEqual(layout.contentFrame.maxX, leading ? 624 : 640)
             XCTAssertEqual(layout.guideSideBleed, 0)
+            XCTAssertEqual(layout.videoLeadingReflectionWidth, leading ? 96 : 0)
+            XCTAssertEqual(layout.videoTrailingReflectionWidth, leading ? 0 : 96)
         }
     }
 
@@ -63,14 +65,10 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             XCTAssertEqual(collapsed.videoReflectionHeight, 0)
             XCTAssertEqual(collapsed.videoTopReflectionHeight, 0)
             XCTAssertEqual(searching.videoTopReflectionHeight, 0)
-            if playing.bounds.height > playing.bounds.width {
-                XCTAssertGreaterThan(playing.videoReflectionHeight, 0)
-                XCTAssertEqual(playing.videoTopReflectionHeight, playing.videoFrame.minY - playing.bounds.minY)
-                XCTAssertLessThanOrEqual(playing.videoReflectionHeight, playing.videoFrame.height)
-            } else {
-                XCTAssertEqual(playing.videoReflectionHeight, 0)
-                XCTAssertEqual(playing.videoTopReflectionHeight, 0)
-            }
+            XCTAssertGreaterThan(playing.videoReflectionHeight, 0)
+            XCTAssertEqual(playing.videoTopReflectionHeight,
+                           min(playing.videoFrame.height, playing.videoFrame.minY - playing.bounds.minY))
+            XCTAssertLessThanOrEqual(playing.videoReflectionHeight, playing.videoFrame.height)
         }
     }
 
@@ -184,12 +182,42 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
         XCTAssertEqual(output.convert(output.bounds, to: video), originalFrame,
                        "Adding an upper reflection must not move or resize the original video.")
         XCTAssertTrue(output.superview === originalHost)
-        XCTAssertEqual(compositor.subviews.filter { $0 is UIVisualEffectView && !$0.isHidden }.count, 2)
+        XCTAssertEqual(compositor.subviews.filter { $0 is UIVisualEffectView && !$0.isHidden }.count, 1)
+        video.frame.size = CGSize(width: 600, height: 200)
+        video.updateReflection(height: 120, topHeight: 40, leftWidth: 60, rightWidth: 80, previewCornerRadius: 16)
+        try await settle(window)
+        XCTAssertEqual(compositor.frame, CGRect(x: -60, y: -40, width: 740, height: 360))
+        XCTAssertTrue(output.superview === originalHost)
+        XCTAssertTrue(engine.nowPlayingPlayer === player)
+        let picture = try XCTUnwrap(video.videoRect)
+        let roundedCrop = try XCTUnwrap(originalHost.layer.mask as? CAShapeLayer)
+        let picturePath = try XCTUnwrap(roundedCrop.path)
+        XCTAssertEqual(picturePath.boundingBoxOfPath, picture)
+        XCTAssertFalse(picturePath.contains(CGPoint(x: picture.minX + 1, y: picture.minY + 1)))
+        XCTAssertTrue(picturePath.contains(CGPoint(x: picture.midX, y: picture.midY)))
+        let verticalFade = try XCTUnwrap(compositor.layer.mask as? CAGradientLayer)
+        let sideFade = try XCTUnwrap(verticalFade.mask as? CAGradientLayer)
+        let sideColors = try XCTUnwrap(sideFade.colors as? [CGColor])
+        XCTAssertEqual(sideColors.first?.alpha, 0)
+        XCTAssertEqual(sideColors.last?.alpha, 0)
+        let blur = try XCTUnwrap(compositor.subviews.compactMap { $0 as? UIVisualEffectView }.first)
+        let blurMask = try XCTUnwrap(blur.layer.mask as? CAShapeLayer)
+        XCTAssertEqual(blurMask.fillRule, .evenOdd)
+        let center = video.convert(CGPoint(x: picture.midX, y: picture.midY), to: blur)
+        XCTAssertFalse(try XCTUnwrap(blurMask.path).contains(center, using: .evenOdd),
+                       "Keep the original video sharp; only its surroundings receive blur.")
+
+        video.updateReflection(height: 0, previewCornerRadius: 16)
+        try await settle(window)
+        XCTAssertTrue(blur.isHidden, "Reduce Transparency keeps the rounded picture without any reflection blur.")
+        XCTAssertNil(compositor.layer.mask)
+        XCTAssertNotNil(originalHost.layer.mask)
         video.updateReflection(height: 0)
         try await settle(window)
         XCTAssertTrue(output.superview === originalHost, "Fullscreen must not reparent the playing surface.")
         XCTAssertTrue(video.clipsToBounds)
         XCTAssertNil(compositor.layer.mask)
+        XCTAssertNil(originalHost.layer.mask, "Fullscreen restores the unmasked native video surface.")
         XCTAssertTrue(engine.nowPlayingPlayer === player)
         for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
             video.frame.size = size

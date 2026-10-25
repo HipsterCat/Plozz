@@ -48,6 +48,11 @@ struct PresentationHostApp: App {
         model.settings.cardStyle.artwork = .default
         model.settings.cardStyle.style = .borderless
         model.settings.theme.theme = .dark
+        if ProcessInfo.processInfo.arguments.contains("--search-light-theme") {
+            model.settings.theme.theme = .light
+        } else if ProcessInfo.processInfo.arguments.contains("--search-black-theme") {
+            model.settings.theme.theme = .pureBlack
+        }
         model.settings.theme.gradientEnabled = true
         model.settings.playback.settings = .default
         if ProcessInfo.processInfo.arguments.contains("--reset-read-ahead") {
@@ -515,8 +520,10 @@ private struct SettingsInteractionFixture: View {
         .environment(appModel)
         .environment(language)
         .environment(\.locale, Locale(identifier: "en_US"))
-        .environment(\.themePalette, .dark)
+        .environment(\.themePalette, ThemePalette.palette(
+            for: appModel.settings.theme.theme, systemColorScheme: .dark
+        ))
         .environment(\.plozzMetrics, .touch(density: .standard))
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(appModel.settings.theme.theme.preferredColorScheme ?? .dark)
     }
 }

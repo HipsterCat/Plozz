@@ -91,13 +91,18 @@ change updates Normal/Crop/Stretch geometry without a zoom gesture, retuning, or
 resizing the subtitle overlay; no additional polling loop is created.
 
 On iPhone and iPad, the Live TV guide's inline preview uses the shared
-previous/play-pause/next controls and an in-place fullscreen action. The engine,
-video surface, and its native parent remain mounted across expansion, return,
-and rotation. Portrait previews can mirror that same compositor surface beneath
-the picture and upward behind the toolbar with native blur and gradual transparency
-fades away from the video; there is no second player or
-frame-extraction loop. Fullscreen, multiview, external playback, and Reduce
-Transparency disable the reflection.
+previous/play-pause/next controls and an in-place fullscreen action.
+Fullscreen also exposes a bottom-trailing inward-arrow action to return to the
+preview, matching the expand control's placement; the top-left Close remains.
+The engine, video surface, and its native parent remain mounted across expansion, return,
+and rotation. Inline previews mirror that same compositor surface above, below,
+and into available side gutters, including the space around a fitted picture.
+Native blur and gradual transparency fades surround the sharp original picture;
+there is no second player or frame-extraction loop. Pictures with space on both
+horizontal sides use the shared content corner radius. Fullscreen, multiview,
+external playback, and Reduce Transparency disable the reflection. Reduce
+Transparency retains inset-picture rounding; fullscreen restores the unmasked,
+black-backed video surface.
 
 When loading a new mobile native source, disconnect the outgoing player from
 the retained `AVPlayerLayer` before teardown and replacement. Retuning must

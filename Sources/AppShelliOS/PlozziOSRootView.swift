@@ -789,6 +789,7 @@ struct PlozziOSTabShell: View {
     private var heroTrailerController
     @State private var selectedDestination: PlozziOSDestination = .home
     @State private var isShowingMorePage = false
+    @State private var hasVisibleSettingsNavigationEntry = false
     @State private var lastContentDestination: PlozziOSDestination = .home
     @State private var retainsExplicitLiveTVEntry = false
     @State private var retainsExplicitHomeEntry = false
@@ -1141,7 +1142,13 @@ struct PlozziOSTabShell: View {
                         Label {
                             Text(destination.title)
                         } icon: {
-                            Image(systemName: destination.systemImage)
+                            if destination == .settings {
+                                ProfileAvatarView(
+                                    profile: appModel.profiles.activeProfile, size: 28, rendersAsImage: true
+                                )
+                            } else {
+                                Image(systemName: destination.systemImage)
+                            }
                         }
                     }
                 }
@@ -1153,11 +1160,13 @@ struct PlozziOSTabShell: View {
             PlozziOSSettingsTabAction(
                 tabIndex: tabDestinations.firstIndex(of: .settings),
                 action: showSettings,
-                onOverflowVisibilityChange: { isShowingMorePage = $0 }
+                onOverflowVisibilityChange: { isShowingMorePage = $0 },
+                onSettingsVisibilityChange: { hasVisibleSettingsNavigationEntry = $0 }
             )
             .frame(width: 0, height: 0)
         }
         .environment(sharedHomeViewModel)
+        .environment(\.hasVisibleSettingsNavigationEntry, hasVisibleSettingsNavigationEntry)
         .onAppear { refreshWatchlistNavigation() }
         .onReceive(NotificationCenter.default.publisher(for: .universalWatchlistDidChange)) { _ in
             refreshWatchlistNavigation()
@@ -1492,6 +1501,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
     let tabIndex: Int?
     let action: () -> Void
     var onOverflowVisibilityChange: ((Bool) -> Void)?
+    var onSettingsVisibilityChange: ((Bool) -> Void)?
 
     func makeUIViewController(context: Context) -> Controller { Controller() }
 
@@ -1499,6 +1509,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         controller.tabIndex = tabIndex
         controller.action = action
         controller.onOverflowVisibilityChange = onOverflowVisibilityChange
+        controller.onSettingsVisibilityChange = onSettingsVisibilityChange
         controller.install()
     }
 
@@ -1506,12 +1517,15 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         controller.restore()
         controller.action = nil
         controller.onOverflowVisibilityChange = nil
+        controller.onSettingsVisibilityChange = nil
     }
 
     final class Controller: UIViewController, UITabBarControllerDelegate, UITableViewDelegate, UINavigationControllerDelegate {
         var tabIndex: Int?
         var action: (() -> Void)?
         var onOverflowVisibilityChange: ((Bool) -> Void)?
+        var onSettingsVisibilityChange: ((Bool) -> Void)?
+        private var reportedSettingsVisibility: Bool?
         private var reportedOverflowVisibility: Bool?
         private weak var owner: UITabBarController?
         private weak var previousDelegate: (any UITabBarControllerDelegate)?
@@ -1532,6 +1546,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
             super.viewDidLayoutSubviews()
             install()
             reportOverflowVisibility()
+            reportSettingsVisibility()
         }
 
         func install() {
@@ -1556,6 +1571,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
                         tabs.delegate = self
                     }
                     installOverflowAction(in: tabs)
+                    reportSettingsVisibility()
                     return
                 }
                 ancestor = container.parent
@@ -1582,6 +1598,27 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
             owner = nil
             previousDelegate = nil
             reportedOverflowVisibility = nil
+            reportedSettingsVisibility = nil
+        }
+
+        private func reportSettingsVisibility() {
+            guard let owner else { return }
+            let tab = tabIndex.flatMap { owner.tabs.indices.contains($0) ? owner.tabs[$0] : nil }
+            let controller = tab?.viewController
+            let inTabBar = controller.map { controller in
+                !owner.isTabBarHidden && (
+                    tab?.hasVisiblePlacement == true
+                        || (owner.tabBar.items ?? []).contains { $0 === controller.tabBarItem }
+                )
+            } ?? false
+            let visible = tab?.isHidden == false && (inTabBar || !owner.sidebar.isHidden)
+            guard reportedSettingsVisibility != visible else { return }
+            reportedSettingsVisibility = visible
+            Task { @MainActor [weak self, weak owner] in
+                guard let self, let owner, self.owner === owner,
+                      self.reportedSettingsVisibility == visible else { return }
+                self.onSettingsVisibilityChange?(visible)
+            }
         }
 
         private func installOverflowAction(in tabs: UITabBarController) {

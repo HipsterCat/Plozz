@@ -24,6 +24,8 @@ public struct LiveTVPrototypePlayback {
     public let expandPreview: () -> Void
     public let previewReflectionHeight: CGFloat
     public let previewTopReflectionHeight: CGFloat
+    public let previewLeadingReflectionWidth: CGFloat
+    public let previewTrailingReflectionWidth: CGFloat
     public let returnToGuide: () -> Void
     public let playPauseRequest: Int
     public let playbackStarted: () -> Void
@@ -398,8 +400,12 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         let reflectionHeight = !expanded && !showingMultiview && !reduceTransparency
                             ? layout.videoReflectionHeight : 0
                         let topReflectionHeight = reflectionHeight > 0 ? layout.videoTopReflectionHeight : 0
+                        let leadingReflectionWidth = reflectionHeight > 0 ? layout.videoLeadingReflectionWidth : 0
+                        let trailingReflectionWidth = reflectionHeight > 0 ? layout.videoTrailingReflectionWidth : 0
                         player(playbackInput(for: pane, prepared: prepared, reflectionHeight: reflectionHeight,
                                              topReflectionHeight: topReflectionHeight,
+                                             leadingReflectionWidth: leadingReflectionWidth,
+                                             trailingReflectionWidth: trailingReflectionWidth,
                                              isPreviewVisible: !expanded && layout.heroHeight > 0))
                     .environment(\.themePalette, ThemePalette.dark)
                     .environment(\.colorScheme, .dark)
@@ -407,6 +413,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     .clipShape(PrototypeVideoClip(
                         reflectionHeight: reflectionHeight,
                         topReflectionHeight: topReflectionHeight,
+                        leftReflectionWidth: layoutDirection == .rightToLeft ? trailingReflectionWidth : leadingReflectionWidth,
+                        rightReflectionWidth: layoutDirection == .rightToLeft ? leadingReflectionWidth : trailingReflectionWidth,
                         cornerRadius: showingMultiview && multiview.isEditingLayout ? 10 : 0))
                     .overlay {
                         #if os(tvOS)
@@ -568,7 +576,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
 
     private func playbackInput(
         for pane: LiveTVMultiviewPane, prepared: LiveTVPreparedStream, reflectionHeight: CGFloat = 0,
-        topReflectionHeight: CGFloat = 0, isPreviewVisible: Bool = false
+        topReflectionHeight: CGFloat = 0, leadingReflectionWidth: CGFloat = 0,
+        trailingReflectionWidth: CGFloat = 0, isPreviewVisible: Bool = false
     ) -> LiveTVPrototypePlayback {
         let presentationID = playback.presentationID
         return LiveTVPrototypePlayback(
@@ -588,6 +597,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             },
             previewReflectionHeight: reflectionHeight,
             previewTopReflectionHeight: topReflectionHeight,
+            previewLeadingReflectionWidth: leadingReflectionWidth,
+            previewTrailingReflectionWidth: trailingReflectionWidth,
             returnToGuide: {
                 guard playback.ownsPlayerPresentation(presentationID) else { return }
                 leavePlaybackForGuide()

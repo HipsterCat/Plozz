@@ -103,6 +103,7 @@ struct LiveChannelOverlay: View {
     var touchTimelineOnly = false
     var onTouchScrubbingChanged: (Bool) -> Void = { _ in }
     var onExpandPreview: (() -> Void)?
+    var onCollapsePreview: (() -> Void)?
     var previewStatus: LocalizedStringResource?
 
     @Environment(\.playerCardMetrics) private var metrics
@@ -1328,8 +1329,6 @@ extension LiveChannelOverlay {
                     .contentShape(Rectangle())
                     .onTapGesture(perform: backgroundTapped)
             }
-            Color.black.opacity(0.22)
-                .allowsHitTesting(false)
             if let previewStatus {
                 Text(previewStatus)
                     .font(.subheadline)
@@ -1497,7 +1496,17 @@ extension LiveChannelOverlay {
                     .reportSubtitleControlsFrame(in: tracks.subtitles.controlsLayout, region: .timeline)
                     .transition(.opacity)
             }
-            touchTabRow
+            HStack(spacing: 12) {
+                touchTabRow
+                if let onCollapsePreview {
+                    Spacer(minLength: 0)
+                    touchBadge(
+                        "Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left",
+                        action: onCollapsePreview
+                    )
+                    .accessibilityIdentifier("live-channel-exit-fullscreen")
+                }
+            }
                 .playerTouchChromeHidden(touchChromeHidden)
             if cardOpen {
                 card

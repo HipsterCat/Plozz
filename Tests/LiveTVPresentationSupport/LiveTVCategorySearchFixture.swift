@@ -97,6 +97,8 @@ private struct CategoryPreviewPlayer: View {
             },
             previewReflectionHeight: playback.previewReflectionHeight,
             previewTopReflectionHeight: playback.previewTopReflectionHeight,
+            previewLeadingReflectionWidth: playback.previewLeadingReflectionWidth,
+            previewTrailingReflectionWidth: playback.previewTrailingReflectionWidth,
             isActive: playback.isPlaybackActive, onReturnToGuide: playback.returnToGuide,
             onPlaybackStarted: playback.playbackStarted, reportingID: playback.reportingID,
             countsAsWatching: playback.countsAsWatching, program: playback.program
