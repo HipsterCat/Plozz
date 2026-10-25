@@ -167,8 +167,6 @@ final class VideoPresentationView: UIView {
                 guard oldValue != lightAppearance else { return }
                 blur.effect = UIBlurEffect(style: lightAppearance
                     ? .systemThinMaterialLight : .systemUltraThinMaterialDark)
-                blur.contentView.backgroundColor = lightAppearance
-                    ? UIColor.white.withAlphaComponent(0.32) : .clear
                 setNeedsLayout()
             }
         }
@@ -266,9 +264,9 @@ final class VideoPresentationView: UIView {
             extent: CGFloat, pictureLength: CGFloat, enabled: Bool
         ) {
             view.replicaLayer.instanceCount = enabled && extent > 0 ? 2 : 1
-            // Tint the page gently without copying the video's dark luminance.
-            // Instance zero (the playing picture) always keeps its original opacity.
-            view.replicaLayer.instanceAlphaOffset = lightAppearance ? -0.35 : 0
+            // Let the page lift dark footage without an extra white layer over its colors.
+            // Instance zero (the playing picture) remains unchanged.
+            view.replicaLayer.instanceAlphaOffset = lightAppearance ? -0.3 : 0
             // Stretch only the reflected tile when a narrow picture has wider gutters.
             let scale = max(1, extent / max(1, pictureLength))
             let anchor = (horizontal ? videoSize.width : videoSize.height) / 2
@@ -285,13 +283,13 @@ final class VideoPresentationView: UIView {
             var alphas: [CGFloat] = [before > 0 ? 0 : 1]
             for step in Self.fadeSteps.dropFirst() where before > 0 {
                 locations.append(before * step / total)
-                alphas.append(step * step)
+                alphas.append(lightAppearance ? step : step * step)
             }
             locations.append((before + pictureLength) / total)
             alphas.append(1)
             for step in Self.fadeSteps.dropFirst() where after > 0 {
                 locations.append((before + pictureLength + after * step) / total)
-                alphas.append((1 - step) * (1 - step))
+                alphas.append(lightAppearance ? 1 - step : (1 - step) * (1 - step))
             }
             gradient.locations = locations.map { NSNumber(value: Double($0)) }
             gradient.colors = alphas.map { UIColor.white.withAlphaComponent($0).cgColor }

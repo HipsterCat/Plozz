@@ -216,11 +216,14 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             try await settle(window)
             XCTAssertNotNil(blur.effect as? UIBlurEffect)
             XCTAssertFalse(blur.effect === previousEffect)
-            XCTAssertEqual(blur.contentView.backgroundColor?.cgColor.alpha, light ? 0.32 : 0)
+            XCTAssertEqual(blur.contentView.backgroundColor?.cgColor.alpha ?? 0, 0)
+            let fadeColors = try XCTUnwrap(verticalFade.colors as? [CGColor])
+            XCTAssertEqual(fadeColors[2].alpha, light ? 0.4 : 0.16, accuracy: 0.001,
+                           "Light-page colors need a longer fade, not an extra white wash.")
             var replica = try XCTUnwrap(compositor.subviews.first)
             for _ in 0..<4 {
                 let layer = try XCTUnwrap(replica.layer as? CAReplicatorLayer)
-                XCTAssertEqual(layer.instanceAlphaOffset, light ? -0.35 : 0, accuracy: 0.001)
+                XCTAssertEqual(layer.instanceAlphaOffset, light ? -0.3 : 0, accuracy: 0.001)
                 replica = try XCTUnwrap(replica.subviews.first)
             }
             XCTAssertTrue(replica === originalHost)
