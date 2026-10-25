@@ -247,7 +247,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             try await withScreen(content:
                 HomeEditorPage(title: Text("Continue Watching"), showsHeader: true) {
                     Text("All libraries").font(.subheadline)
-                    Toggle("Merge Next Up rows", isOn: .constant(true))
+                    Toggle("Include Next Up", isOn: .constant(true))
                     ContinueWatchingArtworkPicker(
                         style: .constant(.portraitPosters), playbackDetails: .detailed, captions: captions
                     )

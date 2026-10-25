@@ -43,14 +43,16 @@ public struct HomeRowsSettingsView: View {
                     .environment(hero)
                     .environment(heroBackground)
             } label: {
-                HomeEditorRowLabel(title: heroTitle, subtitle: heroSummary)
+                HomeEditorRowLabel(title: heroTitle, value: heroSummary)
             }
+            .accessibilityLabel(heroTitle)
+            .accessibilityValue(heroSummary ?? Text(verbatim: ""))
             .accessibilityIdentifier("home-section-hero")
             HomeEditorLink {
                 CardCaptionCustomizationView(cards: cards, scope: .home, visibility: visibility)
                     .environment(hero)
             } label: {
-                HomeEditorRowLabel(title: Text("Card labels"), subtitle: Text("Labels below Home cards"))
+                HomeEditorRowLabel(title: Text("Card labels"))
             }
             .accessibilityIdentifier("home-customize-labels")
             HomeEditorLink {
@@ -62,7 +64,7 @@ public struct HomeRowsSettingsView: View {
                 .environment(heroBackground)
                 .environment(cards)
             } label: {
-                HomeEditorRowLabel(title: Text("Sections"), subtitle: Text("Add, remove, and reorder Home sections"))
+                HomeEditorRowLabel(title: Text("Rows"))
             }
             .accessibilityIdentifier("home-sections-settings")
         }
@@ -70,7 +72,7 @@ public struct HomeRowsSettingsView: View {
 
     private var heroTitle: Text {
         #if os(tvOS)
-        hero.settings.style == .followsFocus ? Text("Home layout: Showcase") : Text("Home layout: Hero")
+        Text("Layout")
         #else
         Text("Hero")
         #endif
@@ -78,9 +80,11 @@ public struct HomeRowsSettingsView: View {
 
     private var heroSummary: Text? {
         #if os(tvOS)
-        if hero.settings.style == .followsFocus { return nil }
-        #endif
+        if hero.settings.style == .followsFocus { return Text("Showcase") }
+        return hero.settings.isEnabled ? Text("Hero") : Text("Off")
+        #else
         return hero.settings.isEnabled ? nil : Text("Off")
+        #endif
     }
 }
 
@@ -138,14 +142,11 @@ struct HomeSectionsSettingsView: View {
     }
 
     private var editor: some View {
-        HomeEditorPage(title: Text("Home sections"), showsHeader: true) {
+        HomeEditorPage(title: Text("Home rows"), showsHeader: true) {
             #if os(tvOS)
-            HStack {
-                Spacer()
-                reorderButton
-            }
-            .focusSection()
+            reorderButton
             #endif
+        } content: {
             SettingsSectionGroup {
                 editorControls
             }
@@ -163,7 +164,7 @@ struct HomeSectionsSettingsView: View {
                 LiftableReorderList(
                     sections: .init(enabled: sections.enabled, disabled: []),
                     disabledSectionTitle: "Hidden", disabledPlaceholder: "No hidden rows",
-                    isLifting: $isLifting, allowsHiding: false,
+                    isLifting: $isLifting, allowsHiding: false, removeTitle: "Remove from Home",
                     onRemove: { id in
                         do {
                             try reorderSession?.remove(id, savingTo: visibility)
@@ -174,7 +175,7 @@ struct HomeSectionsSettingsView: View {
                     row: { id in
                         let choice = byID[id]
                         return .init(
-                            title: choice?.homeEditorTitle ?? Text("Section"),
+                            title: choice?.homeEditorTitle ?? Text("Row"),
                             symbolName: "rectangle.grid.1x2",
                             providerKind: choice?.homeEditorProvider(in: accounts),
                             mediaShareTransport: choice?.library?.transportKind,
@@ -216,7 +217,7 @@ struct HomeSectionsSettingsView: View {
                                 beginReordering(at: id)
                             }
                             .disabled(sections.enabled.count < 2)
-                            Button("Remove section", systemImage: "minus.circle", role: .destructive) {
+                            Button("Remove from Home", systemImage: "minus.circle", role: .destructive) {
                                 do {
                                     try visibility.setHomeSectionVisible(false, id: id, catalog: currentCatalog)
                                     editError = nil
@@ -232,7 +233,6 @@ struct HomeSectionsSettingsView: View {
                     sectionStatus(issue)
                 }
             }
-            addSectionButton(identifier: "home-section-add-bottom")
             if !sections.enabled.contains(.global(.continueWatching)),
                let watching = HomeRowChoice.shared.first(where: { $0.id == .global(.continueWatching) }) {
                 HomeEditorLink {
@@ -244,8 +244,7 @@ struct HomeSectionsSettingsView: View {
                     .environment(cards)
                 } label: {
                     HomeEditorRowLabel(
-                        title: Text("Continue Watching settings"),
-                        subtitle: Text("Shared artwork and labels remain available when hidden on Home.")
+                        title: Text("Continue Watching settings")
                     )
                 }
                 .disabled(isReordering)
@@ -260,7 +259,7 @@ struct HomeSectionsSettingsView: View {
                 } label: {
                     HomeEditorRowLabel(
                         title: Text("Discovery"),
-                        subtitle: Text("Managed by Home layout, not section presets or reordering.")
+                        subtitle: Text("Managed by Home layout.")
                     )
                 }
                 .disabled(isReordering)
@@ -268,7 +267,7 @@ struct HomeSectionsSettingsView: View {
             }
             #endif
             if editError != nil {
-                InlineErrorMessage(Text("Couldn't update this section. Try again."))
+                InlineErrorMessage(Text("Couldn't update this row. Try again."))
             }
             HomeCatalogStatus(inventory: inventory, accounts: accounts, libraries: libraries) {
                 reloadRevision += 1
@@ -314,7 +313,7 @@ struct HomeSectionsSettingsView: View {
             if isReordering { Text("Done").fixedSize(horizontal: false, vertical: true) }
             else { Text("Edit").fixedSize(horizontal: false, vertical: true) }
         }
-        .disabled(isLifting || (!isReordering && currentCatalog.sections(in: visibility.visibility).enabled.count < 2))
+        .disabled(isLifting || (!isReordering && currentCatalog.sections(in: visibility.visibility).enabled.isEmpty))
         .accessibilityIdentifier("home-section-reorder")
         #if os(tvOS)
         .plozzActionButton(role: .secondary)
@@ -352,7 +351,7 @@ struct HomeSectionsSettingsView: View {
         SettingsPageLink {
             addSectionDestination
         } label: {
-            Label("Add section", systemImage: "plus")
+            Label("Add row", systemImage: "plus")
                 .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity, minHeight: 44)
         }

@@ -116,6 +116,7 @@ struct ViewCustomizationList<Content: View>: View {
     let title: LocalizedStringResource
     let initialRowID: String
     var focusedHelp: (String) -> ViewCustomizationHelp? = { _ in nil }
+    var pinsFocusedHelp = true
     var sectionSpacing: CGFloat = SettingsRowMetrics.formRowSpacing
     var hasGroupedContent = false
     @ViewBuilder var content: () -> Content
@@ -165,6 +166,9 @@ struct ViewCustomizationList<Content: View>: View {
                                         .padding(.horizontal, SettingsFormMetrics.headingInset)
                                 }
                             }
+                            if !pinsFocusedHelp, let help {
+                                ViewCustomizationHelpCard(help: help)
+                            }
                         }
                     }
                 }
@@ -183,15 +187,15 @@ struct ViewCustomizationList<Content: View>: View {
                 .padding(.bottom, SettingsFormMetrics.pageBottomInset)
                 .padding(.horizontal, SettingsFormMetrics.pageInset)
             }
-            .contentMargins(.bottom, help == nil ? 0 : 40, for: .scrollContent)
+            .contentMargins(.bottom, pinsFocusedHelp && help != nil ? 40 : 0, for: .scrollContent)
             .scrollClipDisabled()
             .mask {
                 // Keep mask geometry stable while native focus scrolls the controls.
                 VerticalEdgeFadeMask(
                     fadeHeight: 40, topStrength: topFadeStrength,
-                    bottomStrength: help == nil ? 0 : 1, horizontalOverhang: 20
+                    bottomStrength: pinsFocusedHelp && help != nil ? 1 : 0, horizontalOverhang: 20
                 )
-                .ignoresSafeArea(.container, edges: help == nil ? .vertical : .top)
+                .ignoresSafeArea(.container, edges: pinsFocusedHelp && help != nil ? .top : .vertical)
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 min(1, max(0, (geometry.contentOffset.y + geometry.contentInsets.top) / 40))
@@ -199,7 +203,7 @@ struct ViewCustomizationList<Content: View>: View {
                 topFadeStrength = strength
             }
             .accessibilityIdentifier("view-customization-scroll")
-            if let help {
+            if pinsFocusedHelp, let help {
                 ViewCustomizationHelpCard(help: help)
                     .padding(.horizontal, SettingsFormMetrics.pageInset)
                     .padding(.bottom, 24)

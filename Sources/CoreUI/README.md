@@ -52,6 +52,10 @@ The text-height disclosure-row treatment is deprecated: never apply
 padding-free disclosure label with `SettingsFormButtonStyle`. Padding outside
 the button's focus fill does not replace its required internal row geometry.
 
+`SettingsPageHeader` accepts a trailing native action for page-scoped commands.
+Keep it in the header's full-width focus section and scroll the header with the
+page; do not add a separate action strip or shrink the native button.
+
 `SettingsStepper` retains every adjustment stop while limiting dense range tracks
 to 21 visual ticks. `ThemeMusicPreviewControlling` is the Settings-to-runtime
 preview seam; it carries ownership, availability, and errors without coupling

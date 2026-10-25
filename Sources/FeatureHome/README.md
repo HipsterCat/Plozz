@@ -182,10 +182,10 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   off. Public provider caches stay profile-independent; server-owned library titles
   continue to follow the selected server user's access rather than an invented
   app-wide maturity threshold.
-- **Home section customization** — Settings > Screens & Navigation > Customize Home
-  uses the same section editor on TV, iPhone and iPad. Tap a section to configure
-  it, Reorder to move it, or Add section to choose a collection or another existing feed. Hero
-  stays configurable at the top, outside the movable row list. Rows from different
+- **Home row customization** — Settings > Screens & Navigation > Customize Home > Rows
+  uses the same arrangement editor on TV, iPhone and iPad. Tap a row to configure
+  it, Edit to reorder or remove it, or Add row to choose a collection or another existing feed.
+  Layout/Hero and Card labels have separate destinations. Rows from different
   libraries can be interleaved, reordered or hidden, including the Libraries
   tiles. `HomeRowCustomization` stores typed identity, order and explicit
   visibility inside the profile's existing Home settings blob; profile transfer
@@ -204,7 +204,7 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   Global rows say **All libraries**; native server and library rows identify their
   source. All can be freely interleaved. Changing presets requires confirmation;
   selecting the already active preset does nothing.
-  **Merge Next Up rows** is a profile-scoped setting inside the **Continue Watching**
+  **Include Next Up** is a profile-scoped setting inside the **Continue Watching**
   section's configuration on every platform, alongside its artwork choice.
   **Continue Watching action** chooses **Play** (the unchanged default) or
   **Open details** for movie/episode cards on Home, including merged Next Up
@@ -263,7 +263,7 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   library membership. **See all** opens the existing collection browser using
   the original provider ID. All card styles open title details.
   Collection definitions persist with the profile separately from arrangement:
-  removing a row or choosing a preset retains its configuration in Add section.
+  removing a row or choosing a preset retains its configuration in Add row.
   Disabled libraries and a different server viewer prevent collection requests;
   failures remain distinct from empty collections.
   Featured is available only for authored collection rows. Large artwork cards

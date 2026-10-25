@@ -39,7 +39,7 @@ enum CardCaptionSettingsPage: String, CaseIterable {
     var sharedRowNote: LocalizedStringResource? {
         switch self {
         case .home, .recommended:
-            "Continue Watching: Follow page uses each page's setting. On or Off applies to both Home and Recommended."
+            "Follow page uses each page's setting. On/Off overrides Home and Recommended."
         default: nil
         }
     }
@@ -81,18 +81,22 @@ struct CardCaptionCustomizationContent: View {
     private var initialRowID: String {
         scope.pages.count > 1 ? "card-label-page" : "card-label-view-\(selectedPage.firstControl.rawValue)"
     }
+    private var title: LocalizedStringResource {
+        scope == .home ? "Card labels" : "Customize labels"
+    }
 
     var body: some View {
         #if os(tvOS)
         ViewCustomizationList(
-            title: "Customize labels", initialRowID: initialRowID,
+            title: title, initialRowID: initialRowID,
             focusedHelp: { id in
                 let view = views.first { "card-label-view-\($0.rawValue)" == id } ?? selectedPage.firstControl
                 return ViewCustomizationHelp(
                     detail: settings.cardLabelHelp(in: view),
                     illustration: .pageCaptions(preview(editing: view), style: style)
                 )
-            }
+            },
+            pinsFocusedHelp: scope != .home
         ) {
             if scope.pages.count > 1 {
                 Section {
@@ -116,7 +120,7 @@ struct CardCaptionCustomizationContent: View {
             }
         }
         #else
-        ViewCustomizationList(title: "Customize labels", initialRowID: "") {
+        ViewCustomizationList(title: title, initialRowID: "") {
             if scope.pages.count > 1 {
                 Section {
                     ViewCustomizationMenu(
@@ -133,7 +137,7 @@ struct CardCaptionCustomizationContent: View {
                 labelControls
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if selectedPage != .detail {
+                    if selectedPage != .detail && selectedPage != .home {
                         Text(selectedPage.firstControl.cardLabelDetail)
                     }
                     if let explanation = settings.cardLabelMixedExplanation(in: selectedPage.firstControl) {

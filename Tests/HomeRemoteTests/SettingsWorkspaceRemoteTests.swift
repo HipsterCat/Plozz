@@ -1051,7 +1051,8 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCUIRemote.shared.press(.select)
         XCUIRemote.shared.press(.menu)
         waitForEnabled(hero)
-        XCTAssertEqual(hero.label, "Home layout: Showcase")
+        XCTAssertEqual(hero.label, "Layout")
+        XCTAssertEqual(hero.value as? String, "Showcase")
         XCTAssertFalse(app.staticTexts["Pinned at top"].exists)
         try focus(hero, in: app)
         XCUIRemote.shared.press(.select)
@@ -1062,7 +1063,8 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         if enabledHero.value as? String != "1" { XCUIRemote.shared.press(.select) }
         XCUIRemote.shared.press(.menu)
         waitForEnabled(hero)
-        XCTAssertEqual(hero.label, "Home layout: Hero")
+        XCTAssertEqual(hero.label, "Layout")
+        XCTAssertEqual(hero.value as? String, "Hero")
         XCTAssertFalse(app.staticTexts["Pinned at top"].exists)
         capture("home-hero-pin", in: app)
         try openHomeSections(in: app)
@@ -1105,7 +1107,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         waitForEnabled(configured)
         XCTAssertTrue(hasFocus(configured), "Back must restore the section that opened its configuration.")
         try focus(reorder, in: app)
-        XCUIRemote.shared.press(.up)
+        XCUIRemote.shared.press(.left)
         XCTAssertTrue(hasFocus(pageBack("settings-workspace-back", in: app)), app.debugDescription)
         capture("home-section-header-back", in: app)
         let watchingWasBelowWatchlist = configured.frame.minY > app.buttons["home-section-home-watchlist"].frame.minY
@@ -1116,7 +1118,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertTrue(combinedOption.waitForExistence(timeout: 5), app.debugDescription)
         try focus(combinedOption, in: app)
         XCUIRemote.shared.press(.select)
-        let confirmation = app.sheets["Replace your section arrangement?"]
+        let confirmation = app.sheets["Replace your row arrangement?"]
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5), app.debugDescription)
         try focus(confirmation.buttons.matching(identifier: "Cancel").firstMatch, in: app)
         XCUIRemote.shared.press(.select)
@@ -1153,13 +1155,48 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         #endif
     }
 
+    func testSingleHomeRowCanBeEditedAndRemoved() throws {
+        #if targetEnvironment(simulator)
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = ["--home-section-editor-fixture", "--single-home-row", "-AppleLanguages", "(en)"]
+        app.launch()
+        defer { app.terminate() }
+        try openHomeSections(in: app)
+        let edit = app.buttons["home-section-reorder"]
+        XCTAssertTrue(edit.isEnabled, "A single row still supports removal through Edit.")
+        try focus(edit, in: app)
+        XCUIRemote.shared.press(.select)
+        let row = app.buttons.containing(.staticText, identifier: "Continue Watching").firstMatch
+        try focus(row, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(edit.isEnabled, "A lone row cannot be lifted for reordering.")
+        XCUIRemote.shared.press(.select, forDuration: 1)
+        let remove = app.cells.containing(.other, identifier: "Remove from Home").firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 3), app.debugDescription)
+        try focus(remove, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(row.waitForNonExistence(timeout: 3))
+        try focus(edit, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertFalse(edit.isEnabled)
+        try focus(app.buttons["home-section-add"], in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.buttons["home-add-home-continueWatching"].waitForExistence(timeout: 3))
+        capture("home-ux-last-row-removed", in: app)
+        #else
+        throw XCTSkip("Simulator-only Home editor interaction.")
+        #endif
+    }
+
     private func assertAddSectionActions(in app: XCUIApplication) throws {
         let section = app.buttons["home-section-home-continueWatching"]
-        for identifier in ["home-section-add", "home-section-add-bottom"] {
+        XCTAssertFalse(app.buttons["home-section-add-bottom"].exists)
+        for identifier in ["home-section-add"] {
             let add = app.buttons[identifier]
             try focus(add, in: app)
             XCTAssertGreaterThanOrEqual(add.frame.width, section.frame.width,
-                                       "Both Add section actions must fill the section rows' content width.")
+                                       "Add row must fill the rows' content width.")
             XCTAssertLessThanOrEqual(add.frame.width - section.frame.width, 16,
                                      "Only the native focused button's outer margin may exceed the row width.")
             XCTAssertEqual(add.frame.midX, section.frame.midX, accuracy: 1)
@@ -1171,9 +1208,8 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             }
             capture(identifier, in: app)
             XCUIRemote.shared.press(.select)
-            XCTAssertTrue(app.staticTexts["Add section"].waitForExistence(timeout: 5), app.debugDescription)
-            XCTAssertTrue(app.buttons["home-add-collection"].label.contains("Create section"))
-            XCTAssertTrue(app.staticTexts["Available sections"].exists)
+            XCTAssertTrue(app.staticTexts["Add row"].waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertEqual(app.buttons["home-add-collection"].label, "From a collection")
             XCTAssertFalse(app.buttons["home-section-reorder"].exists)
             if identifier == "home-section-add" {
                 try focus(app.buttons["home-add-collection"], in: app)
@@ -1183,7 +1219,8 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
                     .matching(NSPredicate(format: "enabled == true")).firstMatch
                 try focus(pickerControl, in: app)
                 XCUIRemote.shared.press(.menu)
-                XCTAssertTrue(app.staticTexts["Available sections"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.buttons["home-add-collection"].waitForExistence(timeout: 5))
+                try focus(app.buttons["home-add-collection"], in: app)
             }
             XCUIRemote.shared.press(.menu)
             waitForEnabled(add)
@@ -1235,6 +1272,12 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertTrue(app.buttons["card-label-view-home"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["card-label-page"].exists)
         try focus(app.buttons["card-label-view-home"], in: app)
+        XCTAssertTrue(app.staticTexts["Card labels"].exists)
+        let preview = app.descendants(matching: .any)["card-label-preview-home"].firstMatch
+        let watchingLabels = app.buttons["card-label-view-continueWatchingPortrait"]
+        XCTAssertLessThan(preview.frame.minY - watchingLabels.frame.maxY, 170,
+                          "The scoped preview belongs directly below the controls and shared-scope note.")
+        capture("home-ux-card-labels", in: app)
         XCUIRemote.shared.press(.menu)
         capture("home-labels-return", in: app)
         waitForEnabled(labels)
@@ -1244,21 +1287,26 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCUIRemote.shared.press(.select)
         try focus(app.buttons["Showcase"], in: app)
         XCUIRemote.shared.press(.select)
+        capture("home-ux-layout", in: app)
         XCUIRemote.shared.press(.menu)
         waitForEnabled(hero)
         try focus(hero, in: app)
         capture("home-layout-full-height-focus", in: app)
         let layout = hero.label
         try openHomeSections(in: app)
-        XCTAssertEqual(preset.label, "Section preset")
+        XCTAssertEqual(preset.label, "Preset")
         XCTAssertLessThan(preset.frame.maxY, add.frame.minY)
-        try focus(preset, in: app)
-        XCUIRemote.shared.press(.up)
-        XCTAssertTrue(hasFocus(reorder), "Up from the preset must reach the trailing Edit action.")
-        XCUIRemote.shared.press(.up)
+        XCTAssertEqual(reorder.frame.midY, pageBack(in: app).frame.midY, accuracy: 8,
+                       "Edit belongs inline with the title and Back, not on a separate row.")
+        try focus(reorder, in: app)
+        capture("home-ux-rows", in: app)
+        XCUIRemote.shared.press(.left)
         XCTAssertTrue(hasFocus(pageBack(in: app)))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(hasFocus(reorder), "Header actions must share native horizontal navigation.")
+        XCUIRemote.shared.press(.left)
         XCUIRemote.shared.press(.down)
-        XCTAssertTrue(hasFocus(reorder), "Down from Back must enter the section editor's action.")
+        XCTAssertTrue(hasFocus(preset), "Down from the header should enter the row settings.")
         let discovery = app.buttons["home-layout-discovery"]
         try focus(discovery, in: app)
         XCUIRemote.shared.press(.select)
@@ -1352,7 +1400,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             XCUIRemote.shared.press(.select, forDuration: 1)
             let startReorder = app.cells.containing(.other, identifier: "Reorder").firstMatch
             XCTAssertTrue(startReorder.waitForExistence(timeout: 3), app.debugDescription)
-            XCTAssertTrue(app.cells.containing(.other, identifier: "Remove section").firstMatch.exists)
+            XCTAssertTrue(app.cells.containing(.other, identifier: "Remove from Home").firstMatch.exists)
             try focus(startReorder, in: app)
             XCUIRemote.shared.press(.select)
         } else {
@@ -1398,7 +1446,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             )
             XCTAssertEqual(XCTWaiter.wait(for: [followed], timeout: 3), .completed, app.debugDescription)
         }
-        try menuAction("Remove section")
+        try menuAction("Remove from Home")
         XCTAssertTrue(watching.waitForNonExistence(timeout: 3), app.debugDescription)
         XCTAssertFalse(app.staticTexts["HIDDEN"].exists)
         waitForEnabled(reorder)
@@ -1415,7 +1463,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         let restored = app.buttons["home-section-home-continueWatching"]
         XCTAssertTrue(restored.waitForExistence(timeout: 3), app.debugDescription)
         try focus(restored, in: app)
-        try menuAction("Remove section")
+        try menuAction("Remove from Home")
         XCTAssertTrue(restored.waitForNonExistence(timeout: 3))
         try focus(app.buttons["home-section-add"], in: app)
         XCUIRemote.shared.press(.select)
@@ -2498,7 +2546,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             if stoppingWhen() { return }
             if hasFocus(target) { return }
             let nativeFocused = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "hasFocus == true AND enabled == true")).firstMatch
+                .matching(NSPredicate(format: "hasFocus == true")).firstMatch
             let selected = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "settings-section-"))
                 .allElementsBoundByIndex.first(where: \.isSelected)
             guard let focused = nativeFocused.exists ? nativeFocused : selected else {
@@ -2516,6 +2564,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             let playback = section("playback", in: app)
             let fullWidthSettings = pageBack("settings-category-back", in: app).exists
                 || pageBack(in: app).exists || pageBack("live-tv-settings-back", in: app).exists
+                || app.navigationBars["Home rows"].exists
             let sameDetail = fullWidthSettings
                 || (playback.exists && from.minX > playback.frame.maxX && to.minX > playback.frame.maxX)
             if sameDetail && to.maxY <= from.minY {

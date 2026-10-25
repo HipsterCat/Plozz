@@ -3,16 +3,17 @@ import SwiftUI
 import CoreModels
 import CoreUI
 
-struct HomeEditorPage<Content: View>: View {
+struct HomeEditorPage<HeaderActions: View, Content: View>: View {
     let title: Text
     var showsHeader = false
+    @ViewBuilder var headerActions: () -> HeaderActions
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: pageSpacing) {
                 #if os(tvOS)
-                if showsHeader { SettingsPageHeader(title) }
+                if showsHeader { SettingsPageHeader(title, trailing: headerActions) }
                 #endif
                 content()
             }
@@ -43,6 +44,12 @@ struct HomeEditorPage<Content: View>: View {
     }
 }
 
+extension HomeEditorPage where HeaderActions == EmptyView {
+    init(title: Text, showsHeader: Bool = false, @ViewBuilder content: @escaping () -> Content) {
+        self.init(title: title, showsHeader: showsHeader, headerActions: { EmptyView() }, content: content)
+    }
+}
+
 struct HomeEditorLink<Destination: View, Label: View>: View {
     @ViewBuilder let destination: () -> Destination
     @ViewBuilder let label: () -> Label
@@ -70,7 +77,8 @@ struct HomeEditorLink<Destination: View, Label: View>: View {
 
 struct HomeEditorRowLabel: View {
     let title: Text
-    let subtitle: Text?
+    var subtitle: Text? = nil
+    var value: Text? = nil
     var accessory = "chevron.forward"
     var titleSymbol: String? = nil
     var subtitleProvider: ProviderKind? = nil
@@ -103,6 +111,9 @@ struct HomeEditorRowLabel: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if let value {
+                value.settingsRowSecondary()
+            }
             Image(systemName: accessory).font(.footnote).settingsRowSecondary().accessibilityHidden(true)
         }
         .multilineTextAlignment(.leading)
@@ -198,18 +209,21 @@ struct HomeSectionSettingsView: View {
                     }
                 ), playbackDetails: visibility.continueWatchingPlaybackDetails,
                    captions: cards.captions, isShowcase: previewsShowcase)
-                Text("Artwork, playback details, and labels also apply to Continue Watching on Recommended pages.")
-                    .settingsHelperText()
                 #if os(tvOS)
                 SettingsControlGroup { presentationControls }
-                SettingsControlGroup { behaviorControls }
                 #else
                 SettingsSectionGroup { presentationControls }
+                #endif
+                Text("Appearance also applies on Recommended.")
+                    .settingsHelperText()
+                #if os(tvOS)
+                SettingsControlGroup { behaviorControls }
+                #else
                 SettingsSectionGroup { behaviorControls }
                 #endif
             }
             if showsRemoveAction {
-                Button("Remove section", role: .destructive) {
+                Button("Remove from Home", role: .destructive) {
                     do {
                         try visibility.setHomeSectionVisible(false, id: choice.id, catalog: inventory.currentCatalog(
                             libraries: libraries, accounts: accounts, visibility: visibility
@@ -220,8 +234,8 @@ struct HomeSectionSettingsView: View {
                 .plozzActionButton(role: .secondary)
                 .accessibilityIdentifier("home-section-remove")
             }
-            if failed { InlineErrorMessage(Text("Couldn't update this section. Try again.")) }
-            if inventory.isLoading { ProgressView("Loading available sections…") }
+            if failed { InlineErrorMessage(Text("Couldn't update this row. Try again.")) }
+            if inventory.isLoading { ProgressView("Loading available rows…") }
         }
         .task(id: HomeSectionCatalogModel.loadID(
             libraries: libraries, accounts: accounts, visibility: visibility
@@ -283,10 +297,9 @@ struct ContinueWatchingActionControl: View {
                     visibility.setContinueWatchingAction(selection == .play ? .openDetails : .play)
                 }
                 #if os(tvOS)
-                Text("You can also press Play/Pause \(Image(systemName: "playpause.circle.fill")) on your remote to play the focused item.")
+                Text("Play/Pause always starts playback.")
                     .settingsHelperText()
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("You can also press Play/Pause on your remote to play the focused item.")
                     .accessibilityIdentifier("continue-watching-remote-help")
                 #endif
             }
@@ -335,9 +348,10 @@ struct HomeAddSectionView: View {
     @Environment(CardStyleSettingsModel.self) private var cards
     @SettingsPageDismiss private var dismiss
     @State private var failed = false
+    @State private var reloadRevision = 0
 
     var body: some View {
-        HomeEditorPage(title: Text("Add section"), showsHeader: true) {
+        HomeEditorPage(title: Text("Add row"), showsHeader: true) {
             HomeEditorLink {
                 CollectionSectionCreationView(
                     inventory: inventory, visibility: visibility, libraries: libraries, accounts: accounts,
@@ -345,18 +359,21 @@ struct HomeAddSectionView: View {
                 )
                 .environment(cards)
             } label: {
-                HomeEditorRowLabel(title: Text("Create section"), subtitle: Text("Start with a library collection"))
+                HomeEditorRowLabel(title: Text("From a collection"))
             }
             .accessibilityIdentifier("home-add-collection")
-            Text("Available sections")
-                .font(.headline)
-                .padding(.top, 12)
-                .accessibilityAddTraits(.isHeader)
             let catalog = inventory.currentCatalog(libraries: libraries, accounts: accounts, visibility: visibility)
             let disabled = Set(catalog.sections(in: visibility.visibility).disabled)
             let choices = catalog.editableChoices(in: visibility.visibility).filter { disabled.contains($0.id) }
-            if choices.isEmpty && !inventory.isLoading {
-                Text("No other sections are available to add.").plozzForeground(.secondary)
+            if !choices.isEmpty {
+                Text("Available rows")
+                    .font(.headline)
+                    .padding(.top, 12)
+                    .accessibilityAddTraits(.isHeader)
+            } else if !inventory.isLoading && inventory.serverFailures.isEmpty && inventory.libraryFailures.isEmpty {
+                Text("No additional rows available.")
+                    .plozzForeground(.secondary)
+                    .accessibilityIdentifier("home-add-empty")
             }
             ForEach(choices) { choice in
                 Button {
@@ -370,14 +387,16 @@ struct HomeAddSectionView: View {
                 .buttonStyle(SettingsFormButtonStyle())
                 .accessibilityIdentifier("home-add-\(choice.id.presentationID)")
             }
-            if inventory.isLoading { ProgressView("Loading available sections…") }
+            HomeCatalogStatus(inventory: inventory, accounts: accounts, libraries: libraries) {
+                reloadRevision += 1
+            }
             if visibility.visibility.mergesNextUpRows {
                 Text("Next Up is included in Continue Watching.").font(.footnote).plozzForeground(.secondary)
             }
-            if failed { InlineErrorMessage(Text("Couldn't update this section. Try again.")) }
+            if failed { InlineErrorMessage(Text("Couldn't update this row. Try again.")) }
         }
         .task(id: HomeSectionCatalogModel.loadID(
-            libraries: libraries, accounts: accounts, visibility: visibility
+            libraries: libraries, accounts: accounts, visibility: visibility, revision: reloadRevision
         )) {
             await inventory.load(libraries: libraries, accounts: accounts, visibility: visibility)
         }
@@ -427,15 +446,19 @@ struct HomeHeroSettingsView: View {
                         size: $hero.settings.showcaseLogoSize, textSize: $hero.settings.showcaseTextSize, surface: .showcase
                     )
                 }
-                Toggle("Show ratings", isOn: $hero.settings.showsRatings)
-                if hero.settings.showsRatings {
-                    Toggle("Show Common Sense age", isOn: $hero.settings.ratingPreferences.showsHeaderFamilyGuidance)
-                    HeaderReviewScoreCountPicker(settings: $hero.settings.ratingPreferences)
+                SettingsControlGroup {
+                    Toggle("Ratings", isOn: $hero.settings.showsRatings)
+                    if hero.settings.showsRatings {
+                        Toggle("Show Common Sense age", isOn: $hero.settings.ratingPreferences.showsHeaderFamilyGuidance)
+                        HeaderReviewScoreCountPicker(settings: $hero.settings.ratingPreferences)
+                    }
                 }
                 if hero.allowsDiscovery {
-                    Toggle("Show Discovery row", isOn: $hero.settings.showsDiscoverRow)
-                    if hero.settings.showsDiscoverRow {
-                        HeroSettingsLink(page: .discovery, libraries: availableLibraries, accounts: accounts)
+                    SettingsControlGroup {
+                        Toggle("Discovery row", isOn: $hero.settings.showsDiscoverRow)
+                        if hero.settings.showsDiscoverRow {
+                            HeroSettingsLink(page: .discovery, libraries: availableLibraries, accounts: accounts)
+                        }
                     }
                 } else {
                     Text("Discovery is unavailable in Kids profiles.")
@@ -466,7 +489,7 @@ struct HomeCatalogStatus: View {
     let retry: () -> Void
 
     var body: some View {
-        if inventory.isLoading { ProgressView("Loading available sections…") }
+        if inventory.isLoading { ProgressView("Loading available rows…") }
         if !inventory.serverFailures.isEmpty || !inventory.libraryFailures.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(accounts.filter { inventory.serverFailures[$0.account.id] != nil }, id: \.account.id) { source in
@@ -476,7 +499,7 @@ struct HomeCatalogStatus: View {
                     }
                 }
                 ForEach(libraries.filter { inventory.libraryFailures[$0.key] != nil }) { library in
-                    InlineErrorMessage(Text("Couldn't load sections from \(library.library.title)."))
+                    InlineErrorMessage(Text("Couldn't load rows from \(library.library.title)."))
                 }
                 Button("Retry", action: retry)
                     .plozzActionButton(role: .secondary)
@@ -492,7 +515,7 @@ struct HomeCatalogStatus: View {
     private func message(server: String, error: AppError) -> Text {
         if error == .serverUnreachable { return Text("\(server) is offline.") }
         if error.requiresSignIn { return Text("Sign in to \(server) again.") }
-        return Text("Couldn't load sections from \(server).")
+        return Text("Couldn't load rows from \(server).")
     }
 }
 
@@ -530,7 +553,7 @@ struct HomeRowPresetPicker: View {
         }
         .frame(minHeight: 44)
         .confirmationDialog(
-            "Replace your section arrangement?",
+            "Replace your row arrangement?",
             isPresented: Binding(
                 get: { resetDefaults != nil },
                 set: { if !$0 { resetDefaults = nil } }
@@ -548,13 +571,13 @@ struct HomeRowPresetPicker: View {
             }
             Button("Cancel", role: .cancel) { resetDefaults = nil }
         } message: {
-            if resetDefaults == .matchServer { Text("Follow your servers' Home sections.") }
-            else { Text("Start with sections across all libraries.") }
+            if resetDefaults == .matchServer { Text("Follow your servers' Home rows.") }
+            else { Text("Start with rows across all libraries.") }
         }
     }
 
     private var presetLabel: some View {
-        Text("Section preset")
+        Text("Preset")
             #if os(iOS)
             .font(.subheadline.weight(.semibold))
             .settingsRowSecondary()
@@ -585,7 +608,7 @@ struct HomeRowPresetPicker: View {
         .buttonBorderShape(.capsule)
         .frame(minHeight: 44)
         #endif
-        .accessibilityLabel(Text("Section preset"))
+        .accessibilityLabel(Text("Preset"))
         .accessibilityValue(currentTitle)
         .accessibilityIdentifier("home-row-preset")
     }

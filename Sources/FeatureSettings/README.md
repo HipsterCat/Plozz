@@ -258,10 +258,12 @@ watch history and planning-list behavior are documented in
 
 - **Screen customization hierarchy** follows task boundaries. Screens & Navigation presents
   app navigation before shared screen preferences and individual screen editors.
-  Customize Home opens Home layout/Hero, Card labels, or Sections through
-  matching full-height navigation rows. Home sections owns Section preset,
-  Add section, the section list, and Edit/Done. Mobile uses a native toolbar
-  editing action; TV retains its remote-focused action and lift controls.
+  Customize Home opens Layout/Hero, Card labels, or Rows through matching
+  full-height navigation rows, without redundant subtitles. TV shows the current
+  layout as a secondary value. Home rows owns Preset, one Add row action, the
+  row list, and Edit/Done. Mobile uses a native toolbar editing action; TV places
+  the native action inline with the scrolling page title and Back control.
+  Editing remains available for one row so it can be removed; movement does not.
   Presets and reordering never change page appearance. Showcase's fixed Discovery
   row links back to Home layout rather than pretending to be reorderable.
   Shared Continue Watching settings remain accessible when its Home row is hidden.
@@ -277,7 +279,9 @@ watch history and planning-list behavior are documented in
   profile-scoped caption settings; navigation and preview focus never change
   saved values. Previews highlight the affected captions, not a duplicate table
   describing whether each label is on or off.
-  TV Page opens a native checked selection menu rather than cycling through
+  The scoped Home destination is titled Card labels and places its live preview
+  immediately below the controls and shared-scope note. Other editors retain their
+  pinned contextual help. TV Page opens a native checked selection menu rather than cycling through
   pages. TV diagrams use fewer sample cards and larger row headings for viewing
   at a distance. Mixed has a visible, platform-specific explanation; Home and
   Recommended explicitly distinguish per-page inheritance from their shared
@@ -311,45 +315,37 @@ watch history and planning-list behavior are documented in
   does not duplicate its Enabled controls: the Home editor manages section presentation,
   and Hero source selection uses the enabled library inventory. Discovering
   libraries for those controls must not restore a separate management list.
-- **Customize Home** is one shared section editor on TV, iPhone and iPad.
+- **Home rows** is one shared arrangement editor on TV, iPhone and iPad.
   Normal rows open their own settings. Source-specific rows and their settings
   use the shared provider brand mark, including the transport badge for shares.
-  In the editor, Add section, and reorder rows, the mark sits beside the
+  In the editor, Add row, and reorder rows, the mark sits beside the
   library/server name on the second line rather than before the section title;
   generic row glyphs appear only during reordering.
   An inline Preset selector sits below the title, with up/down chevrons beside
   its current value to expose the native menu; mobile uses a secondary heading
   with a trailing native menu capsule and a divider, not another section card.
-  TV gives this control row additional vertical separation from the header and sections.
   It scrolls with the content and stacks at large text sizes when needed.
-  Full-width Add section actions bracket the editable sections
-  on both platforms, after the page-level Preset and Home layout controls and
-  again below the list. A centered plus-and-label, native capsule button style,
-  and extra vertical spacing distinguish these actions from the editable rows.
-  Mobile keeps Reorder/Done in the native toolbar rather
-  than duplicating Add section as a small icon. Reorder/Done switches to
-  native movement controls with no Hidden drop zone; Hero stays
-  pinned and cannot move. Its editable row carries a subtle pin rather than a
-  lock, without a “Pinned at top” subtitle in either editing mode.
-  On TV, the single-line title is “Home layout: Hero” or “Home layout: Showcase”,
-  reflecting the active layout and opening the Home layout settings page.
+  One full-width Add row action appears below Preset and above the editable rows.
+  A centered plus-and-label, native capsule style, and vertical spacing distinguish
+  the action from the editable rows. Edit/Done switches to native movement controls
+  with no Hidden drop zone. Hero and Showcase remain on their separate layout page.
   Mobile uses the shared page inset without extra gutters.
-  Add section separates **Create section** from **Available sections** not already
-  shown. Creation starts with a library collection; the editor identifies that
-  source as Content and its presentation as Layout. Section names the configurable
-  Home area, row its horizontal layout, and collection its source grouping
-  (see [Home terminology](../../CONTEXT.md)). Choose a source collection first,
+  Add row separates **From a collection** from **Available rows** not already
+  shown. Empty results omit the empty heading; discovery failures show source
+  errors and Retry instead of claiming no rows are available. Creation starts with
+  a library collection; the editor identifies that source as Content and its
+  presentation as Layout (see [Home terminology](../../CONTEXT.md)). Choose a source collection first,
   then edit its name and Posters, Landscape or Featured presentation with the layout control immediately above a real-title
   preview. The preview uses the existing artwork preferences and spoiler protection.
   Each navigation destination explicitly forwards the active profile's card settings,
-  including Add section's nested creation destination; iOS navigation does not
+  including Add row's nested creation destination; iOS navigation does not
   inherit dependencies injected only into the preceding page.
   Save places a new independently configured row before Libraries; the ordinary
   arranger can move it anywhere among the movable rows. Editing never changes
   the collection on the server. Preview loading is bounded and retains server order;
   filtering and combining multiple sources are not yet supported. Removing a
   section hides it without erasing its configuration or disabling its libraries.
-  Holding a normal section opens Reorder and Remove section. Reorder keeps the
+  Holding a normal row opens Reorder and Remove from Home. Reorder keeps the
   selected section as the movement target: TV lifts and focuses it immediately;
   mobile exposes native drag handles without losing its position. Collection
   subtitles resolve their server mark from the current account even without a
@@ -366,6 +362,9 @@ watch history and planning-list behavior are documented in
   as evidence that the actual Home content request succeeded.
   Continue Watching owns its merge and artwork controls. Hero owns its sources
   and presentation, including the existing TV Home Layout/Showcase options.
+  Continue Watching groups artwork, playback details and labels before their shared
+  Recommended-page scope note; Include Next Up and selection behavior follow.
+  Showcase groups Ratings and Discovery with their dependent controls.
   **Center button action** on TV and **When tapping an item** on iPhone/iPad
   select **Play** or **Open detail page** for Home's movie/episode cards.
   Play remains the default for fresh and existing profiles. The choice uses the
@@ -410,21 +409,21 @@ watch history and planning-list behavior are documented in
   Caption presets/reset clear this override, and
   switching artwork presentation preserves it. Playback details is independently
   profile-scoped, survives layout changes, and does not change the Labels override.
-  The Merge Next Up explanation belongs to the native toggle's label, not a
+  The Include Next Up explanation belongs to the native toggle's label, not a
   separate helper-text row.
   Preset retains the confirmed Match server and Combined rows choices and shows
   Custom for edited arrangements. Selecting a new preset still requires
   confirmation.
   Merely opening the editor, a destination, or Reorder does not freeze a preset.
-  One bottom card on the main editor uses shared `InlineErrorMessage` warnings
-  to name affected sources and offers Retry, without repeating these on detail pages.
+  Home rows and Add row use shared `InlineErrorMessage` warnings to name affected
+  sources and offer Retry; appearance-only destinations do not repeat these.
   The root and every catalog-editing destination keep discovery active while
   visible and retain loading status and local edit failures. Preset changes reload the catalog.
-  Reorder is available as soon as two known sections can move, independently of
-  server discovery or failures. An editing session snapshots its known rows so
+  Edit is available as soon as one known row can be removed, independently of
+  server discovery or failures; movement requires two rows. An editing session snapshots its known rows so
   late discovery cannot move or disable a lifted row; the first actual move
   saves that arrangement, retaining unavailable saved identities. Newly discovered
-  sections remain available through Add section. Known, identity-scoped sections
+  sections remain available through Add row. Known, identity-scoped sections
   remain focusable and editable while optional discovery runs; loading only
   delays choices that have not been discovered yet.
   Mobile library discovery publishes one identity-scoped snapshot, never pairing

@@ -40,7 +40,7 @@ public enum HomeContentNotice: Equatable, Sendable {
                 comment: "Shown on Home when the profile has hidden every library from the Home screen."
             )
         case .noHomeRows:
-            return "No Home sections to show. Add sections in Settings > Screens & Navigation > Customize Home > Sections."
+            return "No Home rows to show. Add rows in Settings > Screens & Navigation > Customize Home > Rows."
         }
     }
 }

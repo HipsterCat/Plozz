@@ -128,6 +128,16 @@ private struct HomeSectionsEditorFixture: View {
             store: HomeLibraryVisibilityStore(namespace: "home-section-remote-fixture")
         )
         visibility.useRowDefaults(.combined)
+        if ProcessInfo.processInfo.arguments.contains("--single-home-row") {
+            let choices = HomeRowChoice.shared
+            visibility.applyRows(
+                .init(
+                    enabled: [.global(.continueWatching)],
+                    disabled: choices.map(\.id).filter { $0 != .global(.continueWatching) }
+                ),
+                choices: choices
+            )
+        }
         _visibility = State(initialValue: visibility)
     }
 
