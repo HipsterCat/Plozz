@@ -367,12 +367,14 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             let engines: [(any VideoEngine, String)] = [
                 (NativeVideoEngine(startsMuted: true), "live-continuity-dim.mp4"),
                 (try PlozzigenVideoEngine(), "glow-software.mkv"),
+                (LibraryLiveChannelEngine(engine: try PlozzigenVideoEngine()), "glow-software.mkv"),
             ]
             for (engine, filename) in engines {
                 let video = VideoPresentationView(frame: CGRect(x: 0, y: 100, width: 380, height: 214))
                 host.view.addSubview(video)
                 video.attach(engine)
                 defer { video.removeFromSuperview(); engine.stop() }
+                XCTAssertFalse(engine.hasPresentedVideoFrame)
                 XCTAssertNil(engine.previewVideoFrame())
                 await engine.load(
                     request: PlaybackRequest(
@@ -384,12 +386,18 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
                     try await Task.sleep(for: .milliseconds(20))
                 }
                 XCTAssertTrue(engine.hasPresentedVideoFrame, filename)
+                if let adapter = engine as? LibraryLiveChannelEngine {
+                    XCTAssertTrue(adapter.underlyingEngine.hasPresentedVideoFrame)
+                    XCTAssertEqual(adapter.previewFrameGeneration, adapter.underlyingEngine.previewFrameGeneration)
+                }
                 let item = engine.nowPlayingPlayer?.currentItem
                 let originalOutputs = item?.outputs.count
                 if filename.hasSuffix("mkv") {
                     XCTAssertNil(item, "Exercise the software path, not the remux/native path.")
                     XCTAssertNotNil(engine.previewVideoFrame())
                     XCTAssertNotNil(engine.previewFrameGeneration)
+                } else {
+                    XCTAssertNotNil(item, "Exercise the native output path.")
                 }
                 video.updateReflection(height: 180, topHeight: 80, lightAppearance: true)
                 try await settle(window)
@@ -426,8 +434,12 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
                 video.removeFromSuperview()
                 XCTAssertFalse(video.isPreviewColorSampling)
                 engine.stop()
+                XCTAssertFalse(engine.hasPresentedVideoFrame)
                 XCTAssertNil(engine.previewVideoFrame())
                 XCTAssertNil(engine.previewFrameGeneration)
+                if let adapter = engine as? LibraryLiveChannelEngine {
+                    await adapter.drainTransport()
+                }
             }
         }
 

@@ -109,6 +109,9 @@ There is no second player, decoder, demuxer, or software display readback. The s
 sample can lead the picture by its render queue. Black/neutral areas add no invented hue.
 Source generations reject stale asynchronous results, paused pictures do not resample,
 and hidden/detached/background previews release their output and sampling task.
+The production `LibraryLiveChannelEngine` wrapper forwards frame readiness and
+software-frame access only for its current, ready source; direct-decoder tests
+alone do not cover this Live TV integration boundary.
 Pictures with space on both horizontal sides use the shared content corner radius.
 The glow follows the page theme independently of dark player controls. Dark pages
 retain their original reflection treatment without sampling. Fullscreen, multiview,

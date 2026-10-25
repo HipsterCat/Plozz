@@ -88,13 +88,21 @@ struct LiveTVCategorySearchFixture: View {
 #if os(iOS)
 private struct CategoryPreviewPlayer: View {
     let playback: LiveTVPrototypePlayback
-    @State private var engine = CategoryPreviewEngine()
+    @State private var engine: CategoryPreviewEngine
+    @State private var playbackEngine: LibraryLiveChannelEngine
     @State private var expansions = 0
+
+    init(playback: LiveTVPrototypePlayback) {
+        self.playback = playback
+        let engine = CategoryPreviewEngine()
+        _engine = State(initialValue: engine)
+        _playbackEngine = State(initialValue: LibraryLiveChannelEngine(engine: engine))
+    }
 
     var body: some View {
         LiveChannelPlayerView(
             channelID: playback.channel.id, title: playback.channel.name,
-            input: playback.input, logoURL: nil, makeEngine: { engine },
+            input: playback.input, logoURL: nil, makeEngine: { playbackEngine },
             onPreviousChannel: playback.previousChannel, onNextChannel: playback.nextChannel,
             isFavorite: false, canToggleFavorite: false, onToggleFavorite: {},
             isExpanded: playback.isExpanded, isPreviewVisible: playback.isPreviewVisible, onExpandPreview: {
@@ -117,7 +125,8 @@ private struct CategoryPreviewPlayer: View {
                     .accessibilityIdentifier("category-preview-expands")
                 Text(engine.identity.uuidString)
                     .accessibilityIdentifier("category-preview-engine")
-                Text(engine.liveSnapshot.firstFrameReady ? "Frame: ready" : "Frame: waiting")
+                Text(engine.liveSnapshot.firstFrameReady && playbackEngine.hasPresentedVideoFrame
+                    ? "Frame: ready" : "Frame: waiting")
                     .accessibilityIdentifier("category-preview-frame")
             }
             .allowsHitTesting(false)
