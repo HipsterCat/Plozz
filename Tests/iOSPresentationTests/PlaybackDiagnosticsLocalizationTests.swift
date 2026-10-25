@@ -156,7 +156,7 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
     func testReadAheadDiagnosticsRenderMemoryAndDiskOnBothPresentations() throws {
         for memory in [true, false] {
             var diagnostics = fixture(mode: .plozzigen)
-            diagnostics.engineName = "AetherEngine"
+            diagnostics.engineName = "AetherEngine v7.47.0"
             diagnostics.sourceFileName = memory ? "Sample P7.mkv" : "Sample P8.mkv"
             diagnostics.videoCodec = "hevc"
             diagnostics.resolution = .init(width: 3840, height: 2160)
@@ -229,6 +229,7 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
                 add(attachment)
                 let text = try renderedText(image, locale: "en_US")
                 XCTAssertTrue(text.contains("Cache storage"), text)
+                XCTAssertTrue(text.contains("v7.47.0"), text)
                 XCTAssertTrue(text.contains("Read-ahead target"), text)
                 XCTAssertTrue(text.contains("5 min"), text)
                 XCTAssertEqual(text.contains("Memory limit reached"), memory, text)
