@@ -5,10 +5,37 @@ import XCTest
 
 final class ViewCustomizationCycleTests: XCTestCase {
     func testLibraryLabelControlsAreGroupedByPage() {
-        XCTAssertEqual(LibraryCardLabelSettingsView.pages, [.recommended, .browse, .collections, .playlists])
-        XCTAssertEqual(LibraryCardLabelSettingsView.controls(on: .recommended), [.recommended, .continueWatching])
-        for page in LibraryCardLabelSettingsView.pages where page != .recommended {
-            XCTAssertEqual(LibraryCardLabelSettingsView.controls(on: page), [page])
+        XCTAssertEqual(CardCaptionSettingsScope.libraries.pages, [.recommended, .browse, .collections, .playlists])
+        XCTAssertEqual(CardCaptionSettingsPage.recommended.controls, [.recommended, .continueWatching])
+        for page in CardCaptionSettingsScope.libraries.pages where page != .recommended {
+            XCTAssertEqual(page.controls, [page.firstControl])
+        }
+    }
+
+    func testEveryCaptionSettingHasARecognizablePageInTheSharedEditor() {
+        XCTAssertEqual(CardCaptionSettingsScope.home.pages, [.home])
+        XCTAssertEqual(CardCaptionSettingsScope.detail.pages, [.detail])
+        XCTAssertEqual(CardCaptionSettingsPage.home.controls, [.home, .continueWatching])
+        XCTAssertEqual(CardCaptionSettingsPage.detail.controls, [.episodes, .related, .extras])
+        XCTAssertEqual(CardCaptionSettingsPage.people.controls, [.filmography])
+        let controls = CardCaptionSettingsScope.all.pages.flatMap(\.controls)
+        XCTAssertEqual(Set(controls), Set(CardCaptionView.allCases))
+        for view in CardCaptionView.allCases {
+            XCTAssertEqual(controls.filter { $0 == view }.count, view == .continueWatching ? 2 : 1)
+        }
+    }
+
+    func testDetailPreviewHighlightsOnlyTheEditedRow() {
+        var settings = CardCaptionSettings.default
+        settings.setOverride(.hide, for: .episodes)
+        for editing in CardCaptionSettingsPage.detail.controls {
+            let snapshot = CardLabelScopePreview.snapshot(
+                page: .detail, editing: editing, settings: settings,
+                isShowcase: false, seriesArtwork: true, layout: .landscape
+            )
+            XCTAssertEqual(snapshot.rows.map(\.view), [.episodes, .related, .extras])
+            XCTAssertEqual(snapshot.rows.filter(\.highlighted).map(\.view), [editing])
+            XCTAssertEqual(snapshot.rows.map(\.showsLabels), [false, true, true])
         }
     }
 
@@ -18,7 +45,7 @@ final class ViewCustomizationCycleTests: XCTestCase {
         settings.setOverride(.hide, for: .recommended)
         for choice in CardCaptionView.continueWatching.customizationChoices {
             settings.setOverride(choice, for: .continueWatching)
-            for page in [CardCaptionView.home, .recommended] {
+            for page in [CardCaptionSettingsPage.home, .recommended] {
                 let preview = CardLabelScopePreview.snapshot(
                     page: page, editing: .continueWatching, settings: settings, isShowcase: true,
                     seriesArtwork: true, layout: .landscape
@@ -46,18 +73,19 @@ final class ViewCustomizationCycleTests: XCTestCase {
         for showcase in [false, true] {
             for seriesArtwork in [false, true] {
                 for layout in [ContinueWatchingCardLayout.portrait, .landscape] {
-                    for page in LibraryCardLabelSettingsView.pages {
-                        for view in LibraryCardLabelSettingsView.controls(on: page) {
+                    for page in CardCaptionSettingsScope.all.pages {
+                        for view in page.controls {
+                            let isShowcase = [.home, .recommended].contains(page) && showcase
                             let snapshot = CardLabelScopePreview.snapshot(
                                 page: page, editing: view, settings: settings,
-                                isShowcase: page == .recommended && showcase,
+                                isShowcase: isShowcase,
                                 seriesArtwork: seriesArtwork, layout: layout
                             )
                             XCTAssertEqual(snapshot.layout, layout)
                             for row in snapshot.rows {
                                 XCTAssertEqual(row.showsLabels, settings.showsLabels(
-                                    in: snapshot.page,
-                                    isShowcase: [.home, .recommended].contains(snapshot.page) && showcase,
+                                    in: row.isContinueWatching ? page.firstControl : row.view,
+                                    isShowcase: isShowcase,
                                     hasArtworkTitle: row.isContinueWatching && seriesArtwork,
                                     isContinueWatching: row.isContinueWatching
                                 ))

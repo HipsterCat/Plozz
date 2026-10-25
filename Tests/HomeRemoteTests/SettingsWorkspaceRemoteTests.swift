@@ -675,7 +675,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         try focus(app.buttons["card-label-customization"], in: app)
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(app.buttons["view-customization-back"].waitForExistence(timeout: 5), app.debugDescription)
-        assertInlineSettingsHeader("Labels by view", back: pageBack("view-customization-back", in: app), in: app)
+        assertInlineSettingsHeader("Customize labels", back: pageBack("view-customization-back", in: app), in: app)
         capture("card-label-customization", in: app)
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(app.buttons["card-label-customization"].waitForExistence(timeout: 5))

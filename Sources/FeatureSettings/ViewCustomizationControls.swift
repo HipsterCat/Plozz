@@ -67,11 +67,12 @@ struct ViewPreferenceChoiceRow: View {
 
 struct ViewCustomizationLink<Destination: View>: View {
     let isCustomized: Bool
+    var title: LocalizedStringResource = "Customize by view"
     @ViewBuilder var destination: () -> Destination
 
     var body: some View {
         SettingsDetailLink(destination: destination) {
-            ViewCustomizationLinkLabel(isCustomized: isCustomized)
+            ViewCustomizationLinkLabel(isCustomized: isCustomized, title: title)
         }
         #if os(tvOS)
         .buttonStyle(SettingsFocusButtonStyle(size: .contained))
@@ -81,6 +82,7 @@ struct ViewCustomizationLink<Destination: View>: View {
 
 private struct ViewCustomizationLinkLabel: View {
     let isCustomized: Bool
+    let title: LocalizedStringResource
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -89,7 +91,7 @@ private struct ViewCustomizationLinkLabel: View {
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
                 : AnyLayout(HStackLayout())
             layout {
-                Text("Customize by view")
+                Text(title)
                 if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                 if isCustomized {
                     Text("Custom")

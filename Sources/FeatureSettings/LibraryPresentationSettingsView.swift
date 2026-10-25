@@ -12,7 +12,6 @@ public struct LibraryPresentationSettingsView: View {
     @State private var discovery: LibraryPresentationDiscovery?
     @State private var discoveryScope: HomeSectionCatalogModel.RequestID?
     @State private var reloadRevision = 0
-    @State private var showsLabels = false
 
     private struct DiscoveryRequest: Equatable {
         let scope: HomeSectionCatalogModel.RequestID
@@ -53,24 +52,13 @@ public struct LibraryPresentationSettingsView: View {
                         size: $model.settings.logoSize, textSize: $model.settings.textSize,
                         surface: .showcase, showsLibraryPreview: true
                     )
-                    SettingsPageLink {
-                        labelEditor
-                    } label: {
-                        SettingsDisclosureLabel { Text("Customize labels") }
-                            .settingsFormRowLayout()
-                    }
-                    .buttonStyle(SettingsFormButtonStyle())
-                    .accessibilityIdentifier("library-customize-labels")
+                    CardCaptionSettingsLink(cards: cards, scope: .libraries, visibility: visibility)
                 }
             }
             #else
             SettingsSectionGroup {
-                Button { showsLabels = true } label: {
-                    SettingsDisclosureLabel { Text("Customize labels") }
-                }
-                .accessibilityIdentifier("library-customize-labels")
+                CardCaptionSettingsLink(cards: cards, scope: .libraries, visibility: visibility)
             }
-            .navigationDestination(isPresented: $showsLabels) { labelEditor }
             #endif
             Text("Libraries")
                 .font(.headline)
@@ -83,10 +71,6 @@ public struct LibraryPresentationSettingsView: View {
         .task(id: DiscoveryRequest(scope: requestID, revision: reloadRevision)) {
             await discoverLibraries()
         }
-    }
-
-    private var labelEditor: some View {
-        LibraryCardLabelSettingsView(cards: cards, visibility: visibility)
     }
 
     @ViewBuilder private var libraryChoices: some View {

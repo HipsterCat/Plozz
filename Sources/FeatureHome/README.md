@@ -23,6 +23,12 @@ credential changes invalidate playback; live authorization is rechecked after
 theme and authenticated-URL resolution, including for public theme URLs.
 Audio-interruption changes cancel pending resolution and retry the still-current
 foreground detail when the interruption ends.
+On iPhone and iPad, active detail theme music uses the trailer mute button's
+trailing toolbar position. Mute changes the existing player's audio without
+changing the saved volume, restarting playback, or interrupting its fade.
+It survives temporary app inactivity but resets when that detail playback ends;
+settings previews and another profile do not inherit it. The control is absent
+for a covered page, another item's theme, or a settings preview.
 
 tvOS detail entry keeps the real primary action focusable while its play target
 loads. An early press queues one activation, replacing the icon with a spinner

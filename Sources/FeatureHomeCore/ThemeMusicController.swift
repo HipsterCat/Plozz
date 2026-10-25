@@ -15,6 +15,7 @@ import UIKit
 @Observable
 public final class ThemeMusicController: ThemeMusicPreviewControlling {
     public private(set) var isPlaying = false
+    public private(set) var isMuted = false
     public private(set) var currentPlaybackID: String?
     public private(set) var detailOwner: UUID?
     public private(set) var isBlocked = false
@@ -174,6 +175,12 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
         if hasFadedIn || isPreviewing { player.volume = fadeTarget }
     }
 
+    public func toggleMuted() {
+        isMuted.toggle()
+        player.isMuted = isMuted
+        PlozzLog.app.info("Theme music: muted=\(isMuted)")
+    }
+
     public func stopPreview(owner: UUID) {
         guard previewOwner == owner else { return }
         stop()
@@ -245,6 +252,10 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
             player.replaceCurrentItem(with: nil)
             isPlaying = false
             currentPlaybackID = nil
+            if isMuted {
+                isMuted = false
+                player.isMuted = false
+            }
         }
     }
 

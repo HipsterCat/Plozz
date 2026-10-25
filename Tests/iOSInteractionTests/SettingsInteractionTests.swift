@@ -330,29 +330,59 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(ratings.value as? String, value)
     }
 
+    func testThemeMusicMuteUsesTheDetailToolbarAndCurrentPlayback() {
+        app.terminate()
+        app.launchArguments = ["--theme-mute-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        let mute = app.buttons["theme-music-mute"]
+        XCTAssertTrue(mute.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(mute.label, "Mute theme music")
+        XCTAssertFalse(app.buttons["trailer-mute"].exists)
+        mute.tap()
+        XCTAssertTrue(app.buttons.matching(identifier: "theme-music-mute")
+            .matching(NSPredicate(format: "label == %@", "Unmute theme music")).firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["theme-player-audio"].label, "Muted")
+        capture("theme-music-muted")
+        mute.tap()
+        XCTAssertTrue(app.buttons.matching(identifier: "theme-music-mute")
+            .matching(NSPredicate(format: "label == %@", "Mute theme music")).firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["theme-player-audio"].label, "Audible")
+        capture("theme-music-unmuted")
+        tapNativeSwitch(app.switches["Current item"])
+        XCTAssertFalse(mute.exists, "Another item's theme must not expose this detail's control.")
+        tapNativeSwitch(app.switches["Current item"])
+        XCTAssertTrue(mute.waitForExistence(timeout: 3))
+        tapNativeSwitch(app.switches["Active detail"])
+        XCTAssertFalse(mute.exists, "A covered detail cannot control foreground audio.")
+        tapNativeSwitch(app.switches["Active detail"])
+        XCTAssertTrue(mute.waitForExistence(timeout: 3))
+        app.buttons["Stop theme"].tap()
+        XCTAssertFalse(mute.exists)
+    }
+
     func testScreenCardLabelControlsShareCentralOverrides() {
         openSettingsPage("Screens & Navigation")
-        let screens: [(String, [String])] = [
-            ("Customize Home", ["home", "continueWatchingPortrait"]),
-            ("Customize Libraries", ["recommended", "browse", "collections", "playlists", "continueWatchingPortrait"]),
-            ("Detail Page", ["episodes", "related", "extras"])
+        let screens: [(String, String, [String])] = [
+            ("Customize Home", "home", ["home", "continueWatchingPortrait"]),
+            ("Customize Libraries", "library", ["recommended", "browse", "collections", "playlists", "continueWatchingPortrait"]),
+            ("Detail Page", "detail", ["episodes", "related", "extras"])
         ]
-        for (title, views) in screens {
+        for (title, scope, views) in screens {
             let link = button(title)
             reveal(link)
             link.tap()
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 3), app.debugDescription)
-            if title == "Customize Libraries" {
-                let customize = app.buttons["library-customize-labels"]
-                reveal(customize)
-                customize.tap()
-                XCTAssertTrue(app.navigationBars["Customize labels"].waitForExistence(timeout: 3))
-            }
+            XCTAssertFalse(app.buttons["card-label-view-\(views[0])"].exists)
+            let customize = app.buttons["\(scope)-customize-labels"]
+            reveal(customize)
+            customize.tap()
+            XCTAssertTrue(app.navigationBars["Customize labels"].waitForExistence(timeout: 3))
+            XCTAssertEqual(app.buttons["card-label-page"].exists, scope == "library")
             for view in views {
                 let row: XCUIElement
                 if title == "Customize Libraries" {
                     let name = view == "continueWatchingPortrait" ? "Recommended" : view.capitalized
-                    selectCustomization(app.buttons["library-label-target"], expecting: name)
+                    selectCustomization(app.buttons["card-label-page"], expecting: name)
                     row = app.buttons["card-label-view-\(view)"]
                 } else {
                     row = app.buttons["card-label-view-\(view)"]
@@ -367,9 +397,7 @@ final class SettingsInteractionTests: XCTestCase {
             XCTAssertFalse(app.buttons["card-label-view-filmography"].exists)
             XCTAssertFalse(app.buttons["card-label-view-search"].exists)
             capture("screen-card-labels-\(title)")
-            if title == "Customize Libraries" {
-                app.navigationBars["Customize labels"].buttons["BackButton"].tap()
-            }
+            app.navigationBars["Customize labels"].buttons["BackButton"].tap()
             app.navigationBars[title].buttons["BackButton"].tap()
         }
         let screensBack = app.navigationBars["Screens & Navigation"].buttons["BackButton"]
@@ -381,21 +409,31 @@ final class SettingsInteractionTests: XCTestCase {
         let customize = app.buttons["card-label-customization"]
         reveal(customize)
         customize.tap()
-        for view in [
-            "home", "continueWatchingPortrait", "recommended", "browse", "collections", "playlists",
-            "related", "episodes", "extras"
+        let page = app.buttons["card-label-page"]
+        for (name, views) in [
+            ("Home", ["home", "continueWatchingPortrait"]),
+            ("Recommended", ["recommended", "continueWatchingPortrait"]),
+            ("Browse", ["browse"]), ("Collections", ["collections"]), ("Playlists", ["playlists"]),
+            ("Detail Page", ["episodes", "related", "extras"])
         ] {
-            let row = app.buttons["card-label-view-\(view)"]
-            reveal(row)
-            XCTAssertEqual(row.value as? String, "Off", "The central editor must show the contextual edit for \(view).")
+            selectCustomization(page, expecting: name)
+            for view in views {
+                let row = app.buttons["card-label-view-\(view)"]
+                reveal(row)
+                XCTAssertEqual(row.value as? String, "Off", "The central editor must show the contextual edit for \(view).")
+            }
+            capture("all-labels-\(name)")
         }
-        let filmography = app.buttons["card-label-view-filmography"]
-        reveal(filmography)
-        XCTAssertEqual(filmography.value as? String, "On", "Unrelated views must be preserved.")
+        for (name, view) in [("Search", "search"), ("Watchlist", "watchlist"), ("People", "filmography")] {
+            selectCustomization(page, expecting: name)
+            XCTAssertEqual(app.buttons["card-label-view-\(view)"].value as? String, "On",
+                           "Unrelated pages must be preserved.")
+        }
+        selectCustomization(page, expecting: "Detail Page")
         let episodes = app.buttons["card-label-view-episodes"]
-        reveal(episodes, towardTop: true)
+        reveal(episodes)
         selectCustomization(episodes, expecting: "On")
-        for title in ["Labels by view", "Cards", "Appearance"] {
+        for title in ["Customize labels", "Cards", "Appearance"] {
             let back = app.navigationBars[title].buttons["BackButton"]
             if title != "Appearance" || back.exists { back.tap() }
         }
@@ -403,6 +441,7 @@ final class SettingsInteractionTests: XCTestCase {
         reveal(screenSettings, settingsMenu: true)
         screenSettings.tap()
         button("Detail Page").tap()
+        app.buttons["detail-customize-labels"].tap()
         XCTAssertTrue(episodes.waitForExistence(timeout: 3))
         XCTAssertEqual(episodes.value as? String, "On", "Central edits must flow back into the screen's controls.")
         XCTAssertEqual(app.buttons["card-label-view-related"].value as? String, "Off")
@@ -417,7 +456,7 @@ final class SettingsInteractionTests: XCTestCase {
         reveal(customize)
         customize.tap()
         XCTAssertTrue(app.navigationBars["Customize labels"].waitForExistence(timeout: 3))
-        let target = app.buttons["library-label-target"]
+        let target = app.buttons["card-label-page"]
         let value = app.buttons["card-label-view-recommended"]
         let watching = app.buttons["card-label-view-continueWatchingPortrait"]
         XCTAssertEqual(target.label, "Page")
@@ -427,8 +466,8 @@ final class SettingsInteractionTests: XCTestCase {
         selectCustomization(value, expecting: "Off")
         capture("library-labels-recommended-off")
         XCTAssertEqual(watching.value as? String, "Follow page")
-        let home = app.descendants(matching: .any)["library-label-preview-home"].firstMatch
-        let recommended = app.descendants(matching: .any)["library-label-preview-recommended"].firstMatch
+        let home = app.descendants(matching: .any)["card-label-preview-home"].firstMatch
+        let recommended = app.descendants(matching: .any)["card-label-preview-recommended"].firstMatch
         XCTAssertFalse(home.exists, "The preview should stay on the selected page.")
         XCTAssertTrue(recommended.exists)
         XCTAssertTrue(app.staticTexts["Continue Watching also affects Home."].exists)
@@ -1332,7 +1371,7 @@ final class SettingsInteractionTests: XCTestCase {
         portrait.tap()
         let labels = app.buttons["card-label-view-continueWatchingPortrait"]
         XCTAssertTrue(labels.waitForExistence(timeout: 3))
-        XCTAssertEqual(labels.value as? String, "Follow Appearance")
+        XCTAssertEqual(labels.value as? String, "Follow page")
         let details = app.buttons["continue-watching-playback-details"]
         XCTAssertTrue(details.exists)
         XCTAssertEqual(details.value as? String, "Detailed")
@@ -1353,7 +1392,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(labels.value as? String, "On")
         selectCustomization(labels, expecting: "Off")
         capture("appearance-portrait-labels")
-        for title in ["Labels by view", "Cards", "Appearance"] {
+        for title in ["Customize labels", "Cards", "Appearance"] {
             app.navigationBars[title].buttons["BackButton"].tap()
         }
         let screens = categoryButton("Screens & Navigation")
@@ -1376,7 +1415,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(labels.value as? String, "Off", "Changing artwork must preserve the label override.")
         XCTAssertEqual(details.value as? String, "Progress only", "Artwork and caption changes must preserve playback details.")
         selectCustomization(details, expecting: "Detailed")
-        selectCustomization(labels, expecting: "Follow Appearance")
+        selectCustomization(labels, expecting: "Follow page")
     }
 
     func testContinueWatchingGroupedControlsKeepSelectionsIndependent() {

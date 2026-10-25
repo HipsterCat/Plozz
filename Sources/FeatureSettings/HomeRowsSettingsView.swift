@@ -96,8 +96,9 @@ public struct HomeRowsSettingsView: View {
             .accessibilityIdentifier("home-section-hero")
             .disabled(isReordering)
 
-            SettingsSectionGroup("Card labels") {
-                CardCaptionSettingsControls(cards: cards, scope: .home)
+            SettingsSectionGroup {
+                CardCaptionSettingsLink(cards: cards, scope: .home, visibility: visibility)
+                    .environment(hero)
             }
             .disabled(isReordering)
 

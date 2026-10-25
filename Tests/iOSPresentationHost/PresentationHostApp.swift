@@ -3,7 +3,7 @@ import UIKit
 import CoreModels
 import CoreUI
 import FeatureAuth
-import FeatureHomeCore
+@testable import FeatureHomeCore
 @testable import FeatureLiveTV
 import FeatureLiveTVCore
 import FeatureSettings
@@ -142,6 +142,8 @@ struct PresentationHostApp: App {
                 CollectionSettingsInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--hero-request-controls-fixture") {
                 HeroRequestControlsFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--theme-mute-fixture") {
+                ThemeMusicMuteFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--home-hero-fixture") {
                 HomeHeroInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--player-layout-fixture") {
@@ -185,6 +187,73 @@ struct PresentationHostApp: App {
             } else {
                 Color.black
             }
+        }
+    }
+}
+
+private struct ThemeMusicMuteFixture: View {
+    @State private var theme = ThemeMusicController()
+    @State private var trailer = HeroTrailerController()
+    @State private var matchesItem = true
+    @State private var isActive = true
+    @State private var sampleURL: URL?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Text(theme.isMuted && theme.player.isMuted ? "Muted" : "Audible")
+                    .accessibilityIdentifier("theme-player-audio")
+                Toggle("Current item", isOn: $matchesItem)
+                Toggle("Active detail", isOn: $isActive)
+                Button("Stop theme", action: stop)
+            }
+            .navigationTitle("Theme music")
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    PlozziOSDetailAudioMuteControl(
+                        trailer: trailer, themeMusic: theme, itemID: "movie",
+                        themePlaybackID: matchesItem ? "account:movie" : "account:other",
+                        isActive: isActive
+                    )
+                }
+            }
+        }
+        .task {
+            do {
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("theme-mute-fixture.wav")
+                var sample = ThemeMusicPreviewSample.data()
+                let pcmLength = 22_050 * 180 * 2
+                sample.replaceSubrange(44..<sample.count, with: Data(count: pcmLength))
+                for (offset, value) in [(4, pcmLength + 36), (40, pcmLength)] {
+                    var size = UInt32(value).littleEndian
+                    withUnsafeBytes(of: &size) { sample.replaceSubrange(offset..<(offset + 4), with: $0) }
+                }
+                try sample.write(to: url, options: .atomic)
+                sampleURL = url
+                theme.setAuthorization("fixture")
+                let owner = UUID()
+                precondition(theme.claimDetail(owner: owner, playbackID: "account:movie", authorizationID: "fixture"))
+                let music = ThemeMusic(
+                    itemID: "movie",
+                    playbackSource: .publicURL(try SecretFreeURLSource(url: URL(string: "https://example.test/theme.wav")!))
+                )
+                theme.play(music, resolvedURL: url, playbackID: "account:movie", owner: owner,
+                           authorizationID: "fixture", settings: ThemeMusicSettings(isEnabled: true))
+            } catch {
+                fatalError("Could not prepare theme mute fixture: \(error)")
+            }
+        }
+        .onDisappear(perform: stop)
+    }
+
+    private func stop() {
+        theme.stop()
+        guard let sampleURL else { return }
+        do {
+            try FileManager.default.removeItem(at: sampleURL)
+            self.sampleURL = nil
+        } catch {
+            fatalError("Could not clean up theme mute fixture: \(error)")
         }
     }
 }

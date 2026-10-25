@@ -9,15 +9,15 @@ struct ViewCustomizationHelp {
     var continueWatchingShowsSeriesArtwork = true
     var continueWatchingLayout: ContinueWatchingCardLayout = .landscape
 
-    var isLibraryCaptions: Bool {
-        if case .libraryCaptions = illustration { return true }
+    var isPageCaptions: Bool {
+        if case .pageCaptions = illustration { return true }
         return false
     }
 
     enum Illustration: Hashable {
         case artwork(ArtworkArea)
         case captions(style: CardStyle, showsCaptions: Bool, showsMixedCaptions: Bool)
-        case libraryCaptions(CardLabelScopePreview.Snapshot, style: CardStyle)
+        case pageCaptions(CardLabelScopePreview.Snapshot, style: CardStyle)
     }
 }
 
@@ -39,7 +39,7 @@ struct ViewCustomizationHelpCard: View {
         }
         .id(help.illustration)
         .transition(.opacity)
-        .frame(height: help.isLibraryCaptions ? nil : contentHeight)
+        .frame(height: help.isPageCaptions ? nil : contentHeight)
         .frame(minHeight: contentHeight)
         .padding(24)
         .settingsGroupSurface(cornerRadius: PlozzTheme.Metrics.Radius.content)
@@ -51,7 +51,7 @@ struct ViewCustomizationHelpCard: View {
 
     private var accessibilitySummary: Text {
         var text = Text(help.detail)
-        if case .libraryCaptions(let preview, _) = help.illustration {
+        if case .pageCaptions(let preview, _) = help.illustration {
             text = text + Text(verbatim: ". ") + preview.accessibilitySummary
         }
         return text
@@ -78,7 +78,7 @@ struct ViewCustomizationHelpCard: View {
                 showsCaptions: showsCaptions, showsMixedCaptions: showsMixedCaptions
             )
             .frame(width: 256, height: 144)
-        case .libraryCaptions(let preview, let style):
+        case .pageCaptions(let preview, let style):
             CardLabelScopePreview(preview: preview, style: style)
                 .frame(width: 280)
         }

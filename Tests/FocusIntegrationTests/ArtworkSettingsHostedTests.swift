@@ -15,8 +15,8 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             let preview = CardLabelScopePreview.Snapshot(
                 page: .recommended,
                 rows: [
-                    .init(isContinueWatching: true, showsLabels: showsLabels, highlighted: true),
-                    .init(isContinueWatching: false, showsLabels: showsLabels, highlighted: true)
+                    .init(view: .continueWatching, showsLabels: showsLabels, highlighted: true),
+                    .init(view: .recommended, showsLabels: showsLabels, highlighted: true)
                 ],
                 layout: .landscape
             )
@@ -48,7 +48,8 @@ final class ArtworkSettingsHostedTests: XCTestCase {
         cards.captions.setOverride(.hide, for: .recommended)
         let initial = cards.captions
         try await withScreen(content:
-            LibraryCardLabelSettingsView(cards: cards, visibility: visibility).frame(width: 1100, height: 1000)
+            CardCaptionCustomizationView(cards: cards, scope: .libraries, visibility: visibility)
+                .frame(width: 1100, height: 1000)
         ) { window in
             let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
             let host = try XCTUnwrap(window.rootViewController as? ArtworkFocusRequesting)
@@ -58,7 +59,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             }
             // Back and Page precede Recommended's two label controls.
             XCTAssertEqual(rows.count, 4)
-            for (index, view) in LibraryCardLabelSettingsView.controls(on: .recommended).enumerated() {
+            for (index, view) in CardCaptionSettingsPage.recommended.controls.enumerated() {
                 let row = try XCTUnwrap(rows.dropFirst(2).dropFirst(index).first)
                 host.artworkFocusTarget = row
                 system.requestFocusUpdate(to: try XCTUnwrap(window.rootViewController))
@@ -176,17 +177,20 @@ final class ArtworkSettingsHostedTests: XCTestCase {
         let cards = makeCards(defaults: defaults)
         for scope in CardCaptionSettingsScope.allCases {
             try await withScreen(content:
-                SettingsControlGroup { CardCaptionSettingsControls(cards: cards, scope: scope) }
-                    .frame(width: SettingsFormMetrics.pageWidth)
+                CardCaptionCustomizationView(cards: cards, scope: scope)
+                    .frame(width: 1100, height: 1000)
             ) { window in
                 let text = try await self.capture(window, name: "card-labels-\(scope)", includeMaster: true)
-                XCTAssertEqual(self.focusItems(in: window).count, scope.views.count)
-                for view in scope.views {
-                    XCTAssertTrue(text.contains(String(localized: view.displayName)), text)
+                let page = try XCTUnwrap(scope.pages.first)
+                XCTAssertEqual(self.focusItems(in: window).count,
+                               page.controls.count + 1 + (scope.pages.count > 1 ? 1 : 0))
+                XCTAssertTrue(text.contains("Customize labels"), text)
+                XCTAssertTrue(text.contains(String(localized: page.title)), text)
+                for view in page.controls where view == .continueWatching || page == .detail {
+                    XCTAssertTrue(text.contains(String(localized: view.cardLabelTitle)), text)
                 }
-                for view in CardCaptionView.allCases where !scope.views.contains(view) {
-                    XCTAssertFalse(text.contains(String(localized: view.displayName)), text)
-                }
+                XCTAssertFalse(text.contains("Filmography"), text)
+                XCTAssertFalse(text.contains("Search"), text)
             }
         }
     }
@@ -1056,8 +1060,11 @@ final class ArtworkSettingsHostedTests: XCTestCase {
 
     func testCustomizationBackAndTitleScrollThroughTheTopSafeAreaWithoutClipping() async throws {
         try await withScreen(
-            content: CardCaptionCustomizationContent(settings: .constant(.init(preference: .show)))
-                .frame(width: 1100),
+            content: CardCaptionCustomizationContent(
+                settings: .constant(.init(preference: .show)), scope: .detail
+            )
+                .frame(width: 1100)
+                .padding(.bottom, 350),
             topSafeArea: 60
         ) { window in
             var pending = [try XCTUnwrap(window.rootViewController?.view)]
@@ -1073,8 +1080,8 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(250))
             _ = try await self.capture(window, name: "labels-before-top-scroll", includeMaster: true)
             let before = try self.collectionLabelFrames(in: window)
-            let title = try XCTUnwrap(before.first { $0.text == "Labels by view" })
-            let backItem = try self.backButton(beside: "Labels by view", in: window)
+            let title = try XCTUnwrap(before.first { $0.text == "Customize labels" })
+            let backItem = try self.backButton(beside: "Customize labels", in: window)
             let backControlFrame = try self.nativeFrame(backItem, in: window)
             let beforeImage = self.renderWindow(window)
             let titleInk = try self.textInkBounds(in: beforeImage, frame: title.frame)
@@ -1088,7 +1095,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(250))
             _ = try await self.capture(window, name: "labels-crossing-top-inset", includeMaster: true)
             let after = try self.collectionLabelFrames(in: window)
-            let scrolledTitle = try XCTUnwrap(after.first { $0.text == "Labels by view" })
+            let scrolledTitle = try XCTUnwrap(after.first { $0.text == "Customize labels" })
             let scrolledControlFrame = try self.nativeFrame(backItem, in: window)
             let afterImage = self.renderWindow(window)
             let scrolledTitleInk = try self.textInkBounds(in: afterImage, frame: scrolledTitle.frame)
@@ -1101,25 +1108,27 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             XCTAssertEqual(titleInk.minY - scrolledTitleInk.minY, distance, accuracy: 3,
                            "Neither Back nor the title should be pinned.")
             let text = try await self.capture(window, name: "labels-scrolling-through-top-inset", includeMaster: true)
-            XCTAssertTrue(text.contains("Labels are visible in this view"), text)
+            XCTAssertTrue(text.contains("Episodes"), text)
         }
     }
 
-    func testLabelHelpDescribesTheVisibleAndHiddenSetting() async throws {
+    func testLabelHelpKeepsVisibilityInThePreviewRatherThanDuplicateProse() async throws {
         let suite = "LabelVisibilityHelpHosted.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let cards = makeCards(defaults: defaults)
         try await withScreen(content: CardCaptionCustomizationView(cards: cards).frame(width: 1100)) { window in
             for (preference, expected) in [
-                (CardCaptionPreference.show, "Labels are visible in this view"),
-                (.hide, "Labels are hidden in this view"),
-                (.recommended, "Labels are visible except in Showcase and on series artwork")
+                (CardCaptionPreference.show, "On"),
+                (.hide, "Off"),
+                (.recommended, "Mixed")
             ] {
                 cards.captions = CardCaptionSettings(preference: preference)
                 let text = try await self.capture(window, name: "label-help-\(preference.rawValue)", includeMaster: true)
                 XCTAssertTrue(text.contains(expected), text)
-                XCTAssertFalse(text.contains("separate from"), text)
+                XCTAssertTrue(text.contains("Changes labels below Home cards"), text)
+                XCTAssertFalse(text.contains("Labels are visible"), text)
+                XCTAssertFalse(text.contains("Labels are hidden"), text)
             }
         }
     }
@@ -1485,7 +1494,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             let initial = try await self.capture(window, name: "labels-recommended-preview")
             for text in [
                 "App default", "Show labels everywhere", "Hide labels everywhere",
-                "Customize by view"
+                "Customize labels"
             ] {
                 XCTAssertTrue(initial.contains(text), initial)
             }
@@ -1544,34 +1553,20 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             settings: settings
         )) { window in
             let initial = try await self.capture(window, name: "labels-browse-inherited", includeMaster: true)
-            XCTAssertTrue(initial.contains("Labels"), initial)
+            XCTAssertTrue(initial.contains("Card labels"), initial)
             XCTAssertTrue(initial.contains("Mixed"), initial)
             XCTAssertFalse(initial.contains("Main setting"), initial)
             XCTAssertFalse(initial.contains("App default"), initial)
             XCTAssertFalse(initial.contains("Use default"), initial)
-            XCTAssertTrue(initial.uppercased().contains("LIBRARIES"), initial)
+            XCTAssertTrue(initial.contains("Home"), initial)
+            XCTAssertTrue(initial.contains("Continue Watching"), initial)
             XCTAssertFalse(initial.contains("No labels"), initial)
-            var views = [try XCTUnwrap(window.rootViewController?.view)]
-            var scrollViews: [UIScrollView] = []
-            while let view = views.popLast() {
-                if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height {
-                    scrollViews.append(scroll)
-                }
-                views.append(contentsOf: view.subviews)
-            }
-            let scroll = try XCTUnwrap(scrollViews.max { $0.bounds.width < $1.bounds.width })
-            let originalOffset = scroll.contentOffset
-            // The fixed help card keeps the later section below the initial viewport.
-            scroll.setContentOffset(CGPoint(x: originalOffset.x, y: 400), animated: false)
-            let laterRows = try await self.capture(window, name: "labels-other-views", includeMaster: true)
-            XCTAssertTrue(laterRows.uppercased().contains("OTHER VIEWS"), laterRows)
-            scroll.setContentOffset(originalOffset, animated: false)
-            cards.captions.toggleCustomization(in: .browse)
-            let changed = try await self.capture(window, name: "labels-browse-explicit")
+            cards.captions.toggleCustomization(in: .home)
+            let changed = try await self.capture(window, name: "labels-home-explicit")
             XCTAssertFalse(changed.contains("Custom"), changed)
             XCTAssertFalse(changed.contains("Use default"), changed)
-            XCTAssertEqual(cards.captions.override(for: .browse), .hide)
-            XCTAssertFalse(cards.captions.showsLabels(in: .browse))
+            XCTAssertEqual(cards.captions.override(for: .home), .show)
+            XCTAssertTrue(cards.captions.showsLabels(in: .home))
             XCTAssertEqual(CardCaptionSettingsStore(defaults: defaults).load(), cards.captions)
             cards.captions.applyPreset(.show)
             XCTAssertTrue(cards.captions.showsLabels(in: .browse))

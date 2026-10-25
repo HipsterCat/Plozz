@@ -1648,7 +1648,11 @@ struct PlozziOSAppearanceSettingsView: View {
             case .theme:
                 PlozziOSThemeSettingsView(theme: theme, transparency: transparency)
             case .cards:
-                CardAppearanceControls(cards: cardStyle, watchIndicator: watchIndicator, density: density)
+                CardAppearanceControls(
+                    cards: cardStyle, watchIndicator: watchIndicator,
+                    density: density, visibility: appModel.settings.homeVisibility
+                )
+                .environment(appModel.settings.hero)
             case .artwork:
                 PlozziOSArtworkSettingsView(
                     appModel: appModel, cardStyle: cardStyle, canManageProviders: canManageProviders
@@ -1955,13 +1959,13 @@ private struct PlozziOSDetailPageSettingsView: View {
 
     var body: some View {
         List {
-            SettingsSectionGroup("Card labels") {
-                CardCaptionSettingsControls(cards: cards, scope: .detail)
-            }
             SettingsSectionGroup {
                 HeroLogoSizeControl(
                     size: $detailPage.settings.logoSize, textSize: $detailPage.settings.textSize, surface: .detail
                 )
+            }
+            SettingsSectionGroup {
+                CardCaptionSettingsLink(cards: cards, scope: .detail)
             }
             SettingsSectionGroup("Review scores") {
                 Toggle("Show review scores", isOn: $detailPage.settings.showsHeaderRatings)

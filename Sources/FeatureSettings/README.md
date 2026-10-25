@@ -256,6 +256,15 @@ watch history and planning-list behavior are documented in
 
 ## Responsibility
 
+- **Customize labels** uses one shared, page-organized visual editor from
+  Appearance's Cards page and the scoped Home, Libraries, and Detail Page links.
+  Home and Recommended each show Card labels and the shared Continue Watching
+  override together. Detail Page groups Episodes, Related, and Extras; Search,
+  Watchlist, and People are also available from the full editor. Scoped
+  single-page editors omit the Page selector. All entry points edit the same
+  profile-scoped caption settings; navigation and preview focus never change
+  saved values. Previews highlight the affected captions, not a duplicate table
+  describing whether each label is on or off.
 - **Customize Libraries** lives in Screens & Navigation on TV and mobile.
   Library Navigation comes first, including the first Down move from Back on TV.
   The Recommended Page controls follow it; headings and helper copy name the

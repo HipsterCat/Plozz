@@ -158,7 +158,9 @@ struct AppearanceDetailView: View {
                     id: "cards",
                     title: "Cards",
                     description: "How media cards look across the app.",
-                    subpage: SettingsDetailSubpage { CardCaptionCustomizationView(cards: cardStyle) }
+                    subpage: SettingsDetailSubpage {
+                        CardCaptionCustomizationView(cards: cardStyle, visibility: librariesScope.homeVisibility)
+                    }
                 ) {
                     cardsControls
                 }.groupedContent(),
@@ -257,7 +259,10 @@ struct AppearanceDetailView: View {
     }
 
     @ViewBuilder private var cardsControls: some View {
-        CardAppearanceControls(cards: cardStyle, watchIndicator: watchStatusIndicator, density: density)
+        CardAppearanceControls(
+            cards: cardStyle, watchIndicator: watchStatusIndicator,
+            density: density, visibility: librariesScope.homeVisibility
+        )
     }
 }
 
@@ -367,9 +372,9 @@ struct DetailPageDetailView: View {
                 DetailHeaderAgeSettingsForm(model: detailHeaderSettings)
             })
         }
-        rows.append(SettingsSplitRow(id: "detail-page-card-labels", title: "Card labels") {
-            CardCaptionSettingsControls(cards: cards, scope: .detail)
-        })
+        rows.append(SettingsSplitRow(id: "detail-page-card-labels", title: "Customize labels") {
+            CardCaptionSettingsLink(cards: cards, scope: .detail)
+        }.labeledControl())
         return rows
     }
 }
