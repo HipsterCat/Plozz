@@ -184,8 +184,7 @@ public struct HeroMetadataEnricher: Sendable {
                 enriched[index].seriesID = root.id
                 enriched[index].officialRating = root.officialRating
                 enriched[index].genres = root.genres
-                enriched[index].overview = root.overview
-                enriched[index].taglines = root.taglines
+                enriched[index].seriesSynopsis = MediaSeriesSynopsis(series: root)
                 enriched[index].ratings = root.ratings
                 enriched[index].usesProviderRatings = root.usesProviderRatings
                 enriched[index].familyGuidance = root.familyGuidance

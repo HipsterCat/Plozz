@@ -861,6 +861,13 @@ data from completion of the entire Home load.
 
 ## Showcase
 
+Episode-backed Home heroes use a separately scoped `MediaSeriesSynopsis` fetched
+from the authenticated parent-series record. The server's series tagline/synopsis
+is shown without episode spoiler masking; episode prose is never substituted
+when that series text is absent. The original episode overview, playback route,
+and watch state remain intact. Detail pages retain episode-specific spoiler rules.
+This description policy is shared by Showcase, the TV carousel, and mobile Home.
+
 `FocusHeroHomeView` keeps focus-driven movement and hero updates outside the
 row-building view. Posters use the profile's full normal poster dimensions.
 Preview headings have a 16pt inter-row spacer above them and more room below

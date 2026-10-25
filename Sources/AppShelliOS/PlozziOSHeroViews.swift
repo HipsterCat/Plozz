@@ -2629,7 +2629,9 @@ private struct PlozziOSHeroMetadata: View {
         case .folder, .collection, .playlist, .unknown:
             return nil
         default:
-            return HeroLogoFallback(for: item) { await ArtworkRouter.shared.artworkURL(.logo, for: item) }
+            return HeroLogoFallback(for: item, localizedResolve: { language in
+                await ArtworkRouter.shared.artworkURL(.logo, for: item, language: language)
+            })
         }
     }
 

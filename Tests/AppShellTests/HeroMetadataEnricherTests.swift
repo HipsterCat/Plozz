@@ -65,6 +65,35 @@ private final class PinnedSeriesTestState: @unchecked Sendable {
 }
 
 final class HeroMetadataEnricherTests: XCTestCase {
+    func testProviderSeriesSynopsisStaysSeparateFromEpisodeText() async throws {
+        for provider in [ProviderKind.jellyfin, .emby, .plex] {
+            let accountID = provider.rawValue
+            let episode = MediaItem(
+                id: "episode", title: "Episode", kind: .episode,
+                overview: "Episode spoiler", taglines: ["Episode tagline"],
+                seriesID: "series", resumePosition: 90, sourceAccountID: accountID
+            )
+            let series = MediaItem(
+                id: "series", title: "La serie", kind: .series,
+                overview: "Le synopsis choisi sur le serveur."
+            )
+            let account = resolved(
+                accountID, details: [episode.id: episode, series.id: series], provider: provider
+            )
+            let enricher = HeroMetadataEnricher(accounts: [account], targetSelector: { $0 })
+            let results = await enricher.enrich([episode])
+            let result = try XCTUnwrap(results.first)
+            XCTAssertEqual(result.overview, episode.overview)
+            XCTAssertEqual(result.taglines, episode.taglines)
+            XCTAssertEqual(result.seriesSynopsis?.overview, series.overview)
+            XCTAssertEqual(result.seriesSynopsis?.sourceAccountID, accountID)
+            XCTAssertEqual(result.seriesSynopsis?.matches(result), true)
+            XCTAssertEqual(result.parentTitle, series.title)
+            XCTAssertEqual(result.resumePosition, 90)
+            XCTAssertEqual(result.id, episode.id)
+        }
+    }
+
     @MainActor
     func testExternalMoviesAndSeriesHaveARequestCTAWithoutOpeningDetailFirst() async throws {
         let seer = SeerService(connectionStore: InMemorySeerConnectionStore(connection: .init(
@@ -566,14 +595,15 @@ final class HeroMetadataEnricherTests: XCTestCase {
     private func resolved(
         _ accountID: String,
         details: [String: MediaItem],
-        childrenByID: [String: [MediaItem]] = [:]
+        childrenByID: [String: [MediaItem]] = [:],
+        provider: ProviderKind = .jellyfin
     ) -> ResolvedAccount {
         let session = UserSession(
             server: MediaServer(
                 id: "server-\(accountID)",
                 name: "Server",
                 baseURL: URL(string: "http://jellyfin.local")!,
-                provider: .jellyfin
+                provider: provider
             ),
             userID: "user",
             userName: "User",
@@ -632,7 +662,7 @@ private final class CachedHeroRatingsProvider:
 }
 
 private class HeroMetadataProvider: MediaProvider, @unchecked Sendable {
-    let kind: ProviderKind = .jellyfin
+    var kind: ProviderKind { session.server.provider }
     let session: UserSession
     private let details: [String: MediaItem]
     private let childrenByID: [String: [MediaItem]]

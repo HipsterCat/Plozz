@@ -1991,9 +1991,9 @@ struct DetailHeroView: View, Equatable {
         default:
             break
         }
-        return HeroLogoFallback(for: source) {
-            await ArtworkRouter.shared.artworkURL(.logo, for: source)
-        }
+        return HeroLogoFallback(for: source, localizedResolve: { language in
+            await ArtworkRouter.shared.artworkURL(.logo, for: source, language: language)
+        })
     }
 
 }

@@ -210,7 +210,7 @@ public struct TMDbMetadataProvider: ArtworkProvider {
     private func logoPath(for query: MetadataQuery) async -> String? {
         guard let id = await resolveID(for: query) else { return nil }
         let images = await images(forID: id, isTV: query.isTV)
-        return Self.bestLogoPath(images?.logos)
+        return Self.bestLogoPath(images?.logos, preferredLanguage: query.artworkLanguage)
     }
 
     private func posterPath(for query: MetadataQuery) async -> String? {
@@ -681,14 +681,16 @@ public struct TMDbMetadataProvider: ArtworkProvider {
         }.prefix(limit).compactMap(\.file_path)
     }
 
-    static func bestLogoPath(_ logos: [Image]?) -> String? {
+    static func bestLogoPath(
+        _ logos: [Image]?, preferredLanguage: String = Locale.current.identifier
+    ) -> String? {
         guard let logos else { return nil }
+        let preferred = MetadataQuery.normalizedArtworkLanguage(preferredLanguage)
         func rank(_ image: Image) -> Int {
-            switch image.iso_639_1 {
-            case "en": return 0
-            case nil, "": return 1
-            default: return 2
-            }
+            guard let language = image.iso_639_1, !language.isEmpty else { return 1 }
+            let normalized = MetadataQuery.normalizedArtworkLanguage(language)
+            if normalized == preferred { return 0 }
+            return normalized == "en" ? 2 : 3
         }
         guard let path = logos.lazy.filter({ $0.file_path?.isEmpty == false }).min(by: {
             let (lr, rr) = (rank($0), rank($1))
