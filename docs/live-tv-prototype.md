@@ -118,6 +118,27 @@ Navigation uses the plain **Live TV** label in every style. The source-setup
 introduction carries a small, secondary **Experimental** note on both platforms,
 without a warning dialog or an extra confirmation step.
 
+On iPhone and iPad, selecting a channel opens a video preview above the guide,
+8 points below the existing navigation toolbar controls. There is no channel-artwork card or
+Watch channel button over the video. Tapping the preview shows or hides the
+shared player transport and fullscreen action; fullscreen keeps the same player
+and stream. Its video surface stays in the same native parent during expansion,
+return, and rotation; an interruptible resize follows the current window geometry
+without waiting for a forced orientation. Reduce Motion disables that animation.
+Expanding the current preview rechecks authorization and presentation ownership
+without starting channel preparation or showing an opening-channel banner.
+Before a channel is selected, the guide uses the available space.
+Opening the preview reduces the guide's viewport without replacing its scroll
+view or resetting its channel/time position. Search and the narrow category
+directory hide the preview surface while retaining the existing playback policy.
+In portrait, the playing surface is reflected vertically below the preview with
+a native blur and a gradual fade into the guide background. The reflection sits
+behind guide content, adds no layout height, and shares the original video
+surface rather than opening another player or copying decoded frames. It is
+disabled in landscape, fullscreen, multiview, Reduce Transparency, and when the
+preview is inactive, interrupted, or continuing on an external presentation.
+Apple TV keeps its existing browsing info bar and focus-driven preview.
+
 For isolated physical-TV iteration, build a branded Debug app using the existing
 per-branch build configuration. It has its own bundle ID, preferences and data;
 normal Plozz remains installed and untouched. Cloud sync and Top Shelf are not

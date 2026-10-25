@@ -10,6 +10,9 @@ final class VideoPresentationView: UIView {
     private var zoom = PlayerVideoZoom()
     private var aspectRatio: Double?
     private var fitsInsideSafeArea = false
+    #if os(iOS)
+    private let reflection = VideoPreviewReflectionView()
+    #endif
     private(set) var fitBounds: CGRect?
     weak var subtitleViewport: VideoSubtitleViewport? {
         didSet { subtitleViewport?.attachVideoView(self) }
@@ -20,6 +23,9 @@ final class VideoPresentationView: UIView {
         backgroundColor = .black
         clipsToBounds = true
         isUserInteractionEnabled = false
+        #if os(iOS)
+        addSubview(reflection)
+        #endif
     }
 
     @available(*, unavailable)
@@ -28,14 +34,32 @@ final class VideoPresentationView: UIView {
     func attach(_ engine: any VideoEngine) {
         let output = engine.makeVideoOutputView()
         self.engine = engine
-        guard output.superview !== self else { return }
-        if surface?.superview === self { surface?.removeFromSuperview() }
+        guard output.superview !== surfaceHost else { return }
+        if surface?.superview === surfaceHost { surface?.removeFromSuperview() }
         output.removeFromSuperview()
         output.autoresizingMask = []
         output.isUserInteractionEnabled = false
         surface = output
-        addSubview(output)
+        surfaceHost.addSubview(output)
         setNeedsLayout()
+    }
+
+    private var surfaceHost: UIView {
+        #if os(iOS)
+        reflection.source
+        #else
+        self
+        #endif
+    }
+
+    func updateReflection(height: CGFloat, background: UIColor = .black) {
+        #if os(iOS)
+        guard reflection.reflectionHeight != height || reflection.backgroundTint != background else { return }
+        reflection.reflectionHeight = height
+        reflection.backgroundTint = background
+        clipsToBounds = height <= 0
+        setNeedsLayout()
+        #endif
     }
 
     func update(zoom: PlayerVideoZoom, aspectRatio: Double? = nil, fitsInsideSafeArea: Bool = false) {
@@ -88,7 +112,13 @@ final class VideoPresentationView: UIView {
         super.layoutSubviews()
         aspectRatio = engine?.videoAspectRatio
         fitBounds = resolvedFitBounds
-        guard let surface, surface.superview === self else { return }
+        #if os(iOS)
+        reflection.frame = bounds
+        reflection.pictureBottom = min(bounds.height, videoRect?.maxY ?? bounds.height)
+        reflection.pictureHeight = min(bounds.height, videoRect?.height ?? bounds.height)
+        reflection.layoutIfNeeded()
+        #endif
+        guard let surface, surface.superview === surfaceHost else { return }
         let contentBounds = CGRect(origin: .zero, size: bounds.size)
         let center = zoom.surfaceCenter(in: bounds, fitBounds: fitBounds)
         let scale = zoom.scaleFactors(in: bounds, aspectRatio: aspectRatio, fitBounds: fitBounds)
@@ -104,6 +134,79 @@ final class VideoPresentationView: UIView {
         }
         subtitleViewport?.scheduleUpdate()
     }
+
+    #if os(iOS)
+    /// Replicates the existing compositor surface, not a second player or decoded frame.
+    private final class VideoPreviewReflectionView: UIView {
+        let source = UIView()
+        var pictureBottom: CGFloat = 0 {
+            didSet { if oldValue != pictureBottom { setNeedsLayout() } }
+        }
+        var pictureHeight: CGFloat = 0 {
+            didSet { if oldValue != pictureHeight { setNeedsLayout() } }
+        }
+        var reflectionHeight: CGFloat = 0 {
+            didSet { if oldValue != reflectionHeight { setNeedsLayout() } }
+        }
+        var backgroundTint: UIColor = .black {
+            didSet { if oldValue != backgroundTint { setNeedsLayout() } }
+        }
+        private let replicas = VideoPreviewReplicaView()
+        private let crop = CALayer()
+        private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterialDark))
+        private let fade = CAGradientLayer()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            accessibilityElementsHidden = true
+            source.backgroundColor = .black
+            source.clipsToBounds = true
+            addSubview(replicas)
+            replicas.addSubview(source)
+            crop.backgroundColor = UIColor.white.cgColor
+            replicas.layer.mask = crop
+            addSubview(blur)
+            layer.addSublayer(fade)
+            fade.startPoint = CGPoint(x: 0.5, y: 0)
+            fade.endPoint = CGPoint(x: 0.5, y: 1)
+            fade.locations = [0, 0.25, 0.65, 1]
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            replicas.frame = bounds
+            source.frame = bounds
+            let height = min(reflectionHeight, pictureHeight)
+            let total = max(1, bounds.height + height)
+            replicas.replicaLayer.instanceCount = height > 0 ? 2 : 1
+            blur.isHidden = height <= 0
+            fade.isHidden = height <= 0
+            replicas.replicaLayer.instanceTransform = CATransform3DConcat(
+                CATransform3DMakeScale(1, -1, 1),
+                CATransform3DMakeTranslation(0, pictureBottom, 0)
+            )
+            crop.frame = CGRect(x: 0, y: 0, width: bounds.width, height: total)
+            let blurScale: CGFloat = 4
+            blur.bounds = CGRect(x: 0, y: 0, width: bounds.width / blurScale, height: height / blurScale)
+            blur.center = CGPoint(x: bounds.midX, y: bounds.height + height / 2)
+            blur.transform = CGAffineTransform(scaleX: blurScale, y: blurScale)
+            fade.frame = CGRect(x: 0, y: bounds.height, width: bounds.width, height: height)
+            fade.colors = [0, 0.3, 0.75, 1].map { backgroundTint.withAlphaComponent($0).cgColor }
+            CATransaction.commit()
+        }
+    }
+
+    private final class VideoPreviewReplicaView: UIView {
+        override class var layerClass: AnyClass { CAReplicatorLayer.self }
+        var replicaLayer: CAReplicatorLayer { layer as! CAReplicatorLayer }
+    }
+    #endif
 
     var videoRect: CGRect? { zoom.videoRect(in: bounds, aspectRatio: aspectRatio, fitBounds: fitBounds) }
     var sourceAspectRatio: Double? { aspectRatio }

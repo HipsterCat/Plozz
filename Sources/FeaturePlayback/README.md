@@ -90,6 +90,14 @@ an explicit input to the retained video surface. A late aspect ratio or a format
 change updates Normal/Crop/Stretch geometry without a zoom gesture, retuning, or
 resizing the subtitle overlay; no additional polling loop is created.
 
+On iPhone and iPad, the Live TV guide's inline preview uses the shared
+previous/play-pause/next controls and an in-place fullscreen action. The engine,
+video surface, and its native parent remain mounted across expansion, return,
+and rotation. Portrait previews can mirror that same compositor surface beneath
+the picture with native blur and a background fade; there is no second player or
+frame-extraction loop. Fullscreen, multiview, external playback, and Reduce
+Transparency disable the reflection.
+
 On tvOS, temporary scene inactivity from Control Center or Siri does not issue
 a player pause, cancel a live seek, or reload the stream. Playback and explicit
 pause intent survive the overlay; genuine system audio interruptions remain

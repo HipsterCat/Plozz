@@ -4,10 +4,17 @@ import FeatureLiveTV
 import FeatureLiveTVCore
 import FeatureProfiles
 import SwiftUI
+#if os(iOS)
+@testable import AppShelliOS
+import FeaturePlayback
+import Observation
+import UIKit
+#endif
 
 struct LiveTVCategorySearchFixture: View {
     @State private var profiles: ProfilesModel
     @State private var showsProfile = false
+    @State private var isExpanded = false
     private let namespace = "CategorySearch.\(UUID().uuidString)"
 
     init() {
@@ -21,16 +28,22 @@ struct LiveTVCategorySearchFixture: View {
                 preferencesStore: CategorySearchPreferences(),
                 viewSettingsStore: CategorySearchSettings(),
                 sourceStore: CategorySearchSources(),
+                onExpandedChange: { isExpanded = $0 },
                 sourceLoader: CategorySearchLoader(),
                 preferencesNamespace: namespace,
                 sourceApprovalContext: { [profiles] in LiveTVSourceApprovalContext(profiles: profiles) },
                 topBarAccessory: profileAction
             ) { playback in
+                #if os(iOS)
+                CategoryPreviewPlayer(playback: playback)
+                #else
                 Color.black
                     .accessibilityIdentifier("category-search-playback")
                     .accessibilityLabel(Text(playback.channel.name))
                     .accessibilityValue(Text(verbatim: playback.isExpanded ? "Fullscreen" : "Preview"))
+                #endif
             }
+
         }
         .environment(profiles)
         .environment(\.locale, Locale(identifier: "en_US"))
@@ -38,6 +51,11 @@ struct LiveTVCategorySearchFixture: View {
         .environment(\.colorScheme, .dark)
         .background { AppBackground(palette: .dark) }
         #if os(iOS)
+        .plozziOSLivePlayerOrientation(
+            isPresented: isExpanded,
+            orientation: ProcessInfo.processInfo.arguments.contains("--category-preview-landscape") ? .landscape
+                : (ProcessInfo.processInfo.arguments.contains("--category-preview-portrait") ? .portrait : .auto)
+        )
         .environment(\.plozzMetrics, .touch(density: .standard))
         .sheet(isPresented: $showsProfile) {
             Text("Profile settings").accessibilityIdentifier("category-search-profile-settings")
@@ -60,6 +78,97 @@ struct LiveTVCategorySearchFixture: View {
         #endif
     }
 }
+
+#if os(iOS)
+private struct CategoryPreviewPlayer: View {
+    let playback: LiveTVPrototypePlayback
+    @State private var engine = CategoryPreviewEngine()
+    @State private var expansions = 0
+
+    var body: some View {
+        LiveChannelPlayerView(
+            channelID: playback.channel.id, title: playback.channel.name,
+            input: playback.input, logoURL: nil, makeEngine: { engine },
+            onPreviousChannel: playback.previousChannel, onNextChannel: playback.nextChannel,
+            isFavorite: false, canToggleFavorite: false, onToggleFavorite: {},
+            isExpanded: playback.isExpanded, onExpandPreview: {
+                expansions += 1
+                playback.expandPreview()
+            },
+            previewReflectionHeight: playback.previewReflectionHeight,
+            previewReflectionBackground: playback.previewReflectionBackground,
+            isActive: playback.isPlaybackActive, onReturnToGuide: playback.returnToGuide,
+            onPlaybackStarted: playback.playbackStarted, reportingID: playback.reportingID,
+            countsAsWatching: playback.countsAsWatching, program: playback.program
+        )
+        .overlay(alignment: .topLeading) {
+            VStack {
+                Text("Loads: \(engine.loads)")
+                    .accessibilityIdentifier("category-preview-loads")
+                Text("Expands: \(expansions)")
+                    .accessibilityIdentifier("category-preview-expands")
+                Text(engine.identity.uuidString)
+                    .accessibilityIdentifier("category-preview-engine")
+            }
+            .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("category-search-playback")
+        .accessibilityLabel(Text(playback.channel.name))
+        .accessibilityValue(Text(verbatim: playback.isExpanded ? "Fullscreen" : "Preview"))
+    }
+}
+
+@MainActor @Observable
+private final class CategoryPreviewEngine: LiveChannelEngine {
+    let identity = UUID()
+    @ObservationIgnored private let native = NativeVideoEngine(startsMuted: true)
+    var videoAspectRatio: Double? { native.videoAspectRatio }
+    var loads = 0
+    var liveSnapshot = LiveChannelEngineSnapshot(
+        phase: .playing, firstFrameReady: true, position: 100, bufferedPosition: 120,
+        seekableRange: 0...1800, behindLiveSeconds: 0, route: .localHLS
+    )
+    var status = VideoEngineStatus.ready
+    var isPaused = false
+    var currentTime: TimeInterval { 100 }
+    var duration: TimeInterval { 1800 }
+    var furthestObservedPosition: TimeInterval { 100 }
+    var audioTracks: [MediaTrack] { [] }
+    var subtitleTracks: [MediaTrack] { [] }
+    var currentAudioTrackID: Int? { nil }
+    @ObservationIgnored var onProgress: (@MainActor () -> Void)?
+    @ObservationIgnored var onFailure: (@MainActor (AppError) -> Void)?
+    @ObservationIgnored var onEnded: (@MainActor () -> Void)?
+    @ObservationIgnored var onTracksChanged: (@MainActor () -> Void)?
+    @ObservationIgnored var onProbedSourceFactsChanged: (@MainActor (EngineProbedSourceFacts) -> Void)?
+    @ObservationIgnored var onSubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
+    @ObservationIgnored var onSecondarySubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
+    @ObservationIgnored var onLiveSourceReset: (@MainActor () -> Void)?
+
+    func loadLive(url: URL, httpHeaders: [String: String]) async {
+        loads += 1
+        guard let fixture = Bundle.main.url(forResource: "live-continuity", withExtension: "mp4") else {
+            preconditionFailure("The category preview fixture video is missing.")
+        }
+        await native.load(request: PlaybackRequest(
+            item: MediaItem(id: "preview", title: "Synthetic video", kind: .movie), streamURL: fixture
+        ), startPosition: 0)
+        status = .ready
+        isPaused = false
+        liveSnapshot.phase = .playing
+    }
+    func load(request: PlaybackRequest, startPosition: TimeInterval) async {}
+    func play() { native.play(); isPaused = false; liveSnapshot.phase = .playing }
+    func pause() { native.pause(); isPaused = true; liveSnapshot.phase = .paused }
+    func stop() { native.stop(); status = .idle }
+    func seek(to seconds: TimeInterval) async {}
+    func seekToLiveEdge() async {}
+    func selectAudioTrack(_ track: MediaTrack?) {}
+    func selectSubtitleTrack(_ track: MediaTrack?) {}
+    func makeVideoOutputView() -> UIView { native.makeVideoOutputView() }
+}
+#endif
 
 private final class CategorySearchPreferences: LiveTVPreferencesStoring, @unchecked Sendable {
     private let lock = NSLock()

@@ -130,11 +130,14 @@ struct VideoSurfaceContainer: UIViewRepresentable {
     var aspectRatio: Double? = nil
     var fitsInsideSafeArea = false
     var subtitleViewport: VideoSubtitleViewport?
+    var reflectionHeight: CGFloat = 0
+    var reflectionBackground: UIColor = .black
 
     func makeUIView(context: Context) -> VideoPresentationView {
         let root = VideoPresentationView(frame: .zero)
         root.subtitleViewport = subtitleViewport
         root.attach(engine)
+        root.updateReflection(height: reflectionHeight, background: reflectionBackground)
         root.update(zoom: zoom, aspectRatio: aspectRatio, fitsInsideSafeArea: fitsInsideSafeArea)
         return root
     }
@@ -142,6 +145,7 @@ struct VideoSurfaceContainer: UIViewRepresentable {
     func updateUIView(_ uiView: VideoPresentationView, context: Context) {
         uiView.subtitleViewport = subtitleViewport
         uiView.attach(engine)
+        uiView.updateReflection(height: reflectionHeight, background: reflectionBackground)
         uiView.update(zoom: zoom, aspectRatio: aspectRatio, fitsInsideSafeArea: fitsInsideSafeArea)
     }
 }

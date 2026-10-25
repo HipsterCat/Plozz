@@ -102,6 +102,8 @@ struct LiveChannelOverlay: View {
     var touchBackgroundTapRevision = 0
     var touchTimelineOnly = false
     var onTouchScrubbingChanged: (Bool) -> Void = { _ in }
+    var onExpandPreview: (() -> Void)?
+    var previewStatus: LocalizedStringResource?
 
     @Environment(\.playerCardMetrics) private var metrics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -248,7 +250,11 @@ struct LiveChannelOverlay: View {
     @ViewBuilder
     private var layout: some View {
         #if os(iOS)
-        touchLayout
+        if let onExpandPreview {
+            inlinePreviewLayout(expand: onExpandPreview)
+        } else {
+            touchLayout
+        }
         #else
         ZStack(alignment: .top) {
             // Measured as a sibling so it is the same box the menu layer is laid
@@ -1315,6 +1321,51 @@ extension LiveChannelOverlay {
         .onChange(of: touchBackgroundTapRevision) { _, _ in backgroundTapped() }
     }
 
+    private func inlinePreviewLayout(expand: @escaping () -> Void) -> some View {
+        ZStack {
+            if !hasTouchGestureSurface {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: backgroundTapped)
+            }
+            Color.black.opacity(0.22)
+                .allowsHitTesting(false)
+            VStack(spacing: 8) {
+                Spacer(minLength: 0)
+                if let previewStatus {
+                    Text(previewStatus)
+                        .font(.subheadline)
+                } else {
+                    centerTransport
+                        .reportSubtitleControlsFrame(
+                            in: tracks.subtitles.controlsLayout, region: .centerTransport, isVisible: true
+                        )
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 12) {
+                    Text(program?.title ?? title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    touchGoLiveBadge
+                    touchBadge(
+                        "Full Screen", systemImage: "arrow.up.left.and.arrow.down.right",
+                        action: expand
+                    )
+                    .accessibilityIdentifier("live-channel-fullscreen")
+                }
+                .reportSubtitleControlsFrame(
+                    in: tracks.subtitles.controlsLayout, region: .title, isVisible: true
+                )
+            }
+            .padding(12)
+        }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { touchViewportSize = $0 }
+        .onChange(of: touchBackgroundTapRevision) { _, _ in backgroundTapped() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("live-channel-preview-controls")
+    }
+
     private var touchScrim: some View {
         LinearGradient(
             colors: [
@@ -1366,7 +1417,7 @@ extension LiveChannelOverlay {
     }
 
     private var compactTransport: Bool {
-        PlayerTouchLayout.usesCompactTransport(in: touchViewportSize)
+        onExpandPreview != nil || PlayerTouchLayout.usesCompactTransport(in: touchViewportSize)
     }
 
     /// Stands in for the host's activity panel while the controls are up, so

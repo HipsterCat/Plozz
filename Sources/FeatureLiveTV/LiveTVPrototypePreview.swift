@@ -22,6 +22,15 @@ struct PrototypePreviewLayout {
     let guideSideBleed: CGFloat
     private let isSearching: Bool
 
+    var videoReflectionHeight: CGFloat {
+        #if os(iOS)
+        guard heroHeight > 0, bounds.height > bounds.width else { return 0 }
+        return min(videoFrame.height, (bounds.maxY - videoFrame.maxY) * 0.65)
+        #else
+        return 0
+        #endif
+    }
+
     /// The gap between the info bar, the toolbar and the guide.
     var sectionGap: CGFloat { short || isSearching ? PrototypeLayout.smallGap : PrototypeLayout.sectionGap }
 
@@ -99,7 +108,8 @@ struct PrototypePreviewLayout {
         size: CGSize, safeAreaInsets: EdgeInsets = EdgeInsets(),
         navigationInset: CGFloat = 0, nativeNavigation: Bool = false,
         largeText: Bool = false, isSearching: Bool = false,
-        hidesSidebar: Bool = false, showsCategories: Bool = false
+        hidesSidebar: Bool = false, showsCategories: Bool = false,
+        showsVideoPreview: Bool = false, toolbarControlsBottom: CGFloat? = nil
     ) {
         #if os(tvOS)
         self.hidesSidebar = hidesSidebar
@@ -152,14 +162,18 @@ struct PrototypePreviewLayout {
             ? min(browsingHeroHeight, largeText ? 230 : (compact ? 140 : 180))
             : browsingHeroHeight
         #else
-        heroHeight = self.isSearching ? 0 : browsingHeroHeight
+        let previewTop = (toolbarControlsBottom ?? contentFrame.minY) + 8
+        let previewHeight = min(bounds.width * 9 / 16, max(0, bounds.maxY - previewTop) * 0.48)
+        heroHeight = self.isSearching || !showsVideoPreview
+            ? 0 : max(0, previewTop + previewHeight - contentFrame.minY)
         #endif
         metadataWidth = compact || largeText ? contentFrame.width : contentFrame.width * 0.56
         let videoWidth = bounds.width
-        let videoHeight = videoWidth * 9 / 16
         #if os(iOS)
-        let videoTop = contentFrame.minY
+        let videoHeight = previewHeight
+        let videoTop = previewTop
         #else
+        let videoHeight = videoWidth * 9 / 16
         let videoTop = bounds.minY
         #endif
         videoFrame = CGRect(
@@ -168,6 +182,33 @@ struct PrototypePreviewLayout {
             width: videoWidth, height: videoHeight
         )
         fadeEnd = min(bounds.height * 0.82, videoHeight * 0.88)
+    }
+}
+
+struct PrototypeVideoClip: Shape {
+    var reflectionHeight: CGFloat
+    var cornerRadius: CGFloat
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(reflectionHeight, cornerRadius) }
+        set {
+            reflectionHeight = newValue.first
+            cornerRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        Path(roundedRect: CGRect(x: rect.minX, y: rect.minY, width: rect.width,
+                                height: rect.height + reflectionHeight),
+             cornerRadius: cornerRadius)
+    }
+}
+
+struct PrototypeGuideHitRegion: Shape {
+    var top: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX, y: rect.minY + top, width: rect.width,
+                    height: max(0, rect.height - top)))
     }
 }
 
@@ -191,13 +232,14 @@ struct PrototypeBrowseLayout<Header: View, Sidebar: View, Guide: View>: View {
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: layout.hidesSidebar)
         #else
-        VStack(spacing: layout.sectionGap) {
+        VStack(spacing: PrototypeLayout.smallGap) {
             header()
             HStack(alignment: .top, spacing: layout.sidebarWidth > 0 ? PrototypeLayout.sectionGap : 0) {
                 sidebarSlot
                 guideSlot
             }
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: layout.heroHeight)
         #endif
     }
 
