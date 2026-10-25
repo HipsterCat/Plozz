@@ -69,15 +69,14 @@ struct AppearanceDetailView: View {
     private var rows: [SettingsSplitRow] {
         let availableRows = allRows
         if section == .screensNavigation {
-            return [
+            return availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
                 SettingsSplitRow(
                     id: "content-ratings", title: "Show content ratings",
                     sectionStart: .heading(Text("All screens"))
                 ) {
                     ContentRatingToggle(model: contentRatings)
                 }.labeledControl()
-            ] + SpoilerRowsBuilder(spoilers: spoilers).rows.map { $0.page() }
-                + availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
+            ] + SpoilerRowsBuilder(spoilers: spoilers).rows.map { $0.page() } + [
                     SettingsSplitRow(
                         id: "customize-home", title: "Customize Home",
                         sectionStart: .heading(Text("Customize individual screens"))
@@ -334,7 +333,8 @@ struct DetailPageDetailView: View {
         var rows = [
             SettingsSplitRow(
                 id: "detail-page-hero-mode",
-                title: "Background"
+                title: "Background",
+                sectionStart: detailHeaderSettings == nil ? .heading(Text("Hero")) : nil
             ) {
                 SettingsControlRows(nonTVSpacing: SettingsMetrics.sectionSpacing) {
                     DescribedSegmentedPicker(
@@ -355,7 +355,8 @@ struct DetailPageDetailView: View {
         if let detailHeaderSettings {
             rows.insert(SettingsSplitRow(
                 id: "detail-page-logo-size",
-                title: "Logo & text size"
+                title: "Logo & text size",
+                sectionStart: .heading(Text("Hero"))
             ) {
                 DetailLogoSizeSettingsForm(model: detailHeaderSettings)
             }, at: 0)
@@ -372,7 +373,9 @@ struct DetailPageDetailView: View {
                 DetailHeaderAgeSettingsForm(model: detailHeaderSettings)
             })
         }
-        rows.append(SettingsSplitRow(id: "detail-page-card-labels", title: "Customize labels") {
+        rows.append(SettingsSplitRow(
+            id: "detail-page-card-labels", title: "Customize labels", sectionStart: .heading(Text("Cards"))
+        ) {
             CardCaptionSettingsLink(cards: cards, scope: .detail)
         }.labeledControl())
         return rows

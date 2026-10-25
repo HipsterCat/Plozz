@@ -549,7 +549,7 @@ struct HomeRowPresetPicker: View {
     }
 
     private var presetLabel: some View {
-        Text("Preset")
+        Text("Row preset")
             #if os(iOS)
             .font(.subheadline.weight(.semibold))
             .settingsRowSecondary()
@@ -580,7 +580,7 @@ struct HomeRowPresetPicker: View {
         .buttonBorderShape(.capsule)
         .frame(minHeight: 44)
         #endif
-        .accessibilityLabel(Text("Preset"))
+        .accessibilityLabel(Text("Row preset"))
         .accessibilityValue(currentTitle)
         .accessibilityIdentifier("home-row-preset")
     }

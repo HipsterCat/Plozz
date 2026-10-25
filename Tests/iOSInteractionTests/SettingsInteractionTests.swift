@@ -441,6 +441,7 @@ final class SettingsInteractionTests: XCTestCase {
         reveal(screenSettings, settingsMenu: true)
         screenSettings.tap()
         button("Detail Page").tap()
+        reveal(app.buttons["detail-customize-labels"])
         app.buttons["detail-customize-labels"].tap()
         XCTAssertTrue(episodes.waitForExistence(timeout: 3))
         XCTAssertEqual(episodes.value as? String, "On", "Central edits must flow back into the screen's controls.")
@@ -1520,35 +1521,39 @@ final class SettingsInteractionTests: XCTestCase {
     func testHomeSectionArtworkAndMergeKeepSeparateActions() {
         openSettingsPage("Customize Home")
         let hero = app.buttons["home-section-hero"]
-        XCTAssertEqual(hero.frame.minX - app.frame.minX, 24, accuracy: 2)
-        XCTAssertEqual(app.frame.maxX - hero.frame.maxX, 24, accuracy: 2)
-        let header = app.otherElements["home-row-preset-header"]
-        XCTAssertTrue(header.waitForExistence(timeout: 3), app.debugDescription)
-        XCTAssertFalse(app.otherElements["home-row-preset-container"].exists)
-        XCTAssertEqual(header.frame.minX, hero.frame.minX, accuracy: 2)
-        XCTAssertEqual(header.frame.maxX, hero.frame.maxX, accuracy: 2)
-        XCTAssertEqual(hero.frame.minY - header.frame.maxY, 12, accuracy: 2)
+        let appearance = app.descendants(matching: .any)["home-page-appearance"].firstMatch
+        let sections = app.descendants(matching: .any)["home-section-controls"].firstMatch
+        XCTAssertTrue(appearance.exists)
+        XCTAssertTrue(sections.exists)
+        let page = settingsPageFrame(containing: "home-section-hero")
+        XCTAssertEqual(appearance.frame.minX - page.minX, 24, accuracy: 2)
+        XCTAssertEqual(page.maxX - appearance.frame.maxX, 24, accuracy: 2)
+        XCTAssertLessThan(appearance.frame.maxY, sections.frame.minY)
+        XCTAssertTrue(appearance.frame.contains(hero.frame))
+        XCTAssertTrue(appearance.frame.contains(app.buttons["home-customize-labels"].frame))
         let preset = app.buttons["home-row-preset"]
+        let reorder = app.buttons["home-section-reorder"]
         XCTAssertTrue(preset.isHittable, app.debugDescription)
-        XCTAssertTrue(header.frame.contains(preset.frame))
-        XCTAssertEqual(preset.frame.maxX, header.frame.maxX, accuracy: 2)
-        XCTAssertGreaterThan(preset.frame.minX, header.frame.midX)
+        XCTAssertEqual(preset.label, "Row preset")
+        XCTAssertTrue(sections.frame.contains(preset.frame))
+        XCTAssertTrue(sections.frame.contains(reorder.frame))
         XCTAssertGreaterThanOrEqual(preset.frame.height, 44)
-        XCTAssertLessThan(preset.frame.maxY, hero.frame.minY)
-        XCTAssertGreaterThanOrEqual(preset.frame.minX, app.frame.minX + 20)
-        XCTAssertLessThanOrEqual(preset.frame.maxX, app.frame.maxX - 20)
+        XCTAssertGreaterThan(preset.frame.minY, reorder.frame.maxY)
+        XCTAssertGreaterThanOrEqual(preset.frame.minX, page.minX + 20)
+        XCTAssertLessThanOrEqual(preset.frame.maxX, page.maxX - 20)
         let add = app.buttons["home-section-add"]
-        let reorder = app.navigationBars["Customize Home"].buttons["home-section-reorder"]
         XCTAssertTrue(add.isHittable, app.debugDescription)
         XCTAssertEqual(add.label, "Add section")
-        XCTAssertEqual(add.frame.minX, hero.frame.minX, accuracy: 2)
-        XCTAssertEqual(add.frame.width, hero.frame.width, accuracy: 2)
-        XCTAssertGreaterThanOrEqual(add.frame.minY - hero.frame.maxY, 24)
+        XCTAssertEqual(add.frame.minX, appearance.frame.minX, accuracy: 2)
+        XCTAssertEqual(add.frame.width, appearance.frame.width, accuracy: 2)
+        XCTAssertGreaterThan(add.frame.minY, sections.frame.maxY)
         XCTAssertGreaterThanOrEqual(app.buttons["home-section-home-continueWatching"].frame.minY - add.frame.maxY, 24)
         XCTAssertFalse(app.navigationBars["Customize Home"].buttons["home-section-add"].exists,
                        "The full-width action replaces the small toolbar icon.")
+        XCTAssertFalse(app.navigationBars["Customize Home"].buttons["home-section-reorder"].exists,
+                       "Reorder belongs beside Sections, not beside the page title.")
         XCTAssertTrue(reorder.isHittable, app.debugDescription)
-        XCTAssertGreaterThan(reorder.frame.minX, app.frame.midX)
+        XCTAssertGreaterThan(reorder.frame.minX, page.midX)
         XCTAssertTrue(app.buttons["home-section-add-bottom"].exists)
         capture("home-section-action-bar-and-gutters")
         let watching = app.buttons["home-section-home-continueWatching"]
@@ -1616,9 +1621,9 @@ final class SettingsInteractionTests: XCTestCase {
     func testHomeRowNativeDragReordersAndPersists() {
         openSettingsPage("Customize Home")
         let hero = app.buttons["home-section-hero"]
-        let heroY = hero.frame.minY
+        let heroLabel = hero.label
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).count, 0)
-        let reorder = app.navigationBars["Customize Home"].buttons["home-section-reorder"]
+        let reorder = app.buttons["home-section-reorder"]
         let original = app.buttons["home-section-home-continueWatching"]
         original.press(forDuration: 1)
         let menu = app.collectionViews.buttons["Reorder"]
@@ -1646,7 +1651,15 @@ final class SettingsInteractionTests: XCTestCase {
             predicate: NSPredicate { _, _ in watching.frame.minY > watchlist.frame.minY }, object: nil
         )
         XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 3), .completed, app.debugDescription)
-        XCTAssertEqual(hero.frame.minY, heroY, accuracy: 1)
+        reveal(reorder, towardTop: true, fullyVisible: true)
+        XCTAssertLessThan(hero.frame.maxY, reorder.frame.minY,
+                          "Page appearance must remain above the section editor after a row moves.")
+        XCTAssertEqual(hero.label, heroLabel)
+        XCTAssertEqual(
+            app.descendants(matching: .any)["home-page-appearance"].firstMatch
+                .buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).count, 0,
+            "Page appearance must not enter the reorderable section list."
+        )
         capture("home-row-after-native-drag")
         reorder.tap()
         XCTAssertEqual(reorder.label, "Reorder")
@@ -1656,6 +1669,34 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).count, 0)
         reorder.tap()
         XCTAssertGreaterThan(watching.frame.minY, watchlist.frame.minY)
+    }
+
+    func testScreenCustomizationHierarchyKeepsNavigationAndPageScopesSeparate() {
+        openSettingsPage("Screens & Navigation")
+        let navigation = app.buttons["screens-navigation"]
+        let spoilers = app.buttons["screens-spoilers"]
+        XCTAssertLessThan(navigation.frame.maxY, spoilers.frame.minY)
+        capture("screen-customization-entry")
+        openSettingsPage("Customize Libraries")
+        let tabs = app.buttons["library-navigation-settings"]
+        let labels = app.buttons["library-customize-labels"]
+        let rows = app.staticTexts["Recommended rows"]
+        XCTAssertLessThan(tabs.frame.maxY, labels.frame.minY)
+        XCTAssertLessThan(labels.frame.maxY, rows.frame.minY)
+        XCTAssertFalse(app.buttons["home-row-preset"].exists)
+        XCTAssertFalse(app.buttons["home-section-reorder"].exists)
+        capture("library-customization-scopes")
+        openSettingsPage("Detail Page")
+        let detailLabels = app.buttons["detail-customize-labels"]
+        reveal(detailLabels)
+        let background = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Background,")).firstMatch
+        XCTAssertTrue(background.exists)
+        XCTAssertLessThan(background.frame.maxY, detailLabels.frame.minY)
+        XCTAssertFalse(app.buttons["home-section-reorder"].exists)
+        capture("detail-customization-scopes")
+        detailLabels.tap()
+        XCTAssertTrue(app.buttons["card-label-view-episodes"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["card-label-page"].exists, "Detail labels stay in the existing scoped editor.")
     }
 
     func testHomeSectionsCanBeRemovedAndAddedWithoutChangingTheirSettings() {
@@ -1673,7 +1714,8 @@ final class SettingsInteractionTests: XCTestCase {
             XCTAssertFalse(watching.exists)
             let add = app.buttons[identifier]
             reveal(add)
-            XCTAssertEqual(add.frame.width, app.frame.width - 48, accuracy: 2,
+            let page = settingsPageFrame(containing: "home-section-hero")
+            XCTAssertEqual(add.frame.width, page.width - 48, accuracy: 2,
                            "Both Add section actions must fill the page's content width.")
             add.tap()
             XCTAssertTrue(app.buttons["home-add-collection"].label.contains("Create section"))
@@ -1869,6 +1911,21 @@ final class SettingsInteractionTests: XCTestCase {
         if directPresentation { app.launchArguments.append("--settings-direct-presentation") }
         if settingsFirst { app.launchArguments.append("--settings-first") }
         app.launch()
+    }
+
+    private func settingsPageFrame(containing identifier: String) -> CGRect {
+        var frame = app.scrollViews.containing(.any, identifier: identifier).firstMatch.frame
+        let sidebar = app.navigationBars["Settings"]
+        // iPad's scroll view extends behind the floating sidebar; its content uses the safe area.
+        if sidebar.exists, sidebar.frame.width < frame.width {
+            if sidebar.frame.midX < frame.midX {
+                frame = CGRect(x: sidebar.frame.maxX, y: frame.minY,
+                               width: frame.maxX - sidebar.frame.maxX, height: frame.height)
+            } else {
+                frame.size.width = sidebar.frame.minX - frame.minX
+            }
+        }
+        return frame
     }
 
     private func reveal(

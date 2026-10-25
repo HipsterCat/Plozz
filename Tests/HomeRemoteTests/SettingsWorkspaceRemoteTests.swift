@@ -116,6 +116,11 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             XCUIRemote.shared.press(.down)
         }
         capture("detail-size-vertical-focus", in: app)
+        let labels = app.buttons["settings-group-detail-page-card-labels"]
+        try focus(labels, in: app)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Cards")).firstMatch.exists)
+        XCTAssertLessThan(app.buttons["Theme music"].frame.maxY, labels.frame.minY)
+        capture("detail-customization-scopes", in: app)
         #else
         throw XCTSkip("Never changes detail settings on a physical device.")
         #endif
@@ -134,12 +139,17 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         let recommended = app.staticTexts.matching(
             NSPredicate(format: "label ==[c] %@", "Recommended Page")
         ).firstMatch
-        let libraries = app.staticTexts["Libraries"]
+        let libraries = app.staticTexts["Recommended rows"]
+        let appearance = app.staticTexts.matching(
+            NSPredicate(format: "label ==[c] %@", "Page appearance")
+        ).firstMatch
         XCTAssertTrue(recommended.exists, app.debugDescription)
         XCTAssertTrue(libraries.exists, app.debugDescription)
+        XCTAssertTrue(appearance.exists, app.debugDescription)
         XCTAssertFalse(app.staticTexts["Recommended Page Rows"].exists,
                        "This page lists libraries; row settings belong inside the selected library.")
-        XCTAssertLessThan(navigation.frame.maxY, recommended.frame.minY)
+        XCTAssertLessThan(navigation.frame.maxY, appearance.frame.minY)
+        XCTAssertLessThan(appearance.frame.maxY, recommended.frame.minY)
         XCTAssertLessThan(recommended.frame.maxY, libraries.frame.minY)
         let back = pageBack(in: app)
         try focus(back, in: app)
@@ -1055,7 +1065,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         let reorder = app.buttons["home-section-reorder"]
         let preset = app.buttons["home-row-preset"]
         XCTAssertGreaterThanOrEqual(preset.frame.minY - reorder.frame.maxY, 16)
-        XCTAssertGreaterThanOrEqual(hero.frame.minY - preset.frame.maxY, 16)
+        XCTAssertLessThan(hero.frame.maxY, reorder.frame.minY)
         try focus(reorder, in: app)
         XCUIRemote.shared.press(.select)
         XCTAssertFalse(hero.isEnabled)
@@ -1092,8 +1102,8 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCUIRemote.shared.press(.menu)
         waitForEnabled(configured)
         XCTAssertTrue(hasFocus(configured), "Back must restore the section that opened its configuration.")
-        try focus(reorder, in: app)
-        XCUIRemote.shared.press(.left)
+        try focus(hero, in: app)
+        XCUIRemote.shared.press(.up)
         XCTAssertTrue(hasFocus(pageBack("settings-workspace-back", in: app)), app.debugDescription)
         capture("home-section-header-back", in: app)
         let watchingWasBelowWatchlist = configured.frame.minY > app.buttons["home-section-home-watchlist"].frame.minY
@@ -1141,15 +1151,17 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
     }
 
     private func assertAddSectionActions(in app: XCUIApplication) throws {
-        let hero = app.buttons["home-section-hero"]
+        let section = app.buttons["home-section-home-continueWatching"]
         for identifier in ["home-section-add", "home-section-add-bottom"] {
             let add = app.buttons[identifier]
             try focus(add, in: app)
-            XCTAssertEqual(add.frame.width, hero.frame.width, accuracy: 1,
-                           "Both Add section actions must fill the same content width as section rows.")
-            XCTAssertEqual(add.frame.minX, hero.frame.minX, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(add.frame.width, section.frame.width,
+                                       "Both Add section actions must fill the section rows' content width.")
+            XCTAssertLessThanOrEqual(add.frame.width - section.frame.width, 16,
+                                     "Only the native focused button's outer margin may exceed the row width.")
+            XCTAssertEqual(add.frame.midX, section.frame.midX, accuracy: 1)
             if identifier == "home-section-add" {
-                XCTAssertGreaterThanOrEqual(add.frame.minY - hero.frame.maxY, 20)
+                XCTAssertGreaterThanOrEqual(add.frame.minY - app.buttons["home-row-preset"].frame.maxY, 20)
                 XCTAssertGreaterThanOrEqual(
                     app.buttons["home-section-home-continueWatching"].frame.minY - add.frame.maxY, 20
                 )
@@ -1171,6 +1183,65 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             waitForEnabled(add)
             XCTAssertTrue(hasFocus(add))
         }
+    }
+
+    func testHomeCustomizationKeepsAppearanceAboveSectionActions() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings()
+        defer { app.terminate() }
+        try focus(section("screensNavigation", in: app), in: app)
+        XCUIRemote.shared.press(.select)
+        let navigation = app.buttons["settings-page-navigation"]
+        XCTAssertTrue(navigation.waitForExistence(timeout: 5))
+        XCTAssertLessThan(navigation.frame.maxY, app.buttons["settings-page-customize-home"].frame.minY)
+        capture("screen-customization-entry", in: app)
+        try focus(app.buttons["settings-page-customize-home"], in: app)
+        XCUIRemote.shared.press(.select)
+        let hero = app.buttons["home-section-hero"]
+        let labels = app.buttons["home-customize-labels"]
+        let reorder = app.buttons["home-section-reorder"]
+        let preset = app.buttons["home-row-preset"]
+        let add = app.buttons["home-section-add"]
+        XCTAssertTrue(hero.waitForExistence(timeout: 5))
+        try focus(hero, in: app)
+        XCTAssertLessThan(hero.frame.maxY, labels.frame.minY)
+        XCTAssertLessThan(labels.frame.maxY, reorder.frame.minY)
+        XCTAssertLessThan(reorder.frame.maxY, preset.frame.minY)
+        XCTAssertLessThan(preset.frame.maxY, add.frame.minY)
+        XCTAssertEqual(preset.label, "Row preset")
+        XCTAssertFalse(app.images["pin.fill"].exists, "Page appearance is not a pinned content section.")
+        let back = pageBack(in: app)
+        try focus(back, in: app)
+        XCUIRemote.shared.press(.down)
+        XCTAssertTrue(hasFocus(hero), "Down from Back must enter page appearance, not row actions.")
+        try focus(labels, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.buttons["card-label-view-home"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["card-label-page"].exists)
+        try focus(app.buttons["card-label-view-home"], in: app)
+        XCUIRemote.shared.press(.menu)
+        capture("home-labels-return", in: app)
+        waitForEnabled(labels)
+        XCTAssertTrue(hasFocus(labels))
+        capture("home-customization-scopes", in: app)
+        let layout = hero.label
+        try focus(reorder, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertFalse(hero.isEnabled)
+        XCTAssertFalse(labels.isEnabled)
+        XCTAssertFalse(preset.isEnabled)
+        XCTAssertFalse(add.isEnabled)
+        XCTAssertTrue(reorder.isEnabled)
+        XCTAssertEqual(reorder.label, "Done")
+        XCTAssertEqual(hero.label, layout)
+        try focus(reorder, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(hero.isEnabled)
+        XCTAssertTrue(labels.isEnabled)
+        XCTAssertEqual(reorder.label, "Reorder")
+        #else
+        throw XCTSkip("Simulator-only Home editor hierarchy.")
+        #endif
     }
 
     func testHomeSectionWarningDetailsAndRetryUseNativeControls() throws {

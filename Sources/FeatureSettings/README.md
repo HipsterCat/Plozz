@@ -256,6 +256,14 @@ watch history and planning-list behavior are documented in
 
 ## Responsibility
 
+- **Screen customization hierarchy** stays flat. Screens & Navigation presents
+  app navigation before shared screen preferences and individual screen editors.
+  Customize Home groups Home layout/Hero and Customize labels under Page
+  appearance, then places Row preset and Reorder beside Sections, followed by
+  Add section and the section list. Presets and reordering never change page
+  appearance. Reorder/Done belongs to Sections rather than the page toolbar.
+  Detail Page keeps hero controls together and places its label editor under Cards.
+  These groups preserve the existing profile-scoped stores and navigation routes.
 - **Customize labels** uses one shared, page-organized visual editor from
   Appearance's Cards page and the scoped Home, Libraries, and Detail Page links.
   Home and Recommended each show Card labels and the shared Continue Watching
@@ -272,9 +280,9 @@ watch history and planning-list behavior are documented in
   Continue Watching On/Off override.
 - **Customize Libraries** lives in Screens & Navigation on TV and mobile.
   Library Navigation comes first, including the first Down move from Back on TV.
-  The Recommended Page controls follow it; headings and helper copy name the
-  library's page explicitly rather than implying suggested settings.
-  The Libraries list opens each library's Recommended Page Rows editor.
+  Page appearance follows it, containing Recommended Page sizing on TV and the
+  separate label editor for all library tabs. Recommended rows lists libraries
+  and opens each library's Recommended Page Rows editor.
   The TV logo control reuses `HeroLogoSizeControl` with one Showcase preview.
   Customize labels is the attached lower group beneath those controls, using
   `SettingsConnectedControlGroups` rather than a prominent list of overrides.

@@ -46,23 +46,27 @@ public struct LibraryPresentationSettingsView: View {
             }
             .accessibilityIdentifier("library-navigation-settings")
             #if os(tvOS)
-            SettingsFormGroup(title: Text("Recommended Page"), hasGroupedContent: true) {
+            SettingsFormGroup(title: Text("Page appearance"), hasGroupedContent: true) {
                 SettingsConnectedControlGroups {
-                    HeroLogoSizeControl(
-                        size: $model.settings.logoSize, textSize: $model.settings.textSize,
-                        surface: .showcase, showsLibraryPreview: true
-                    )
+                    VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+                        Text("Recommended Page").font(.headline)
+                        HeroLogoSizeControl(
+                            size: $model.settings.logoSize, textSize: $model.settings.textSize,
+                            surface: .showcase, showsLibraryPreview: true
+                        )
+                    }
                     CardCaptionSettingsLink(cards: cards, scope: .libraries, visibility: visibility)
                 }
             }
             #else
-            SettingsSectionGroup {
+            SettingsSectionGroup("Page appearance") {
                 CardCaptionSettingsLink(cards: cards, scope: .libraries, visibility: visibility)
             }
             #endif
-            Text("Libraries")
+            Text("Recommended rows")
                 .font(.headline)
                 .padding(.top)
+                .accessibilityAddTraits(.isHeader)
             Text("Choose a library to arrange or hide rows on its Recommended page.")
                 .font(.callout)
                 .foregroundStyle(.secondary)

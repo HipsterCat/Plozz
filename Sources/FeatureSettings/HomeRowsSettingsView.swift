@@ -68,39 +68,31 @@ public struct HomeRowsSettingsView: View {
     }
 
     private var editor: some View {
-        HomeEditorPage(title: Text("Customize Home")) {
-            #if os(tvOS)
-            HStack(spacing: SettingsFormMetrics.controlSpacing) {
-                SettingsPageHeader("Customize Home")
-                reorderButton
-            }
-            editorControls
-                .padding(.vertical, SettingsFormMetrics.navigationRowSpacing)
-            #elseif os(iOS)
-            VStack(alignment: .leading, spacing: 12) {
-                editorControls
-                Divider()
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("home-row-preset-header")
-            #endif
-            HomeEditorLink {
-                HomeHeroSettingsView(libraries: libraries, accounts: accounts, visibility: visibility)
-                    .environment(hero)
-                    .environment(heroBackground)
-            } label: {
-                HomeEditorRowLabel(
-                    title: heroTitle, subtitle: heroSummary, titleSymbol: "pin.fill"
-                )
-            }
-            .accessibilityIdentifier("home-section-hero")
-            .disabled(isReordering)
-
-            SettingsSectionGroup {
+        HomeEditorPage(title: Text("Customize Home"), showsHeader: true) {
+            SettingsSectionGroup("Page appearance") {
+                SettingsPageLink {
+                    HomeHeroSettingsView(libraries: libraries, accounts: accounts, visibility: visibility)
+                        .environment(hero)
+                        .environment(heroBackground)
+                } label: {
+                    HomeEditorRowLabel(title: heroTitle, subtitle: heroSummary)
+                }
+                #if os(tvOS)
+                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                #endif
+                .accessibilityIdentifier("home-section-hero")
                 CardCaptionSettingsLink(cards: cards, scope: .home, visibility: visibility)
                     .environment(hero)
             }
             .disabled(isReordering)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("home-page-appearance")
+
+            SettingsSectionGroup("Sections", accessory: { reorderButton }) {
+                editorControls
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("home-section-controls")
 
             addSectionButton(identifier: "home-section-add")
 
@@ -191,13 +183,6 @@ public struct HomeRowsSettingsView: View {
             }
             .disabled(isReordering)
         }
-        #if os(iOS)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                reorderButton
-            }
-        }
-        #endif
         .task(id: HomeSectionCatalogModel.loadID(
             libraries: libraries, accounts: accounts, visibility: visibility, revision: reloadRevision
         )) {
