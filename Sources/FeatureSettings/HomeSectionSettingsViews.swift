@@ -170,6 +170,7 @@ struct HomeSectionSettingsView: View {
     let visibility: HomeLibraryVisibilityModel
     let libraries: [AggregatedLibrary]
     let accounts: [ResolvedAccount]
+    var showsRemoveAction = true
     @Environment(CardStyleSettingsModel.self) private var cards
     #if os(tvOS)
     @Environment(HeroSettingsModel.self) private var hero
@@ -197,6 +198,8 @@ struct HomeSectionSettingsView: View {
                     }
                 ), playbackDetails: visibility.continueWatchingPlaybackDetails,
                    captions: cards.captions, isShowcase: previewsShowcase)
+                Text("Artwork, playback details, and labels also apply to Continue Watching on Recommended pages.")
+                    .settingsHelperText()
                 #if os(tvOS)
                 SettingsControlGroup { presentationControls }
                 SettingsControlGroup { behaviorControls }
@@ -205,16 +208,18 @@ struct HomeSectionSettingsView: View {
                 SettingsSectionGroup { behaviorControls }
                 #endif
             }
-            Button("Remove section", role: .destructive) {
-                do {
-                    try visibility.setHomeSectionVisible(false, id: choice.id, catalog: inventory.currentCatalog(
-                        libraries: libraries, accounts: accounts, visibility: visibility
-                    ))
-                    dismiss()
-                } catch { failed = true }
+            if showsRemoveAction {
+                Button("Remove section", role: .destructive) {
+                    do {
+                        try visibility.setHomeSectionVisible(false, id: choice.id, catalog: inventory.currentCatalog(
+                            libraries: libraries, accounts: accounts, visibility: visibility
+                        ))
+                        dismiss()
+                    } catch { failed = true }
+                }
+                .plozzActionButton(role: .secondary)
+                .accessibilityIdentifier("home-section-remove")
             }
-            .plozzActionButton(role: .secondary)
-            .accessibilityIdentifier("home-section-remove")
             if failed { InlineErrorMessage(Text("Couldn't update this section. Try again.")) }
             if inventory.isLoading { ProgressView("Loading available sections…") }
         }
@@ -549,7 +554,7 @@ struct HomeRowPresetPicker: View {
     }
 
     private var presetLabel: some View {
-        Text("Row preset")
+        Text("Section preset")
             #if os(iOS)
             .font(.subheadline.weight(.semibold))
             .settingsRowSecondary()
@@ -580,7 +585,7 @@ struct HomeRowPresetPicker: View {
         .buttonBorderShape(.capsule)
         .frame(minHeight: 44)
         #endif
-        .accessibilityLabel(Text("Row preset"))
+        .accessibilityLabel(Text("Section preset"))
         .accessibilityValue(currentTitle)
         .accessibilityIdentifier("home-row-preset")
     }

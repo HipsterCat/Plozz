@@ -256,14 +256,18 @@ watch history and planning-list behavior are documented in
 
 ## Responsibility
 
-- **Screen customization hierarchy** stays flat. Screens & Navigation presents
+- **Screen customization hierarchy** follows task boundaries. Screens & Navigation presents
   app navigation before shared screen preferences and individual screen editors.
-  Customize Home groups Home layout/Hero and Customize labels under Page
-  appearance, then places Row preset and Reorder beside Sections, followed by
-  Add section and the section list. Presets and reordering never change page
-  appearance. Reorder/Done belongs to Sections rather than the page toolbar.
+  Customize Home opens Home layout/Hero, Card labels, or Sections through
+  matching full-height navigation rows. Home sections owns Section preset,
+  Add section, the section list, and Edit/Done. Mobile uses a native toolbar
+  editing action; TV retains its remote-focused action and lift controls.
+  Presets and reordering never change page appearance. Showcase's fixed Discovery
+  row links back to Home layout rather than pretending to be reorderable.
+  Shared Continue Watching settings remain accessible when its Home row is hidden.
   Detail Page keeps hero controls together and places its label editor under Cards.
-  These groups preserve the existing profile-scoped stores and navigation routes.
+  These destinations preserve the existing profile-scoped stores. See CoreUI's
+  row-geometry guidance; the deprecated text-height focus strip must not return.
 - **Customize labels** uses one shared, page-organized visual editor from
   Appearance's Cards page and the scoped Home, Libraries, and Detail Page links.
   Home and Recommended each show Card labels and the shared Continue Watching

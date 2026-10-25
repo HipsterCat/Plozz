@@ -46,6 +46,11 @@ which puts the shared minimum height and padding inside the TV focus fill.
 `SettingsFocusButtonStyle` is only for labels that already supply their own
 control geometry. Standalone and inline actions use `plozzActionButton`; do not
 use a text-height focus strip as a smaller action-button variant.
+The text-height disclosure-row treatment is deprecated: never apply
+`SettingsFocusButtonStyle` directly to a compact label such as
+`HomeEditorRowLabel`. Use a full-row wrapper such as `HomeEditorLink`, or a
+padding-free disclosure label with `SettingsFormButtonStyle`. Padding outside
+the button's focus fill does not replace its required internal row geometry.
 
 `SettingsStepper` retains every adjustment stop while limiting dense range tracks
 to 21 visual ticks. `ThemeMusicPreviewControlling` is the Settings-to-runtime

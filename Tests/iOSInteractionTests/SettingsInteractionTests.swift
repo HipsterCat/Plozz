@@ -1326,6 +1326,7 @@ final class SettingsInteractionTests: XCTestCase {
 
     func testContinueWatchingRowOpensItsOwnSettings() {
         openSettingsPage("Customize Home")
+        openHomeSections()
         let label = app.staticTexts["Continue Watching"].firstMatch
         XCTAssertTrue(label.waitForExistence(timeout: 3), app.debugDescription)
         label.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -1337,6 +1338,7 @@ final class SettingsInteractionTests: XCTestCase {
 
     func testContinueWatchingOffersThreeStablePresentationChoices() {
         openSettingsPage("Customize Home")
+        openHomeSections()
         app.buttons["home-section-home-continueWatching"].tap()
         XCTAssertTrue(app.navigationBars["Continue Watching"].waitForExistence(timeout: 3))
         let merge = app.switches["home-merge-next-up"]
@@ -1375,6 +1377,7 @@ final class SettingsInteractionTests: XCTestCase {
 
     func testContinueWatchingLabelsShareTheAppearanceOverride() {
         openSettingsPage("Customize Home")
+        openHomeSections()
         app.buttons["home-section-home-continueWatching"].tap()
         let portrait = app.buttons["continue-watching-style-portraitPosters"]
         reveal(portrait, fullyVisible: true)
@@ -1388,7 +1391,7 @@ final class SettingsInteractionTests: XCTestCase {
         selectCustomization(details, expecting: "Progress only")
         selectCustomization(labels, expecting: "On")
         capture("continue-watching-portrait-labels")
-        for title in ["Continue Watching", "Customize Home", "Screens & Navigation"] {
+        for title in ["Continue Watching", "Home sections", "Customize Home", "Screens & Navigation"] {
             app.navigationBars[title].buttons["BackButton"].tap()
         }
         let appearance = categoryButton("Appearance")
@@ -1409,6 +1412,7 @@ final class SettingsInteractionTests: XCTestCase {
         reveal(screens, settingsMenu: true)
         screens.tap()
         button("Customize Home").tap()
+        openHomeSections()
         app.buttons["home-section-home-continueWatching"].tap()
         XCTAssertTrue(labels.waitForExistence(timeout: 3))
         XCTAssertEqual(labels.value as? String, "Off")
@@ -1430,6 +1434,7 @@ final class SettingsInteractionTests: XCTestCase {
 
     func testContinueWatchingGroupedControlsKeepSelectionsIndependent() {
         openSettingsPage("Customize Home")
+        openHomeSections()
         app.buttons["home-section-home-continueWatching"].tap()
         XCTAssertTrue(app.navigationBars["Continue Watching"].waitForExistence(timeout: 3))
         let artwork = app.buttons["continue-watching-style-portraitPosters"]
@@ -1518,25 +1523,36 @@ final class SettingsInteractionTests: XCTestCase {
         }
     }
 
+    private func openHomeSections() {
+        let sections = app.buttons["home-sections-settings"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 5), app.debugDescription)
+        sections.tap()
+        XCTAssertTrue(app.navigationBars["Home sections"].waitForExistence(timeout: 3), app.debugDescription)
+    }
+
     func testHomeSectionArtworkAndMergeKeepSeparateActions() {
         openSettingsPage("Customize Home")
         let hero = app.buttons["home-section-hero"]
-        let appearance = app.descendants(matching: .any)["home-page-appearance"].firstMatch
-        let sections = app.descendants(matching: .any)["home-section-controls"].firstMatch
-        XCTAssertTrue(appearance.exists)
-        XCTAssertTrue(sections.exists)
+        let labels = app.buttons["home-customize-labels"]
+        let sectionsLink = app.buttons["home-sections-settings"]
         let page = settingsPageFrame(containing: "home-section-hero")
-        XCTAssertEqual(appearance.frame.minX - page.minX, 24, accuracy: 2)
-        XCTAssertEqual(page.maxX - appearance.frame.maxX, 24, accuracy: 2)
-        XCTAssertLessThan(appearance.frame.maxY, sections.frame.minY)
-        XCTAssertTrue(appearance.frame.contains(hero.frame))
-        XCTAssertTrue(appearance.frame.contains(app.buttons["home-customize-labels"].frame))
+        for link in [hero, labels, sectionsLink] {
+            XCTAssertEqual(link.frame.minX - page.minX, 24, accuracy: 2)
+            XCTAssertEqual(page.maxX - link.frame.maxX, 24, accuracy: 2)
+            XCTAssertGreaterThanOrEqual(link.frame.height, 44)
+        }
+        XCTAssertLessThan(hero.frame.maxY, labels.frame.minY)
+        XCTAssertLessThan(labels.frame.maxY, sectionsLink.frame.minY)
+        XCTAssertFalse(app.buttons["home-row-preset"].exists)
+        XCTAssertFalse(app.buttons["home-section-reorder"].exists)
+        capture("home-customization-hub")
+        openHomeSections()
+        let sections = app.descendants(matching: .any)["home-section-controls"].firstMatch
         let preset = app.buttons["home-row-preset"]
         let reorder = app.buttons["home-section-reorder"]
         XCTAssertTrue(preset.isHittable, app.debugDescription)
-        XCTAssertEqual(preset.label, "Row preset")
+        XCTAssertEqual(preset.label, "Section preset")
         XCTAssertTrue(sections.frame.contains(preset.frame))
-        XCTAssertTrue(sections.frame.contains(reorder.frame))
         XCTAssertGreaterThanOrEqual(preset.frame.height, 44)
         XCTAssertGreaterThan(preset.frame.minY, reorder.frame.maxY)
         XCTAssertGreaterThanOrEqual(preset.frame.minX, page.minX + 20)
@@ -1544,14 +1560,14 @@ final class SettingsInteractionTests: XCTestCase {
         let add = app.buttons["home-section-add"]
         XCTAssertTrue(add.isHittable, app.debugDescription)
         XCTAssertEqual(add.label, "Add section")
-        XCTAssertEqual(add.frame.minX, appearance.frame.minX, accuracy: 2)
-        XCTAssertEqual(add.frame.width, appearance.frame.width, accuracy: 2)
+        XCTAssertEqual(add.frame.minX, sections.frame.minX, accuracy: 2)
+        XCTAssertEqual(add.frame.width, sections.frame.width, accuracy: 2)
         XCTAssertGreaterThan(add.frame.minY, sections.frame.maxY)
         XCTAssertGreaterThanOrEqual(app.buttons["home-section-home-continueWatching"].frame.minY - add.frame.maxY, 24)
-        XCTAssertFalse(app.navigationBars["Customize Home"].buttons["home-section-add"].exists,
+        XCTAssertFalse(app.navigationBars["Home sections"].buttons["home-section-add"].exists,
                        "The full-width action replaces the small toolbar icon.")
-        XCTAssertFalse(app.navigationBars["Customize Home"].buttons["home-section-reorder"].exists,
-                       "Reorder belongs beside Sections, not beside the page title.")
+        XCTAssertTrue(app.navigationBars["Home sections"].buttons["home-section-reorder"].exists,
+                      "The dedicated editor owns its native toolbar Edit/Done action.")
         XCTAssertTrue(reorder.isHittable, app.debugDescription)
         XCTAssertGreaterThan(reorder.frame.minX, page.midX)
         XCTAssertTrue(app.buttons["home-section-add-bottom"].exists)
@@ -1574,7 +1590,7 @@ final class SettingsInteractionTests: XCTestCase {
         let updated = merge.value as? String
         XCTAssertNotEqual(original, updated)
         app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Customize Home"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["Home sections"].waitForExistence(timeout: 3))
         watching.tap()
         XCTAssertEqual(merge.value as? String, updated)
         XCTAssertTrue(thumbnail.isSelected, app.debugDescription)
@@ -1582,6 +1598,7 @@ final class SettingsInteractionTests: XCTestCase {
 
     func testHomeRowPresetsRequireConfirmationAndKeepRowsEditable() {
         openSettingsPage("Customize Home")
+        openHomeSections()
         let preset = app.buttons["home-row-preset"]
         XCTAssertTrue(preset.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue(preset.label.contains("Match server") || preset.value as? String == "Match server")
@@ -1611,7 +1628,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 3), app.debugDescription)
         confirm.tap()
         XCTAssertTrue(app.staticTexts["Replace your section arrangement?"].waitForNonExistence(timeout: 3))
-        XCTAssertTrue(app.navigationBars["Customize Home"].exists)
+        XCTAssertTrue(app.navigationBars["Home sections"].exists)
         XCTAssertTrue(app.buttons["home-section-home-recentlyAdded"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["HIDDEN"].exists)
         XCTAssertTrue(preset.label.contains("Combined rows") || preset.value as? String == "Combined rows")
@@ -1622,6 +1639,7 @@ final class SettingsInteractionTests: XCTestCase {
         openSettingsPage("Customize Home")
         let hero = app.buttons["home-section-hero"]
         let heroLabel = hero.label
+        openHomeSections()
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).count, 0)
         let reorder = app.buttons["home-section-reorder"]
         let original = app.buttons["home-section-home-continueWatching"]
@@ -1634,7 +1652,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertFalse(app.buttons["home-row-preset"].isEnabled)
         XCTAssertFalse(app.buttons["home-section-add"].isEnabled)
         XCTAssertFalse(app.buttons["home-section-add-bottom"].isEnabled)
-        XCTAssertFalse(hero.isEnabled)
+        XCTAssertFalse(hero.exists)
         XCTAssertFalse(app.staticTexts["HIDDEN"].exists)
         let watching = app.staticTexts["Continue Watching"].firstMatch
         let watchlist = app.staticTexts["Watchlist"].firstMatch
@@ -1651,22 +1669,18 @@ final class SettingsInteractionTests: XCTestCase {
             predicate: NSPredicate { _, _ in watching.frame.minY > watchlist.frame.minY }, object: nil
         )
         XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 3), .completed, app.debugDescription)
-        reveal(reorder, towardTop: true, fullyVisible: true)
-        XCTAssertLessThan(hero.frame.maxY, reorder.frame.minY,
-                          "Page appearance must remain above the section editor after a row moves.")
-        XCTAssertEqual(hero.label, heroLabel)
-        XCTAssertEqual(
-            app.descendants(matching: .any)["home-page-appearance"].firstMatch
-                .buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).count, 0,
-            "Page appearance must not enter the reorderable section list."
-        )
+        XCTAssertTrue(reorder.isHittable, "Done must stay reachable in the native toolbar after dragging.")
+        XCTAssertFalse(hero.exists, "Page appearance must not enter the section editor.")
         capture("home-row-after-native-drag")
         reorder.tap()
-        XCTAssertEqual(reorder.label, "Reorder")
-        XCTAssertTrue(hero.isEnabled)
+        XCTAssertEqual(reorder.label, "Edit")
         let preset = app.buttons["home-row-preset"]
         XCTAssertTrue(preset.label.contains("Custom") || preset.value as? String == "Custom")
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).count, 0)
+        app.navigationBars["Home sections"].buttons.firstMatch.tap()
+        XCTAssertTrue(hero.waitForExistence(timeout: 3))
+        XCTAssertEqual(hero.label, heroLabel)
+        openHomeSections()
         reorder.tap()
         XCTAssertGreaterThan(watching.frame.minY, watchlist.frame.minY)
     }
@@ -1701,6 +1715,7 @@ final class SettingsInteractionTests: XCTestCase {
 
     func testHomeSectionsCanBeRemovedAndAddedWithoutChangingTheirSettings() {
         openSettingsPage("Customize Home")
+        openHomeSections()
         let watching = app.buttons["home-section-home-continueWatching"]
         for identifier in ["home-section-add", "home-section-add-bottom"] {
             reveal(watching)
@@ -1710,11 +1725,18 @@ final class SettingsInteractionTests: XCTestCase {
             let value = merge.value as? String
             reveal(app.buttons["home-section-remove"])
             app.buttons["home-section-remove"].tap()
-            XCTAssertTrue(app.navigationBars["Customize Home"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.navigationBars["Home sections"].waitForExistence(timeout: 3))
             XCTAssertFalse(watching.exists)
+            let hiddenSettings = app.buttons["home-hidden-continue-watching-settings"]
+            reveal(hiddenSettings)
+            hiddenSettings.tap()
+            XCTAssertTrue(app.navigationBars["Continue Watching"].waitForExistence(timeout: 3))
+            XCTAssertEqual(merge.value as? String, value)
+            XCTAssertFalse(app.buttons["home-section-remove"].exists)
+            app.navigationBars.buttons.firstMatch.tap()
             let add = app.buttons[identifier]
             reveal(add)
-            let page = settingsPageFrame(containing: "home-section-hero")
+            let page = settingsPageFrame(containing: identifier)
             XCTAssertEqual(add.frame.width, page.width - 48, accuracy: 2,
                            "Both Add section actions must fill the page's content width.")
             add.tap()
@@ -1723,7 +1745,7 @@ final class SettingsInteractionTests: XCTestCase {
             let option = app.buttons["home-add-home-continueWatching"]
             XCTAssertTrue(option.waitForExistence(timeout: 3), app.debugDescription)
             option.tap()
-            XCTAssertTrue(app.navigationBars["Customize Home"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.navigationBars["Home sections"].waitForExistence(timeout: 3))
             reveal(watching)
             watching.tap()
             XCTAssertEqual(merge.value as? String, value)
@@ -1766,6 +1788,7 @@ final class SettingsInteractionTests: XCTestCase {
             "--collection-settings-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"
         ]
         app.launch()
+        openHomeSections()
         let add = app.buttons["home-section-add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10), app.debugDescription)
         add.tap()
@@ -1794,7 +1817,7 @@ final class SettingsInteractionTests: XCTestCase {
         save.tap()
         XCTAssertTrue(app.navigationBars["Add section"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Customize Home"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Home sections"].waitForExistence(timeout: 5))
         let section = button("Favorites")
         reveal(section)
         section.tap()

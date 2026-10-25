@@ -756,7 +756,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         let account = ResolvedAccount(account: Account(from: provider.session), provider: provider)
         let inventory = HomeSectionCatalogModel()
         try await withWindow {
-            HomeRowsSettingsView(libraries: [], accounts: [account], visibility: visibility, inventory: inventory)
+            HomeSectionsSettingsView(libraries: [], accounts: [account], visibility: visibility, inventory: inventory)
                 .frame(width: SettingsFormMetrics.pageWidth)
         } inspect: { window in
             await self.fulfillment(of: [requested], timeout: 5)
@@ -778,7 +778,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
 
     private func assertReorderFocusable(in window: UIWindow, name: String) async throws {
         let lines = try await capture(window, name: name)
-        let label = try XCTUnwrap(lines.first { $0.0.contains("Reorder") }).1
+        let label = try XCTUnwrap(lines.first { $0.0.contains("Edit") }).1
         let point = CGPoint(x: label.midX * window.bounds.width, y: (1 - label.midY) * window.bounds.height)
         XCTAssertNotNil(focusableItem(at: point, in: window),
                         "Known sections must be reorderable without waiting for server discovery.")
@@ -821,7 +821,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         XCTAssertEqual(inventory.serverFailures[account.account.id], .serverUnreachable)
 
         try await withWindow {
-            HomeRowsSettingsView(libraries: [], accounts: [account], visibility: visibility, inventory: inventory)
+            HomeSectionsSettingsView(libraries: [], accounts: [account], visibility: visibility, inventory: inventory)
         } inspect: { window in
             _ = try await self.capture(window, name: "Preset before server recovery")
             await provider.setHomeError(nil)
@@ -889,7 +889,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             let inventory = HomeSectionCatalogModel()
             try await withWindow(size: CGSize(width: width, height: 900), colorScheme: scheme) {
                 NavigationStack {
-                    HomeRowsSettingsView(
+                    HomeSectionsSettingsView(
                         libraries: libraries, accounts: [account], visibility: visibility, inventory: inventory
                     )
                 }
@@ -905,7 +905,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
                 await self.fulfillment(of: [ready], timeout: 5)
                 let before = try await self.capture(window, name: "Home preset header \(width) \(size) \(scheme)")
                 let text = before.map(\.0).joined(separator: " ")
-                for label in ["Preset", "Reorder", "Custom"] {
+                for label in ["preset", "Edit", "Custom"] {
                     XCTAssertTrue(text.contains(label), text)
                 }
                 func scrollViews(_ view: UIView) -> [UIScrollView] {
@@ -918,12 +918,12 @@ final class HomeRowArrangementHostedTests: XCTestCase {
                 scroll.setContentOffset(CGPoint(x: 0, y: initialOffset + 300), animated: false)
                 let after = try await self.capture(window, name: "Home scrolled preset \(width) \(size) \(scheme)")
                 XCTAssertGreaterThan(scroll.contentOffset.y, initialOffset + 250)
-                XCTAssertFalse(after.contains { $0.0.contains("Preset") },
+                XCTAssertFalse(after.contains { $0.0.contains("preset") },
                                "The preset must scroll away rather than remain pinned below the toolbar.")
-                XCTAssertEqual(try self.y("Reorder", in: before), try self.y("Reorder", in: after), accuracy: 0.003)
+                XCTAssertEqual(try self.y("Edit", in: before), try self.y("Edit", in: after), accuracy: 0.003)
                 scroll.setContentOffset(CGPoint(x: 0, y: initialOffset), animated: false)
                 let restored = try await self.capture(window, name: "Home preset restored \(width) \(size) \(scheme)")
-                XCTAssertEqual(try self.y("Preset", in: before), try self.y("Preset", in: restored), accuracy: 0.003)
+                XCTAssertEqual(try self.y("preset", in: before), try self.y("preset", in: restored), accuracy: 0.003)
             }
         }
     }
@@ -1444,16 +1444,16 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         try await withWindow {
             #if os(iOS)
             NavigationStack {
-                HomeRowsSettingsView(libraries: libraries, accounts: accounts, visibility: visibility)
+                HomeSectionsSettingsView(libraries: libraries, accounts: accounts, visibility: visibility)
             }
             #else
-            HomeRowsSettingsView(libraries: libraries, accounts: accounts, visibility: visibility)
+            HomeSectionsSettingsView(libraries: libraries, accounts: accounts, visibility: visibility)
             .frame(width: 1050)
             #endif
         } inspect: { window in
             let before = try await self.capture(window, name: "Home arranger original order")
             XCTAssertFalse(before.contains { $0.0.contains("Merge Next Up rows") })
-            XCTAssertTrue(before.contains { $0.0.contains("Hero") })
+            XCTAssertFalse(before.contains { $0.0.contains("Home layout") })
             XCTAssertGreaterThan(try self.y("Alpha", in: before), try self.y("Beta", in: before))
             XCTAssertTrue(before.contains { $0.0.contains("All libraries") })
             visibility.applyRows(.init(enabled: Array(ids.reversed()), disabled: hidden), choices: choices)
@@ -1549,7 +1549,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             try await withWindow {
                 NavigationStack {
                     if page == 0 {
-                        HomeRowsSettingsView(libraries: [], accounts: accounts, visibility: visibility, inventory: inventory)
+                        HomeSectionsSettingsView(libraries: [], accounts: accounts, visibility: visibility, inventory: inventory)
                     } else if page == 1 {
                         HomeSectionSettingsView(
                             choice: choice, inventory: inventory, visibility: visibility, libraries: [], accounts: accounts
@@ -1848,7 +1848,7 @@ private struct HomeCatalogNavigationHost: View {
 
     var body: some View {
         NavigationStack(path: $navigation.path) {
-            HomeRowsSettingsView(libraries: [], accounts: accounts, visibility: visibility, inventory: inventory)
+            HomeSectionsSettingsView(libraries: [], accounts: accounts, visibility: visibility, inventory: inventory)
                 .onDisappear { navigation.rootDisappeared = true }
                 .navigationDestination(for: String.self) { _ in
                     HomeAddSectionView(inventory: inventory, visibility: visibility, libraries: [], accounts: accounts)
