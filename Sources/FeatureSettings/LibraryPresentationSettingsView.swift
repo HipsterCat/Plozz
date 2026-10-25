@@ -12,6 +12,7 @@ public struct LibraryPresentationSettingsView: View {
     @State private var discovery: LibraryPresentationDiscovery?
     @State private var discoveryScope: HomeSectionCatalogModel.RequestID?
     @State private var reloadRevision = 0
+    @State private var showsLabels = false
 
     private struct DiscoveryRequest: Equatable {
         let scope: HomeSectionCatalogModel.RequestID
@@ -45,18 +46,31 @@ public struct LibraryPresentationSettingsView: View {
                 )
             }
             .accessibilityIdentifier("library-navigation-settings")
-            SettingsSectionGroup("Card labels") {
-                CardCaptionSettingsControls(cards: cards, scope: .libraries)
-            } footer: {
-                Text("Choices apply across all libraries. Continue Watching shares its label setting with Home.")
-            }
             #if os(tvOS)
-            SettingsSectionGroup("Recommended Page") {
-                HeroLogoSizeControl(
-                    size: $model.settings.logoSize, textSize: $model.settings.textSize,
-                    surface: .showcase, showsLibraryPreview: true
-                )
+            SettingsFormGroup(title: Text("Recommended Page"), hasGroupedContent: true) {
+                SettingsConnectedControlGroups {
+                    HeroLogoSizeControl(
+                        size: $model.settings.logoSize, textSize: $model.settings.textSize,
+                        surface: .showcase, showsLibraryPreview: true
+                    )
+                    SettingsPageLink {
+                        labelEditor
+                    } label: {
+                        SettingsDisclosureLabel { Text("Customize labels") }
+                            .settingsFormRowLayout()
+                    }
+                    .buttonStyle(SettingsFormButtonStyle())
+                    .accessibilityIdentifier("library-customize-labels")
+                }
             }
+            #else
+            SettingsSectionGroup {
+                Button { showsLabels = true } label: {
+                    SettingsDisclosureLabel { Text("Customize labels") }
+                }
+                .accessibilityIdentifier("library-customize-labels")
+            }
+            .navigationDestination(isPresented: $showsLabels) { labelEditor }
             #endif
             Text("Libraries")
                 .font(.headline)
@@ -69,6 +83,10 @@ public struct LibraryPresentationSettingsView: View {
         .task(id: DiscoveryRequest(scope: requestID, revision: reloadRevision)) {
             await discoverLibraries()
         }
+    }
+
+    private var labelEditor: some View {
+        LibraryCardLabelSettingsView(cards: cards, visibility: visibility)
     }
 
     @ViewBuilder private var libraryChoices: some View {

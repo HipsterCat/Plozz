@@ -342,8 +342,21 @@ final class SettingsInteractionTests: XCTestCase {
             reveal(link)
             link.tap()
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 3), app.debugDescription)
+            if title == "Customize Libraries" {
+                let customize = app.buttons["library-customize-labels"]
+                reveal(customize)
+                customize.tap()
+                XCTAssertTrue(app.navigationBars["Customize labels"].waitForExistence(timeout: 3))
+            }
             for view in views {
-                let row = app.buttons["card-label-view-\(view)"]
+                let row: XCUIElement
+                if title == "Customize Libraries" {
+                    let name = view == "continueWatchingPortrait" ? "Recommended" : view.capitalized
+                    selectCustomization(app.buttons["library-label-target"], expecting: name)
+                    row = app.buttons["card-label-view-\(view)"]
+                } else {
+                    row = app.buttons["card-label-view-\(view)"]
+                }
                 reveal(row)
                 if title == "Customize Libraries", view == "continueWatchingPortrait" {
                     XCTAssertEqual(row.value as? String, "Off", "Home and Libraries must share this override.")
@@ -354,9 +367,13 @@ final class SettingsInteractionTests: XCTestCase {
             XCTAssertFalse(app.buttons["card-label-view-filmography"].exists)
             XCTAssertFalse(app.buttons["card-label-view-search"].exists)
             capture("screen-card-labels-\(title)")
+            if title == "Customize Libraries" {
+                app.navigationBars["Customize labels"].buttons["BackButton"].tap()
+            }
             app.navigationBars[title].buttons["BackButton"].tap()
         }
-        app.navigationBars["Screens & Navigation"].buttons["BackButton"].tap()
+        let screensBack = app.navigationBars["Screens & Navigation"].buttons["BackButton"]
+        if screensBack.exists { screensBack.tap() }
         let appearance = categoryButton("Appearance")
         reveal(appearance, settingsMenu: true)
         appearance.tap()
@@ -379,7 +396,8 @@ final class SettingsInteractionTests: XCTestCase {
         reveal(episodes, towardTop: true)
         selectCustomization(episodes, expecting: "On")
         for title in ["Labels by view", "Cards", "Appearance"] {
-            app.navigationBars[title].buttons["BackButton"].tap()
+            let back = app.navigationBars[title].buttons["BackButton"]
+            if title != "Appearance" || back.exists { back.tap() }
         }
         let screenSettings = categoryButton("Screens & Navigation")
         reveal(screenSettings, settingsMenu: true)
@@ -390,6 +408,43 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(app.buttons["card-label-view-related"].value as? String, "Off")
         XCTAssertEqual(app.buttons["card-label-view-extras"].value as? String, "Off")
         capture("detail-labels-round-trip")
+    }
+
+    func testLibraryLabelEditorUsesTouchSelectionAndPreservesFollowPage() {
+        openSettingsPage("Customize Libraries")
+        XCTAssertFalse(app.buttons["card-label-view-recommended"].exists)
+        let customize = app.buttons["library-customize-labels"]
+        reveal(customize)
+        customize.tap()
+        XCTAssertTrue(app.navigationBars["Customize labels"].waitForExistence(timeout: 3))
+        let target = app.buttons["library-label-target"]
+        let value = app.buttons["card-label-view-recommended"]
+        let watching = app.buttons["card-label-view-continueWatchingPortrait"]
+        XCTAssertEqual(target.label, "Page")
+        XCTAssertEqual(target.value as? String, "Recommended")
+        XCTAssertTrue(value.exists)
+        XCTAssertTrue(watching.exists, "Recommended must show both options together.")
+        selectCustomization(value, expecting: "Off")
+        capture("library-labels-recommended-off")
+        XCTAssertEqual(watching.value as? String, "Follow page")
+        let home = app.descendants(matching: .any)["library-label-preview-home"].firstMatch
+        let recommended = app.descendants(matching: .any)["library-label-preview-recommended"].firstMatch
+        XCTAssertFalse(home.exists, "The preview should stay on the selected page.")
+        XCTAssertTrue(recommended.exists)
+        XCTAssertTrue(app.staticTexts["Continue Watching also affects Home."].exists)
+        selectCustomization(watching, expecting: "On")
+        capture("library-labels-watching-shared-on")
+        XCTAssertEqual(value.value as? String, "Off", "Continue Watching must not edit the page's labels.")
+        selectCustomization(target, expecting: "Browse")
+        XCTAssertFalse(watching.exists, "Continue Watching is not another page or a Browse option.")
+        XCTAssertEqual(app.buttons["card-label-view-browse"].value as? String, "On")
+        capture("library-labels-browse")
+        selectCustomization(target, expecting: "Recommended")
+        XCTAssertEqual(value.value as? String, "Off")
+        XCTAssertEqual(watching.value as? String, "On")
+        selectCustomization(watching, expecting: "Follow page")
+        app.navigationBars["Customize labels"].buttons["BackButton"].tap()
+        XCTAssertTrue(customize.waitForExistence(timeout: 3))
     }
 
     func testKidsLibrariesRemainGatedWithTheAlignedCategories() {
@@ -1775,11 +1830,20 @@ final class SettingsInteractionTests: XCTestCase {
         fullyVisible: Bool = false
     ) {
         for _ in 0..<10 {
-            let scroll = settingsMenu
+            var scroll = settingsMenu
                 ? app.scrollViews.firstMatch
                 : (app.collectionViews.count > 0
                     ? app.collectionViews.element(boundBy: app.collectionViews.count - 1)
                     : app.scrollViews.element(boundBy: app.scrollViews.count - 1))
+            if !settingsMenu, element.exists, !element.identifier.isEmpty {
+                let collection = app.collectionViews.containing(.any, identifier: element.identifier).firstMatch
+                let container = app.scrollViews.containing(.any, identifier: element.identifier).firstMatch
+                if collection.exists {
+                    scroll = collection
+                } else if container.exists {
+                    scroll = container
+                }
+            }
             var viewport = scroll.frame.intersection(app.windows.firstMatch.frame)
             if fullyVisible, app.navigationBars.firstMatch.exists {
                 let top = max(viewport.minY, app.navigationBars.firstMatch.frame.maxY)

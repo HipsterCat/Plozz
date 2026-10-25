@@ -10,6 +10,73 @@ import XCTest
 
 @MainActor
 final class ArtworkSettingsHostedTests: XCTestCase {
+    func testLibraryLabelPreviewDoesNotRepeatVisibleStatusText() async throws {
+        for showsLabels in [false, true] {
+            let preview = CardLabelScopePreview.Snapshot(
+                page: .recommended,
+                rows: [
+                    .init(isContinueWatching: true, showsLabels: showsLabels, highlighted: true),
+                    .init(isContinueWatching: false, showsLabels: showsLabels, highlighted: true)
+                ],
+                layout: .landscape
+            )
+            try await withScreen(content:
+                VStack(spacing: 32) {
+                    CardLabelScopePreview(preview: preview, style: .framed)
+                        .frame(width: 280)
+                    Button("Preview action") {}
+                }
+            ) { window in
+                let text = try await self.capture(
+                    window, name: "library-label-visual-only-\(showsLabels)", includeMaster: true
+                )
+                XCTAssertTrue(text.contains("Recommended"), text)
+                let words = text.split(whereSeparator: \.isWhitespace)
+                XCTAssertFalse(words.contains("On"), "The diagram must not have a duplicate status table.")
+                XCTAssertFalse(words.contains("Off"), "The diagram must not have a duplicate status table.")
+            }
+        }
+    }
+
+    func testLibraryLabelEditorFocusPreviewsDoNotChangeSettings() async throws {
+        let suite = "LibraryLabelPreviewHosted.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cards = makeCards(defaults: defaults)
+        let visibility = HomeLibraryVisibilityModel(store: HomeLibraryVisibilityStore(defaults: defaults))
+        cards.captions.setOverride(.show, for: .home)
+        cards.captions.setOverride(.hide, for: .recommended)
+        let initial = cards.captions
+        try await withScreen(content:
+            LibraryCardLabelSettingsView(cards: cards, visibility: visibility).frame(width: 1100, height: 1000)
+        ) { window in
+            let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+            let host = try XCTUnwrap(window.rootViewController as? ArtworkFocusRequesting)
+            let rows = self.focusItems(in: window).sorted {
+                ((try? self.nativeFrame($0, in: window).minY) ?? 0)
+                    < ((try? self.nativeFrame($1, in: window).minY) ?? 0)
+            }
+            // Back and Page precede Recommended's two label controls.
+            XCTAssertEqual(rows.count, 4)
+            for (index, view) in LibraryCardLabelSettingsView.controls(on: .recommended).enumerated() {
+                let row = try XCTUnwrap(rows.dropFirst(2).dropFirst(index).first)
+                host.artworkFocusTarget = row
+                system.requestFocusUpdate(to: try XCTUnwrap(window.rootViewController))
+                system.updateFocusIfNeeded()
+                host.artworkFocusTarget = nil
+                let text = try await self.capture(window, name: "library-label-preview-\(view.rawValue)", includeMaster: true)
+                XCTAssertTrue(system.focusedItem === row)
+                XCTAssertEqual(cards.captions, initial, "Focus previews must never commit a label choice.")
+                XCTAssertTrue(text.contains(String(localized: view.displayName)), text)
+                if view == .continueWatching {
+                    XCTAssertTrue(text.contains("Home"), text)
+                    XCTAssertTrue(text.contains("Recommended"), text)
+                    XCTAssertTrue(text.contains("Follow page"), text)
+                }
+            }
+        }
+    }
+
     func testContentRatingExamplesRemainVisibleAcrossNativeFocusAndAppearance() async throws {
         let suite = "ContentRatingFocusHosted.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

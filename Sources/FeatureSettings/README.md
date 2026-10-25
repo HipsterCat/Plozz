@@ -262,6 +262,18 @@ watch history and planning-list behavior are documented in
   library's page explicitly rather than implying suggested settings.
   The Libraries list opens each library's Recommended Page Rows editor.
   The TV logo control reuses `HeroLogoSizeControl` with one Showcase preview.
+  Customize labels is the attached lower group beneath those controls, using
+  `SettingsConnectedControlGroups` rather than a prominent list of overrides.
+  Its editor selects a page: Recommended, Browse, Collections, or Playlists.
+  Recommended has Card labels and Continue Watching controls together; the other
+  pages each have one Card labels control. TV focus and mobile value changes
+  highlight the affected captions on that page, without a duplicate status table.
+  VoiceOver retains the equivalent state description.
+  Follow page retains the existing inheritance; On/Off remains
+  one shared override, explicitly noted as also affecting Home.
+  Recommended highlights Continue Watching only while it
+  follows the page. Collection/playlist covers are distinct from titles inside,
+  which retain Browse's labels. No stored defaults or profile scopes change.
   Library tabs share an arrangement across the profile; each library separately
   owns its Recommended row arrangement. Both editors use `LiftableReorderList`,
   its Hidden divider, native focus/drag behavior, and scoped reset actions.
@@ -366,7 +378,7 @@ watch history and planning-list behavior are documented in
   preference. The presentation is profile-scoped and also applies to library
   Continue Watching rows. All three styles expose a Labels control bound to the same
   Continue Watching override in Appearance -> Cards -> Labels by view:
-  Follow Appearance inherits Home rows or Recommended; On/Off controls the labels
+  Follow page inherits Home rows or Recommended; On/Off controls the labels
   below any Continue Watching artwork. Each preview shows or hides its caption
   lines using the same choice. The previous portrait override is preserved.
   Caption presets/reset clear this override, and

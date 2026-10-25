@@ -9,9 +9,15 @@ struct ViewCustomizationHelp {
     var continueWatchingShowsSeriesArtwork = true
     var continueWatchingLayout: ContinueWatchingCardLayout = .landscape
 
+    var isLibraryCaptions: Bool {
+        if case .libraryCaptions = illustration { return true }
+        return false
+    }
+
     enum Illustration: Hashable {
         case artwork(ArtworkArea)
         case captions(style: CardStyle, showsCaptions: Bool, showsMixedCaptions: Bool)
+        case libraryCaptions(CardLabelScopePreview.Snapshot, style: CardStyle)
     }
 }
 
@@ -33,13 +39,22 @@ struct ViewCustomizationHelpCard: View {
         }
         .id(help.illustration)
         .transition(.opacity)
-        .frame(height: contentHeight)
+        .frame(height: help.isLibraryCaptions ? nil : contentHeight)
+        .frame(minHeight: contentHeight)
         .padding(24)
         .settingsGroupSurface(cornerRadius: PlozzTheme.Metrics.Radius.content)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: help.illustration)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(help.detail))
+        .accessibilityLabel(accessibilitySummary)
         .accessibilityIdentifier("view-customization-help")
+    }
+
+    private var accessibilitySummary: Text {
+        var text = Text(help.detail)
+        if case .libraryCaptions(let preview, _) = help.illustration {
+            text = text + Text(verbatim: ". ") + preview.accessibilitySummary
+        }
+        return text
     }
 
     @ViewBuilder
@@ -63,6 +78,9 @@ struct ViewCustomizationHelpCard: View {
                 showsCaptions: showsCaptions, showsMixedCaptions: showsMixedCaptions
             )
             .frame(width: 256, height: 144)
+        case .libraryCaptions(let preview, let style):
+            CardLabelScopePreview(preview: preview, style: style)
+                .frame(width: 280)
         }
     }
 

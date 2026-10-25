@@ -4,6 +4,72 @@ import CoreUI
 import XCTest
 
 final class ViewCustomizationCycleTests: XCTestCase {
+    func testLibraryLabelControlsAreGroupedByPage() {
+        XCTAssertEqual(LibraryCardLabelSettingsView.pages, [.recommended, .browse, .collections, .playlists])
+        XCTAssertEqual(LibraryCardLabelSettingsView.controls(on: .recommended), [.recommended, .continueWatching])
+        for page in LibraryCardLabelSettingsView.pages where page != .recommended {
+            XCTAssertEqual(LibraryCardLabelSettingsView.controls(on: page), [page])
+        }
+    }
+
+    func testLibraryLabelPreviewShowsEachParentAndTheSharedRowOverride() throws {
+        var settings = CardCaptionSettings.default
+        settings.setOverride(.show, for: .home)
+        settings.setOverride(.hide, for: .recommended)
+        for choice in CardCaptionView.continueWatching.customizationChoices {
+            settings.setOverride(choice, for: .continueWatching)
+            for page in [CardCaptionView.home, .recommended] {
+                let preview = CardLabelScopePreview.snapshot(
+                    page: page, editing: .continueWatching, settings: settings, isShowcase: true,
+                    seriesArtwork: true, layout: .landscape
+                )
+                XCTAssertEqual(preview.page, page)
+                let watching = try XCTUnwrap(preview.rows.first)
+                let ordinary = try XCTUnwrap(preview.rows.last)
+                XCTAssertTrue(watching.isContinueWatching)
+                XCTAssertTrue(watching.highlighted)
+                XCTAssertFalse(ordinary.highlighted)
+                XCTAssertEqual(watching.showsLabels, choice == .automatic ? preview.page == .home : choice == .show)
+                XCTAssertEqual(ordinary.showsLabels, preview.page == .home)
+            }
+            let recommended = CardLabelScopePreview.snapshot(
+                page: .recommended, editing: .recommended, settings: settings, isShowcase: true,
+                seriesArtwork: true, layout: .landscape
+            )
+            XCTAssertEqual(recommended.rows.first?.highlighted, choice == .automatic)
+            XCTAssertEqual(recommended.rows.last?.highlighted, true)
+        }
+    }
+
+    func testLibraryLabelPreviewsUseTheActualLayoutAndDoNotChangePreferences() {
+        let settings = CardCaptionSettings.default
+        for showcase in [false, true] {
+            for seriesArtwork in [false, true] {
+                for layout in [ContinueWatchingCardLayout.portrait, .landscape] {
+                    for page in LibraryCardLabelSettingsView.pages {
+                        for view in LibraryCardLabelSettingsView.controls(on: page) {
+                            let snapshot = CardLabelScopePreview.snapshot(
+                                page: page, editing: view, settings: settings,
+                                isShowcase: page == .recommended && showcase,
+                                seriesArtwork: seriesArtwork, layout: layout
+                            )
+                            XCTAssertEqual(snapshot.layout, layout)
+                            for row in snapshot.rows {
+                                XCTAssertEqual(row.showsLabels, settings.showsLabels(
+                                    in: snapshot.page,
+                                    isShowcase: [.home, .recommended].contains(snapshot.page) && showcase,
+                                    hasArtworkTitle: row.isContinueWatching && seriesArtwork,
+                                    isContinueWatching: row.isContinueWatching
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(settings, .default)
+    }
+
     func testArtworkCyclesThroughExactlyItsSupportedChoicesAndRemainsCustom() {
         for preference in ArtworkPreference.allCases {
             for area in ArtworkArea.allCases {
@@ -92,7 +158,7 @@ final class ViewCustomizationCycleTests: XCTestCase {
         XCTAssertEqual(String(localized: labels.customizationValue(in: .recommended)), "Mixed")
         XCTAssertEqual(String(localized: labels.customizationDetail(in: .home)),
                        "Labels are visible except in Showcase and on series artwork.")
-        XCTAssertEqual(String(localized: labels.customizationValue(in: .continueWatching)), "Follow Appearance")
+        XCTAssertEqual(String(localized: labels.customizationValue(in: .continueWatching)), "Follow page")
         for view in CardCaptionView.allCases where view != .home && view != .recommended && view != .continueWatching {
             XCTAssertEqual(String(localized: labels.customizationValue(in: view)), "On")
         }
