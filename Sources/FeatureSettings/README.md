@@ -69,6 +69,12 @@ text below. Opening, focusing, or cancelling the menu does not save a choice;
 Select does. Mobile retains its native pickers. These remain independent,
 device-local preferences with Automatic as the default.
 
+Playback's **Prefer lossless audio** toggle uses one short helper:
+**Turn off for surround sound over regular HDMI ARC, which requires compressed audio.**
+It defaults on for new and upgrading devices and is shared by Plozz
+profiles on that device, not synced to other audio setups. Off selects the
+ordinary compatibility-surround bridge; the spatial-height setting is separate.
+
 **Screens & Navigation → Navigation → Zoom when opening titles** is a tvOS-only,
 profile-scoped opt-in. Off uses native page opening and closing; on restores the
 cinematic artwork transition. The hero's staged content reveal is shared by both

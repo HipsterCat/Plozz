@@ -818,6 +818,9 @@ struct PlaybackDetailView: View {
                     Toggle("Remember audio language per series", isOn: $playback.settings.rememberAudioTrackPerSeries)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            },
+            SettingsSplitRow(id: "lossless-surround", title: "Audio") {
+                LosslessAudioControl()
             }
         ]
         #if os(tvOS)
