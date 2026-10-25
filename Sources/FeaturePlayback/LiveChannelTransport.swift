@@ -1330,17 +1330,17 @@ extension LiveChannelOverlay {
             }
             Color.black.opacity(0.22)
                 .allowsHitTesting(false)
-            VStack(spacing: 8) {
-                Spacer(minLength: 0)
-                if let previewStatus {
-                    Text(previewStatus)
-                        .font(.subheadline)
-                } else {
-                    centerTransport
-                        .reportSubtitleControlsFrame(
-                            in: tracks.subtitles.controlsLayout, region: .centerTransport, isVisible: true
-                        )
-                }
+            if let previewStatus {
+                Text(previewStatus)
+                    .font(.subheadline)
+            } else {
+                centerTransport
+                    .reportSubtitleControlsFrame(
+                        in: tracks.subtitles.controlsLayout, region: .centerTransport, isVisible: true
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 HStack(spacing: 12) {
                     Text(program?.title ?? title)
@@ -1420,6 +1420,12 @@ extension LiveChannelOverlay {
         onExpandPreview != nil || PlayerTouchLayout.usesCompactTransport(in: touchViewportSize)
     }
 
+    private var playPauseDiameter: CGFloat {
+        guard onExpandPreview != nil else { return compactTransport ? 44 : PlayerTouchLayout.playDiameter }
+        // Keep the centered primary control clear of the 44 pt footer and its 12 pt inset.
+        return min(64, max(44, touchViewportSize.height - 2 * (44 + 12)))
+    }
+
     /// Stands in for the host's activity panel while the controls are up, so
     /// a tune in progress doesn't stack a spinner card over these buttons.
     private var playPauseButton: some View {
@@ -1437,9 +1443,9 @@ extension LiveChannelOverlay {
                 }
             }
             .labelStyle(.iconOnly)
-            .font(.system(size: compactTransport ? 24 : 44))
+            .font(.system(size: onExpandPreview != nil ? playPauseDiameter / 2 : (compactTransport ? 24 : 44)))
         }
-        .buttonStyle(PlayerGlassCircleButtonStyle(diameter: compactTransport ? 44 : PlayerTouchLayout.playDiameter))
+        .buttonStyle(PlayerGlassCircleButtonStyle(diameter: playPauseDiameter))
         // A stream with no time-shift can't pause; the button stays put so the
         // row doesn't reflow, but says so.
         .disabled(isBusy || !(canPause || phase == .paused))

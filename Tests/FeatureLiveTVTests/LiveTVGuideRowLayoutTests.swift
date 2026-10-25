@@ -103,14 +103,15 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         )
         XCTAssertEqual(layout.bounds, CGRect(x: -90, y: -60, width: 1_920, height: 1_080))
         XCTAssertEqual(layout.videoFrame.maxX, layout.bounds.maxX, accuracy: 0.5)
-        XCTAssertEqual(layout.videoFrame.minX, layout.bounds.minX, accuracy: 0.5)
         #if os(tvOS)
+        XCTAssertEqual(layout.videoFrame.minX, layout.bounds.minX, accuracy: 0.5)
         XCTAssertEqual(layout.videoFrame.minY, layout.bounds.minY, accuracy: 0.5)
         XCTAssertEqual(layout.videoFrame.width / layout.videoFrame.height, 16.0 / 9.0, accuracy: 0.001)
         XCTAssertEqual(layout.contentFrame.minX - layout.bounds.minX, 32, accuracy: 0.5)
         XCTAssertEqual(layout.bounds.maxX - layout.contentFrame.maxX, 32, accuracy: 0.5)
         XCTAssertEqual(layout.bounds.maxY - layout.contentFrame.maxY, 20, accuracy: 0.5)
         #else
+        XCTAssertGreaterThan(layout.videoFrame.minX, layout.contentFrame.minX + layout.sidebarWidth)
         XCTAssertEqual(layout.videoFrame.minY, layout.contentFrame.minY + 8, accuracy: 0.5)
         #endif
     }
@@ -735,7 +736,13 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
                 layout.contentFrame.width, accuracy: 0.01
             )
             XCTAssertGreaterThanOrEqual(layout.guideWidth - PrototypeLayout.guideInset * 2, 650)
+            #if os(tvOS)
             XCTAssertEqual(layout.videoFrame.width, layout.bounds.width)
+            #else
+            XCTAssertLessThan(layout.videoFrame.width, layout.bounds.width)
+            XCTAssertGreaterThan(layout.videoFrame.minX, layout.contentFrame.minX + layout.sidebarWidth)
+            XCTAssertEqual(layout.videoFrame.maxX, layout.bounds.maxX)
+            #endif
         }
     }
 

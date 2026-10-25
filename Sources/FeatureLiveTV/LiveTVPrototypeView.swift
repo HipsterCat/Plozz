@@ -469,7 +469,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 #if os(iOS)
                 .contentShape(PrototypeGuideHitRegion(
-                    top: layout.heroHeight > 0 ? max(0, layout.videoFrame.maxY) : 0))
+                    top: layout.heroHeight > 0 ? max(0, layout.videoFrame.maxY) : 0,
+                    sidebarWidth: layout.sidebarWidth > 0 ? max(0, layout.videoFrame.minX) : 0,
+                    sidebarOnTrailing: layoutDirection == .rightToLeft))
                 #endif
                 .opacity(expanded ? 0 : 1)
                 #if os(iOS)

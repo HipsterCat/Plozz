@@ -53,6 +53,38 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         verifyFullscreenRoundTrip(orientation: "auto")
     }
 
+    func testWideSidebarStaysFullHeightBesideVideoPreview() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "Requires a wide iPad sidebar.")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = launch(guideFirst: true)
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        let search = app.buttons["live-tv-search"]
+        let category = app.buttons["live-tv-sidebar-category-all"]
+        XCTAssertTrue(search.waitForExistence(timeout: 15), app.debugDescription)
+        let searchFrame = search.frame
+        let categoryFrame = category.frame
+        let arena = channel("Arena One", in: app)
+        XCTAssertTrue(arena.waitForExistence(timeout: 5))
+        arena.tap()
+        let preview = app.otherElements["category-search-playback"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            abs(search.frame.minY - searchFrame.minY) < 1
+                && arena.frame.minY >= preview.frame.maxY
+                && preview.frame.minX >= search.frame.maxX
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed)
+        XCTAssertEqual(category.frame.minY, categoryFrame.minY, accuracy: 1)
+        XCTAssertTrue(search.isHittable)
+        XCTAssertTrue(category.isHittable)
+        capture("ipad-full-height-sidebar-preview", in: app)
+        search.tap()
+        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
+    }
+
     func testPreviewFullscreenRoundTripWithPortraitPreference() {
         verifyFullscreenRoundTrip(orientation: "portrait")
     }
@@ -165,6 +197,13 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         app.buttons["live-channel-play-pause"].tap()
         XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 5))
         XCTAssertEqual(preview.value as? String, "Preview")
+        let play = app.buttons["live-channel-play-pause"]
+        let previous = app.buttons["live-channel-previous"]
+        let next = app.buttons["live-channel-next"]
+        XCTAssertGreaterThan(play.frame.height, previous.frame.height)
+        for control in [play, previous, next] {
+            XCTAssertEqual(control.frame.midY, preview.frame.midY, accuracy: 2)
+        }
         background.tap()
         XCTAssertTrue(fullscreen.waitForNonExistence(timeout: 5))
         background.tap()

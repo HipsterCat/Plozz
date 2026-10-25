@@ -20,7 +20,14 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             let playing = PrototypePreviewLayout(size: size, safeAreaInsets: insets, showsVideoPreview: true)
             XCTAssertEqual(collapsed.heroHeight, 0)
             XCTAssertEqual(playing.videoFrame.minY, playing.contentFrame.minY + 8)
-            XCTAssertEqual(playing.videoFrame.width, playing.bounds.width)
+            XCTAssertEqual(playing.videoFrame.maxX, playing.bounds.maxX)
+            if playing.sidebarWidth > 0 {
+                XCTAssertEqual(playing.videoFrame.minX,
+                               playing.contentFrame.minX + playing.sidebarWidth
+                                   + PrototypeLayout.sectionGap - playing.guideLeadingExtension)
+            } else {
+                XCTAssertEqual(playing.videoFrame.width, playing.bounds.width)
+            }
             XCTAssertEqual(playing.contentFrame.minY + playing.heroHeight, playing.videoFrame.maxY)
             XCTAssertLessThanOrEqual(playing.videoFrame.height, playing.bounds.height * 0.48)
             XCTAssertGreaterThan(playing.heroHeight, 80)
@@ -135,6 +142,17 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
         }
     }
 
+    func testSidebarRemainsInteractiveBesidePreviewInBothLayoutDirections() {
+        let bounds = CGRect(x: 0, y: 0, width: 1_024, height: 768)
+        for trailing in [false, true] {
+            let path = PrototypeGuideHitRegion(top: 300, sidebarWidth: 240, sidebarOnTrailing: trailing)
+                .path(in: bounds)
+            XCTAssertTrue(path.contains(CGPoint(x: trailing ? 900 : 100, y: 100)))
+            XCTAssertFalse(path.contains(CGPoint(x: 500, y: 100)), "Preview taps must reach player controls.")
+            XCTAssertTrue(path.contains(CGPoint(x: 500, y: 500)))
+        }
+    }
+
     func testOpeningPreviewResizesExistingGuideWithoutChangingScrollOffset() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)
@@ -154,13 +172,18 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             window.frame = CGRect(origin: .zero, size: size)
             host.view.frame = window.bounds
             try await settle(window)
-            let scroll = try XCTUnwrap(scrollViews(window).first {
+            let scrolling = scrollViews(window).filter {
                 $0.contentSize.height > $0.bounds.height + 400
-            })
+            }
+            let scroll = try XCTUnwrap(scrolling.max { $0.bounds.width < $1.bounds.width })
+            let sidebar = scrolling.first { $0 !== scroll }
+            if size.width > 700 { XCTAssertNotNil(sidebar) }
+            sidebar?.setContentOffset(CGPoint(x: 0, y: 91), animated: false)
             scroll.setContentOffset(CGPoint(x: 0, y: 367), animated: false)
             try await settle(window)
             let offset = scroll.contentOffset
             let before = scroll.convert(scroll.bounds, to: window)
+            let sidebarFrame = sidebar.map { $0.convert($0.bounds, to: window) }
             state.showsPreview = true
             try await settle(window)
             XCTAssertTrue(scrollViews(window).contains { $0 === scroll }, "Keep the original guide scroll view.")
@@ -169,6 +192,11 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             XCTAssertGreaterThan(after.minY, before.minY + 100)
             XCTAssertEqual(after.maxY, before.maxY, accuracy: 1)
             XCTAssertEqual(after.width, before.width, accuracy: 1)
+            if let sidebar {
+                XCTAssertTrue(scrollViews(window).contains { $0 === sidebar })
+                XCTAssertEqual(sidebar.convert(sidebar.bounds, to: window), sidebarFrame)
+                XCTAssertEqual(sidebar.contentOffset.y, 91, accuracy: 1)
+            }
             state.showsPreview = false
             try await settle(window)
             XCTAssertEqual(scroll.contentOffset.y, offset.y, accuracy: 1)
@@ -211,7 +239,13 @@ private struct PreviewGuideFixture: View {
                 PrototypeBrowseLayout(layout: layout) {
                     Color.clear.frame(height: layout.heroHeight).allowsHitTesting(false)
                 } sidebar: {
-                    Color.clear
+                    ScrollView {
+                        LazyVStack {
+                            ForEach(0..<50) { index in
+                                Text("Category \(index)").frame(height: 44)
+                            }
+                        }
+                    }
                 } guide: {
                     PrototypeBrowser(
                         model: model, imports: imports, selectedID: $selectedID, selectedRowID: $selectedRowID,

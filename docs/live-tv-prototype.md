@@ -131,6 +131,10 @@ Before a channel is selected, the guide uses the available space.
 Opening the preview reduces the guide's viewport without replacing its scroll
 view or resetting its channel/time position. Search and the narrow category
 directory hide the preview surface while retaining the existing playback policy.
+In wide iPad layouts, the category sidebar retains its full height and scroll
+position; only the channel guide sits below the video in the adjacent column.
+Preview transport controls are centered on the video independently of its title
+row, with a larger Play/Pause button than Previous/Next.
 In portrait, the playing surface is reflected below the preview and upward behind
 the toolbar, without moving the video or controls. Both reflections use
 a native blur with a light tint and an immediate, gradual fade into the guide
