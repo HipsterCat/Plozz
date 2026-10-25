@@ -43,6 +43,15 @@ final class MediaVersionTests: XCTestCase {
         XCTAssertEqual(version.compatibility(with: .init(supportsHDR10: false)), .transcode)
     }
 
+    func testCombinedDolbyVisionBadgeDoesNotBypassNativeCompatibilityGating() {
+        let version = MediaVersion(
+            id: "dv", videoCodec: "hevc", videoRange: "DOVIWithHDR10Plus", audioCodec: "aac"
+        )
+        XCTAssertEqual(version.technicalBadges, [MediaBadge("Dolby Vision", style: .dolby, detail: "HDR10+")])
+        XCTAssertEqual(version.compatibility(with: .init(supportsDolbyVision: false)), .transcode)
+        XCTAssertEqual(version.compatibility(with: .init(supportsDolbyVision: true)), .directPlay)
+    }
+
     func testTechnicalBadgesUsePictureThenAudioOrder() {
         let dovi = MediaVersion(
             id: "1",
@@ -55,7 +64,8 @@ final class MediaVersionTests: XCTestCase {
             audioProfile: "Dolby Atmos"
         )
         XCTAssertEqual(dovi.technicalBadges.map(\.label),
-                       ["4K", "Dolby Vision", "HDR10", "Dolby Digital+", "Dolby Atmos"])
+                       ["4K", "Dolby Vision", "Dolby Digital+", "Dolby Atmos"])
+        XCTAssertEqual(dovi.technicalBadges[1].detail, "HDR10")
 
         // A 720p SDR stereo version should emit just 720p · SDR — no audio
         // headline, no HDR badges, and channels < 6 are not surfaced.
@@ -154,8 +164,9 @@ final class MediaVersionTests: XCTestCase {
         ])
         XCTAssertEqual(row.releaseName, "Film.Extended.2160p.REMUX-GROUP.mkv")
         XCTAssertEqual(row.badges.map(\.label), [
-            "4K", "Dolby Vision", "HDR10", "HEVC", "Dolby TrueHD", "Dolby Atmos", "English", "French"
+            "4K", "Dolby Vision", "HEVC", "Dolby TrueHD", "Dolby Atmos", "English", "French"
         ])
+        XCTAssertEqual(row.badges.first { $0.label == "Dolby Vision" }?.detail, "HDR10")
         XCTAssertEqual(row.badges.first { $0.label == "HEVC" }?.style, .spec)
         XCTAssertEqual(row.badges.suffix(2).map(\.style), [.audio, .audio])
         XCTAssertEqual(row.badges.first { $0.label == "Dolby TrueHD" }?.style, .dolby)

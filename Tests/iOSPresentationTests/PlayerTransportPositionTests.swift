@@ -543,10 +543,9 @@ final class PlayerTransportPositionTests: XCTestCase {
                         isScrubbing: model.controls.isScrubbing, scrubPreviewImage: thumbnail, showsScrubPreview: true,
                         pictureInPictureAvailable: false, onTogglePictureInPicture: {},
                         onScrubChanged: { _ in }, onScrubEditingChanged: { _ in },
-                        onSkipBackward: {}, onPlayPause: {}, onSkipForward: {}, onShowSpeed: {},
-                        supportsVideoZoom: false, onShowCustomZoom: {}, onShowSubtitles: {},
-                        onShowQuality: {}, hasVersions: false, onShowVersions: {},
-                        onOptionsMenuPresentationChange: { _ in }, isCardOpen: .constant(false),
+                        onSkipBackward: {}, onPlayPause: {}, onSkipForward: {},
+                        supportsVideoZoom: false, hasVersions: false, menuPresentation: .init(),
+                        isCardOpen: .constant(false),
                         onInteraction: {}, availableSize: geometry.size
                     )
                 }

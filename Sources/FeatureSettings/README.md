@@ -69,6 +69,12 @@ text below. Opening, focusing, or cancelling the menu does not save a choice;
 Select does. Mobile retains its native pickers. These remain independent,
 device-local preferences with Automatic as the default.
 
+Playback's **Prefer lossless audio** toggle uses one short helper:
+**Turn off for surround sound over regular HDMI ARC, which requires compressed audio.**
+It defaults on for new and upgrading devices and is shared by Plozz
+profiles on that device, not synced to other audio setups. Off selects the
+ordinary compatibility-surround bridge; the spatial-height setting is separate.
+
 **Screens & Navigation → Navigation → Zoom when opening titles** is a tvOS-only,
 profile-scoped opt-in. Off uses native page opening and closing; on restores the
 cinematic artwork transition. The hero's staged content reveal is shared by both
@@ -107,9 +113,27 @@ while Home and detail previews use edge-to-edge artwork.
 Mobile Home keeps native sliders beside their labels and one stacked preview.
 No artwork lookup is needed for these fictional previews.
 
-Detail Page theme music offers Low, Medium, and High volume; the Background mode
-owns Off. Older silent theme-music preferences migrate to Background Off without
-changing Home or trailer settings, with Low ready for the next explicit opt-in.
+Detail Page theme music uses the shared `ThemeMusicVolumeControl` on TV and mobile:
+0–100%, with native touch sliders and the shared remote-adjustable Settings stepper.
+TV shows the current percentage instead of notches, so each 1% Left/Right press
+has visible numeric feedback. This control opts into the shared fast hold-repeat:
+the unchanged 0.45-second initial delay, then one percentage point every 0.03 seconds
+instead of the standard 0.08 seconds. Other controls retain their existing speed.
+Mobile keeps its native slider and 1% precision. Saved values are not changed
+merely by opening the control.
+New/reset preferences start at 25%; existing saved volumes are not raised.
+There is no explanatory paragraph under the preview action; playback errors
+remain visible when they occur.
+The player uses the selected gain directly, up to the device's full volume;
+old Low/Medium/High preferences keep their exact 15/35/60% gains.
+Adjusting starts a preview, with an explicit Play/Stop preview action too.
+It samples up to eight recent/resume titles already admitted to the active
+profile's Home content, through `MediaProvider`; without an available theme,
+it loops an original locally generated instrumental sample. Errors are reported,
+not presented as a successful preview. Leaving the control or app stops previews.
+The Background mode owns Off. Only old string-valued silent preferences migrate
+to Background Off; a new slider value of 0% remains selected and persists.
+Migration does not change Home or trailer settings, with 25% ready for the next explicit opt-in.
 On tvOS, the selected Background option supplies its own explanation rather than
 repeating it in a section footer.
 

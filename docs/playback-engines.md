@@ -302,6 +302,26 @@ single-connection spatial-audio probe safeguards and system-composited Dolby Vis
 held pictures. The fork retains the persistent HTTP body-reader isolation
 correction from its previous integration.
 
+### Lossless surround
+
+Playback's **Prefer lossless audio** toggle defaults on for
+both new and upgrading devices. It controls the ordinary Aether audio bridge for
+on-demand files, downloads, and Live TV, independently of source channel count.
+Each new load reads the device preference. Profile switching and profile sync do
+not replace the choice because the connected audio setup belongs to the device.
+
+On selects the existing FLAC bridge, including for 5.1 DTS-HD MA and sources whose
+channel count is unknown before the engine probes them. AVPlayer decodes FLAC to
+PCM; multichannel output requires a compatible HDMI/eARC path. A legacy ARC or
+other stereo-PCM-only path may downmix it to stereo. Off selects Aether's E-AC-3
+compatibility-surround mode, which is lossy and caps multichannel sources at 5.1;
+stereo sources still use FLAC under the engine's existing policy.
+
+This does not recover quality already lost in a server rendition, change
+stream-copy audio, force native playback through a bridge, or override spatial
+audio conversion. Diagnostics describe the actual engine pipeline, not the
+toggle's desired mode or the receiver's output.
+
 ### Spatial audio
 
 **Spatial audio defaults on for supported on-demand playback on tvOS 26+.**
@@ -326,8 +346,8 @@ This implementation description is not patent clearance: upstream explicitly
 leaves third-party patent licensing to integrators. Other apps enabling the
 feature does not establish licensing compliance or guarantee App Store approval.
 
-Off and unsupported paths retain the ordinary compatible channel presentation:
-FLAC above six channels, otherwise the E-AC-3 compatibility bridge. Live streams,
+Off and unsupported paths retain the ordinary channel presentation selected by
+Lossless surround: FLAC by default, or the E-AC-3 compatibility bridge when off. Live streams,
 shared players, muted previews and iOS/iPadOS do not request conversion. FEL and
 other software-video routes retain channel audio. Dolby Digital Plus (E-AC-3/JOC)
 stream-copy is unaffected. Explicit track selections and language preferences

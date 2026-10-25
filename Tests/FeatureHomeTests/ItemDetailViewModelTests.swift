@@ -5,6 +5,7 @@ import MetadataKit
 import RatingsService
 import Observation
 @testable import FeatureHome
+@testable import FeatureHomeCore
 
 @MainActor
 final class ItemDetailViewModelTests: XCTestCase {
@@ -3505,8 +3506,9 @@ final class ItemDetailViewModelTests: XCTestCase {
 
         let enriched = await vm.enrichEpisodeBadgesIfNeeded(sparse)
         XCTAssertEqual(enriched?.technicalBadges.map(\.label),
-                       ["4K", "Dolby Vision", "HDR10", "Dolby Digital+", "Dolby Atmos"],
+                       ["4K", "Dolby Vision", "Dolby Digital+", "Dolby Atmos"],
                        "Focused episode must badge from the full fetch's real metadata")
+        XCTAssertEqual(enriched?.technicalBadges[1].detail, "HDR10")
         XCTAssertEqual(
             vm.seasonEpisodes["s1"]?.first?.technicalBadges.map(\.label),
             before,

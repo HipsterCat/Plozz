@@ -342,14 +342,7 @@ struct DetailPageDetailView: View {
                         Toggle("Start muted", isOn: $heroBackground.settings.detailTrailerMuted)
                     }
                     if heroBackground.settings.detailMode == .themeMusic {
-                        SettingsDetailGroup(title: "Volume") {
-                            DescribedSegmentedPicker(
-                                options: ThemeMusicVolume.playbackLevels,
-                                selection: $themeMusic.settings.volume,
-                                title: { $0.displayName },
-                                detail: { $0.detail }
-                            )
-                        }
+                        ThemeMusicVolumeControl(model: themeMusic)
                     }
                 }
             }
@@ -825,6 +818,9 @@ struct PlaybackDetailView: View {
                     Toggle("Remember audio language per series", isOn: $playback.settings.rememberAudioTrackPerSeries)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            },
+            SettingsSplitRow(id: "lossless-surround", title: "Audio") {
+                LosslessAudioControl()
             }
         ]
         #if os(tvOS)

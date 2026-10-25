@@ -26,6 +26,8 @@ public struct PlozziOSRootView: View {
     @State private var appModel = PlozziOSProcessComposition.appModel
     @State private var homeViewModelBox = LazyViewState<HomeViewModel>()
     @State private var heroTrailerController = HeroTrailerController()
+    @State private var themeMusicController = ThemeMusicController()
+    @State private var isLiveTVSelected = false
     @State private var sidebarGeometry = PlozziOSSidebarGeometryModel()
     @State private var showingAddServer = false
     @State private var providerSetupRouter = ManagedProviderSetupRouter()
@@ -91,6 +93,18 @@ public struct PlozziOSRootView: View {
         }
     }
 
+    private var themeMusicAuthorization: ThemeMusicPlaybackAuthorization {
+        let scope = appModel.accountsProviders.liveTVAuthorizationID
+        return ThemeMusicPlaybackAuthorization(
+            id: appModel.isActiveProfileAuthorized ? scope : nil,
+            provider: { accountID in
+                guard appModel.isActiveProfileAuthorized,
+                      appModel.accountsProviders.liveTVAuthorizationID == scope else { return nil }
+                return appModel.accountsProviders.homeAccounts.first { $0.account.id == accountID }?.provider
+            }
+        )
+    }
+
     private var needsDiagnosticConsent: Bool {
         appModel.crashReportingController.isConfigured && appModel.crashReporting.needsConsent
     }
@@ -115,6 +129,7 @@ public struct PlozziOSRootView: View {
                 PlozziOSTabShell(
                     appModel: appModel,
                     homeViewModelBox: homeViewModelBox,
+                    onLiveTVActivityChanged: { isLiveTVSelected = $0 },
                     onAddServer: showAddServer,
                     showingSettings: $showingSettings,
                     showingProfileSwitcher: $showingProfileSwitcher,
@@ -234,11 +249,16 @@ public struct PlozziOSRootView: View {
         .background { AppBackground(palette: resolvedPalette) }
         .id(presentationShellIdentity)
         .onChange(of: appModel.isSettingsPresented) { _, presented in
+            if presented {
+                themeMusicController.stop()
+                heroTrailerController.stop()
+            }
             settingsShellIdentity = presented
                 ? (appModel.profiles.activeProfileID, shellIdentity) : nil
         }
         .onChange(of: shellIdentity) {
             heroTrailerController.stop()
+            themeMusicController.stop()
         }
         // A successful Plex selection changes shellIdentity, not the sheet collecting it.
         // Libraries owns the same question while Settings is presented.
@@ -316,6 +336,17 @@ public struct PlozziOSRootView: View {
         )
         .environment(appModel)
         .environment(heroTrailerController)
+        .themeMusicScope(
+            controller: themeMusicController,
+            model: appModel.settings.themeMusic,
+            background: appModel.settings.heroBackground.settings,
+            isBlocked: heroTrailerController.isPlaying || heroTrailerController.isPlaybackSuppressed
+                || isLiveTVSelected,
+            detailAllowed: !appModel.isSettingsPresented && !showingProfileSwitcher
+                && appModel.isActiveProfileAuthorized,
+            authorization: themeMusicAuthorization,
+            authenticatedHTTPResolver: appModel.authenticatedHTTPResolver
+        )
         .environment(sidebarGeometry)
         .syncsWindowInterfaceStyle(appModel.settings.theme.theme.preferredColorScheme)
         .modifier(PlozziOSDownloadNotificationRouting(
@@ -829,10 +860,12 @@ struct PlozziOSTabShell: View {
     @Binding var deferredPairingURL: URL?
     let onNotificationPresentationDismissed: (PlozziOSRootView.NotificationPresentation) -> Void
     let systemColorScheme: ColorScheme
+    let onLiveTVActivityChanged: (Bool) -> Void
 
     init(
         appModel: PlozziOSAppModel,
         homeViewModelBox: LazyViewState<HomeViewModel>,
+        onLiveTVActivityChanged: @escaping (Bool) -> Void = { _ in },
         onAddServer: @escaping () -> Void,
         showingSettings: Binding<Bool>,
         showingProfileSwitcher: Binding<Bool>,
@@ -843,6 +876,7 @@ struct PlozziOSTabShell: View {
     ) {
         self.appModel = appModel
         self.homeViewModelBox = homeViewModelBox
+        self.onLiveTVActivityChanged = onLiveTVActivityChanged
         self.onAddServer = onAddServer
         _showingSettings = showingSettings
         _showingProfileSwitcher = showingProfileSwitcher
@@ -1244,6 +1278,10 @@ struct PlozziOSTabShell: View {
         .onChange(of: isShowingMorePage) { _, showingMore in
             if showingMore { heroTrailerController.stop() }
         }
+        .onChange(of: effectiveSelectedDestination == .liveTV && !isShowingMorePage, initial: true) { _, active in
+            onLiveTVActivityChanged(active)
+        }
+        .onDisappear { onLiveTVActivityChanged(false) }
         .onChange(of: selectedDestination, initial: true) { _, destination in
             MainThreadStallProbe.context = destination.rawValue
             if destination == .settings {
@@ -1349,6 +1387,12 @@ struct PlozziOSTabShell: View {
                 onSwitchTo: { pendingSwitchProfileID = $0 },
                 systemColorScheme: systemColorScheme
             )
+            .environment(\.themeMusicPreviewResolver, {
+                try await ThemeMusicPreviewResolver.resolve(
+                    content: homeViewModelBox.existingValue(forKey: homeContentIdentity)?.state.value,
+                    accounts: appModel.accountsProviders.homeAccounts
+                )
+            })
             .presentationSizing(.page)
             // Elevation edge for the all-black theme: without it the sheet's
             // dark surface blends straight into the dark page behind it, so the

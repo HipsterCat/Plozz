@@ -5,6 +5,22 @@ import XCTest
 @testable import EnginePlozzigen
 
 final class AetherReleaseIntegrationTests: XCTestCase {
+    func testNativeAudioMenuTrackKeepsObservedCodecChannelsAndSelectionIdentity() {
+        let id = PlozzigenVideoEngine.bypassAudioIDBase + 2
+        let track = PlozzigenVideoEngine.bypassAudioTrack(
+            id: id, title: "English", language: "en", isDefault: true, codec: "opus", channels: 6
+        )
+        XCTAssertEqual(track.id, id)
+        XCTAssertEqual(track.codec, "opus")
+        XCTAssertEqual(track.channels, 6)
+        XCTAssertTrue(track.isDefault)
+        XCTAssertEqual(
+            TrackLabeling.audioLabel(displayTitle: track.displayTitle, language: track.language, codec: track.codec,
+                                    channels: track.channels, trackID: track.id, locale: Locale(identifier: "en")),
+            TrackLabel(base: .content("English"), qualifiers: [.format("Opus 5.1")])
+        )
+    }
+
     func testResolvedEngineAndSourceCreditIdentifyPinnedReleaseIntegration() throws {
         XCTAssertEqual(AetherEngine.version, "7.47.0")
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "AetherEngine" })
@@ -45,13 +61,13 @@ final class AetherReleaseIntegrationTests: XCTestCase {
         XCTAssertEqual(options.objectAudioRendering, .off)
         XCTAssertFalse(options.progressiveSegmentDelivery)
         XCTAssertFalse(options.preferDualLayerDolbyVision)
-        XCTAssertFalse(PlozzigenVideoEngine.onDemandLoadOptions(audioChannels: 8).preferDualLayerDolbyVision)
+        XCTAssertFalse(PlozzigenVideoEngine.onDemandLoadOptions().preferDualLayerDolbyVision)
     }
 
     func testFELPreferenceReachesOnDemandOptionsWithoutDisablingAudioForOtherSources() {
         for enabled in [false, true] {
             let options = PlozzigenVideoEngine.onDemandLoadOptions(
-                audioChannels: 8, dolbyVisionFELEnabled: enabled
+                dolbyVisionFELEnabled: enabled
             )
             XCTAssertEqual(options.preferDualLayerDolbyVision, enabled)
             XCTAssertEqual(options.dolbyVisionHandling, .automatic)
@@ -94,14 +110,14 @@ final class AetherReleaseIntegrationTests: XCTestCase {
     }
 
     func testOnDemandSpatialChoicePreservesChannelFallbackAndBuffering() {
-        for channels in [0, 2, 6, 8] {
+        for lossless in [false, true] {
             for enabled in [false, true] {
                 for buffer in PlaybackReadAhead.allCases {
                     let options = PlozzigenVideoEngine.onDemandLoadOptions(
-                        audioChannels: channels, trueHDAtmosEnabled: enabled, readAhead: buffer
+                        losslessAudioEnabled: lossless, trueHDAtmosEnabled: enabled, readAhead: buffer
                     )
                     assertSpatialRendering(options, enabled: enabled)
-                    XCTAssertEqual(options.audioBridgeMode, channels > 6 ? .lossless : .surroundCompat)
+                    XCTAssertEqual(options.audioBridgeMode, lossless ? .lossless : .surroundCompat)
                     XCTAssertEqual(options.sessionCacheByteBudget, buffer == .automatic ? nil : Int.max)
                     XCTAssertTrue(options.matchContentEnabled)
                     XCTAssertFalse(options.isLive)
@@ -118,7 +134,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
             .init(isAudible: false, sharesAudioSession: true, suppressesDisplayMatching: true)
         ] {
             let options = PlozzigenVideoEngine.onDemandLoadOptions(
-                audioChannels: 8, dolbyVisionFELEnabled: true, outputPolicy: policy
+                dolbyVisionFELEnabled: true, outputPolicy: policy
             )
             XCTAssertEqual(options.objectAudioRendering, .off)
             XCTAssertFalse(options.preferDualLayerDolbyVision)
@@ -130,7 +146,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
 
     func testDisplaySuppressedPreviewDoesNotRequestFEL() {
         let options = PlozzigenVideoEngine.onDemandLoadOptions(
-            audioChannels: 8, dolbyVisionFELEnabled: true,
+            dolbyVisionFELEnabled: true,
             outputPolicy: .init(isAudible: true, suppressesDisplayMatching: true)
         )
         XCTAssertFalse(options.preferDualLayerDolbyVision)

@@ -44,6 +44,15 @@ first-class backends; co-equal with `ProviderJellyfin`.
   rewrites the stored admin account's token; per-user tokens live in a
   short-lived override map.
 
+## Format badges
+
+Detail and version badges preserve the same source's Dolby Vision compatibility
+and HDR10+ hints together. A base compatibility ID of 1 does not downgrade
+confirmed HDR10+ to HDR10. HLG/SDR/none compatibility remains authoritative;
+profile 8 alone and false DoVi flags do not establish an HDR10 base layer.
+Selected audio profile/title hints use the shared normalization, including
+E-AC-3 JOC, without changing playback negotiation or adding metadata requests.
+
 ## Playback chapters
 
 Playback detail requests opt into `includeChapters=1` and carry the server's

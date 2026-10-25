@@ -387,7 +387,8 @@ public struct ItemDetailView: View {
         #if canImport(AVFoundation)
         .themeMusicPlayback(
             playbackID: viewModel.themeMusicPlaybackID,
-            resolve: { await viewModel.resolveThemeMusic() }
+            source: viewModel.currentSourceForDisplay,
+            isActive: isTrailerOwner
         )
         #endif
         // Overrides rather than replaces, so a caller that supplies no router
