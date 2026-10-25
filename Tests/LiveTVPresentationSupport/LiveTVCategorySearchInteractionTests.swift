@@ -99,6 +99,16 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         waitForPresentation("Preview", preview: preview)
         XCTAssertEqual(app.staticTexts["category-preview-loads"].label, loads)
         XCTAssertTrue(arena.isHittable)
+        channel("Daily News", in: app).tap()
+        XCTAssertTrue(app.staticTexts["category-preview-loads"].wait(
+            for: \.label, toEqual: "Loads: 2", timeout: 10
+        ))
+        XCTAssertTrue(app.staticTexts["category-preview-frame"].wait(
+            for: \.label, toEqual: "Frame: ready", timeout: 10
+        ))
+        XCTAssertEqual(preview.label, "Daily News")
+        XCTAssertEqual(preview.value as? String, "Preview")
+        capture("light-preview-retuned", in: app)
     }
 
     func testLightPreviewReflectionWithDarkVideo() {

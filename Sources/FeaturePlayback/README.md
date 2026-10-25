@@ -114,8 +114,13 @@ software-frame access only for its current, ready source; direct-decoder tests
 alone do not cover this Live TV integration boundary.
 Pictures with space on both horizontal sides use the shared content corner radius.
 The glow follows the page theme independently of dark player controls. Dark pages
-retain their original reflection treatment without sampling. Fullscreen, multiview,
-external playback, and Reduce Transparency disable the reflection. Reduce
+retain their original reflection treatment without sampling. Glow colors fade
+in, out, and between palettes over 0.6 seconds, retargeting from their currently
+displayed colors if interrupted. Channel changes stop sampling immediately but
+keep the light-mode glow's bounds while its old colors fade out; no decoded
+frame is retained for the fade. Reduce Motion disables these color animations.
+Leaving the visible inline presentation clears its colors and animations immediately.
+Fullscreen, multiview, external playback, and Reduce Transparency disable the reflection. Reduce
 Transparency retains inset-picture rounding; fullscreen restores the unmasked,
 black-backed video surface.
 

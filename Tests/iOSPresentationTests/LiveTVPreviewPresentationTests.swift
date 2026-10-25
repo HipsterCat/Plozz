@@ -328,6 +328,64 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
         }
     }
 
+    func testGlowFadesInOutAndRetargetsFromItsVisibleColors() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let reflection = VideoPresentationView.VideoPreviewReflectionView(frame: window.bounds)
+        reflection.videoSize = CGSize(width: 320, height: 180)
+        reflection.picture = CGRect(origin: .zero, size: reflection.videoSize)
+        reflection.insets = UIEdgeInsets(top: 100, left: 0, bottom: 100, right: 0)
+        reflection.lightAppearance = true
+        host.view.addSubview(reflection)
+        try await settle(window)
+        let gradient = try XCTUnwrap(reflection.layer.sublayers?.compactMap { $0 as? CAGradientLayer }.first)
+        let red = Array(repeating: SIMD4<Float>(1, 0.6, 0.6, 0.9), count: 3)
+        let blue = Array(repeating: SIMD4<Float>(0.6, 0.6, 1, 0.9), count: 3)
+
+        reflection.updateColors(red)
+        if UIAccessibility.isReduceMotionEnabled {
+            XCTAssertNil(gradient.animation(forKey: "colors"))
+            reflection.updateColors([])
+            XCTAssertNil(gradient.colors)
+            return
+        }
+        let fadeIn = try XCTUnwrap(gradient.animation(forKey: "colors") as? CABasicAnimation)
+        XCTAssertTrue(try XCTUnwrap(fadeIn.fromValue as? [CGColor]).allSatisfy { $0.alpha == 0 })
+        XCTAssertTrue(try XCTUnwrap(fadeIn.toValue as? [CGColor]).allSatisfy { $0.alpha > 0.8 })
+        XCTAssertEqual(fadeIn.duration, 0.6, accuracy: 0.001)
+        try await Task.sleep(for: .milliseconds(750))
+        reflection.updateColors([])
+        let fadeOut = try XCTUnwrap(gradient.animation(forKey: "colors") as? CABasicAnimation)
+        let start = try XCTUnwrap(fadeOut.fromValue as? [CGColor])
+        XCTAssertTrue(start.allSatisfy { $0.alpha > 0.8 })
+        XCTAssertTrue(try XCTUnwrap(fadeOut.toValue as? [CGColor]).allSatisfy { $0.alpha == 0 })
+        try await Task.sleep(for: .milliseconds(150))
+        reflection.updateColors([])
+        let repeatedClear = try XCTUnwrap(gradient.animation(forKey: "colors") as? CABasicAnimation)
+        XCTAssertEqual(repeatedClear.fromValue as? [CGColor], start, "Repeated loading updates must not restart the fade.")
+        let visible = try XCTUnwrap(gradient.presentation()?.colors as? [CGColor])
+        XCTAssertTrue(visible.allSatisfy { $0.alpha > 0 && $0.alpha < 0.9 })
+        reflection.updateColors(blue)
+        let interrupted = try XCTUnwrap(gradient.animation(forKey: "colors") as? CABasicAnimation)
+        XCTAssertEqual(interrupted.fromValue as? [CGColor], visible, "The next channel must start at the visible colors.")
+        XCTAssertEqual(interrupted.toValue as? [CGColor], gradient.colors as? [CGColor])
+        reflection.updateColors([], animated: false)
+        XCTAssertNil(gradient.colors)
+        XCTAssertNil(gradient.animation(forKey: "colors"))
+        reflection.updateColors(blue)
+        let returning = try XCTUnwrap(gradient.animation(forKey: "colors") as? CABasicAnimation)
+        XCTAssertTrue(try XCTUnwrap(returning.fromValue as? [CGColor]).allSatisfy { $0.alpha == 0 })
+    }
+
         func testGlowPreservesDimHuesWithoutDarkeningNeutralFootage() {
             func palette(_ red: UInt8, _ green: UInt8, _ blue: UInt8) -> [SIMD4<Float>] {
                 let pixel: [UInt8] = [red, green, blue, 255]
@@ -412,18 +470,37 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
                 let colors = try XCTUnwrap(gradient.colors as? [CGColor])
                 XCTAssertEqual(colors.count, 3)
                 XCTAssertTrue(colors.contains { $0.alpha > 0.5 }, "Dim decoded footage must still yield visible color.")
+                if !UIAccessibility.isReduceMotionEnabled {
+                    let fade = try XCTUnwrap(gradient.animation(forKey: "colors") as? CABasicAnimation)
+                    let start = try XCTUnwrap(fade.fromValue as? [CGColor])
+                    let end = try XCTUnwrap(fade.toValue as? [CGColor])
+                    XCTAssertEqual(start.count, colors.count)
+                    XCTAssertTrue(start.allSatisfy { $0.alpha == 0 }, "The first palette must fade in from transparent.")
+                    XCTAssertEqual(end, colors)
+                    XCTAssertEqual(fade.duration, 0.6, accuracy: 0.001)
+                } else {
+                    XCTAssertNil(gradient.animation(forKey: "colors"))
+                }
                 engine.pause()
                 try await Task.sleep(for: .milliseconds(700))
                 let pausedCount = video.previewColorSampleCount
                 try await Task.sleep(for: .milliseconds(1100))
                 XCTAssertEqual(video.previewColorSampleCount, pausedCount, "Paused frames must not keep converting.")
-                video.updateReflection(height: 0)
+                let glowBounds = gradient.frame
+                video.updateReflection(height: 180, topHeight: 80, lightAppearance: true, isActive: false)
                 XCTAssertFalse(video.isPreviewColorSampling)
-                XCTAssertNil(gradient.colors)
+                XCTAssertEqual(gradient.frame, glowBounds, "Channel changes retain the area needed to fade out.")
+                if !UIAccessibility.isReduceMotionEnabled {
+                    let fade = try XCTUnwrap(gradient.animation(forKey: "colors") as? CABasicAnimation)
+                    XCTAssertTrue(try XCTUnwrap(fade.toValue as? [CGColor]).allSatisfy { $0.alpha == 0 })
+                }
                 if let item { XCTAssertEqual(item.outputs.count, originalOutputs) }
                 let stoppedCount = video.previewColorSampleCount
                 try await Task.sleep(for: .milliseconds(600))
                 XCTAssertEqual(video.previewColorSampleCount, stoppedCount)
+                video.updateReflection(height: 0)
+                XCTAssertNil(gradient.colors)
+                XCTAssertNil(gradient.animation(forKey: "colors"), "Leaving the inline presentation cancels its fade.")
                 video.updateReflection(height: 180, lightAppearance: true)
                 NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
                 XCTAssertFalse(video.isPreviewColorSampling)

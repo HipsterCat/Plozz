@@ -15,6 +15,7 @@ final class VideoPresentationView: UIView {
     private var colorSampler: VideoPreviewColorSampler?
     private var activationObservers: [NSObjectProtocol] = []
     private var permitsColorSampling = true
+    private var reflectionIsActive = true
     var previewColorSampleCount: Int { colorSampler?.sampleCount ?? 0 }
     var isPreviewColorSampling: Bool { colorSampler?.isRunning ?? false }
     #endif
@@ -37,6 +38,7 @@ final class VideoPresentationView: UIView {
                 MainActor.assumeIsolated {
                     self?.permitsColorSampling = false
                     self?.colorSampler?.stop()
+                    self?.reflection.updateColors([], animated: false)
                 }
             },
             NotificationCenter.default.addObserver(
@@ -86,12 +88,13 @@ final class VideoPresentationView: UIView {
 
     func updateReflection(
         height: CGFloat, topHeight: CGFloat = 0, leftWidth: CGFloat = 0, rightWidth: CGFloat = 0,
-        previewCornerRadius: CGFloat = 0, lightAppearance: Bool = false
+        previewCornerRadius: CGFloat = 0, lightAppearance: Bool = false, isActive: Bool = true
     ) {
         #if os(iOS)
         let insets = UIEdgeInsets(top: topHeight, left: leftWidth, bottom: height, right: rightWidth)
         guard reflection.insets != insets || reflection.previewCornerRadius != previewCornerRadius
-            || reflection.lightAppearance != lightAppearance else { return }
+            || reflection.lightAppearance != lightAppearance || reflectionIsActive != isActive else { return }
+        reflectionIsActive = isActive
         reflection.insets = insets
         reflection.previewCornerRadius = previewCornerRadius
         reflection.lightAppearance = lightAppearance
@@ -133,8 +136,9 @@ final class VideoPresentationView: UIView {
         let enabled = permitsColorSampling && reflection.lightAppearance && reflection.insets != .zero
             && window?.windowScene?.activationState == .foregroundActive
             && !UIAccessibility.isReduceTransparencyEnabled
-        guard let engine, enabled else {
+        guard let engine, enabled, reflectionIsActive else {
             colorSampler?.stop()
+            if !enabled { reflection.updateColors([], animated: false) }
             return
         }
         if colorSampler == nil {
@@ -202,7 +206,7 @@ final class VideoPresentationView: UIView {
 
     #if os(iOS)
     /// Replicates the existing compositor surface, not a second player or decoded frame.
-    private final class VideoPreviewReflectionView: UIView {
+    final class VideoPreviewReflectionView: UIView {
         let source = UIView()
         var videoSize: CGSize = .zero {
             didSet { if oldValue != videoSize { setNeedsLayout() } }
@@ -265,23 +269,31 @@ final class VideoPresentationView: UIView {
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func updateColors(_ samples: [SIMD4<Float>]) {
+        func updateColors(_ samples: [SIMD4<Float>], animated: Bool = true) {
             let colors = samples.map {
                 UIColor(red: CGFloat($0.x), green: CGFloat($0.y),
                         blue: CGFloat($0.z), alpha: CGFloat($0.w)).cgColor
             }
-            let oldColors = glow.presentation()?.colors ?? glow.colors
+            let previous = glow.colors as? [CGColor] ?? []
+            let oldColors = previous.isEmpty ? [] : (glow.presentation()?.colors as? [CGColor] ?? previous)
+            let animates = animated && !UIAccessibility.isReduceMotionEnabled
+            let target = colors.isEmpty && animates
+                ? previous.map { UIColor(cgColor: $0).withAlphaComponent(0).cgColor }
+                : colors
+            if animates, previous == target { return }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            glow.colors = colors.isEmpty ? nil : colors
+            glow.colors = target.isEmpty ? nil : target
             CATransaction.commit()
-            guard !colors.isEmpty, let oldColors, !UIAccessibility.isReduceMotionEnabled else {
+            guard !target.isEmpty, animates else {
                 glow.removeAllAnimations()
                 return
             }
             let transition = CABasicAnimation(keyPath: "colors")
-            transition.fromValue = oldColors
-            transition.toValue = colors
+            transition.fromValue = oldColors.isEmpty ? target.map {
+                UIColor(cgColor: $0).withAlphaComponent(0).cgColor
+            } : oldColors
+            transition.toValue = target
             transition.duration = 0.6
             glow.add(transition, forKey: "colors")
         }

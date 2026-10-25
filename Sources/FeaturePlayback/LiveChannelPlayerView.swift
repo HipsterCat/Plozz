@@ -369,8 +369,7 @@ public struct LiveChannelPlayerView: View {
                     input: input
                 )
                 let showsReflection = hasInlineControls && !reduceTransparency && isActive
-                    && scenePhase == .active && sourceMatches && model.hasPresentedFrame
-                    && model.interruption == nil && model.networkBlock == nil && !model.continuesExternally
+                    && scenePhase == .active && !model.continuesExternally
                 VideoSurfaceContainer(
                     engine: model.engine, zoom: model.videoZoom.settings,
                     aspectRatio: model.videoAspectRatio,
@@ -379,7 +378,9 @@ public struct LiveChannelPlayerView: View {
                     topReflectionHeight: showsReflection ? previewTopReflectionHeight : 0,
                     leadingReflectionWidth: showsReflection ? previewLeadingReflectionWidth : 0,
                     trailingReflectionWidth: showsReflection ? previewTrailingReflectionWidth : 0,
-                    previewCornerRadius: hasInlineControls ? PlozzTheme.Metrics.Radius.content : 0
+                    previewCornerRadius: hasInlineControls ? PlozzTheme.Metrics.Radius.content : 0,
+                    reflectionIsActive: sourceMatches && model.hasPresentedFrame
+                        && model.interruption == nil && model.networkBlock == nil
                 )
                     .ignoresSafeArea(.all, edges: hasInlineControls ? [] : .all)
 

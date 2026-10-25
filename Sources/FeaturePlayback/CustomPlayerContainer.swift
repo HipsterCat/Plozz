@@ -137,14 +137,18 @@ struct VideoSurfaceContainer: UIViewRepresentable {
     var leadingReflectionWidth: CGFloat = 0
     var trailingReflectionWidth: CGFloat = 0
     var previewCornerRadius: CGFloat = 0
+    var reflectionIsActive = true
 
     private func updateReflection(_ view: VideoPresentationView) {
+        let retainsReflection = reflectionIsActive || reflectionColorScheme == .light
         view.updateReflection(
-            height: reflectionHeight, topHeight: topReflectionHeight,
-            leftWidth: layoutDirection == .rightToLeft ? trailingReflectionWidth : leadingReflectionWidth,
-            rightWidth: layoutDirection == .rightToLeft ? leadingReflectionWidth : trailingReflectionWidth,
+            height: retainsReflection ? reflectionHeight : 0,
+            topHeight: retainsReflection ? topReflectionHeight : 0,
+            leftWidth: retainsReflection ? (layoutDirection == .rightToLeft ? trailingReflectionWidth : leadingReflectionWidth) : 0,
+            rightWidth: retainsReflection ? (layoutDirection == .rightToLeft ? leadingReflectionWidth : trailingReflectionWidth) : 0,
             previewCornerRadius: previewCornerRadius,
-            lightAppearance: reflectionColorScheme == .light
+            lightAppearance: reflectionColorScheme == .light,
+            isActive: reflectionIsActive
         )
     }
 
