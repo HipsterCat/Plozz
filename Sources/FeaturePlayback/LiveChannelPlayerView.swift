@@ -33,6 +33,7 @@ public struct LiveChannelPlayerView: View {
     private let isExpanded: Bool
     private let onExpandPreview: (() -> Void)?
     private let previewReflectionHeight: CGFloat
+    private let previewTopReflectionHeight: CGFloat
     private let usesNativeFullscreen: Bool
     private let isActive: Bool
     private let onReturnToGuide: (() -> Void)?
@@ -137,6 +138,7 @@ public struct LiveChannelPlayerView: View {
         isExpanded: Bool = true,
         onExpandPreview: (() -> Void)? = nil,
         previewReflectionHeight: CGFloat = 0,
+        previewTopReflectionHeight: CGFloat = 0,
         usesNativeFullscreen: Bool = false,
         isActive: Bool = true,
         onReturnToGuide: (() -> Void)? = nil,
@@ -185,6 +187,7 @@ public struct LiveChannelPlayerView: View {
         self.isExpanded = isExpanded
         self.onExpandPreview = onExpandPreview
         self.previewReflectionHeight = previewReflectionHeight
+        self.previewTopReflectionHeight = previewTopReflectionHeight
         self.usesNativeFullscreen = usesNativeFullscreen
         self.isActive = isActive
         self.onReturnToGuide = onReturnToGuide
@@ -298,15 +301,16 @@ public struct LiveChannelPlayerView: View {
                     channelID: channelID,
                     input: input
                 )
+                let showsReflection = hasInlineControls && !reduceTransparency && isActive
+                    && scenePhase == .active && sourceMatches && model.hasPresentedFrame
+                    && model.interruption == nil && model.networkBlock == nil && !model.continuesExternally
                 VideoSurfaceContainer(
                     engine: model.engine, zoom: model.videoZoom.settings,
                     aspectRatio: model.videoAspectRatio,
                     fitsInsideSafeArea: liveSubtitleViewport != nil && !model.continuesExternally,
                     subtitleViewport: liveSubtitleViewport,
-                    reflectionHeight: hasInlineControls && !reduceTransparency && isActive
-                        && scenePhase == .active && sourceMatches && model.hasPresentedFrame
-                        && model.interruption == nil && model.networkBlock == nil && !model.continuesExternally
-                        ? previewReflectionHeight : 0
+                    reflectionHeight: showsReflection ? previewReflectionHeight : 0,
+                    topReflectionHeight: showsReflection ? previewTopReflectionHeight : 0
                 )
                     .ignoresSafeArea(.all, edges: hasInlineControls ? [] : .all)
 

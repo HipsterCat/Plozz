@@ -131,9 +131,11 @@ Before a channel is selected, the guide uses the available space.
 Opening the preview reduces the guide's viewport without replacing its scroll
 view or resetting its channel/time position. Search and the narrow category
 directory hide the preview surface while retaining the existing playback policy.
-In portrait, the playing surface is reflected vertically below the preview with
-a native blur with a light tint and a delayed fade into the guide background,
-keeping reflected colors visible beneath the first guide rows. One transparency
+In portrait, the playing surface is reflected below the preview and upward behind
+the toolbar, without moving the video or controls. Both reflections use
+a native blur with a light tint and an immediate, gradual fade into the guide
+background. The reflection starts at full intensity, then follows a quadratic
+falloff with a faint tail rather than a steep final cutoff. One transparency
 mask fades both the reflected video and its blur into the actual background,
 avoiding a flat-color edge where the reflection ends. The reflection sits
 behind guide content, adds no layout height, and shares the original video

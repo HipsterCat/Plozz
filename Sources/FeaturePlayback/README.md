@@ -94,7 +94,8 @@ On iPhone and iPad, the Live TV guide's inline preview uses the shared
 previous/play-pause/next controls and an in-place fullscreen action. The engine,
 video surface, and its native parent remain mounted across expansion, return,
 and rotation. Portrait previews can mirror that same compositor surface beneath
-the picture with native blur and a background fade; there is no second player or
+the picture and upward behind the toolbar with native blur and gradual transparency
+fades away from the video; there is no second player or
 frame-extraction loop. Fullscreen, multiview, external playback, and Reduce
 Transparency disable the reflection.
 

@@ -31,6 +31,11 @@ struct PrototypePreviewLayout {
         #endif
     }
 
+    var videoTopReflectionHeight: CGFloat {
+        guard videoReflectionHeight > 0 else { return 0 }
+        return min(videoFrame.height, max(0, videoFrame.minY - bounds.minY))
+    }
+
     /// The gap between the info bar, the toolbar and the guide.
     var sectionGap: CGFloat { short || isSearching ? PrototypeLayout.smallGap : PrototypeLayout.sectionGap }
 
@@ -187,18 +192,20 @@ struct PrototypePreviewLayout {
 
 struct PrototypeVideoClip: Shape {
     var reflectionHeight: CGFloat
+    var topReflectionHeight: CGFloat = 0
     var cornerRadius: CGFloat
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get { AnimatablePair(reflectionHeight, cornerRadius) }
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
+        get { AnimatablePair(AnimatablePair(reflectionHeight, topReflectionHeight), cornerRadius) }
         set {
-            reflectionHeight = newValue.first
+            reflectionHeight = newValue.first.first
+            topReflectionHeight = newValue.first.second
             cornerRadius = newValue.second
         }
     }
 
     func path(in rect: CGRect) -> Path {
-        Path(roundedRect: CGRect(x: rect.minX, y: rect.minY, width: rect.width,
-                                height: rect.height + reflectionHeight),
+        Path(roundedRect: CGRect(x: rect.minX, y: rect.minY - topReflectionHeight, width: rect.width,
+                                height: rect.height + reflectionHeight + topReflectionHeight),
              cornerRadius: cornerRadius)
     }
 }

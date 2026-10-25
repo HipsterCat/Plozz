@@ -22,6 +22,7 @@ public struct LiveTVPrototypePlayback {
     public let isExpanded: Bool
     public let expandPreview: () -> Void
     public let previewReflectionHeight: CGFloat
+    public let previewTopReflectionHeight: CGFloat
     public let returnToGuide: () -> Void
     public let playPauseRequest: Int
     public let playbackStarted: () -> Void
@@ -395,12 +396,15 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             : (expanded ? layout.bounds : layout.videoFrame)
                         let reflectionHeight = !expanded && !showingMultiview && !reduceTransparency
                             ? layout.videoReflectionHeight : 0
-                        player(playbackInput(for: pane, prepared: prepared, reflectionHeight: reflectionHeight))
+                        let topReflectionHeight = reflectionHeight > 0 ? layout.videoTopReflectionHeight : 0
+                        player(playbackInput(for: pane, prepared: prepared, reflectionHeight: reflectionHeight,
+                                             topReflectionHeight: topReflectionHeight))
                     .environment(\.themePalette, ThemePalette.dark)
                     .environment(\.colorScheme, .dark)
                     .frame(width: videoFrame.width, height: videoFrame.height)
                     .clipShape(PrototypeVideoClip(
                         reflectionHeight: reflectionHeight,
+                        topReflectionHeight: topReflectionHeight,
                         cornerRadius: showingMultiview && multiview.isEditingLayout ? 10 : 0))
                     .overlay {
                         #if os(tvOS)
@@ -559,7 +563,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     }
 
     private func playbackInput(
-        for pane: LiveTVMultiviewPane, prepared: LiveTVPreparedStream, reflectionHeight: CGFloat = 0
+        for pane: LiveTVMultiviewPane, prepared: LiveTVPreparedStream, reflectionHeight: CGFloat = 0,
+        topReflectionHeight: CGFloat = 0
     ) -> LiveTVPrototypePlayback {
         let presentationID = playback.presentationID
         return LiveTVPrototypePlayback(
@@ -577,6 +582,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 playback.expandPreview(presentationID: presentationID, preparedID: prepared.id)
             },
             previewReflectionHeight: reflectionHeight,
+            previewTopReflectionHeight: topReflectionHeight,
             returnToGuide: {
                 guard playback.ownsPlayerPresentation(presentationID) else { return }
                 leavePlaybackForGuide()

@@ -34,11 +34,15 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             XCTAssertEqual(measured.videoFrame.minY, -6, "Keep an 8 pt gap below the actual toolbar controls.")
             XCTAssertEqual(searching.videoReflectionHeight, 0)
             XCTAssertEqual(collapsed.videoReflectionHeight, 0)
+            XCTAssertEqual(collapsed.videoTopReflectionHeight, 0)
+            XCTAssertEqual(searching.videoTopReflectionHeight, 0)
             if playing.bounds.height > playing.bounds.width {
                 XCTAssertGreaterThan(playing.videoReflectionHeight, 0)
+                XCTAssertEqual(playing.videoTopReflectionHeight, playing.videoFrame.minY - playing.bounds.minY)
                 XCTAssertLessThanOrEqual(playing.videoReflectionHeight, playing.videoFrame.height)
             } else {
                 XCTAssertEqual(playing.videoReflectionHeight, 0)
+                XCTAssertEqual(playing.videoTopReflectionHeight, 0)
             }
         }
     }
@@ -83,13 +87,39 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
         XCTAssertTrue(engine.makeVideoOutputView() === output)
         XCTAssertTrue(output.isDescendant(of: video))
         XCTAssertFalse(video.clipsToBounds)
-        let compositor = try XCTUnwrap(originalHost.superview?.superview)
+        let compositor = try XCTUnwrap(video.subviews.first)
         let fade = try XCTUnwrap(compositor.layer.mask as? CAGradientLayer)
         XCTAssertGreaterThan(fade.frame.height, video.bounds.height)
         XCTAssertEqual((fade.colors as? [CGColor])?.last?.alpha, 0,
                        "The reflection and blur must disappear into the actual guide background.")
+        let colors = try XCTUnwrap(fade.colors as? [CGColor])
+        let locations = try XCTUnwrap(fade.locations).map { CGFloat($0.doubleValue) }
+        XCTAssertEqual(colors.count, locations.count)
+        XCTAssertEqual(colors[1].alpha, 1, "Keep full intensity at the start of the reflection.")
+        let samples: [(CGFloat, CGFloat)] = [(0.25, 0.6), (0.75, 0.1)]
+        for (fraction, maximumAlpha) in samples {
+            let position = (video.bounds.height + (fade.frame.height - video.bounds.height) * fraction)
+                / fade.frame.height
+            let upper = try XCTUnwrap(locations.firstIndex { $0 > position })
+            let lower = upper - 1
+            let progress = (position - locations[lower]) / (locations[upper] - locations[lower])
+            let alpha = colors[lower].alpha + (colors[upper].alpha - colors[lower].alpha) * progress
+            XCTAssertLessThan(alpha, maximumAlpha, "Fade early, leaving only a faint final quarter.")
+        }
         XCTAssertTrue(compositor.subviews.contains { $0 is UIVisualEffectView },
                       "The same transparency mask must cover the blur, not only the video replica.")
+        let originalFrame = output.convert(output.bounds, to: video)
+        video.updateReflection(height: video.bounds.height, topHeight: 100)
+        try await settle(window)
+        let twoSidedFade = try XCTUnwrap(compositor.layer.mask as? CAGradientLayer)
+        let twoSidedColors = try XCTUnwrap(twoSidedFade.colors as? [CGColor])
+        XCTAssertEqual(twoSidedColors.first?.alpha, 0)
+        XCTAssertEqual(twoSidedColors.last?.alpha, 0)
+        XCTAssertEqual(compositor.frame.minY, -100)
+        XCTAssertEqual(output.convert(output.bounds, to: video), originalFrame,
+                       "Adding an upper reflection must not move or resize the original video.")
+        XCTAssertTrue(output.superview === originalHost)
+        XCTAssertEqual(compositor.subviews.filter { $0 is UIVisualEffectView && !$0.isHidden }.count, 2)
         video.updateReflection(height: 0)
         try await settle(window)
         XCTAssertTrue(output.superview === originalHost, "Fullscreen must not reparent the playing surface.")

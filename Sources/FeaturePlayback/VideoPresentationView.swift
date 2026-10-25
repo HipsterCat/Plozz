@@ -52,11 +52,12 @@ final class VideoPresentationView: UIView {
         #endif
     }
 
-    func updateReflection(height: CGFloat) {
+    func updateReflection(height: CGFloat, topHeight: CGFloat = 0) {
         #if os(iOS)
-        guard reflection.reflectionHeight != height else { return }
+        guard reflection.reflectionHeight != height || reflection.topReflectionHeight != topHeight else { return }
         reflection.reflectionHeight = height
-        clipsToBounds = height <= 0
+        reflection.topReflectionHeight = topHeight
+        clipsToBounds = height <= 0 && topHeight <= 0
         setNeedsLayout()
         #endif
     }
@@ -113,8 +114,10 @@ final class VideoPresentationView: UIView {
         fitBounds = resolvedFitBounds
         #if os(iOS)
         reflection.videoHeight = bounds.height
-        reflection.frame = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width,
-                                  height: bounds.height + reflection.reflectionHeight)
+        reflection.frame = CGRect(x: bounds.minX, y: bounds.minY - reflection.topReflectionHeight,
+                                  width: bounds.width,
+                                  height: bounds.height + reflection.reflectionHeight + reflection.topReflectionHeight)
+        reflection.pictureTop = max(0, videoRect?.minY ?? 0)
         reflection.pictureBottom = min(bounds.height, videoRect?.maxY ?? bounds.height)
         reflection.pictureHeight = min(bounds.height, videoRect?.height ?? bounds.height)
         reflection.layoutIfNeeded()
@@ -146,15 +149,24 @@ final class VideoPresentationView: UIView {
         var pictureBottom: CGFloat = 0 {
             didSet { if oldValue != pictureBottom { setNeedsLayout() } }
         }
+        var pictureTop: CGFloat = 0 {
+            didSet { if oldValue != pictureTop { setNeedsLayout() } }
+        }
         var pictureHeight: CGFloat = 0 {
             didSet { if oldValue != pictureHeight { setNeedsLayout() } }
         }
         var reflectionHeight: CGFloat = 0 {
             didSet { if oldValue != reflectionHeight { setNeedsLayout() } }
         }
+        var topReflectionHeight: CGFloat = 0 {
+            didSet { if oldValue != topReflectionHeight { setNeedsLayout() } }
+        }
+        private static let fadeSteps: [CGFloat] = [0, 0.2, 0.4, 0.6, 0.8, 1]
+        private let topReplicas = VideoPreviewReplicaView()
         private let replicas = VideoPreviewReplicaView()
         private let crop = CALayer()
         private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        private let topBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         private let fade = CAGradientLayer()
 
         override init(frame: CGRect) {
@@ -163,15 +175,16 @@ final class VideoPresentationView: UIView {
             accessibilityElementsHidden = true
             source.backgroundColor = .black
             source.clipsToBounds = true
-            addSubview(replicas)
+            addSubview(topReplicas)
+            topReplicas.addSubview(replicas)
             replicas.addSubview(source)
             crop.backgroundColor = UIColor.white.cgColor
             replicas.layer.mask = crop
             addSubview(blur)
+            addSubview(topBlur)
             layer.mask = fade
             fade.startPoint = CGPoint(x: 0.5, y: 0)
             fade.endPoint = CGPoint(x: 0.5, y: 1)
-            fade.colors = [1, 1, 0.88, 0.5, 0].map { UIColor.white.withAlphaComponent($0).cgColor }
         }
 
         @available(*, unavailable)
@@ -181,26 +194,49 @@ final class VideoPresentationView: UIView {
             super.layoutSubviews()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            replicas.frame = CGRect(x: 0, y: 0, width: bounds.width, height: videoHeight)
+            topReplicas.frame = CGRect(x: 0, y: topReflectionHeight, width: bounds.width, height: videoHeight)
+            replicas.frame = topReplicas.bounds
             source.frame = replicas.bounds
             let height = min(reflectionHeight, pictureHeight)
-            let total = max(1, videoHeight + height)
+            let topHeight = min(topReflectionHeight, pictureHeight)
+            let total = max(1, topHeight + videoHeight + height)
             replicas.replicaLayer.instanceCount = height > 0 ? 2 : 1
+            topReplicas.replicaLayer.instanceCount = topHeight > 0 ? 2 : 1
             blur.isHidden = height <= 0
+            topBlur.isHidden = topHeight <= 0
             replicas.replicaLayer.instanceTransform = CATransform3DConcat(
                 CATransform3DMakeScale(1, -1, 1),
                 CATransform3DMakeTranslation(0, pictureBottom, 0)
             )
-            crop.frame = CGRect(x: 0, y: 0, width: bounds.width, height: total)
+            topReplicas.replicaLayer.instanceTransform = CATransform3DConcat(
+                CATransform3DMakeScale(1, -1, 1),
+                CATransform3DMakeTranslation(0, pictureTop - videoHeight, 0)
+            )
+            crop.frame = CGRect(x: 0, y: 0, width: bounds.width, height: videoHeight + height)
             let blurScale: CGFloat = 4
             blur.bounds = CGRect(x: 0, y: 0, width: bounds.width / blurScale, height: height / blurScale)
-            blur.center = CGPoint(x: bounds.midX, y: videoHeight + height / 2)
+            blur.center = CGPoint(x: bounds.midX, y: topReflectionHeight + videoHeight + height / 2)
             blur.transform = CGAffineTransform(scaleX: blurScale, y: blurScale)
+            topBlur.bounds = CGRect(x: 0, y: 0, width: bounds.width / blurScale, height: topHeight / blurScale)
+            topBlur.center = CGPoint(x: bounds.midX, y: topReflectionHeight - topHeight / 2)
+            topBlur.transform = CGAffineTransform(scaleX: blurScale, y: blurScale)
             // Fade both the replica and its blur to the real background, not a flat color.
-            fade.frame = CGRect(x: 0, y: 0, width: bounds.width, height: total)
-            fade.locations = [0, videoHeight / total, (videoHeight + height * 0.4) / total,
-                              (videoHeight + height * 0.8) / total, 1].map { NSNumber(value: Double($0)) }
-            layer.mask = height > 0 ? fade : nil
+            fade.frame = CGRect(x: 0, y: topReflectionHeight - topHeight, width: bounds.width, height: total)
+            var locations: [CGFloat] = [0]
+            var alphas: [CGFloat] = [topHeight > 0 ? 0 : 1]
+            for step in Self.fadeSteps.dropFirst() where topHeight > 0 {
+                locations.append(topHeight * step / total)
+                alphas.append(step * step)
+            }
+            locations.append((topHeight + videoHeight) / total)
+            alphas.append(1)
+            for step in Self.fadeSteps.dropFirst() where height > 0 {
+                locations.append((topHeight + videoHeight + height * step) / total)
+                alphas.append((1 - step) * (1 - step))
+            }
+            fade.locations = locations.map { NSNumber(value: Double($0)) }
+            fade.colors = alphas.map { UIColor.white.withAlphaComponent($0).cgColor }
+            layer.mask = height > 0 || topHeight > 0 ? fade : nil
             CATransaction.commit()
         }
     }
