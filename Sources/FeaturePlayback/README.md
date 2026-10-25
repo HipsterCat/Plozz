@@ -453,6 +453,9 @@ The memory count excludes purgeable played history; disk counts include retained
 segments/packets. Neither is substituted for contiguous playable seconds ahead.
 Unsupported routes, cleanup, missing telemetry and replacement sessions clear
 the rows. This is temporary cache usage, not download progress or guaranteed duration.
+The TV overlay uses consistent label/value rows across all sections and groups
+the source and engine beneath its left-aligned title. Numeric values use tabular
+digits; the panel still yields to playback controls rather than covering them.
 
 `PlaybackReadAheadBufferingHostedTests` uses the real engine with synthetic
 H.264/AAC media and a range-serving loopback source. It compares Automatic with

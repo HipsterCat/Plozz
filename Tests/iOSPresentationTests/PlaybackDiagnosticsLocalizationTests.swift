@@ -210,16 +210,17 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
                     request.recognitionLevel = .accurate
                     try VNImageRequestHandler(cgImage: headerImage).perform([request])
                     let observations = request.results ?? []
-                    for (text, expectedX) in [
-                        ("Playback Diagnostics", 24.0),
-                        ("Playing from", 24.0 + (1280.0 - 96.0) / 3 + 24),
-                        ("AetherEngine", 24.0 + 2 * ((1280.0 - 96.0) / 3 + 24))
-                    ] {
+                    for text in ["Playback Diagnostics", "Playing from", "AetherEngine"] {
                         let observation = try XCTUnwrap(observations.first {
                             $0.topCandidates(1).first?.string.contains(text) == true
                         }, "Missing header \(text)")
-                        XCTAssertEqual(observation.boundingBox.minX * Double(image.width) / 2,
-                                       expectedX, accuracy: 4, "Header must follow the section keylines.")
+                        if text == "Playback Diagnostics" {
+                            XCTAssertEqual(observation.boundingBox.minX * Double(image.width) / 2,
+                                           24, accuracy: 4)
+                        } else {
+                            XCTAssertLessThan(observation.boundingBox.maxX * Double(image.width) / 2,
+                                              640, "Source and engine must remain grouped on the left.")
+                        }
                     }
                 }
                 let attachment = XCTAttachment(image: UIImage(cgImage: image))

@@ -45,7 +45,7 @@ struct PlaybackDiagnosticsOverlay: View {
         let columnWidth = max(0, (width - 96) / 3)
         return VStack(alignment: .leading, spacing: 0) {
             // Header with provider logo
-            header(columnWidth: columnWidth)
+            header
 
             if let diagnostics {
                 sectionsGrid(for: diagnostics, columnWidth: columnWidth)
@@ -121,41 +121,29 @@ struct PlaybackDiagnosticsOverlay: View {
     // MARK: - Header
 
     @ViewBuilder
-    private func header(columnWidth: CGFloat) -> some View {
+    private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 24) {
-                Text("Playback Diagnostics")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(palette.primaryText)
-                    .frame(width: columnWidth, alignment: .leading)
-                VStack(alignment: .leading, spacing: 0) {
-                    if let provider = diagnostics?.sourceProvider {
-                        HStack(spacing: 6) {
-                            ProviderBrandMark(provider: provider, size: 16, showsBackground: false)
-                                .frame(width: 16, height: 16)
-                                .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
-                            Text("Playing from \(diagnostics?.serverName ?? provider.displayName)")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(palette.primaryText)
-                                .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .frame(width: columnWidth, alignment: .leading)
-                VStack(alignment: .leading, spacing: 0) {
-                    if let engine = diagnostics?.engineName {
-                        Text(engine)
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .foregroundStyle(palette.accent)
-                            .padding(.vertical, 3)
+            Text("Playback Diagnostics")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(palette.primaryText)
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                if let provider = diagnostics?.sourceProvider {
+                    HStack(spacing: 6) {
+                        ProviderBrandMark(provider: provider, size: 14, showsBackground: false)
+                            .frame(width: 14, height: 14)
+                        Text("Playing from \(diagnostics?.serverName ?? provider.displayName)")
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .frame(width: columnWidth, alignment: .leading)
+                if let engine = diagnostics?.engineName {
+                    Text(engine).fixedSize(horizontal: false, vertical: true)
+                }
             }
+            .font(.system(size: 14))
+            .foregroundStyle(palette.secondaryText)
         }
-        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 16)
     }
 
     // MARK: - Sections
@@ -207,18 +195,15 @@ struct PlaybackDiagnosticsOverlay: View {
     @ViewBuilder
     func videoSection(_ d: PlaybackDiagnostics) -> some View {
         section(d.mode == .transcode ? "CURRENT VIDEO" : "VIDEO") {
-            if presentation == .television {
-                summaryValue(compactParts([d.videoCodecText, d.resolutionWithQualityText, compactFrameRate(d)]))
-            } else if d.mode == .transcode {
+            if d.mode == .transcode {
                 row(LocalizedStringResource("Codec", comment: "Playback diagnostics label for the video or audio encoding format."), d.videoCodecText)
                 row("Resolution", d.resolutionWithQualityText)
             } else {
                 optionalRow(LocalizedStringResource("Codec", comment: "Playback diagnostics label for the video or audio encoding format."), d.videoCodecText)
                 optionalRow("Resolution", d.resolutionWithQualityText)
             }
-            if presentation == .mobile {
-                optionalRow(LocalizedStringResource("Frame Rate", comment: "Playback diagnostics label for video frames per second."), frameRateCombined(d))
-            }
+            optionalRow(LocalizedStringResource("Frame Rate", comment: "Playback diagnostics label for video frames per second."),
+                        presentation == .television ? compactFrameRate(d) : frameRateCombined(d))
             if d.mode == .transcode {
                 if let bitrate = d.videoBitrate {
                     row(LocalizedStringResource("Estimated bitrate", comment: "Playback diagnostics label for the estimated bitrate of the current transcoded video."), PlaybackDiagnostics.formatBitrate(bitrate))
@@ -234,19 +219,15 @@ struct PlaybackDiagnosticsOverlay: View {
     @ViewBuilder
     private func audioSection(_ d: PlaybackDiagnostics) -> some View {
         section(d.mode == .transcode ? "CURRENT AUDIO" : "AUDIO") {
-            if presentation == .television {
-                summaryValue(d.audioLineText)
-            } else if d.mode == .transcode {
+            if d.mode == .transcode {
                 row(LocalizedStringResource("Codec", comment: "Playback diagnostics label for the video or audio encoding format."), d.audioCodecText)
                 row("Channels", d.audioChannelsText)
             } else {
                 optionalRow(LocalizedStringResource("Codec", comment: "Playback diagnostics label for the video or audio encoding format."), d.audioCodecText)
                 optionalRow("Channels", d.audioChannelsText)
             }
-            if presentation == .mobile {
-                optionalRow(LocalizedStringResource("Sample Rate", comment: "Playback diagnostics label for the audio sampling frequency."), d.audioSampleRateText)
-                optionalRow("Bitrate", d.audioBitrateText)
-            }
+            optionalRow(LocalizedStringResource("Sample Rate", comment: "Playback diagnostics label for the audio sampling frequency."), d.audioSampleRateText)
+            optionalRow("Bitrate", d.audioBitrateText)
             if d.mode == .plozzigen {
                 optionalRow(LocalizedStringResource("Encoding", comment: "Playback diagnostics: the active engine's audio encoding step, not the original recording's quality or the receiver's output."),
                             d.audioEncodingDescription)
@@ -369,7 +350,7 @@ struct PlaybackDiagnosticsOverlay: View {
     private func section(_ title: LocalizedStringResource, @ViewBuilder rows: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(presentation == .mobile ? .caption.weight(.bold) : .system(size: 11, weight: .bold, design: .monospaced))
+                .font(presentation == .mobile ? .caption.weight(.bold) : .system(size: 11, weight: .semibold))
                 .foregroundStyle(palette.secondaryText.opacity(presentation == .mobile ? 1 : 0.6))
                 .padding(.bottom, 1)
             if presentation == .mobile {
@@ -382,14 +363,6 @@ struct PlaybackDiagnosticsOverlay: View {
     }
 
     // MARK: - Rows
-
-    private func summaryValue(_ value: String) -> some View { // l10n:content — combined measured media format
-        Text(verbatim: value)
-            .font(.system(size: 14, weight: .semibold, design: .monospaced))
-            .foregroundStyle(palette.primaryText)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
 
     @ViewBuilder
     private func optionalRow(_ label: LocalizedStringResource, _ value: String, lineLimit: Int? = nil) -> some View {   // l10n:content — diagnostic value
@@ -442,12 +415,12 @@ struct PlaybackDiagnosticsOverlay: View {
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 16) {
                 label
-                    .font(.system(size: 14, design: .monospaced))
+                    .font(.system(size: 14))
                     .foregroundStyle(palette.secondaryText)
-                    .frame(width: 150, alignment: .leading)
+                    .frame(width: 120, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                 value
-                    .font(.system(size: 14, design: .monospaced).weight(.semibold))
+                    .font(.system(size: 14, weight: .medium).monospacedDigit())
                     .foregroundStyle(palette.primaryText)
                     .lineLimit(lineLimit)
                     .fixedSize(horizontal: false, vertical: true)
