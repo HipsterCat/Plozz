@@ -265,6 +265,11 @@ watch history and planning-list behavior are documented in
   profile-scoped caption settings; navigation and preview focus never change
   saved values. Previews highlight the affected captions, not a duplicate table
   describing whether each label is on or off.
+  TV Page opens a native checked selection menu rather than cycling through
+  pages. TV diagrams use fewer sample cards and larger row headings for viewing
+  at a distance. Mixed has a visible, platform-specific explanation; Home and
+  Recommended explicitly distinguish per-page inheritance from their shared
+  Continue Watching On/Off override.
 - **Customize Libraries** lives in Screens & Navigation on TV and mobile.
   Library Navigation comes first, including the first Down move from Back on TV.
   The Recommended Page controls follow it; headings and helper copy name the

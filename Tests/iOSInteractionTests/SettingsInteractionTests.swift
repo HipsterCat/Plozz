@@ -463,14 +463,23 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(target.value as? String, "Recommended")
         XCTAssertTrue(value.exists)
         XCTAssertTrue(watching.exists, "Recommended must show both options together.")
+        XCTAssertEqual(value.value as? String, "Mixed")
+        let explanation = app.staticTexts["card-label-mixed-help"]
+        XCTAssertTrue(explanation.exists)
+        XCTAssertTrue(explanation.label.contains("series artwork"))
+        XCTAssertFalse(explanation.label.contains("Showcase"), "Mobile help must describe mobile behavior.")
+        capture("library-labels-mixed-explained")
         selectCustomization(value, expecting: "Off")
+        XCTAssertFalse(explanation.exists, "Mixed help must follow the selected setting.")
         capture("library-labels-recommended-off")
         XCTAssertEqual(watching.value as? String, "Follow page")
         let home = app.descendants(matching: .any)["card-label-preview-home"].firstMatch
         let recommended = app.descendants(matching: .any)["card-label-preview-recommended"].firstMatch
         XCTAssertFalse(home.exists, "The preview should stay on the selected page.")
         XCTAssertTrue(recommended.exists)
-        XCTAssertTrue(app.staticTexts["Continue Watching also affects Home."].exists)
+        XCTAssertTrue(app.staticTexts[
+            "Continue Watching: Follow page uses each page's setting. On or Off applies to both Home and Recommended."
+        ].exists)
         selectCustomization(watching, expecting: "On")
         capture("library-labels-watching-shared-on")
         XCTAssertEqual(value.value as? String, "Off", "Continue Watching must not edit the page's labels.")

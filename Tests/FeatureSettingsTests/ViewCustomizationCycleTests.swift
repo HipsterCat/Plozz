@@ -4,6 +4,43 @@ import CoreUI
 import XCTest
 
 final class ViewCustomizationCycleTests: XCTestCase {
+    func testMixedHelpExplainsBehaviorOnlyWhenSelected() throws {
+        var settings = CardCaptionSettings.default
+        for view in [CardCaptionView.home, .recommended] {
+            for choice in view.customizationChoices {
+                settings.setOverride(choice, for: view)
+                let explanation = settings.cardLabelMixedExplanation(in: view)
+                XCTAssertEqual(explanation != nil, choice == .mixed)
+                if choice == .mixed {
+                    let text = String(localized: try XCTUnwrap(explanation))
+                    XCTAssertTrue(text.contains("series artwork"))
+                    XCTAssertTrue(text.contains("other cards keep their labels"))
+                    #if os(tvOS)
+                    XCTAssertTrue(text.contains("Showcase"))
+                    #else
+                    XCTAssertFalse(text.contains("Showcase"))
+                    #endif
+                    XCTAssertEqual(settings.cardLabelHelp(in: view), explanation)
+                } else {
+                    XCTAssertEqual(settings.cardLabelHelp(in: view), view.cardLabelDetail)
+                }
+            }
+        }
+        XCTAssertNil(settings.cardLabelMixedExplanation(in: .browse))
+        XCTAssertNil(settings.cardLabelMixedExplanation(in: .continueWatching))
+    }
+
+    func testSharedRowCopyDistinguishesEachParentFromTheSharedOverride() throws {
+        let home = try XCTUnwrap(CardCaptionSettingsPage.home.sharedRowNote)
+        XCTAssertEqual(home, CardCaptionSettingsPage.recommended.sharedRowNote)
+        let text = String(localized: home)
+        XCTAssertTrue(text.contains("each page's setting"))
+        XCTAssertTrue(text.contains("On or Off applies to both Home and Recommended"))
+        for page in CardCaptionSettingsPage.allCases where page != .home && page != .recommended {
+            XCTAssertNil(page.sharedRowNote)
+        }
+    }
+
     func testLibraryLabelControlsAreGroupedByPage() {
         XCTAssertEqual(CardCaptionSettingsScope.libraries.pages, [.recommended, .browse, .collections, .playlists])
         XCTAssertEqual(CardCaptionSettingsPage.recommended.controls, [.recommended, .continueWatching])

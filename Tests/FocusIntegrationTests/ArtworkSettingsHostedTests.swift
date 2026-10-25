@@ -10,6 +10,33 @@ import XCTest
 
 @MainActor
 final class ArtworkSettingsHostedTests: XCTestCase {
+    func testTVLabelPreviewHeadingsAreReadableAtTheDisplayedSize() async throws {
+        for page in [CardCaptionSettingsPage.home, .detail] {
+            let preview = CardLabelScopePreview.snapshot(
+                page: page, editing: page.firstControl, settings: .default,
+                isShowcase: false, seriesArtwork: true, layout: .landscape
+            )
+            try await withScreen(content:
+                VStack {
+                    CardLabelScopePreview(preview: preview, style: .borderless)
+                        .frame(width: CardLabelScopePreview.illustrationWidth)
+                    Button("Preview action") {}
+                }
+            ) { window in
+                let text = try await self.capture(window, name: "readable-tv-labels-\(page.rawValue)", includeMaster: true)
+                let labels = try self.collectionLabelFrames(in: window)
+                for row in preview.rows {
+                    let title = String(localized: row.title)
+                    XCTAssertTrue(text.contains(title), text)
+                    let label = try XCTUnwrap(labels.first { $0.text == title })
+                    let ink = try self.textInkBounds(in: self.renderWindow(window), frame: label.frame)
+                    XCTAssertGreaterThanOrEqual(ink.height, 16, "Row names must not become miniature diagram text.")
+                }
+                XCTAssertEqual(self.focusItems(in: window).count, 1, "The diagram remains non-interactive.")
+            }
+        }
+    }
+
     func testLibraryLabelPreviewDoesNotRepeatVisibleStatusText() async throws {
         for showsLabels in [false, true] {
             let preview = CardLabelScopePreview.Snapshot(
@@ -1126,7 +1153,15 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                 cards.captions = CardCaptionSettings(preference: preference)
                 let text = try await self.capture(window, name: "label-help-\(preference.rawValue)", includeMaster: true)
                 XCTAssertTrue(text.contains(expected), text)
-                XCTAssertTrue(text.contains("Changes labels below Home cards"), text)
+                if preference == .recommended {
+                    XCTAssertTrue(text.contains("Mixed hides labels in Showcase"), text)
+                    XCTAssertTrue(text.contains("other cards keep their labels"), text)
+                } else {
+                    XCTAssertTrue(text.contains("Changes labels below Home cards"), text)
+                    XCTAssertFalse(text.contains("Mixed hides labels"), text)
+                }
+                XCTAssertTrue(text.contains("each page's setting"), text)
+                XCTAssertTrue(text.contains("both Home and Recommended"), text)
                 XCTAssertFalse(text.contains("Labels are visible"), text)
                 XCTAssertFalse(text.contains("Labels are hidden"), text)
             }

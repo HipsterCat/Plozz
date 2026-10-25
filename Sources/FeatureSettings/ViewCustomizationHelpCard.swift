@@ -80,7 +80,11 @@ struct ViewCustomizationHelpCard: View {
             .frame(width: 256, height: 144)
         case .pageCaptions(let preview, let style):
             CardLabelScopePreview(preview: preview, style: style)
+                #if os(tvOS)
+                .frame(width: CardLabelScopePreview.illustrationWidth)
+                #else
                 .frame(width: 280)
+                #endif
         }
     }
 

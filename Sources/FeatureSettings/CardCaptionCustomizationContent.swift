@@ -38,8 +38,8 @@ enum CardCaptionSettingsPage: String, CaseIterable {
 
     var sharedRowNote: LocalizedStringResource? {
         switch self {
-        case .home: "Continue Watching also affects Recommended."
-        case .recommended: "Continue Watching also affects Home."
+        case .home, .recommended:
+            "Continue Watching: Follow page uses each page's setting. On or Off applies to both Home and Recommended."
         default: nil
         }
     }
@@ -89,21 +89,22 @@ struct CardCaptionCustomizationContent: View {
             focusedHelp: { id in
                 let view = views.first { "card-label-view-\($0.rawValue)" == id } ?? selectedPage.firstControl
                 return ViewCustomizationHelp(
-                    detail: view.cardLabelDetail,
+                    detail: settings.cardLabelHelp(in: view),
                     illustration: .pageCaptions(preview(editing: view), style: style)
                 )
             }
         ) {
             if scope.pages.count > 1 {
                 Section {
-                    ViewCustomizationRow(
-                        id: "card-label-page", title: "Page", value: selectedPage.title
-                    ) {
-                        guard let index = scope.pages.firstIndex(of: selectedPage) else {
-                            preconditionFailure("The selected caption page must belong to this editor.")
+                    SettingsMenuRow(title: "Page", value: Text(selectedPage.title)) {
+                        Picker("Page", selection: $selectedPage) {
+                            ForEach(scope.pages, id: \.self) { page in
+                                Text(page.title).tag(page)
+                            }
                         }
-                        selectedPage = scope.pages[(index + 1) % scope.pages.count]
                     }
+                    .accessibilityIdentifier("card-label-page")
+                    .modifier(ViewCustomizationRowFocus(id: "card-label-page"))
                 }
             }
             Section {
@@ -134,6 +135,10 @@ struct CardCaptionCustomizationContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if selectedPage != .detail {
                         Text(selectedPage.firstControl.cardLabelDetail)
+                    }
+                    if let explanation = settings.cardLabelMixedExplanation(in: selectedPage.firstControl) {
+                        Text(explanation)
+                            .accessibilityIdentifier("card-label-mixed-help")
                     }
                     if let note = selectedPage.sharedRowNote {
                         Text(note)
@@ -188,9 +193,9 @@ extension CardCaptionView {
     var cardLabelDetail: LocalizedStringResource {
         switch self {
         case .home:
-            "Changes labels below Home cards, not the hero logo or description. Continue Watching follows Home unless set to On or Off."
+            "Changes labels below Home cards, not the hero logo or description."
         case .recommended:
-            "Changes labels below Recommended cards in all libraries. Continue Watching follows this page unless its labels are set to On or Off."
+            "Changes labels below Recommended cards in all libraries."
         case .browse:
             "Changes labels below Browse cards, including titles inside collections and playlists."
         case .collections:
@@ -206,6 +211,21 @@ extension CardCaptionView {
         case .extras: "Changes labels below trailers, clips, and other extras on detail pages."
         case .filmography: "Changes labels below titles on a person's page."
         }
+    }
+}
+
+extension CardCaptionSettings {
+    func cardLabelMixedExplanation(in view: CardCaptionView) -> LocalizedStringResource? {
+        guard customization(in: view) == .mixed else { return nil }
+        #if os(tvOS)
+        return "Mixed hides labels in Showcase and on series artwork; other cards keep their labels."
+        #else
+        return "Mixed hides labels on series artwork; other cards keep their labels."
+        #endif
+    }
+
+    func cardLabelHelp(in view: CardCaptionView) -> LocalizedStringResource {
+        cardLabelMixedExplanation(in: view) ?? view.cardLabelDetail
     }
 }
 
@@ -258,7 +278,18 @@ struct CardLabelScopePreview: View {
         .accessibilityIdentifier("card-label-preview-\(preview.page.rawValue)")
     }
 
-    private var diagramHeight: CGFloat { CGFloat(max(2, preview.rows.count)) * 86 + 8 }
+    #if os(tvOS)
+    static let illustrationWidth: CGFloat = 420
+    private let rowHeight: CGFloat = 100
+    private let rowTitleSize: CGFloat = 18
+    private let artworkTop: CGFloat = 28
+    #else
+    private let rowHeight: CGFloat = 86
+    private let rowTitleSize: CGFloat = 9
+    private let artworkTop: CGFloat = 14
+    #endif
+
+    private var diagramHeight: CGFloat { CGFloat(max(2, preview.rows.count)) * rowHeight + 8 }
 
     private var diagram: some View {
         Canvas { context, size in
@@ -271,20 +302,28 @@ struct CardLabelScopePreview: View {
                          with: .color(palette.settingsBackground))
             let rows = preview.rows.count == 1 ? preview.rows + preview.rows : preview.rows
             for (index, row) in rows.enumerated() {
-                let top = CGFloat(index) * 86 + 8
+                let top = CGFloat(index) * rowHeight + 8
                 context.draw(
-                    Text(row.title).font(.system(size: 9, weight: .medium))
+                    Text(row.title).font(.system(size: rowTitleSize, weight: .medium))
                         .foregroundColor(palette.secondaryText),
                     at: CGPoint(x: 12, y: top), anchor: .topLeading
                 )
                 let landscape = (row.isContinueWatching && preview.layout == .landscape)
                     || row.view == .episodes || row.view == .extras
+                #if os(tvOS)
+                let width: CGFloat = landscape ? 96 : 36
+                let count = landscape ? 2 : 4
+                let height: CGFloat = 54
+                let stride = (296 - width) / CGFloat(count - 1)
+                #else
                 let width: CGFloat = landscape ? 88 : 32
                 let count = landscape ? 3 : 6
                 let height: CGFloat = landscape ? 49.5 : 48
+                let stride: CGFloat = landscape ? 102 : 50
+                #endif
                 for column in 0..<count {
-                    let x = 12 + CGFloat(column) * (landscape ? 102 : 50)
-                    let y = top + 14
+                    let x = 12 + CGFloat(column) * stride
+                    let y = top + artworkTop
                     if style == .framed {
                         context.fill(Path(roundedRect: CGRect(x: x - 3, y: y - 3, width: width + 6, height: height + 17),
                                           cornerRadius: 4), with: .color(palette.fill))
