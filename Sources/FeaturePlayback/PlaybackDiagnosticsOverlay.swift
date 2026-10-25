@@ -42,12 +42,13 @@ struct PlaybackDiagnosticsOverlay: View {
     }
 
     func televisionPanel(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let columnWidth = max(0, (width - 96) / 3)
+        return VStack(alignment: .leading, spacing: 0) {
             // Header with provider logo
-            header
+            header(columnWidth: columnWidth)
 
             if let diagnostics {
-                sectionsGrid(for: diagnostics, width: width)
+                sectionsGrid(for: diagnostics, columnWidth: columnWidth)
             } else {
                 Text("Gathering metrics…")
                     .font(.system(size: 15, design: .monospaced))
@@ -120,32 +121,38 @@ struct PlaybackDiagnosticsOverlay: View {
     // MARK: - Header
 
     @ViewBuilder
-    private var header: some View {
+    private func header(columnWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 24) {
                 Text("Playback Diagnostics")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(palette.primaryText)
-                Spacer()
-                if let provider = diagnostics?.sourceProvider {
-                    HStack(spacing: 6) {
-                        ProviderBrandMark(provider: provider, size: 16, showsBackground: false)
-                            .frame(width: 16, height: 16)
-                            .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
-                        Text("Playing from \(diagnostics?.serverName ?? provider.displayName)")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(palette.primaryText)
-                            .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                    .frame(width: columnWidth, alignment: .leading)
+                VStack(alignment: .leading, spacing: 0) {
+                    if let provider = diagnostics?.sourceProvider {
+                        HStack(spacing: 6) {
+                            ProviderBrandMark(provider: provider, size: 16, showsBackground: false)
+                                .frame(width: 16, height: 16)
+                                .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                            Text("Playing from \(diagnostics?.serverName ?? provider.displayName)")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(palette.primaryText)
+                                .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
-                if let engine = diagnostics?.engineName {
-                    Text(engine)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(palette.accent)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(palette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                .frame(width: columnWidth, alignment: .leading)
+                VStack(alignment: .leading, spacing: 0) {
+                    if let engine = diagnostics?.engineName {
+                        Text(engine)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(palette.accent)
+                            .padding(.vertical, 3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .frame(width: columnWidth, alignment: .leading)
             }
         }
         .padding(.bottom, 10)
@@ -154,8 +161,7 @@ struct PlaybackDiagnosticsOverlay: View {
     // MARK: - Sections
 
     @ViewBuilder
-    private func sectionsGrid(for d: PlaybackDiagnostics, width: CGFloat) -> some View {
-        let columnWidth = max(0, (width - 96) / 3)
+    private func sectionsGrid(for d: PlaybackDiagnostics, columnWidth: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 12) {
                 sourceSection(d)
@@ -320,8 +326,24 @@ struct PlaybackDiagnosticsOverlay: View {
             if let cache = d.sessionCache {
                 let format = ByteCountFormatStyle(style: .binary, allowedUnits: [.mb, .gb], spellsOutZero: false)
                     .locale(locale)
+                row(LocalizedStringResource("Cache storage", comment: "Playback diagnostics: whether buffered media is kept in memory or on disk."),
+                    cache.storage == .memory
+                        ? Text(LocalizedStringResource("Memory", comment: "Playback cache storage in RAM."))
+                        : Text(LocalizedStringResource("Disk", comment: "Playback cache storage in temporary files.")))
                 row("Playback cache",
                     "\(cache.residentBytes.formatted(format)) / \(cache.effectiveBudgetBytes.formatted(format))")
+                if let target = cache.targetSeconds, target.isFinite, target > 0 {
+                    row(LocalizedStringResource("Read-ahead target", comment: "Requested buffer duration, not the amount already buffered."),
+                        Duration.seconds(target).formatted(
+                            .units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 2)
+                                .locale(locale)))
+                }
+                if cache.byteLimitReached {
+                    row(LocalizedStringResource("Read-ahead", comment: "Playback diagnostics: the current constraint on buffering ahead."),
+                        cache.storage == .memory
+                            ? Text(LocalizedStringResource("Memory limit reached", comment: "The playback read-ahead memory budget is full, not the device's total RAM."))
+                            : Text(LocalizedStringResource("Cache limit reached", comment: "The playback read-ahead cache budget is full, not necessarily the device's disk.")))
+                }
             }
             optionalRow(LocalizedStringResource("Stalls", comment: "Playback diagnostics label for the count of playback stalls."), d.stallCount.map(String.init) ?? PlaybackDiagnostics.placeholder)
             row(LocalizedStringResource("Dropped", comment: "Playback diagnostics label for dropped video frames."), "\(d.droppedFramesText) frames")
@@ -422,7 +444,7 @@ struct PlaybackDiagnosticsOverlay: View {
                 label
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(palette.secondaryText)
-                    .frame(width: 120, alignment: .leading)
+                    .frame(width: 150, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                 value
                     .font(.system(size: 14, design: .monospaced).weight(.semibold))

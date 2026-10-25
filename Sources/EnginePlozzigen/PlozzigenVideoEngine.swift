@@ -196,7 +196,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             ? max(0, buffered - position) : nil
         let audioPipeline = engine.activeAudioDecoder
         let cache = engine.isSessionReady
-            ? Self.sessionCacheTelemetry(engine.diagnostics.sessionCacheStatus) : nil
+            ? engine.softwareReadAheadStatus.map(Self.packetCacheTelemetry)
+                ?? Self.sessionCacheTelemetry(engine.diagnostics.sessionCacheStatus) : nil
         guard t != nil || bufferAhead != nil || audioPipeline != nil || cache != nil else { return nil }
         return EngineLiveTelemetry(
             droppedFrameCount: t?.droppedFrameCount,
@@ -212,7 +213,20 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         guard status.capability == .active, status.cleanupReason == nil else { return nil }
         return EngineSessionCache(
             residentBytes: Int64(status.currentResidentBytes),
-            effectiveBudgetBytes: Int64(status.effectiveBudgetBytes)
+            effectiveBudgetBytes: Int64(status.effectiveBudgetBytes),
+            targetSeconds: Double(status.forwardWindowSegments) * 4
+        )
+    }
+
+    nonisolated static func packetCacheTelemetry(_ status: SoftwareReadAheadStatus) -> EngineSessionCache {
+        let storage: EngineSessionCache.Storage
+        switch status.storage {
+        case .memory: storage = .memory
+        case .disk: storage = .disk
+        }
+        return EngineSessionCache(
+            residentBytes: Int64(status.budgetedBytes), effectiveBudgetBytes: Int64(status.byteBudget),
+            storage: storage, targetSeconds: status.targetSeconds, byteLimitReached: status.byteLimitReached
         )
     }
 

@@ -444,11 +444,15 @@ tvOS software playback retains its separate purgeable-memory policy, not the
 larger loopback disk allowance. Native AVPlayer/server HLS buffers are not
 governed by the segment-cache byte budget.
 
-Playback diagnostics display resident bytes and the effective budget only for
-an active loopback cache. They consume the engine's already-published status,
-not a synchronous cache scan. Unsupported routes, cleanup, missing telemetry
-and replacement sessions clear the row. This is temporary cache usage, not
-download progress or a guaranteed duration.
+Playback diagnostics identify an active cache's actual memory/disk storage,
+usage/budget, and read-ahead target. Software/FEL packet caches publish bounded
+metadata alongside native segment-cache status, without a synchronous cache scan.
+The software producer reports a byte-limit status only while actually parked
+at its budget, not from the file's Dolby Vision profile or a bitrate estimate.
+The memory count excludes purgeable played history; disk counts include retained
+segments/packets. Neither is substituted for contiguous playable seconds ahead.
+Unsupported routes, cleanup, missing telemetry and replacement sessions clear
+the rows. This is temporary cache usage, not download progress or guaranteed duration.
 
 `PlaybackReadAheadBufferingHostedTests` uses the real engine with synthetic
 H.264/AAC media and a range-serving loopback source. It compares Automatic with

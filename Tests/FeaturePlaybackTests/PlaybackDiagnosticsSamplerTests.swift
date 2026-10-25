@@ -10,7 +10,8 @@ final class PlaybackDiagnosticsSamplerTests: XCTestCase {
     func testCacheTelemetryClearsWhenMissingUnsupportedStoppedOrRestarted() {
         let sampler = PlaybackDiagnosticsSampler()
         defer { sampler.stop() }
-        let cache = EngineSessionCache(residentBytes: 0, effectiveBudgetBytes: 2_147_483_648)
+        let cache = EngineSessionCache(residentBytes: 0, effectiveBudgetBytes: 96 << 20,
+                                       storage: .memory, targetSeconds: 300, byteLimitReached: true)
         var telemetry: EngineLiveTelemetry? = .init(sessionCache: cache)
         var route = LiveChannelEngineRoute.localHLS
         sampler.start(
