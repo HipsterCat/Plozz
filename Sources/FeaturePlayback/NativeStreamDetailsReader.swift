@@ -62,7 +62,7 @@ public enum NativeStreamDetailsReader {
         )
     }
 
-    public static func audioCodec(_ subtype: FourCharCode) -> String {
+    public static func audioCodec(_ subtype: FourCharCode) -> String { // l10n:content - technical codec identifiers, never translated.
         let tag = fourCC(subtype)
         switch tag {
         case "ac-3": return "ac3"

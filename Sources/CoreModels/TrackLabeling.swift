@@ -265,7 +265,7 @@ public enum TrackLabeling {
     }
 
     private static func audioTitleContainsFormat(
-        _ title: String, codec: String?, channels: Int?, isAtmos: Bool
+        _ title: String, codec: String?, channels: Int?, isAtmos: Bool // l10n:content - provider track title and format facts.
     ) -> Bool {
         func contains(_ token: String) -> Bool {
             guard !token.isEmpty else { return false }
