@@ -407,6 +407,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                                              leadingReflectionWidth: leadingReflectionWidth,
                                              trailingReflectionWidth: trailingReflectionWidth,
                                              isPreviewVisible: !expanded && layout.heroHeight > 0))
+                    .environment(\.playbackReflectionColorScheme, palette.isLight ? .light : .dark)
                     .environment(\.themePalette, ThemePalette.dark)
                     .environment(\.colorScheme, .dark)
                     .frame(width: videoFrame.width, height: videoFrame.height)

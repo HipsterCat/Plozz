@@ -72,6 +72,51 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         verifyFullscreenRoundTrip(orientation: "auto")
     }
 
+    func testLightPreviewReflectionKeepsDarkPlayerControlsAndContinuousPlayback() {
+        let app = launch(guideFirst: true, lightAppearance: true)
+        defer { app.terminate() }
+        let arena = channel("Arena One", in: app)
+        XCTAssertTrue(arena.waitForExistence(timeout: 15))
+        arena.tap()
+        let preview = app.otherElements["category-search-playback"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["category-preview-frame"].wait(
+            for: \.label, toEqual: "Frame: ready", timeout: 10
+        ))
+        let playPause = app.buttons["live-channel-play-pause"]
+        XCTAssertTrue(playPause.waitForExistence(timeout: 5))
+        playPause.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 5))
+        capture("light-preview-reflection", in: app)
+        let loads = app.staticTexts["category-preview-loads"].label
+        let fullscreen = app.buttons["live-channel-fullscreen"]
+        fullscreen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitForPresentation("Fullscreen", preview: preview)
+        capture("light-preview-fullscreen", in: app)
+        let close = app.buttons["live-channel-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitForPresentation("Preview", preview: preview)
+        XCTAssertEqual(app.staticTexts["category-preview-loads"].label, loads)
+        XCTAssertTrue(arena.isHittable)
+    }
+
+    func testLightPreviewReflectionWithDarkVideo() {
+        let app = launch(guideFirst: true, lightAppearance: true, dimVideo: true)
+        defer { app.terminate() }
+        let arena = channel("Arena One", in: app)
+        XCTAssertTrue(arena.waitForExistence(timeout: 15))
+        arena.tap()
+        XCTAssertTrue(app.staticTexts["category-preview-frame"].wait(
+            for: \.label, toEqual: "Frame: ready", timeout: 10
+        ))
+        let playPause = app.buttons["live-channel-play-pause"]
+        XCTAssertTrue(playPause.waitForExistence(timeout: 5))
+        playPause.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 5))
+        capture("light-preview-dark-video", in: app)
+    }
+
     func testFullscreenControlsAndStatusBarAutoHideAndReturnTogether() {
         let app = launch(guideFirst: true)
         defer { app.terminate() }
@@ -519,7 +564,10 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         #endif
     }
 
-    private func launch(guideFirst: Bool = false, failsLoading: Bool = false, orientation: String = "auto") -> XCUIApplication {
+    private func launch(
+        guideFirst: Bool = false, failsLoading: Bool = false, orientation: String = "auto",
+        lightAppearance: Bool = false, dimVideo: Bool = false
+    ) -> XCUIApplication {
         continueAfterFailure = false
         #if os(tvOS)
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
@@ -530,6 +578,8 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         app.launchArguments.append("--category-preview-\(orientation)")
         if guideFirst { app.launchArguments.append("--category-search-guide-first") }
         if failsLoading { app.launchArguments.append("--category-search-failure") }
+        if lightAppearance { app.launchArguments.append("--category-preview-light") }
+        if dimVideo { app.launchArguments.append("--category-preview-dim") }
         app.launch()
         return app
     }

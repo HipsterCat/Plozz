@@ -16,6 +16,9 @@ struct LiveTVCategorySearchFixture: View {
     @State private var showsProfile = false
     @State private var isExpanded = false
     private let namespace = "CategorySearch.\(UUID().uuidString)"
+    private var palette: ThemePalette {
+        ProcessInfo.processInfo.arguments.contains("--category-preview-light") ? .light : .dark
+    }
 
     init() {
         let defaults = UserDefaults(suiteName: "CategorySearchProfiles.\(UUID().uuidString)")!
@@ -47,9 +50,10 @@ struct LiveTVCategorySearchFixture: View {
         }
         .environment(profiles)
         .environment(\.locale, Locale(identifier: "en_US"))
-        .environment(\.themePalette, .dark)
-        .environment(\.colorScheme, .dark)
-        .background { AppBackground(palette: .dark) }
+        .environment(\.themePalette, palette)
+        .environment(\.colorScheme, palette.isLight ? .light : .dark)
+        .preferredColorScheme(palette.isLight ? .light : .dark)
+        .background { AppBackground(palette: palette) }
         #if os(iOS)
         .liveChannelSystemOverlays()
         .plozziOSLivePlayerOrientation(
@@ -128,6 +132,7 @@ private struct CategoryPreviewPlayer: View {
 private final class CategoryPreviewEngine: LiveChannelEngine {
     let identity = UUID()
     @ObservationIgnored private let native = NativeVideoEngine(startsMuted: true)
+    @ObservationIgnored private let dimmer = UIView()
     var videoAspectRatio: Double? { native.videoAspectRatio }
     var loads = 0
     var liveSnapshot = LiveChannelEngineSnapshot(
@@ -194,7 +199,17 @@ private final class CategoryPreviewEngine: LiveChannelEngine {
     func seekToLiveEdge() async {}
     func selectAudioTrack(_ track: MediaTrack?) {}
     func selectSubtitleTrack(_ track: MediaTrack?) {}
-    func makeVideoOutputView() -> UIView { native.makeVideoOutputView() }
+    func makeVideoOutputView() -> UIView {
+        let output = native.makeVideoOutputView()
+        if ProcessInfo.processInfo.arguments.contains("--category-preview-dim"), dimmer.superview !== output {
+            dimmer.backgroundColor = UIColor.black.withAlphaComponent(0.8)
+            dimmer.isUserInteractionEnabled = false
+            dimmer.frame = output.bounds
+            dimmer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            output.addSubview(dimmer)
+        }
+        return output
+    }
 }
 #endif
 

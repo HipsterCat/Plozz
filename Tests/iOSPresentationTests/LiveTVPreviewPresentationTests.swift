@@ -207,6 +207,30 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(blurMask.path).contains(center, using: .evenOdd),
                        "Keep the original video sharp; only its surroundings receive blur.")
 
+        for light in [true, false] {
+            let previousEffect = blur.effect
+            video.updateReflection(
+                height: 120, topHeight: 40, leftWidth: 60, rightWidth: 80,
+                previewCornerRadius: 16, lightAppearance: light
+            )
+            try await settle(window)
+            XCTAssertNotNil(blur.effect as? UIBlurEffect)
+            XCTAssertFalse(blur.effect === previousEffect)
+            XCTAssertEqual(blur.contentView.backgroundColor?.cgColor.alpha, light ? 0.32 : 0)
+            var replica = try XCTUnwrap(compositor.subviews.first)
+            for _ in 0..<4 {
+                let layer = try XCTUnwrap(replica.layer as? CAReplicatorLayer)
+                XCTAssertEqual(layer.instanceAlphaOffset, light ? -0.35 : 0, accuracy: 0.001)
+                replica = try XCTUnwrap(replica.subviews.first)
+            }
+            XCTAssertTrue(replica === originalHost)
+            XCTAssertEqual(originalHost.alpha, 1, "Light mode must not wash out the playing picture.")
+            XCTAssertTrue(output.superview === originalHost)
+            XCTAssertTrue(engine.nowPlayingPlayer === player)
+            XCTAssertEqual(video.videoRect, picture)
+            XCTAssertEqual(try XCTUnwrap(blurMask.path).boundingBoxOfPath, blur.bounds)
+        }
+
         video.updateReflection(height: 0, previewCornerRadius: 16)
         try await settle(window)
         XCTAssertTrue(blur.isHidden, "Reduce Transparency keeps the rounded picture without any reflection blur.")

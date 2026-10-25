@@ -126,6 +126,7 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
 /// can initialize before playback reaches `.ready`.
 struct VideoSurfaceContainer: UIViewRepresentable {
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.playbackReflectionColorScheme) private var reflectionColorScheme
     let engine: any VideoEngine
     var zoom = PlayerVideoZoom()
     var aspectRatio: Double? = nil
@@ -142,7 +143,8 @@ struct VideoSurfaceContainer: UIViewRepresentable {
             height: reflectionHeight, topHeight: topReflectionHeight,
             leftWidth: layoutDirection == .rightToLeft ? trailingReflectionWidth : leadingReflectionWidth,
             rightWidth: layoutDirection == .rightToLeft ? leadingReflectionWidth : trailingReflectionWidth,
-            previewCornerRadius: previewCornerRadius
+            previewCornerRadius: previewCornerRadius,
+            lightAppearance: reflectionColorScheme == .light
         )
     }
 

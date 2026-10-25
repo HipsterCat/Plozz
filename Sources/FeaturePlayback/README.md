@@ -103,7 +103,11 @@ and rotation. Inline previews mirror that same compositor surface above, below,
 and into available side gutters, including the space around a fitted picture.
 Native blur and gradual transparency fades surround the sharp original picture;
 there is no second player or frame-extraction loop. Pictures with space on both
-horizontal sides use the shared content corner radius. Fullscreen, multiview,
+horizontal sides use the shared content corner radius. Light pages use a light
+native material and lower-opacity replicas for a subtle color wash rather than
+a dark shadow; this follows the page theme independently of the dark player
+controls and updates without replacing the video surface. Dark pages retain
+their original reflection treatment. Fullscreen, multiview,
 external playback, and Reduce Transparency disable the reflection. Reduce
 Transparency retains inset-picture rounding; fullscreen restores the unmasked,
 black-backed video surface.

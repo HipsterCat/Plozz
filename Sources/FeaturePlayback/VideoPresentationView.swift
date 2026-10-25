@@ -54,13 +54,15 @@ final class VideoPresentationView: UIView {
 
     func updateReflection(
         height: CGFloat, topHeight: CGFloat = 0, leftWidth: CGFloat = 0, rightWidth: CGFloat = 0,
-        previewCornerRadius: CGFloat = 0
+        previewCornerRadius: CGFloat = 0, lightAppearance: Bool = false
     ) {
         #if os(iOS)
         let insets = UIEdgeInsets(top: topHeight, left: leftWidth, bottom: height, right: rightWidth)
-        guard reflection.insets != insets || reflection.previewCornerRadius != previewCornerRadius else { return }
+        guard reflection.insets != insets || reflection.previewCornerRadius != previewCornerRadius
+            || reflection.lightAppearance != lightAppearance else { return }
         reflection.insets = insets
         reflection.previewCornerRadius = previewCornerRadius
+        reflection.lightAppearance = lightAppearance
         clipsToBounds = insets == .zero
         backgroundColor = previewCornerRadius > 0 || insets != .zero ? .clear : .black
         setNeedsLayout()
@@ -160,6 +162,16 @@ final class VideoPresentationView: UIView {
         var previewCornerRadius: CGFloat = 0 {
             didSet { if oldValue != previewCornerRadius { setNeedsLayout() } }
         }
+        var lightAppearance = false {
+            didSet {
+                guard oldValue != lightAppearance else { return }
+                blur.effect = UIBlurEffect(style: lightAppearance
+                    ? .systemThinMaterialLight : .systemUltraThinMaterialDark)
+                blur.contentView.backgroundColor = lightAppearance
+                    ? UIColor.white.withAlphaComponent(0.32) : .clear
+                setNeedsLayout()
+            }
+        }
         private static let fadeSteps: [CGFloat] = [0, 0.2, 0.4, 0.6, 0.8, 1]
         private let topReplicas = VideoPreviewReplicaView()
         private let replicas = VideoPreviewReplicaView()
@@ -254,6 +266,9 @@ final class VideoPresentationView: UIView {
             extent: CGFloat, pictureLength: CGFloat, enabled: Bool
         ) {
             view.replicaLayer.instanceCount = enabled && extent > 0 ? 2 : 1
+            // Tint the page gently without copying the video's dark luminance.
+            // Instance zero (the playing picture) always keeps its original opacity.
+            view.replicaLayer.instanceAlphaOffset = lightAppearance ? -0.35 : 0
             // Stretch only the reflected tile when a narrow picture has wider gutters.
             let scale = max(1, extent / max(1, pictureLength))
             let anchor = (horizontal ? videoSize.width : videoSize.height) / 2
