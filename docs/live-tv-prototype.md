@@ -132,7 +132,10 @@ Opening the preview reduces the guide's viewport without replacing its scroll
 view or resetting its channel/time position. Search and the narrow category
 directory hide the preview surface while retaining the existing playback policy.
 In portrait, the playing surface is reflected vertically below the preview with
-a native blur and a gradual fade into the guide background. The reflection sits
+a native blur with a light tint and a delayed fade into the guide background,
+keeping reflected colors visible beneath the first guide rows. One transparency
+mask fades both the reflected video and its blur into the actual background,
+avoiding a flat-color edge where the reflection ends. The reflection sits
 behind guide content, adds no layout height, and shares the original video
 surface rather than opening another player or copying decoded frames. It is
 disabled in landscape, fullscreen, multiview, Reduce Transparency, and when the

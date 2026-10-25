@@ -83,10 +83,18 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
         XCTAssertTrue(engine.makeVideoOutputView() === output)
         XCTAssertTrue(output.isDescendant(of: video))
         XCTAssertFalse(video.clipsToBounds)
+        let compositor = try XCTUnwrap(originalHost.superview?.superview)
+        let fade = try XCTUnwrap(compositor.layer.mask as? CAGradientLayer)
+        XCTAssertGreaterThan(fade.frame.height, video.bounds.height)
+        XCTAssertEqual((fade.colors as? [CGColor])?.last?.alpha, 0,
+                       "The reflection and blur must disappear into the actual guide background.")
+        XCTAssertTrue(compositor.subviews.contains { $0 is UIVisualEffectView },
+                      "The same transparency mask must cover the blur, not only the video replica.")
         video.updateReflection(height: 0)
         try await settle(window)
         XCTAssertTrue(output.superview === originalHost, "Fullscreen must not reparent the playing surface.")
         XCTAssertTrue(video.clipsToBounds)
+        XCTAssertNil(compositor.layer.mask)
         XCTAssertTrue(engine.nowPlayingPlayer === player)
         for size in [CGSize(width: 874, height: 402), CGSize(width: 402, height: 874)] {
             video.frame.size = size

@@ -22,7 +22,6 @@ public struct LiveTVPrototypePlayback {
     public let isExpanded: Bool
     public let expandPreview: () -> Void
     public let previewReflectionHeight: CGFloat
-    public let previewReflectionBackground: Color
     public let returnToGuide: () -> Void
     public let playPauseRequest: Int
     public let playbackStarted: () -> Void
@@ -578,7 +577,6 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 playback.expandPreview(presentationID: presentationID, preparedID: prepared.id)
             },
             previewReflectionHeight: reflectionHeight,
-            previewReflectionBackground: palette.backgroundBase,
             returnToGuide: {
                 guard playback.ownsPlayerPresentation(presentationID) else { return }
                 leavePlaybackForGuide()

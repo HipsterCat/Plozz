@@ -33,7 +33,6 @@ public struct LiveChannelPlayerView: View {
     private let isExpanded: Bool
     private let onExpandPreview: (() -> Void)?
     private let previewReflectionHeight: CGFloat
-    private let previewReflectionBackground: Color
     private let usesNativeFullscreen: Bool
     private let isActive: Bool
     private let onReturnToGuide: (() -> Void)?
@@ -138,7 +137,6 @@ public struct LiveChannelPlayerView: View {
         isExpanded: Bool = true,
         onExpandPreview: (() -> Void)? = nil,
         previewReflectionHeight: CGFloat = 0,
-        previewReflectionBackground: Color = .black,
         usesNativeFullscreen: Bool = false,
         isActive: Bool = true,
         onReturnToGuide: (() -> Void)? = nil,
@@ -187,7 +185,6 @@ public struct LiveChannelPlayerView: View {
         self.isExpanded = isExpanded
         self.onExpandPreview = onExpandPreview
         self.previewReflectionHeight = previewReflectionHeight
-        self.previewReflectionBackground = previewReflectionBackground
         self.usesNativeFullscreen = usesNativeFullscreen
         self.isActive = isActive
         self.onReturnToGuide = onReturnToGuide
@@ -309,8 +306,7 @@ public struct LiveChannelPlayerView: View {
                     reflectionHeight: hasInlineControls && !reduceTransparency && isActive
                         && scenePhase == .active && sourceMatches && model.hasPresentedFrame
                         && model.interruption == nil && model.networkBlock == nil && !model.continuesExternally
-                        ? previewReflectionHeight : 0,
-                    reflectionBackground: UIColor(previewReflectionBackground)
+                        ? previewReflectionHeight : 0
                 )
                     .ignoresSafeArea(.all, edges: hasInlineControls ? [] : .all)
 

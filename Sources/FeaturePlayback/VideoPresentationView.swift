@@ -52,11 +52,10 @@ final class VideoPresentationView: UIView {
         #endif
     }
 
-    func updateReflection(height: CGFloat, background: UIColor = .black) {
+    func updateReflection(height: CGFloat) {
         #if os(iOS)
-        guard reflection.reflectionHeight != height || reflection.backgroundTint != background else { return }
+        guard reflection.reflectionHeight != height else { return }
         reflection.reflectionHeight = height
-        reflection.backgroundTint = background
         clipsToBounds = height <= 0
         setNeedsLayout()
         #endif
@@ -113,7 +112,9 @@ final class VideoPresentationView: UIView {
         aspectRatio = engine?.videoAspectRatio
         fitBounds = resolvedFitBounds
         #if os(iOS)
-        reflection.frame = bounds
+        reflection.videoHeight = bounds.height
+        reflection.frame = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width,
+                                  height: bounds.height + reflection.reflectionHeight)
         reflection.pictureBottom = min(bounds.height, videoRect?.maxY ?? bounds.height)
         reflection.pictureHeight = min(bounds.height, videoRect?.height ?? bounds.height)
         reflection.layoutIfNeeded()
@@ -139,6 +140,9 @@ final class VideoPresentationView: UIView {
     /// Replicates the existing compositor surface, not a second player or decoded frame.
     private final class VideoPreviewReflectionView: UIView {
         let source = UIView()
+        var videoHeight: CGFloat = 0 {
+            didSet { if oldValue != videoHeight { setNeedsLayout() } }
+        }
         var pictureBottom: CGFloat = 0 {
             didSet { if oldValue != pictureBottom { setNeedsLayout() } }
         }
@@ -148,12 +152,9 @@ final class VideoPresentationView: UIView {
         var reflectionHeight: CGFloat = 0 {
             didSet { if oldValue != reflectionHeight { setNeedsLayout() } }
         }
-        var backgroundTint: UIColor = .black {
-            didSet { if oldValue != backgroundTint { setNeedsLayout() } }
-        }
         private let replicas = VideoPreviewReplicaView()
         private let crop = CALayer()
-        private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterialDark))
+        private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         private let fade = CAGradientLayer()
 
         override init(frame: CGRect) {
@@ -167,10 +168,10 @@ final class VideoPresentationView: UIView {
             crop.backgroundColor = UIColor.white.cgColor
             replicas.layer.mask = crop
             addSubview(blur)
-            layer.addSublayer(fade)
+            layer.mask = fade
             fade.startPoint = CGPoint(x: 0.5, y: 0)
             fade.endPoint = CGPoint(x: 0.5, y: 1)
-            fade.locations = [0, 0.25, 0.65, 1]
+            fade.colors = [1, 1, 0.88, 0.5, 0].map { UIColor.white.withAlphaComponent($0).cgColor }
         }
 
         @available(*, unavailable)
@@ -180,13 +181,12 @@ final class VideoPresentationView: UIView {
             super.layoutSubviews()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            replicas.frame = bounds
-            source.frame = bounds
+            replicas.frame = CGRect(x: 0, y: 0, width: bounds.width, height: videoHeight)
+            source.frame = replicas.bounds
             let height = min(reflectionHeight, pictureHeight)
-            let total = max(1, bounds.height + height)
+            let total = max(1, videoHeight + height)
             replicas.replicaLayer.instanceCount = height > 0 ? 2 : 1
             blur.isHidden = height <= 0
-            fade.isHidden = height <= 0
             replicas.replicaLayer.instanceTransform = CATransform3DConcat(
                 CATransform3DMakeScale(1, -1, 1),
                 CATransform3DMakeTranslation(0, pictureBottom, 0)
@@ -194,10 +194,13 @@ final class VideoPresentationView: UIView {
             crop.frame = CGRect(x: 0, y: 0, width: bounds.width, height: total)
             let blurScale: CGFloat = 4
             blur.bounds = CGRect(x: 0, y: 0, width: bounds.width / blurScale, height: height / blurScale)
-            blur.center = CGPoint(x: bounds.midX, y: bounds.height + height / 2)
+            blur.center = CGPoint(x: bounds.midX, y: videoHeight + height / 2)
             blur.transform = CGAffineTransform(scaleX: blurScale, y: blurScale)
-            fade.frame = CGRect(x: 0, y: bounds.height, width: bounds.width, height: height)
-            fade.colors = [0, 0.3, 0.75, 1].map { backgroundTint.withAlphaComponent($0).cgColor }
+            // Fade both the replica and its blur to the real background, not a flat color.
+            fade.frame = CGRect(x: 0, y: 0, width: bounds.width, height: total)
+            fade.locations = [0, videoHeight / total, (videoHeight + height * 0.4) / total,
+                              (videoHeight + height * 0.8) / total, 1].map { NSNumber(value: Double($0)) }
+            layer.mask = height > 0 ? fade : nil
             CATransaction.commit()
         }
     }
