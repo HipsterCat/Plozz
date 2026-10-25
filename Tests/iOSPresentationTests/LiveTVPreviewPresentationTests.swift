@@ -2,6 +2,7 @@
 import AVFoundation
 import CoreModels
 import CoreUI
+import EnginePlozzigen
 import FeatureLiveTVCore
 @testable import FeatureLiveTV
 @testable import FeaturePlayback
@@ -12,6 +13,77 @@ import XCTest
 
 @MainActor
 final class LiveTVPreviewPresentationTests: XCTestCase {
+    func testPerformanceLightVideoPreview() async throws {
+        try await measurePreview(scenario: "mobile-video-glow", filename: "live-continuity.mp4", enabled: true)
+    }
+
+    func testPerformanceHDVideoGlow() async throws {
+        try await measurePreview(scenario: "mobile-video-glow-hd", filename: "glow-hd.mp4", enabled: true)
+    }
+
+    func testPerformanceHDVideoWithoutGlow() async throws {
+        try await measurePreview(scenario: "mobile-video-glow-hd-disabled", filename: "glow-hd.mp4", enabled: false)
+    }
+
+    private func measurePreview(scenario: String, filename: String, enabled: Bool) async throws {
+        try PerformanceProbe.requireEnabled()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        host.view.backgroundColor = .white
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let engine = NativeVideoEngine(startsMuted: true)
+        let video = VideoPresentationView(frame: CGRect(
+            x: 0, y: 120, width: window.bounds.width, height: window.bounds.width * 9 / 16))
+        host.view.addSubview(video)
+        video.attach(engine)
+        defer {
+            video.updateReflection(height: 0)
+            video.removeFromSuperview()
+            engine.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let folder = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "Fixtures", withExtension: nil))
+        await engine.load(request: PlaybackRequest(
+            item: MediaItem(id: "preview-performance", title: "Synthetic video", kind: .movie),
+            streamURL: folder.appendingPathComponent(filename)
+        ), startPosition: 0)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !engine.hasPresentedVideoFrame, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(engine.hasPresentedVideoFrame)
+        video.updateReflection(height: enabled ? 200 : 0, topHeight: enabled ? 100 : 0, lightAppearance: true)
+        try await settle(window)
+        try await Task.sleep(for: .seconds(2))
+        let player = try XCTUnwrap(engine.nowPlayingPlayer)
+        let output = engine.makeVideoOutputView()
+        if filename == "glow-hd.mp4", enabled { XCTAssertGreaterThan(video.previewColorSampleCount, 0) }
+        try await PerformanceProbe.measure(self, scenario: scenario) {
+            let start = engine.currentTime
+            let samples = video.previewColorSampleCount
+            try await Task.sleep(for: .milliseconds(2300))
+            XCTAssertGreaterThan(engine.currentTime - start, 1.8, "A frozen player is not a performance pass.")
+            XCTAssertTrue(engine.hasPresentedVideoFrame)
+            XCTAssertTrue(engine.nowPlayingPlayer === player)
+            XCTAssertTrue(engine.makeVideoOutputView() === output)
+            XCTAssertTrue(output.isDescendant(of: video))
+            if filename == "glow-hd.mp4" {
+                if enabled {
+                    XCTAssertGreaterThan(video.previewColorSampleCount, samples)
+                    XCTAssertLessThanOrEqual(video.previewColorSampleCount - samples, 5)
+                } else {
+                    XCTAssertFalse(video.isPreviewColorSampling)
+                }
+            }
+            return ["players": 1, "visiblePreviews": 1, "windowMilliseconds": 2300]
+        }
+    }
+
     func testPreviewRespectsEitherVerticalBarWithoutMirroringItsInset() {
         for leading in [false, true] {
             let insets = EdgeInsets(
@@ -223,7 +295,8 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             var replica = try XCTUnwrap(compositor.subviews.first)
             for _ in 0..<4 {
                 let layer = try XCTUnwrap(replica.layer as? CAReplicatorLayer)
-                XCTAssertEqual(layer.instanceAlphaOffset, light ? -0.3 : 0, accuracy: 0.001)
+                XCTAssertEqual(layer.instanceAlphaOffset, 0, accuracy: 0.001)
+                if light { XCTAssertEqual(layer.instanceCount, 1, "Light glow does not replicate video.") }
                 replica = try XCTUnwrap(replica.subviews.first)
             }
             XCTAssertTrue(replica === originalHost)
@@ -254,6 +327,109 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
             XCTAssertEqual(output.bounds.size, size)
         }
     }
+
+        func testGlowPreservesDimHuesWithoutDarkeningNeutralFootage() {
+            func palette(_ red: UInt8, _ green: UInt8, _ blue: UInt8) -> [SIMD4<Float>] {
+                let pixel: [UInt8] = [red, green, blue, 255]
+                let pixels = Array(repeating: pixel, count: 24 * 14).flatMap { $0 }
+                return VideoPreviewColorWorker.palette(pixels)
+            }
+            let bright = palette(240, 24, 8)
+            let dim = palette(30, 3, 1)
+            XCTAssertEqual(bright.count, 3)
+            for (a, b) in zip(bright, dim) {
+                XCTAssertEqual(a.x, b.x, accuracy: 0.01)
+                XCTAssertEqual(a.y, b.y, accuracy: 0.01)
+                XCTAssertEqual(a.z, b.z, accuracy: 0.01)
+                XCTAssertGreaterThan(b.x, b.y + 0.3)
+                XCTAssertGreaterThan(min(b.x, b.y, b.z), 0.5)
+                XCTAssertGreaterThan(b.w, 0.8)
+            }
+            for gray: UInt8 in [0, 16, 128, 255] {
+                XCTAssertTrue(palette(gray, gray, gray).allSatisfy { $0.w == 0 })
+            }
+        }
+
+        func testGlowSamplesBothDecodersAndReleasesItsOutput() async throws {
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let previous = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            let host = UIViewController()
+            host.view.backgroundColor = .white
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKeyAndVisible()
+            }
+            let folder = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "Fixtures", withExtension: nil))
+            let engines: [(any VideoEngine, String)] = [
+                (NativeVideoEngine(startsMuted: true), "live-continuity-dim.mp4"),
+                (try PlozzigenVideoEngine(), "glow-software.mkv"),
+            ]
+            for (engine, filename) in engines {
+                let video = VideoPresentationView(frame: CGRect(x: 0, y: 100, width: 380, height: 214))
+                host.view.addSubview(video)
+                video.attach(engine)
+                defer { video.removeFromSuperview(); engine.stop() }
+                XCTAssertNil(engine.previewVideoFrame())
+                await engine.load(
+                    request: PlaybackRequest(
+                        item: MediaItem(id: filename, title: "Synthetic dim video", kind: .movie),
+                        streamURL: folder.appendingPathComponent(filename)
+                    ), startPosition: 0)
+                let deadline = ContinuousClock.now + .seconds(12)
+                while !engine.hasPresentedVideoFrame, ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertTrue(engine.hasPresentedVideoFrame, filename)
+                let item = engine.nowPlayingPlayer?.currentItem
+                let originalOutputs = item?.outputs.count
+                if filename.hasSuffix("mkv") {
+                    XCTAssertNil(item, "Exercise the software path, not the remux/native path.")
+                    XCTAssertNotNil(engine.previewVideoFrame())
+                    XCTAssertNotNil(engine.previewFrameGeneration)
+                }
+                video.updateReflection(height: 180, topHeight: 80, lightAppearance: true)
+                try await settle(window)
+                let sampleDeadline = ContinuousClock.now + .seconds(5)
+                while video.previewColorSampleCount == 0, ContinuousClock.now < sampleDeadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertGreaterThan(video.previewColorSampleCount, 0, filename)
+                let gradient = try XCTUnwrap(
+                    video.subviews.first?.layer.sublayers?
+                        .compactMap { $0 as? CAGradientLayer }.first)
+                let colors = try XCTUnwrap(gradient.colors as? [CGColor])
+                XCTAssertEqual(colors.count, 3)
+                XCTAssertTrue(colors.contains { $0.alpha > 0.5 }, "Dim decoded footage must still yield visible color.")
+                engine.pause()
+                try await Task.sleep(for: .milliseconds(700))
+                let pausedCount = video.previewColorSampleCount
+                try await Task.sleep(for: .milliseconds(1100))
+                XCTAssertEqual(video.previewColorSampleCount, pausedCount, "Paused frames must not keep converting.")
+                video.updateReflection(height: 0)
+                XCTAssertFalse(video.isPreviewColorSampling)
+                XCTAssertNil(gradient.colors)
+                if let item { XCTAssertEqual(item.outputs.count, originalOutputs) }
+                let stoppedCount = video.previewColorSampleCount
+                try await Task.sleep(for: .milliseconds(600))
+                XCTAssertEqual(video.previewColorSampleCount, stoppedCount)
+                video.updateReflection(height: 180, lightAppearance: true)
+                NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+                XCTAssertFalse(video.isPreviewColorSampling)
+                video.updateReflection(height: 181, lightAppearance: true)
+                XCTAssertFalse(video.isPreviewColorSampling, "A late layout update must not restart background work.")
+                NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+                XCTAssertTrue(video.isPreviewColorSampling)
+                video.removeFromSuperview()
+                XCTAssertFalse(video.isPreviewColorSampling)
+                engine.stop()
+                XCTAssertNil(engine.previewVideoFrame())
+                XCTAssertNil(engine.previewFrameGeneration)
+            }
+        }
 
     func testSidebarRemainsInteractiveBesidePreviewInBothLayoutDirections() {
         let bounds = CGRect(x: 0, y: 0, width: 1_024, height: 768)

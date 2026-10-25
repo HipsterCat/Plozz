@@ -1368,6 +1368,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     public var nowPlayingPlayer: AVPlayer? { engine.currentAVPlayer }
+    #if os(iOS)
+    public func previewVideoFrame() -> CVPixelBuffer? { engine.latestSoftwareVideoFrame() }
+    public var previewFrameGeneration: UInt64? { engine.softwareVideoFrameGeneration }
+    #endif
     public var needsBackgroundReload: Bool { hasReachedSessionReadiness && !engine.isSessionReady }
 
     private var backgroundAudioEnabled = false

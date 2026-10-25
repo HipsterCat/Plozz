@@ -3,7 +3,7 @@ import Observation
 import UIKit
 
 /// Crops only the engine's surface. AVKit's external/PiP presentation keeps
-/// owning its own sizing, and no video frames are copied or decoded here.
+/// owning its own sizing. Light preview colors use a separately bounded sampler.
 final class VideoPresentationView: UIView {
     private var engine: (any VideoEngine)?
     private var surface: UIView?
@@ -12,6 +12,11 @@ final class VideoPresentationView: UIView {
     private var fitsInsideSafeArea = false
     #if os(iOS)
     private let reflection = VideoPreviewReflectionView()
+    private var colorSampler: VideoPreviewColorSampler?
+    private var activationObservers: [NSObjectProtocol] = []
+    private var permitsColorSampling = true
+    var previewColorSampleCount: Int { colorSampler?.sampleCount ?? 0 }
+    var isPreviewColorSampling: Bool { colorSampler?.isRunning ?? false }
     #endif
     private(set) var fitBounds: CGRect?
     weak var subtitleViewport: VideoSubtitleViewport? {
@@ -25,6 +30,30 @@ final class VideoPresentationView: UIView {
         isUserInteractionEnabled = false
         #if os(iOS)
         addSubview(reflection)
+        activationObservers = [
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.permitsColorSampling = false
+                    self?.colorSampler?.stop()
+                }
+            },
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.permitsColorSampling = true
+                    self?.updateColorSampling()
+                }
+            }
+        ]
+        #endif
+    }
+
+    deinit {
+        #if os(iOS)
+        for observer in activationObservers { NotificationCenter.default.removeObserver(observer) }
         #endif
     }
 
@@ -34,6 +63,9 @@ final class VideoPresentationView: UIView {
     func attach(_ engine: any VideoEngine) {
         let output = engine.makeVideoOutputView()
         self.engine = engine
+        #if os(iOS)
+        updateColorSampling()
+        #endif
         guard output.superview !== surfaceHost else { return }
         if surface?.superview === surfaceHost { surface?.removeFromSuperview() }
         output.removeFromSuperview()
@@ -63,6 +95,7 @@ final class VideoPresentationView: UIView {
         reflection.insets = insets
         reflection.previewCornerRadius = previewCornerRadius
         reflection.lightAppearance = lightAppearance
+        updateColorSampling()
         clipsToBounds = insets == .zero
         backgroundColor = previewCornerRadius > 0 || insets != .zero ? .clear : .black
         setNeedsLayout()
@@ -88,9 +121,30 @@ final class VideoPresentationView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        #if os(iOS)
+        updateColorSampling()
+        #endif
         setNeedsLayout()
         subtitleViewport?.scheduleUpdate()
     }
+
+    #if os(iOS)
+    private func updateColorSampling() {
+        let enabled = permitsColorSampling && reflection.lightAppearance && reflection.insets != .zero
+            && window?.windowScene?.activationState == .foregroundActive
+            && !UIAccessibility.isReduceTransparencyEnabled
+        guard let engine, enabled else {
+            colorSampler?.stop()
+            return
+        }
+        if colorSampler == nil {
+            colorSampler = VideoPreviewColorSampler { [weak self] colors in
+                self?.reflection.updateColors(colors)
+            }
+        }
+        colorSampler?.update(engine: engine, enabled: true)
+    }
+    #endif
 
     private var resolvedFitBounds: CGRect? {
         #if os(iOS)
@@ -180,6 +234,7 @@ final class VideoPresentationView: UIView {
         private let blurMask = CAShapeLayer()
         private let fade = CAGradientLayer()
         private let horizontalFade = CAGradientLayer()
+        private let glow = CAGradientLayer()
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -188,6 +243,9 @@ final class VideoPresentationView: UIView {
             source.backgroundColor = .black
             source.clipsToBounds = true
             addSubview(topReplicas)
+            layer.insertSublayer(glow, at: 0)
+            glow.startPoint = CGPoint(x: 0, y: 0.5)
+            glow.endPoint = CGPoint(x: 1, y: 0.5)
             topReplicas.addSubview(replicas)
             replicas.addSubview(leftReplicas)
             leftReplicas.addSubview(rightReplicas)
@@ -206,6 +264,27 @@ final class VideoPresentationView: UIView {
 
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        func updateColors(_ samples: [SIMD4<Float>]) {
+            let colors = samples.map {
+                UIColor(red: CGFloat($0.x), green: CGFloat($0.y),
+                        blue: CGFloat($0.z), alpha: CGFloat($0.w)).cgColor
+            }
+            let oldColors = glow.presentation()?.colors ?? glow.colors
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            glow.colors = colors.isEmpty ? nil : colors
+            CATransaction.commit()
+            guard !colors.isEmpty, let oldColors, !UIAccessibility.isReduceMotionEnabled else {
+                glow.removeAllAnimations()
+                return
+            }
+            let transition = CABasicAnimation(keyPath: "colors")
+            transition.fromValue = oldColors
+            transition.toValue = colors
+            transition.duration = 0.6
+            glow.add(transition, forKey: "colors")
+        }
 
         override func layoutSubviews() {
             super.layoutSubviews()
@@ -232,14 +311,16 @@ final class VideoPresentationView: UIView {
             pictureCrop.path = UIBezierPath(roundedRect: visiblePicture, cornerRadius: radius).cgPath
             source.layer.mask = decorates ? pictureCrop : nil
             configureReplica(rightReplicas, horizontal: true, edge: visiblePicture.maxX,
-                             extent: right, pictureLength: visiblePicture.width, enabled: reflects)
+                             extent: right, pictureLength: visiblePicture.width, enabled: reflects && !lightAppearance)
             configureReplica(leftReplicas, horizontal: true, edge: visiblePicture.minX,
-                             extent: left, pictureLength: visiblePicture.width, enabled: reflects)
+                             extent: left, pictureLength: visiblePicture.width, enabled: reflects && !lightAppearance)
             configureReplica(replicas, horizontal: false, edge: visiblePicture.maxY,
-                             extent: bottom, pictureLength: visiblePicture.height, enabled: reflects)
+                             extent: bottom, pictureLength: visiblePicture.height, enabled: reflects && !lightAppearance)
             configureReplica(topReplicas, horizontal: false, edge: visiblePicture.minY,
-                             extent: top, pictureLength: visiblePicture.height, enabled: reflects)
-            blur.isHidden = !reflects
+                             extent: top, pictureLength: visiblePicture.height, enabled: reflects && !lightAppearance)
+            blur.isHidden = !reflects || lightAppearance
+            glow.frame = bounds
+            glow.isHidden = !reflects || !lightAppearance
             let blurScale: CGFloat = 4
             blur.bounds = CGRect(x: 0, y: 0, width: bounds.width / blurScale, height: bounds.height / blurScale)
             blur.center = CGPoint(x: bounds.midX, y: bounds.midY)
@@ -264,9 +345,7 @@ final class VideoPresentationView: UIView {
             extent: CGFloat, pictureLength: CGFloat, enabled: Bool
         ) {
             view.replicaLayer.instanceCount = enabled && extent > 0 ? 2 : 1
-            // Let the page lift dark footage without an extra white layer over its colors.
-            // Instance zero (the playing picture) remains unchanged.
-            view.replicaLayer.instanceAlphaOffset = lightAppearance ? -0.3 : 0
+            view.replicaLayer.instanceAlphaOffset = 0
             // Stretch only the reflected tile when a narrow picture has wider gutters.
             let scale = max(1, extent / max(1, pictureLength))
             let anchor = (horizontal ? videoSize.width : videoSize.height) / 2

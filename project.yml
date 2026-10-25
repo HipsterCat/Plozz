@@ -506,6 +506,8 @@ targets:
         buildPhase: resources
       - path: Tests/SubtitlePresentationSupport/Fixtures/live-continuity.mp4
         buildPhase: resources
+      - path: Tests/SubtitlePresentationSupport/Fixtures/live-continuity-dim.mp4
+        buildPhase: resources
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: App/Resources/Localizable.xcstrings
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift

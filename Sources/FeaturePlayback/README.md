@@ -99,15 +99,19 @@ area used by controls and subtitles. Showing or hiding controls does not resize
 the picture. The status bar and persistent system overlays hide with the
 fullscreen controls and return when controls are revealed or fullscreen ends.
 The engine, video surface, and its native parent remain mounted across expansion, return,
-and rotation. Inline previews mirror that same compositor surface above, below,
-and into available side gutters, including the space around a fitted picture.
-Native blur and gradual transparency fades surround the sharp original picture;
-there is no second player or frame-extraction loop. Pictures with space on both
-horizontal sides use the shared content corner radius. Light pages use a light
-native material, translucent replicas, and a longer fade for a visible
-colored glow without an opaque white wash. This follows the page theme independently
-of the dark player controls and updates without replacing the video surface. Dark pages retain
-their original reflection treatment. Fullscreen, multiview,
+and rotation. Dark inline previews mirror that same compositor surface above, below,
+and into available side gutters with native blur and gradual transparency fades.
+Light pages instead use a bright, hue-derived gradient, not dark mirrored pixels.
+At most twice per second, a scoped native video output or the software renderer's
+borrowed enqueued frame supplies a 24-by-14 color sample. Core Image reduction runs
+off the main actor; three gradient colors crossfade without per-frame SwiftUI updates.
+There is no second player, decoder, demuxer, or software display readback. The software
+sample can lead the picture by its render queue. Black/neutral areas add no invented hue.
+Source generations reject stale asynchronous results, paused pictures do not resample,
+and hidden/detached/background previews release their output and sampling task.
+Pictures with space on both horizontal sides use the shared content corner radius.
+The glow follows the page theme independently of dark player controls. Dark pages
+retain their original reflection treatment without sampling. Fullscreen, multiview,
 external playback, and Reduce Transparency disable the reflection. Reduce
 Transparency retains inset-picture rounding; fullscreen restores the unmasked,
 black-backed video surface.

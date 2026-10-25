@@ -5,6 +5,7 @@ import FeatureLiveTVCore
 import FeatureProfiles
 import SwiftUI
 #if os(iOS)
+import AVFoundation
 @testable import AppShelliOS
 import FeaturePlayback
 import Observation
@@ -132,8 +133,9 @@ private struct CategoryPreviewPlayer: View {
 private final class CategoryPreviewEngine: LiveChannelEngine {
     let identity = UUID()
     @ObservationIgnored private let native = NativeVideoEngine(startsMuted: true)
-    @ObservationIgnored private let dimmer = UIView()
     var videoAspectRatio: Double? { native.videoAspectRatio }
+    var nowPlayingPlayer: AVPlayer? { native.nowPlayingPlayer }
+    var hasPresentedVideoFrame: Bool { native.hasPresentedVideoFrame }
     var loads = 0
     var liveSnapshot = LiveChannelEngineSnapshot(
         phase: .idle, firstFrameReady: false, position: 100, bufferedPosition: 120,
@@ -175,7 +177,9 @@ private final class CategoryPreviewEngine: LiveChannelEngine {
         status = .loading
         liveSnapshot.phase = .loading
         liveSnapshot.firstFrameReady = false
-        guard let fixture = Bundle.main.url(forResource: "live-continuity", withExtension: "mp4") else {
+        let name = ProcessInfo.processInfo.arguments.contains("--category-preview-dim")
+            ? "live-continuity-dim" : "live-continuity"
+        guard let fixture = Bundle.main.url(forResource: name, withExtension: "mp4") else {
             preconditionFailure("The category preview fixture video is missing.")
         }
         await native.load(request: PlaybackRequest(
@@ -200,15 +204,7 @@ private final class CategoryPreviewEngine: LiveChannelEngine {
     func selectAudioTrack(_ track: MediaTrack?) {}
     func selectSubtitleTrack(_ track: MediaTrack?) {}
     func makeVideoOutputView() -> UIView {
-        let output = native.makeVideoOutputView()
-        if ProcessInfo.processInfo.arguments.contains("--category-preview-dim"), dimmer.superview !== output {
-            dimmer.backgroundColor = UIColor.black.withAlphaComponent(0.8)
-            dimmer.isUserInteractionEnabled = false
-            dimmer.frame = output.bounds
-            dimmer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            output.addSubview(dimmer)
-        }
-        return output
+        native.makeVideoOutputView()
     }
 }
 #endif
