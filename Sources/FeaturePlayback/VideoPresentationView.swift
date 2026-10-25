@@ -39,6 +39,7 @@ final class VideoPresentationView: UIView {
                     self?.permitsColorSampling = false
                     self?.colorSampler?.stop()
                     self?.reflection.updateColors([], animated: false)
+                    self?.reflection.updateDarkReflection(isActive: false, animated: false)
                 }
             },
             NotificationCenter.default.addObserver(
@@ -133,6 +134,13 @@ final class VideoPresentationView: UIView {
 
     #if os(iOS)
     private func updateColorSampling() {
+        let visible = permitsColorSampling && reflection.insets != .zero
+            && window?.windowScene?.activationState == .foregroundActive
+            && !UIAccessibility.isReduceTransparencyEnabled
+        reflection.updateDarkReflection(
+            isActive: visible && reflectionIsActive && !reflection.lightAppearance,
+            animated: visible && !reflection.lightAppearance
+        )
         let enabled = permitsColorSampling && reflection.lightAppearance && reflection.insets != .zero
             && window?.windowScene?.activationState == .foregroundActive
             && !UIAccessibility.isReduceTransparencyEnabled
@@ -239,6 +247,9 @@ final class VideoPresentationView: UIView {
         private let fade = CAGradientLayer()
         private let horizontalFade = CAGradientLayer()
         private let glow = CAGradientLayer()
+        private let reflectionVisibility = CALayer()
+        private let surroundingVisibility = CALayer()
+        private let pictureVisibility = CAShapeLayer()
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -264,10 +275,39 @@ final class VideoPresentationView: UIView {
             horizontalFade.startPoint = CGPoint(x: 0, y: 0.5)
             horizontalFade.endPoint = CGPoint(x: 1, y: 0.5)
             fade.mask = horizontalFade
+            horizontalFade.mask = reflectionVisibility
+            surroundingVisibility.backgroundColor = UIColor.white.cgColor
+            surroundingVisibility.opacity = 0
+            pictureVisibility.fillColor = UIColor.white.cgColor
+            reflectionVisibility.addSublayer(surroundingVisibility)
+            reflectionVisibility.addSublayer(pictureVisibility)
         }
 
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        func updateDarkReflection(isActive: Bool, animated: Bool = true) {
+            let target: Float = isActive || lightAppearance ? 1 : 0
+            let animates = animated && !UIAccessibility.isReduceMotionEnabled
+            guard surroundingVisibility.opacity != target else {
+                if !animates { surroundingVisibility.removeAllAnimations() }
+                return
+            }
+            let current = surroundingVisibility.presentation()?.opacity ?? surroundingVisibility.opacity
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            surroundingVisibility.opacity = target
+            CATransaction.commit()
+            guard animates else {
+                surroundingVisibility.removeAllAnimations()
+                return
+            }
+            let transition = CABasicAnimation(keyPath: "opacity")
+            transition.fromValue = current
+            transition.toValue = target
+            transition.duration = 0.6
+            surroundingVisibility.add(transition, forKey: "visibility")
+        }
 
         func updateColors(_ samples: [SIMD4<Float>], animated: Bool = true) {
             let colors = samples.map {
@@ -347,6 +387,10 @@ final class VideoPresentationView: UIView {
             blurMask.path = blurPath.cgPath
             fade.frame = bounds
             horizontalFade.frame = fade.bounds
+            reflectionVisibility.frame = fade.bounds
+            surroundingVisibility.frame = reflectionVisibility.bounds
+            pictureVisibility.frame = reflectionVisibility.bounds
+            pictureVisibility.path = UIBezierPath(roundedRect: translatedPicture, cornerRadius: radius).cgPath
             configureFade(fade, before: top, pictureLength: visiblePicture.height, after: bottom)
             configureFade(horizontalFade, before: left, pictureLength: visiblePicture.width, after: right)
             layer.mask = reflects ? fade : nil

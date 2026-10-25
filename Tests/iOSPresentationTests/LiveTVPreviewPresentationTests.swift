@@ -386,6 +386,60 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(returning.fromValue as? [CGColor]).allSatisfy { $0.alpha == 0 })
     }
 
+    func testDarkReflectionFadesWithoutFadingThePicture() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let reflection = VideoPresentationView.VideoPreviewReflectionView(frame: window.bounds)
+        reflection.videoSize = CGSize(width: 320, height: 180)
+        reflection.picture = CGRect(origin: .zero, size: reflection.videoSize)
+        reflection.insets = UIEdgeInsets(top: 100, left: 0, bottom: 100, right: 0)
+        host.view.addSubview(reflection)
+        try await settle(window)
+        let visibility = try XCTUnwrap(reflection.layer.mask?.mask?.mask)
+        let surroundings = try XCTUnwrap(visibility.sublayers?.first)
+        let picture = try XCTUnwrap(visibility.sublayers?.last as? CAShapeLayer)
+        XCTAssertEqual(surroundings.opacity, 0)
+        XCTAssertEqual(picture.opacity, 1)
+        XCTAssertEqual(picture.fillColor?.alpha, 1)
+        XCTAssertEqual(picture.path?.boundingBoxOfPath, CGRect(x: 0, y: 100, width: 320, height: 180))
+        reflection.updateDarkReflection(isActive: true)
+        XCTAssertEqual(surroundings.opacity, 1)
+        if UIAccessibility.isReduceMotionEnabled {
+            XCTAssertNil(surroundings.animation(forKey: "visibility"))
+        } else {
+            let fadeIn = try XCTUnwrap(surroundings.animation(forKey: "visibility") as? CABasicAnimation)
+            XCTAssertEqual(fadeIn.fromValue as? Float, 0)
+            XCTAssertEqual(fadeIn.toValue as? Float, 1)
+            XCTAssertEqual(fadeIn.duration, 0.6, accuracy: 0.001)
+            try await Task.sleep(for: .milliseconds(750))
+            reflection.updateDarkReflection(isActive: false)
+            let fadeOut = try XCTUnwrap(surroundings.animation(forKey: "visibility") as? CABasicAnimation)
+            XCTAssertEqual(fadeOut.toValue as? Float, 0)
+            try await Task.sleep(for: .milliseconds(150))
+            let visible = try XCTUnwrap(surroundings.presentation()?.opacity)
+            XCTAssertGreaterThan(visible, 0)
+            XCTAssertLessThan(visible, 1)
+            reflection.updateDarkReflection(isActive: true)
+            let interrupted = try XCTUnwrap(surroundings.animation(forKey: "visibility") as? CABasicAnimation)
+            XCTAssertEqual(interrupted.fromValue as? Float, visible)
+        }
+        XCTAssertEqual(picture.opacity, 1)
+        XCTAssertNil(picture.animationKeys())
+        XCTAssertEqual(reflection.source.alpha, 1)
+        reflection.updateDarkReflection(isActive: false, animated: false)
+        XCTAssertEqual(surroundings.opacity, 0)
+        XCTAssertNil(surroundings.animationKeys())
+    }
+
         func testGlowPreservesDimHuesWithoutDarkeningNeutralFootage() {
             func palette(_ red: UInt8, _ green: UInt8, _ blue: UInt8) -> [SIMD4<Float>] {
                 let pixel: [UInt8] = [red, green, blue, 255]

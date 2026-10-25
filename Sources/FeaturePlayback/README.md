@@ -114,7 +114,10 @@ software-frame access only for its current, ready source; direct-decoder tests
 alone do not cover this Live TV integration boundary.
 Pictures with space on both horizontal sides use the shared content corner radius.
 The glow follows the page theme independently of dark player controls. Dark pages
-retain their original reflection treatment without sampling. Glow colors fade
+retain their original reflection treatment without sampling, fading its surrounding
+mask in and out over 0.6 seconds without changing the playing picture's opacity.
+Both appearances keep reflection bounds during channel changes and retarget
+interrupted fades from the currently displayed state. Glow colors fade
 in, out, and between palettes over 0.6 seconds, retargeting from their currently
 displayed colors if interrupted. Channel changes stop sampling immediately but
 keep the light-mode glow's bounds while its old colors fade out; no decoded
