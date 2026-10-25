@@ -342,14 +342,7 @@ struct DetailPageDetailView: View {
                         Toggle("Start muted", isOn: $heroBackground.settings.detailTrailerMuted)
                     }
                     if heroBackground.settings.detailMode == .themeMusic {
-                        SettingsDetailGroup(title: "Volume") {
-                            DescribedSegmentedPicker(
-                                options: ThemeMusicVolume.playbackLevels,
-                                selection: $themeMusic.settings.volume,
-                                title: { $0.displayName },
-                                detail: { $0.detail }
-                            )
-                        }
+                        ThemeMusicVolumeControl(model: themeMusic)
                     }
                 }
             }

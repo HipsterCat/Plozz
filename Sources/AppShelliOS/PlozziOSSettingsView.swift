@@ -1993,14 +1993,7 @@ private struct PlozziOSDetailPageSettingsView: View {
                     )
                 }
                 if heroBackground.settings.detailMode == .themeMusic {
-                    Picker(
-                        "Theme music volume",
-                        selection: $themeMusic.settings.volume
-                    ) {
-                        ForEach(ThemeMusicVolume.playbackLevels, id: \.self) {
-                            Text($0.displayName).tag($0)
-                        }
-                    }
+                    ThemeMusicVolumeControl(model: themeMusic)
                 }
             } footer: {
                 Text("Choose what plays behind the hero on a movie or show's detail page. Trailer and theme music never play together.")

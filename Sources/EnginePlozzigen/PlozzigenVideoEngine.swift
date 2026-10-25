@@ -1276,30 +1276,39 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             var next = BypassAudio(item: item)
             let options = group?.options.filter(\.isPlayable) ?? []
             let muxed = item.tracks.filter { $0.assetTrack?.mediaType == .audio }
-            if let group, options.count > 1 {
+            if let group, !options.isEmpty, options.count > 1 || muxed.count <= 1 {
                 next.source = .selectionGroup(group, options)
+                let singleAudio = options.count == 1 && muxed.count == 1
+                    ? await Self.bypassAudioFacts(muxed.first?.assetTrack) : nil
                 next.tracks = options.enumerated().map { index, option in
                     Self.bypassAudioTrack(id: Self.bypassAudioIDBase + index, title: option.displayName,
                                           language: option.extendedLanguageTag ?? option.locale?.identifier,
-                                          isDefault: group.defaultOption == option)
+                                          isDefault: group.defaultOption == option,
+                                          codec: singleAudio?.codec ?? option.mediaSubTypes.first.map {
+                                              NativeStreamDetailsReader.audioCodec($0.uint32Value)
+                                          },
+                                          channels: singleAudio?.channels)
                 }
                 let selected = item.currentMediaSelection.selectedMediaOption(in: group)
                 next.selectedID = options.firstIndex { $0 == selected }.map { Self.bypassAudioIDBase + $0 }
-            } else if muxed.count > 1 {
+            } else if !muxed.isEmpty {
                 next.source = .muxed(muxed)
                 var tracks: [MediaTrack] = []
                 for (index, track) in muxed.enumerated() {
                     let language = try? await track.assetTrack?.load(.extendedLanguageTag)
+                    let facts = await Self.bypassAudioFacts(track.assetTrack)
                     tracks.append(Self.bypassAudioTrack(
                         id: Self.bypassAudioIDBase + index,
                         title: language.flatMap { $0 } ?? "Track \(index + 1)", // l10n:content — fallback track label
-                        language: language ?? nil, isDefault: index == 0
+                        language: language ?? nil, isDefault: index == 0,
+                        codec: facts?.codec, channels: facts?.channels
                     ))
                 }
-                guard self.engine.currentAVPlayer?.currentItem === item else { return }
                 next.tracks = tracks
                 next.selectedID = muxed.firstIndex(where: \.isEnabled).map { Self.bypassAudioIDBase + $0 }
             }
+            guard !Task.isCancelled, self.engine.currentAVPlayer?.currentItem === item,
+                  self.engine.videoRoute == .remoteBypass, self.serverRenditionAudio == nil else { return }
             HandoffDiagnostics.emit(
                 "audio BYPASS options=\(options.count) muxed=\(muxed.count) offered=\(next.tracks.count)"
             )
@@ -1329,8 +1338,25 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         onTracksChanged?()
     }
 
-    nonisolated static func bypassAudioTrack(id: Int, title: String, language: String?, isDefault: Bool) -> MediaTrack {
-        MediaTrack(id: id, kind: .audio, displayTitle: title, language: language, isDefault: isDefault)
+    private static func bypassAudioFacts(_ track: AVAssetTrack?) async -> MediaSourceMetadata.AudioStream? {
+        guard let track else { return nil }
+        do {
+            guard let description = try await track.load(.formatDescriptions).first else { return nil }
+            return NativeStreamDetailsReader.audioStream(description)
+        } catch is CancellationError {
+            return nil
+        } catch {
+            PlozzLog.playback.debug("Native audio format metadata unavailable; retaining only observed track facts.")
+            return nil
+        }
+    }
+
+    nonisolated static func bypassAudioTrack(
+        id: Int, title: String, language: String?, isDefault: Bool,
+        codec: String? = nil, channels: Int? = nil
+    ) -> MediaTrack {
+        MediaTrack(id: id, kind: .audio, displayTitle: title, language: language, codec: codec,
+                   isDefault: isDefault, channels: channels)
     }
 
     public func selectSubtitleTrack(_ track: MediaTrack?) {

@@ -7,6 +7,23 @@ an empty provider feed from local curation without recording media or account ID
 Home rows, item detail, series/season experience, and the online-trailer
 fallback when the user's server has no attached trailer.
 
+Theme audio is owned by `FeatureHomeCore.ThemeMusicController` and the shared
+`themeMusicScope` / `themeMusicPlayback` modifiers on both TV and mobile.
+Only the frontmost active detail owns playback. Full video, Live TV, hero trailers,
+and full music playback take precedence. Volume changes update the same player
+without re-resolving or restarting a source. Detail audio pauses on app inactivity
+and resumes its retained timeline on return; settings previews instead stop and
+require a new adjustment or Play action. Late resolution cannot revive a stopped
+preview, switch profiles, or bypass current playback suppression.
+Each detail instance owns a separate theme-playback token, even when a repeated
+title has the same account/item ID. Covered pages cannot release another page's
+audio. Both shells re-resolve themes through the currently authorized provider,
+not a provider retained by an old detail model. Profile/account/effective
+credential changes invalidate playback; live authorization is rechecked after
+theme and authenticated-URL resolution, including for public theme URLs.
+Audio-interruption changes cancel pending resolution and retry the still-current
+foreground detail when the interruption ends.
+
 tvOS detail entry keeps the real primary action focusable while its play target
 loads. An early press queues one activation, replacing the icon with a spinner
 without resizing the button. Readiness consumes that intent once through the

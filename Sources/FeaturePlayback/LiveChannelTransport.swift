@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import AVFoundation
 import CoreModels
+import CoreNetworking
 import CoreUI
 import SwiftUI
 
@@ -116,8 +117,14 @@ struct LiveChannelOverlay: View {
     @State private var subtitleScreen: PlayerControls.SubtitleScreen = .tracks
     @State private var playbackScreen: PlayerControls.PlaybackScreen = .options
     @State private var audioScreen: PlayerControls.AudioScreen = .options
-    @State private var nativePlaybackMenuPresented = false
-    @State private var showsCustomZoom = false
+    #if os(iOS)
+    private enum MobileSheet: String, Identifiable {
+        case zoom, subtitles, audioSync
+        var id: Self { self }
+    }
+    @State private var mobileMenu = PlayerMenuPresentation()
+    @State private var mobileSheet: MobileSheet?
+    #endif
     @State private var panelHeights: [PlayerControls.Category: CGFloat] = [:]
     @State private var panelBackRequest = 0
     @FocusState private var panelFocus: PlayerControls.FocusSlot?
@@ -182,7 +189,10 @@ struct LiveChannelOverlay: View {
                 onTouchScrubbingChanged(scrubbing)
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { resetScrub() }
+                if phase != .active {
+                    resetScrub()
+                    mobileMenu.reset()
+                }
             }
             #endif
             // A finger held still is still scrubbing: keep the transport up
@@ -199,8 +209,9 @@ struct LiveChannelOverlay: View {
         .animation(.easeInOut(duration: 0.2), value: openMenu)
         .animation(.easeInOut(duration: 0.3), value: styleEditing)
         .onChange(of: trackOptionsSource, initial: true) { _, source in syncTrackOptions(source) }
+        .onChange(of: locale.identifier) { syncTrackOptions(trackOptionsSource) }
         .onChange(of: focus) { _, control in focusChanged(control) }
-        .onChange(of: openMenu != nil || cardOpen || nativePlaybackMenuPresented || showsCustomZoom) { _, pinned in
+        .onChange(of: openMenu != nil || cardOpen || mobileOptionsBusy) { _, pinned in
             onTracksPresentationChange(pinned)
         }
         .onChange(of: cardOpen && cardTab == .guide) { _, showing in onGuideCardChange(showing) }
@@ -221,12 +232,19 @@ struct LiveChannelOverlay: View {
             case .playback: toggleMenu(.playback)
             }
         }
-        .onChange(of: channelID) { _, _ in resetScrub() }
-        .onChange(of: input) { _, _ in resetScrub() }
+        .onChange(of: channelID) { _, _ in
+            resetScrub()
+            invalidateMobileMenu()
+        }
+        .onChange(of: input) { _, _ in
+            resetScrub()
+            invalidateMobileMenu()
+        }
         .onChange(of: seekWindowSeconds == nil) { _, unavailable in
             if unavailable { resetScrub() }
         }
         .onDisappear {
+            invalidateMobileMenu()
             resetScrub()
             onTracksPresentationChange(false)
             #if os(iOS)
@@ -234,14 +252,40 @@ struct LiveChannelOverlay: View {
             #endif
         }
         #if os(iOS)
-        .plozzSheet(isPresented: $showsCustomZoom) {
-            PlayerZoomSettingsSheet(model: tracks.videoZoom)
+        .task(id: mobileMenu.destination) { presentMobileDestination() }
+        .onChange(of: phase) { _, phase in
+            if phase == .loading { invalidateMobileMenu() }
+        }
+        .onChange(of: PlayerMoreMenu.hasOptions(trackOptions, availability: mobileMenuAvailability)) { _, available in
+            if !available { mobileMenu.reset() }
+        }
+        .plozzSheet(item: $mobileSheet) { sheet in
+            switch sheet {
+            case .zoom: PlayerZoomSettingsSheet(model: tracks.videoZoom)
+            case .subtitles: LiveSubtitleSettingsSheet(tracks: tracks, controls: trackOptions)
+            case .audioSync: LiveAudioSyncSheet(tracks: tracks, controls: trackOptions)
+            }
         }
         #endif
         #if os(tvOS)
         .observingSystemPlaybackAudio(trackOptions.systemAudio, isVisible: true)
         .onExitCommand(perform: handleExit)
         .background(TVFocusActivityObserver(onActivity: onControlActivity))
+        #endif
+    }
+
+    private var mobileOptionsBusy: Bool {
+        #if os(iOS)
+        mobileMenu.isBusy || mobileSheet != nil
+        #else
+        false
+        #endif
+    }
+
+    private func invalidateMobileMenu() {
+        #if os(iOS)
+        mobileMenu.reset()
+        mobileSheet = nil
         #endif
     }
 
@@ -516,14 +560,21 @@ struct LiveChannelOverlay: View {
     /// same labels, and an Off row for subtitles), with the live style.
     private func syncTrackOptions(_ source: TrackOptionsSource) {
         trackOptions.audioOptions = TrackMenuBuilder.audioOptions(
-            tracks: source.audio, selectedID: source.selectedAudio, preferred: []
+            tracks: source.audio, selectedID: source.selectedAudio, preferred: [], locale: locale
         )
         trackOptions.subtitleOptions = TrackMenuBuilder.subtitleOptions(
-            tracks: source.subtitles, selectedID: source.selectedSubtitle, preferred: [], detectedLanguages: [:]
+            tracks: source.subtitles, selectedID: source.selectedSubtitle, preferred: [], detectedLanguages: [:], locale: locale
         )
         trackOptions.subtitleStyle = source.style
         trackOptions.subtitlesRenderHDR = source.isHDR
         trackOptions.engineCapabilities = source.capabilities
+        #if os(iOS)
+        trackOptions.subtitleDelayAdjustable = tracks.subtitles.supportsPrimaryTimingOffset
+        trackOptions.subtitleDelaySeconds = tracks.subtitles.offset
+        trackOptions.secondarySubtitleImagePrimaryFormat = TrackMenuBuilder.imagePrimaryFormat(
+            selectedPrimaryID: source.selectedSubtitle, engineTracks: source.subtitles, providerTracks: []
+        )
+        #endif
         // A live channel has nothing to search.
         trackOptions.subtitleDownload.canSearch = false
     }
@@ -579,7 +630,7 @@ struct LiveChannelOverlay: View {
         #if os(tvOS)
         Self.showsAudio(trackCount: tracks.audioTracks.count, systemAudio: trackOptions.systemAudio)
         #else
-        tracks.audioTracks.count > 1
+        !tracks.audioTracks.isEmpty
         #endif
     }
 
@@ -1541,40 +1592,70 @@ extension LiveChannelOverlay {
     private func touchTrackBadges(includesGoLive: Bool = false) -> some View {
         PlayerGlassControlGroup {
             if includesGoLive { touchGoLiveBadge }
-            if showsZoom {
-                PlayerOptionsMenuButton(
-                    makeMenu: {
-                        UIMenu(children: [PlayerZoomMenu.make(
-                            model: tracks.videoZoom, locale: locale,
-                            onCustomZoom: { showsCustomZoom = true }
-                        )])
-                    },
-                    onPresentationChange: { nativePlaybackMenuPresented = $0 }
-                )
-                .frame(width: 44, height: 44)
-            }
-            if showsAudio {
-                touchBadge(
-                    LiveChannelTrackMenuKind.audio.title, systemImage: LiveChannelTrackMenuKind.audio.icon,
-                    selected: openMenu == .audio
-                ) { toggleMenu(.audio) }
-                    .accessibilityIdentifier("live-channel-audio")
-            }
-            if showsSubtitles {
-                touchBadge(
-                    LiveChannelTrackMenuKind.subtitles.title, systemImage: LiveChannelTrackMenuKind.subtitles.icon,
-                    selected: openMenu == .subtitles
-                ) { toggleMenu(.subtitles) }
-                    .accessibilityIdentifier("live-channel-subtitles")
-            }
-            if let onMultiview {
-                touchBadge("Multiview", systemImage: "rectangle.split.2x2", action: onMultiview)
-                    .accessibilityIdentifier("live-channel-multiview")
-            }
+            PlayerMoreMenuButton(
+                model: trackOptions, availability: mobileMenuAvailability, presentation: mobileMenu,
+                layout: .init(size: touchViewportSize),
+                accessibilityIdentifier: "live-channel-playback-options", actions: mobileMenuActions
+            )
         }
         // GLOBAL, so the menu layer can rest the open menu just above them.
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
             badgesTop = top
+        }
+    }
+
+    private var mobileMenuAvailability: PlayerMoreMenuAvailability {
+        .init(video: showsZoom, videoModel: tracks.videoZoom, multiview: onMultiview != nil)
+    }
+
+    private var mobileMenuActions: PlayerMoreMenuActions {
+        let generation = mobileMenu.generation
+        var actions = PlayerMoreMenuActions()
+        actions.isCurrent = {
+            mobileMenu.generation == generation && tracks.matchesSource(channelID: channelID, input: input)
+        }
+        actions.selectAudio = { id in
+            guard let track = tracks.audioTracks.first(where: { $0.id == id }) else {
+                PlozzLog.playback.debug("Ignoring obsolete live audio menu selection.")
+                return
+            }
+            tracks.selectAudio(track)
+            onControlActivity()
+        }
+        actions.selectSubtitle = { id in
+            if id == PlayerTrackOption.offID {
+                tracks.selectSubtitle(nil)
+            } else if let track = tracks.subtitleTracks.first(where: { $0.id == id }) {
+                tracks.selectSubtitle(track)
+            } else {
+                PlozzLog.playback.debug("Ignoring obsolete live subtitle menu selection.")
+                return
+            }
+            onControlActivity()
+        }
+        actions.setDialogueEnhancement = { enabled in
+            tracks.engine.setDialogEnhanceEnabled(enabled)
+            trackOptions.dialogEnhanceEnabled = enabled
+            onControlActivity()
+        }
+        return actions
+    }
+
+    private func presentMobileDestination() {
+        guard let destination = mobileMenu.takeDestination() else { return }
+        guard scenePhase == .active, tracks.matchesSource(channelID: channelID, input: input) else {
+            mobileMenu.reset()
+            return
+        }
+        switch destination {
+        case .zoom: mobileSheet = .zoom
+        case .subtitleAdvanced: mobileSheet = .subtitles
+        case .audioSync: mobileSheet = .audioSync
+        case .multiview:
+            if let onMultiview { onMultiview() }
+            else { PlozzLog.playback.debug("Ignoring unavailable live multiview menu selection.") }
+        case .subtitleSearch, .speed, .quality, .versions:
+            PlozzLog.playback.error("Live menu requested an unavailable destination.")
         }
     }
 
