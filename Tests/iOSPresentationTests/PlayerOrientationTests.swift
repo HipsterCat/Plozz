@@ -548,13 +548,22 @@ final class PlayerOrientationTests: XCTestCase {
         XCTAssertFalse(PlozziOSPlayerOrientation.supportsPreference(
             idiom: .phone, windowSize: CGSize(width: 500, height: 1366), screenSize: screen
         ))
-        XCTAssertTrue(PlozziOSPlayerOrientation.supportsPreference(
+        XCTAssertFalse(PlozziOSPlayerOrientation.supportsPreference(
             idiom: .phone,
             windowSize: CGSize(width: 1366, height: 1024), screenSize: screen
         ))
-        XCTAssertTrue(PlozziOSPlayerOrientation.supportsPreference(
+        XCTAssertFalse(PlozziOSPlayerOrientation.supportsPreference(
             idiom: .phone, windowSize: screen, screenSize: screen
         ))
+        let compact = CGSize(width: 402, height: 874)
+        XCTAssertTrue(PlozziOSPlayerOrientation.supportsPreference(
+            idiom: .phone, windowSize: compact, screenSize: compact
+        ))
+        XCTAssertTrue(PlozziOSPlayerOrientation.supportsPreference(
+            idiom: .phone, windowSize: CGSize(width: compact.height, height: compact.width), screenSize: compact
+        ))
+        XCTAssertEqual(PlozziOSWindowOrientation.browsingMask(for: .phone, windowSize: screen), .all)
+        XCTAssertEqual(PlozziOSWindowOrientation.browsingMask(for: .phone, windowSize: compact), .portrait)
     }
 
     func testWindowedModeSuspendsPreferenceButGeometryFailureDoesNotAbandonIt() {

@@ -24,11 +24,15 @@ public enum PlozziOSWindowOrientation {
         }
         return presentedPlayer?.supportedInterfaceOrientations
             ?? owners.object(forKey: window)?.supportedInterfaceOrientations
-            ?? browsingMask(for: window.traitCollection.userInterfaceIdiom)
+            ?? browsingMask(for: window.traitCollection.userInterfaceIdiom, windowSize: window.bounds.size)
     }
 
-    static func browsingMask(for idiom: UIUserInterfaceIdiom) -> UIInterfaceOrientationMask {
-        idiom == .phone ? .portrait : .all
+    static func browsingMask(for idiom: UIUserInterfaceIdiom, windowSize: CGSize = .zero) -> UIInterfaceOrientationMask {
+        usesCompactPhonePolicy(idiom: idiom, windowSize: windowSize) ? .portrait : .all
+    }
+
+    static func usesCompactPhonePolicy(idiom: UIUserInterfaceIdiom, windowSize: CGSize) -> Bool {
+        idiom == .phone && min(windowSize.width, windowSize.height) < 600
     }
 
     static func restoreOrientation(for window: UIWindow?) {
@@ -99,7 +103,7 @@ final class PlozziOSPlayerOrientation {
         idiom: UIUserInterfaceIdiom,
         windowSize: CGSize, screenSize: CGSize
     ) -> Bool {
-        guard idiom == .phone else { return false }
+        guard PlozziOSWindowOrientation.usesCompactPhonePolicy(idiom: idiom, windowSize: windowSize) else { return false }
         guard windowSize.width > 0, windowSize.height > 0 else { return false }
         // Compare independently of rotation while UIKit transitions between coordinate spaces.
         return abs(min(windowSize.width, windowSize.height) - min(screenSize.width, screenSize.height)) < 1
@@ -208,7 +212,7 @@ final class PlozziOSOrientationHostingController: UIHostingController<AnyView> {
     }
 
     var acceptsLiveRotation: Bool {
-        hasAppeared && !hasPendingPresentation && viewIfLoaded?.window?.isKeyWindow == true
+        hasAppeared && orientation.isAvailable && !hasPendingPresentation && viewIfLoaded?.window?.isKeyWindow == true
             && viewIfLoaded?.window?.windowScene?.activationState == .foregroundActive
     }
 

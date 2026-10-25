@@ -226,7 +226,7 @@ final class PrototypeToolbarBottomController: UIViewController {
         Task { @MainActor [weak self] in
             guard let self else { return }
             updatePending = false
-            guard let bar = navigationController?.navigationBar, !bar.isHidden,
+            guard let bar = navigationController?.navigationBar,
                   let window = view.window else { return }
             // Native toolbar buttons discard SwiftUI background geometry readers.
             // Read their public accessibility bounds in the shared window instead.
@@ -238,7 +238,14 @@ final class PrototypeToolbarBottomController: UIViewController {
                 }
                 return container.subviews.flatMap { bottoms(in: $0) }
             }
-            guard let bottom = bottoms(in: bar).max() else { return }
+            let barFrame = bar.convert(bar.bounds, to: window)
+            let bottom: CGFloat
+            if bar.isHidden || barFrame.height > barFrame.width {
+                bottom = window.safeAreaInsets.top
+            } else {
+                guard let controlsBottom = bottoms(in: bar).max() else { return }
+                bottom = controlsBottom
+            }
             guard bottom != lastBottom else { return }
             lastBottom = bottom
             onChange?(bottom)

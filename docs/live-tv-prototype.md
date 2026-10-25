@@ -131,7 +131,7 @@ Before a channel is selected, the guide uses the available space.
 Opening the preview reduces the guide's viewport without replacing its scroll
 view or resetting its channel/time position. Search and the narrow category
 directory hide the preview surface while retaining the existing playback policy.
-In wide iPad layouts, the category sidebar retains its full height and scroll
+In wide mobile layouts, the category sidebar retains its full height and scroll
 position; only the channel guide sits below the video in the adjacent column.
 Preview transport controls are centered on the video independently of its title
 row, with a larger Play/Pause button than Previous/Next.
@@ -148,12 +148,16 @@ disabled in landscape, fullscreen, multiview, Reduce Transparency, and when the
 preview is inactive, interrupted, or continuing on an external presentation.
 Apple TV keeps its existing browsing info bar and focus-driven preview.
 
-On iPhone, browsing stays portrait. With Playback orientation set to Auto, rotating
+In compact iPhone windows, browsing stays portrait. With Playback orientation set to Auto, rotating
 a visible playing preview sideways expands the existing player; rotating upright
 returns automatically expanded playback to the guide preview. Manually opened
 fullscreen stays open on rotation. Close restores portrait browsing and waits for
 physical upright before allowing another automatic expansion. This follows system
-rotation lock; iPad browsing and playback rotation are unchanged.
+rotation lock; iPad browsing and playback rotation are unchanged. Expanded phone
+windows (at least 600 points in both dimensions) follow system rotation instead.
+Resizing or unfolding alone does not expand the preview. Layout uses the current
+window and its independent leading/trailing safe areas; a vertical navigation
+bar does not reserve its full height above the video.
 
 For isolated physical-TV iteration, build a branded Debug app using the existing
 per-branch build configuration. It has its own bundle ID, preferences and data;

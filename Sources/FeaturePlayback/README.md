@@ -99,6 +99,10 @@ fades away from the video; there is no second player or
 frame-extraction loop. Fullscreen, multiview, external playback, and Reduce
 Transparency disable the reflection.
 
+When loading a new mobile native source, disconnect the outgoing player from
+the retained `AVPlayerLayer` before teardown and replacement. Retuning must
+present real video frames on that same surface, including on iOS 27.1.
+
 On tvOS, temporary scene inactivity from Control Center or Siri does not issue
 a player pause, cancel a live seek, or reload the stream. Playback and explicit
 pause intent survive the overlay; genuine system audio interruptions remain
@@ -432,8 +436,10 @@ The iPhone full-screen on-demand and expanded Live TV players read the active pr
 `PlaybackSettings.orientation` (Landscape by default, Auto, or Portrait).
 The existing playback-settings store and profile snapshot transfer carry the
 preference; it has no effect on iPad, tvOS, or inline trailers.
-Landscape permits either sideways direction. Ordinary iPhone browsing stays
-portrait, including the guide when no eligible preview is playing.
+Landscape permits either sideways direction. Compact iPhone browsing stays
+portrait, including the guide when no eligible preview is playing. Expanded phone
+windows with at least 600 points in both dimensions follow system rotation,
+like iPad; opening a larger display does not itself request fullscreen playback.
 
 Orientation is configured only in Settings > Playback, never in the player's
 options menu. Explicitly saved Auto or Portrait choices remain unchanged when
@@ -449,7 +455,7 @@ mobile X button, rather than a SwiftUI dismiss action outside a SwiftUI cover.
 The actual presented UIKit hosting controller owns on-demand orientations.
 Live TV keeps one window-scoped owner while its destination is active, without
 moving or recreating the playing view. With Auto selected, a visible, authorized
-preview that has presented video permits system rotation: accepted landscape
+preview in a compact phone window that has presented video permits system rotation: accepted landscape
 rotation expands that player, and rotating upright returns automatically expanded
 playback to the guide preview. Manual fullscreen does not collapse on rotation.
 Closing fullscreen restores portrait browsing and suppresses automatic expansion

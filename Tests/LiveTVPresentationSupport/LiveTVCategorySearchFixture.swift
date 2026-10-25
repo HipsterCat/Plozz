@@ -109,6 +109,8 @@ private struct CategoryPreviewPlayer: View {
                     .accessibilityIdentifier("category-preview-expands")
                 Text(engine.identity.uuidString)
                     .accessibilityIdentifier("category-preview-engine")
+                Text(engine.liveSnapshot.firstFrameReady ? "Frame: ready" : "Frame: waiting")
+                    .accessibilityIdentifier("category-preview-frame")
             }
             .allowsHitTesting(false)
         }
@@ -126,10 +128,10 @@ private final class CategoryPreviewEngine: LiveChannelEngine {
     var videoAspectRatio: Double? { native.videoAspectRatio }
     var loads = 0
     var liveSnapshot = LiveChannelEngineSnapshot(
-        phase: .playing, firstFrameReady: true, position: 100, bufferedPosition: 120,
+        phase: .idle, firstFrameReady: false, position: 100, bufferedPosition: 120,
         seekableRange: 0...1800, behindLiveSeconds: 0, route: .localHLS
     )
-    var status = VideoEngineStatus.ready
+    var status = VideoEngineStatus.idle
     var isPaused = false
     var currentTime: TimeInterval { 100 }
     var duration: TimeInterval { 1800 }
@@ -146,22 +148,45 @@ private final class CategoryPreviewEngine: LiveChannelEngine {
     @ObservationIgnored var onSecondarySubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
     @ObservationIgnored var onLiveSourceReset: (@MainActor () -> Void)?
 
+    init() {
+        native.onProgress = { [weak self] in
+            guard let self else { return }
+            liveSnapshot.firstFrameReady = native.hasPresentedVideoFrame
+            onProgress?()
+        }
+        native.onFailure = { [weak self] error in
+            guard let self else { return }
+            status = .failed(error)
+            liveSnapshot.phase = .failed
+            onFailure?(error)
+        }
+    }
+
     func loadLive(url: URL, httpHeaders: [String: String]) async {
         loads += 1
+        status = .loading
+        liveSnapshot.phase = .loading
+        liveSnapshot.firstFrameReady = false
         guard let fixture = Bundle.main.url(forResource: "live-continuity", withExtension: "mp4") else {
             preconditionFailure("The category preview fixture video is missing.")
         }
         await native.load(request: PlaybackRequest(
             item: MediaItem(id: "preview", title: "Synthetic video", kind: .movie), streamURL: fixture
         ), startPosition: 0)
-        status = .ready
+        guard !Task.isCancelled else { return }
+        status = native.status
         isPaused = false
-        liveSnapshot.phase = .playing
+        liveSnapshot.phase = native.status == .ready ? .playing : .failed
     }
     func load(request: PlaybackRequest, startPosition: TimeInterval) async {}
     func play() { native.play(); isPaused = false; liveSnapshot.phase = .playing }
     func pause() { native.pause(); isPaused = true; liveSnapshot.phase = .paused }
-    func stop() { native.stop(); status = .idle }
+    func stop() {
+        native.stop()
+        status = .idle
+        liveSnapshot.phase = .idle
+        liveSnapshot.firstFrameReady = false
+    }
     func seek(to seconds: TimeInterval) async {}
     func seekToLiveEdge() async {}
     func selectAudioTrack(_ track: MediaTrack?) {}

@@ -140,9 +140,9 @@ struct PrototypePreviewLayout {
         let bottom: CGFloat = 20
         guideSideBleed = 0
         #else
-        let side = max(16, max(safeAreaInsets.leading, safeAreaInsets.trailing))
-        guideSideBleed = side == 16 && navigationInset == 0 ? 14 : 0
-        let leading = side
+        let side = max(16, safeAreaInsets.trailing)
+        let leading = max(16, safeAreaInsets.leading)
+        guideSideBleed = side == 16 && leading == 16 && navigationInset == 0 ? 14 : 0
         let top = max(12, safeAreaInsets.top)
         let bottom = max(12, safeAreaInsets.bottom)
         #endif
@@ -167,6 +167,7 @@ struct PrototypePreviewLayout {
             largeText ? 440 : (compact ? 184 : 236)
         )
         #if os(tvOS)
+        let videoLeading = bounds.minX
         let videoWidth = bounds.width
         heroHeight = isSearching
             ? min(browsingHeroHeight, largeText ? 230 : (compact ? 140 : 180))
@@ -174,8 +175,9 @@ struct PrototypePreviewLayout {
         #else
         let categoryWidth = Self.categorySidebarWidth(contentFrame.size)
         let videoLeading = categoryWidth > 0
-            ? contentFrame.minX + categoryWidth + PrototypeLayout.sectionGap - guideSideBleed : bounds.minX
-        let videoWidth = bounds.maxX - videoLeading
+            ? contentFrame.minX + categoryWidth + PrototypeLayout.sectionGap - guideSideBleed
+            : bounds.minX + safeAreaInsets.leading
+        let videoWidth = max(1, bounds.maxX - safeAreaInsets.trailing - videoLeading)
         let previewTop = (toolbarControlsBottom ?? contentFrame.minY) + 8
         let previewHeight = min(videoWidth * 9 / 16, max(0, bounds.maxY - previewTop) * 0.48)
         heroHeight = self.isSearching || !showsVideoPreview
@@ -190,7 +192,7 @@ struct PrototypePreviewLayout {
         let videoTop = bounds.minY
         #endif
         videoFrame = CGRect(
-            x: bounds.maxX - videoWidth,
+            x: videoLeading,
             y: videoTop,
             width: videoWidth, height: videoHeight
         )

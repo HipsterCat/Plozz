@@ -12,6 +12,26 @@ import XCTest
 
 @MainActor
 final class LiveTVPreviewPresentationTests: XCTestCase {
+    func testPreviewRespectsEitherVerticalBarWithoutMirroringItsInset() {
+        for leading in [false, true] {
+            let insets = EdgeInsets(
+                top: 24, leading: leading ? 96 : 0,
+                bottom: 20, trailing: leading ? 0 : 96
+            )
+            let layout = PrototypePreviewLayout(
+                size: CGSize(width: 640, height: 800), safeAreaInsets: insets,
+                showsVideoPreview: true, toolbarControlsBottom: 24
+            )
+            XCTAssertEqual(layout.sidebarWidth, 0)
+            XCTAssertEqual(layout.videoFrame.minX, 0)
+            XCTAssertEqual(layout.videoFrame.maxX, 640)
+            XCTAssertEqual(layout.videoFrame.minY, 32)
+            XCTAssertEqual(layout.contentFrame.minX, leading ? 0 : 16)
+            XCTAssertEqual(layout.contentFrame.maxX, leading ? 624 : 640)
+            XCTAssertEqual(layout.guideSideBleed, 0)
+        }
+    }
+
     func testPreviewSitsBelowToolbarAndLeavesRoomForTheGuide() {
         for size in [CGSize(width: 393, height: 700), CGSize(width: 852, height: 320),
                      CGSize(width: 834, height: 1000), CGSize(width: 1194, height: 700)] {
@@ -51,6 +71,44 @@ final class LiveTVPreviewPresentationTests: XCTestCase {
                 XCTAssertEqual(playing.videoReflectionHeight, 0)
                 XCTAssertEqual(playing.videoTopReflectionHeight, 0)
             }
+        }
+    }
+
+    func testNativeVideoRetunePresentsFramesOnItsExistingSurface() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let engine = NativeVideoEngine(startsMuted: true)
+        let video = VideoPresentationView(frame: CGRect(x: 0, y: 100, width: 380, height: 214))
+        host.view.addSubview(video)
+        defer {
+            engine.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let folder = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "Fixtures", withExtension: nil))
+        video.attach(engine)
+        let surface = engine.makeVideoOutputView()
+        for _ in 0..<2 {
+            await engine.load(request: PlaybackRequest(
+                item: MediaItem(id: "retune", title: "Synthetic video", kind: .movie),
+                streamURL: folder.appendingPathComponent("live-continuity.mp4")
+            ), startPosition: 0)
+            video.attach(engine)
+            try await settle(window)
+            let deadline = ContinuousClock.now + .seconds(10)
+            while !engine.hasPresentedVideoFrame, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(engine.hasPresentedVideoFrame)
+            XCTAssertTrue(engine.makeVideoOutputView() === surface)
+            video.updateReflection(height: 180, topHeight: 100)
+            try await settle(window)
+            video.updateReflection(height: 0, topHeight: 0)
         }
     }
 

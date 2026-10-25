@@ -30,7 +30,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }
         launchNavigation(directPresentation: true)
-        let downloads = app.buttons["arrow.down.circle"].firstMatch
+        let downloads = app.tabBars.buttons["Downloads"]
         XCTAssertTrue(downloads.waitForExistence(timeout: 10))
         for page in 0..<3 {
             if page == 1 {
@@ -62,12 +62,12 @@ final class SettingsInteractionTests: XCTestCase {
     private func verifyNavigationRetention(directPresentation: Bool, settingsFirst: Bool = false) {
         launchNavigation(directPresentation: directPresentation, settingsFirst: settingsFirst)
         let settings = directPresentation
-            ? app.buttons["fixture-open-settings"] : app.buttons["gearshape"].firstMatch
-        let downloads = app.buttons["arrow.down.circle"].firstMatch
+            ? app.buttons["fixture-open-settings"] : app.buttons["Settings"].firstMatch
+        let downloads = app.buttons["Downloads"].firstMatch
         XCTAssertTrue(downloads.waitForExistence(timeout: 10), app.debugDescription)
         settings.tap()
         XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["house"].firstMatch.isSelected)
+        XCTAssertTrue(app.buttons["Home"].firstMatch.isSelected)
         app.buttons["Close"].tap()
         downloads.tap()
         XCTAssertTrue(app.buttons["Download Settings"].waitForExistence(timeout: 5))
@@ -107,13 +107,39 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 5), app.debugDescription)
         more.tap()
         XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 5))
-        button("Settings").tap()
+        app.tables.cells.containing(.staticText, identifier: "Settings").firstMatch.tap()
         XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5))
         capture("settings-over-more")
         XCTAssertTrue(more.isSelected)
         app.buttons["Close"].tap()
         XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 5))
         XCTAssertTrue(more.isSelected)
+    }
+
+    func testAdaptiveNavigationPageCaptures() {
+        launchNavigation(settingsInMore: true)
+        for title in ["Home", "Watchlist", "Live TV", "Downloads", "Search", "Settings"] {
+            let tab = app.buttons[title].firstMatch
+            if tab.waitForExistence(timeout: 2), tab.isHittable {
+                tab.tap()
+            } else {
+                let more = app.tabBars.buttons["More"]
+                XCTAssertTrue(more.waitForExistence(timeout: 5), app.debugDescription)
+                more.tap()
+                let row = app.tables.cells.containing(.staticText, identifier: title).firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+                row.tap()
+            }
+            if title == "Settings" {
+                XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5), app.debugDescription)
+            } else if title == "Search" {
+                XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+            } else {
+                XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), app.debugDescription)
+            }
+            capture("adaptive-\(title)-\(Int(app.frame.width))x\(Int(app.frame.height))")
+            if title == "Settings" { app.buttons["Close"].tap() }
+        }
     }
 
     func testCardsRowNavigatesWithoutOpeningDisplaySize() {
@@ -1835,6 +1861,12 @@ final class SettingsInteractionTests: XCTestCase {
         screenshot.name = name
         screenshot.lifetime = .keepAlways
         add(screenshot)
+        for (index, screen) in XCUIScreen.screens.enumerated() where index > 0 {
+            let display = XCTAttachment(screenshot: screen.screenshot())
+            display.name = "\(name)-display-\(index)"
+            display.lifetime = .keepAlways
+            add(display)
+        }
         let hierarchy = XCTAttachment(string: app.debugDescription)
         hierarchy.name = name + "-hierarchy"
         hierarchy.lifetime = .keepAlways

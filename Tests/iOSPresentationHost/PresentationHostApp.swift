@@ -84,11 +84,21 @@ struct PresentationHostApp: App {
             }
             // Explicitly show fixture pages even when their empty content would hide them automatically.
             model.settings.navigation.applyLibrarySections(
-                .init(enabled: [], disabled: available), available: available
+                .init(enabled: [NavigationLibraryLayout.settingsKey],
+                      disabled: available.filter { $0 != NavigationLibraryLayout.settingsKey }),
+                available: available,
+                automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
+            )
+            model.settings.navigation.applyLibrarySections(
+                .init(enabled: [NavigationLibraryLayout.homeKey],
+                      disabled: available.filter { $0 != NavigationLibraryLayout.homeKey }),
+                available: available,
+                automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
             )
             model.settings.navigation.applyLibrarySections(
                 .init(enabled: enabled, disabled: available.filter { !enabled.contains($0) }),
-                available: available
+                available: available,
+                automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
             )
         }
         interactionModel = model

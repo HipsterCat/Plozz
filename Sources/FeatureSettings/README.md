@@ -398,14 +398,19 @@ watch history and planning-list behavior are documented in
   Network-share aliases are a separate feature.
 - `ProfileSettingsCategory` in CoreUI owns the cross-platform profile category
   order, names, icons, and summaries: Playback, Subtitles, Live TV, Libraries,
-  Appearance, Screens & Navigation, Trackers, Language. iPhone and compact iPad
-  use native push navigation; regular-width iPad uses a sidebar and detail stack.
+  Appearance, Screens & Navigation, Trackers, Language. Compact mobile windows
+  use native push navigation; regular-width windows use a sidebar and detail stack.
   Both mobile layouts share their category section and destinations. Appearance
   groups Theme, Cards, Artwork, Spoiler Protection, and Circadian Mode; Display
   Size is last inside Cards. Screens & Navigation groups Customize Home,
   Navigation, and Detail Page; Music Player remains TV-only because mobile does
   not implement those presentation choices. Mobile navigation editing still
   excludes unsupported individual library tabs and Music/All Libraries entries.
+  The mobile app shell uses native adaptive tabs, sidebar, and system More
+  overflow. Destination declarations and their navigation stacks stay mounted
+  across width changes; profile-scoped ordering and visibility remain authoritative.
+  Settings opens as a sheet from direct tabs or native More without replacing
+  the selected page or its navigation history.
   Everyone uses the TV order, with mobile-only Downloads last. Version/build,
   release notes, and community links are inline on both mobile root layouts.
   Mobile Community uses standard-height, single-line Discord and GitHub links

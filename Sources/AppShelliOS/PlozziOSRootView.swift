@@ -763,53 +763,6 @@ private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-private enum PlozziOSTabSelection: Hashable {
-    case destination(PlozziOSDestination)
-    case more
-}
-
-private struct PlozziOSMorePage: View {
-    let destinations: [PlozziOSDestination]
-    let onSelect: (PlozziOSDestination) -> Void
-    let onShowSettings: () -> Void
-
-    var body: some View {
-        SettingsPageList {
-            SettingsSectionGroup {
-                ForEach(destinations) { destination in
-                    Button {
-                        onSelect(destination)
-                    } label: {
-                        HStack(spacing: 16) {
-                            Image(systemName: destination.systemImage)
-                                .font(.title3)
-                                .foregroundStyle(.tint)
-                                .frame(width: 28)
-                                .accessibilityHidden(true)
-                            Text(destination.title)
-                                .font(.body.weight(.semibold))
-                            Spacer(minLength: 12)
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .plozzForeground(.secondary)
-                                .accessibilityHidden(true)
-                        }
-                        .frame(minHeight: 32)
-                    }
-                    .accessibilityIdentifier("more-destination-\(destination.rawValue)")
-                }
-            }
-        }
-        .navigationTitle("More")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings)
-            }
-        }
-    }
-}
-
 /// Performs the capture rig's tab requests. See ``PlozziOSScreenshotDirector``.
 private struct PlozziOSScreenshotTabRouter: View {
     let director: PlozziOSScreenshotDirector
@@ -830,14 +783,12 @@ private struct PlozziOSScreenshotTabRouter: View {
 
 struct PlozziOSTabShell: View {
     @Environment(\.themePalette) private var palette
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(PlozziOSSidebarGeometryModel.self)
     private var sidebarGeometry
     @Environment(HeroTrailerController.self)
     private var heroTrailerController
     @State private var selectedDestination: PlozziOSDestination = .home
-    @State private var isMoreSelected = false
-    @State private var moreDestination: PlozziOSDestination?
+    @State private var isShowingMorePage = false
     @State private var lastContentDestination: PlozziOSDestination = .home
     @State private var retainsExplicitLiveTVEntry = false
     @State private var retainsExplicitHomeEntry = false
@@ -982,41 +933,10 @@ struct PlozziOSTabShell: View {
         return resolvedDestination(selectedDestination)
     }
 
-    private var overflowDestinations: [PlozziOSDestination] {
-        guard UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact else { return [] }
-        let keys = NavigationDestinationDefaults.iPhoneOverflowKeys(visible: tabDestinations.map(\.rawValue))
-        return tabDestinations.filter { keys.contains($0.rawValue) }
-    }
-
-    private var directTabDestinations: [PlozziOSDestination] {
-        tabDestinations.filter { !overflowDestinations.contains($0) }
-    }
-
-    private var isShowingMorePage: Bool {
-        isMoreSelected && moreDestination == nil
-    }
-
-    private var destinationSelection: Binding<PlozziOSTabSelection> {
+    private var destinationSelection: Binding<PlozziOSDestination> {
         Binding(
-            get: {
-                isMoreSelected || overflowDestinations.contains(effectiveSelectedDestination)
-                    ? .more : .destination(effectiveSelectedDestination)
-            },
-            set: { selection in
-                switch selection {
-                case .destination(let destination):
-                    openDestination(destination)
-                case .more:
-                    hasChosenNavigationDestination = true
-                    if isMoreSelected {
-                        moreDestination = nil
-                    } else if let moreDestination {
-                        selectedDestination = resolvedDestination(moreDestination)
-                    }
-                    isMoreSelected = true
-                    heroTrailerController.stop()
-                }
-            }
+            get: { effectiveSelectedDestination },
+            set: openDestination
         )
     }
 
@@ -1030,10 +950,8 @@ struct PlozziOSTabShell: View {
     }
 
     private func selectDestination(_ destination: PlozziOSDestination) {
-        let resolved = resolvedDestination(destination)
-        isMoreSelected = overflowDestinations.contains(resolved)
-        if isMoreSelected && resolved != .settings { moreDestination = resolved }
-        selectedDestination = resolved
+        isShowingMorePage = false
+        selectedDestination = resolvedDestination(destination)
     }
 
     private func consumeStandaloneEntryIfNeeded() {
@@ -1046,7 +964,6 @@ struct PlozziOSTabShell: View {
 
     private var tabDestinationKey: String {
         tabDestinations.map(\.rawValue).joined(separator: "|")
-            + "#more=" + overflowDestinations.map(\.rawValue).joined(separator: "|")
     }
 
     private func resolvedDestination(
@@ -1200,25 +1117,25 @@ struct PlozziOSTabShell: View {
 
     private var contentAwareTabs: some View {
         TabView(selection: destinationSelection) {
-            ForEach(directTabDestinations) { destination in
+            ForEach(tabDestinations) { destination in
                 if destination == .search && tabDestinations.last == .search {
                     // Preserve native trailing Search until the viewer moves it.
                     Tab(
                         "Search",
                         systemImage: "magnifyingglass",
-                        value: PlozziOSTabSelection.destination(.search),
+                        value: PlozziOSDestination.search,
                         role: .search
                     ) {
                         tabContent(for: destination)
                     }
                 } else if destination == .downloads {
-                    Tab(value: PlozziOSTabSelection.destination(destination)) {
+                    Tab(value: destination) {
                         tabContent(for: destination)
                     } label: {
                         PlozziOSDownloadsTabLabel(model: appModel.downloads)
                     }
                 } else {
-                    Tab(value: PlozziOSTabSelection.destination(destination)) {
+                    Tab(value: destination) {
                         tabContent(for: destination)
                     } label: {
                         Label {
@@ -1229,28 +1146,14 @@ struct PlozziOSTabShell: View {
                     }
                 }
             }
-            if !overflowDestinations.isEmpty {
-                Tab("More", systemImage: "ellipsis", value: PlozziOSTabSelection.more) {
-                    NavigationStack {
-                        PlozziOSMorePage(
-                            destinations: overflowDestinations,
-                            onSelect: openDestination,
-                            onShowSettings: showSettings
-                        )
-                        .navigationDestination(item: $moreDestination) { destination in
-                            destinationContent(for: destination, keepsNavigationBar: true)
-                        }
-                    }
-                    .id(downloadNavigationID)
-                }
-            }
         }
 
-        .tabViewStyle(.tabBarOnly)
+        .tabViewStyle(.sidebarAdaptable)
         .background {
             PlozziOSSettingsTabAction(
-                tabIndex: directTabDestinations.firstIndex(of: .settings),
-                action: showSettings
+                tabIndex: tabDestinations.firstIndex(of: .settings),
+                action: showSettings,
+                onOverflowVisibilityChange: { isShowingMorePage = $0 }
             )
             .frame(width: 0, height: 0)
         }
@@ -1326,15 +1229,7 @@ struct PlozziOSTabShell: View {
             consumeStandaloneEntryIfNeeded()
         }
         .onChange(of: tabDestinationKey, initial: true) { _, _ in
-            let wasShowingMorePage = isShowingMorePage
-            if let moreDestination, !overflowDestinations.contains(moreDestination) {
-                self.moreDestination = nil
-            }
-            if !wasShowingMorePage || overflowDestinations.isEmpty {
-                selectDestination(selectedDestination)
-            } else {
-                selectedDestination = resolvedDestination(selectedDestination)
-            }
+            selectDestination(selectedDestination)
         }
         .onChange(of: isShowingMorePage) { _, showingMore in
             if showingMore { heroTrailerController.stop() }
@@ -1596,25 +1491,33 @@ struct PlozziOSDownloadsTabLabel: View {
 struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
     let tabIndex: Int?
     let action: () -> Void
+    var onOverflowVisibilityChange: ((Bool) -> Void)?
 
     func makeUIViewController(context: Context) -> Controller { Controller() }
 
     func updateUIViewController(_ controller: Controller, context: Context) {
         controller.tabIndex = tabIndex
         controller.action = action
+        controller.onOverflowVisibilityChange = onOverflowVisibilityChange
         controller.install()
     }
 
     static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
         controller.restore()
         controller.action = nil
+        controller.onOverflowVisibilityChange = nil
     }
 
-    final class Controller: UIViewController, UITabBarControllerDelegate {
+    final class Controller: UIViewController, UITabBarControllerDelegate, UITableViewDelegate, UINavigationControllerDelegate {
         var tabIndex: Int?
         var action: (() -> Void)?
+        var onOverflowVisibilityChange: ((Bool) -> Void)?
+        private var reportedOverflowVisibility: Bool?
         private weak var owner: UITabBarController?
         private weak var previousDelegate: (any UITabBarControllerDelegate)?
+        private weak var overflowTable: UITableView?
+        private weak var previousOverflowDelegate: (any UITableViewDelegate)?
+        private weak var previousMoreDelegate: (any UINavigationControllerDelegate)?
 
         override func didMove(toParent parent: UIViewController?) {
             super.didMove(toParent: parent)
@@ -1628,10 +1531,11 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         override func viewDidLayoutSubviews() {
             super.viewDidLayoutSubviews()
             install()
+            reportOverflowVisibility()
         }
 
         func install() {
-            guard tabIndex != nil else {
+            guard tabIndex != nil || onOverflowVisibilityChange != nil else {
                 restore()
                 return
             }
@@ -1651,6 +1555,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
                         previousDelegate = tabs.delegate
                         tabs.delegate = self
                     }
+                    installOverflowAction(in: tabs)
                     return
                 }
                 ancestor = container.parent
@@ -1666,9 +1571,96 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         }
 
         func restore() {
+            if owner?.moreNavigationController.delegate === self {
+                owner?.moreNavigationController.delegate = previousMoreDelegate
+            }
+            previousMoreDelegate = nil
+            if overflowTable?.delegate === self { overflowTable?.delegate = previousOverflowDelegate }
+            overflowTable = nil
+            previousOverflowDelegate = nil
             if owner?.delegate === self { owner?.delegate = previousDelegate }
             owner = nil
             previousDelegate = nil
+            reportedOverflowVisibility = nil
+        }
+
+        private func installOverflowAction(in tabs: UITabBarController) {
+            let more = tabs.moreNavigationController
+            if more.delegate !== self {
+                previousMoreDelegate = more.delegate
+                more.delegate = self
+            }
+            func findTable(in view: UIView) -> UITableView? {
+                if let table = view as? UITableView { return table }
+                return view.subviews.lazy.compactMap(findTable).first
+            }
+            guard let root = tabs.moreNavigationController.viewControllers.first?.viewIfLoaded,
+                  let table = findTable(in: root) else { return }
+            if overflowTable !== table {
+                if overflowTable?.delegate === self { overflowTable?.delegate = previousOverflowDelegate }
+                overflowTable = table
+                previousOverflowDelegate = table.delegate
+            }
+            if table.delegate !== self {
+                previousOverflowDelegate = table.delegate
+                table.delegate = self
+            }
+        }
+
+        func navigationController(
+            _ navigationController: UINavigationController,
+            didShow viewController: UIViewController, animated: Bool
+        ) {
+            previousMoreDelegate?.navigationController?(
+                navigationController, didShow: viewController, animated: animated
+            )
+            if let owner { installOverflowAction(in: owner) }
+            reportOverflowVisibility()
+        }
+
+        func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
+            // Native More bypasses the tab-selection delegate when it pushes a row.
+            if let owner, let tabIndex, let controllers = owner.viewControllers,
+               controllers.indices.contains(tabIndex), indexPath.section == 0 {
+                let visibleItems = owner.tabBar.items ?? []
+                let overflow = controllers.filter { controller in
+                    !visibleItems.contains { $0 === controller.tabBarItem }
+                }
+                if overflow.count == tableView.numberOfRows(inSection: 0),
+                   overflow.indices.contains(indexPath.row),
+                   overflow[indexPath.row] === controllers[tabIndex] {
+                    action?()
+                    return nil
+                }
+            }
+            if previousOverflowDelegate?.responds(to: #selector(UITableViewDelegate.tableView(_:willSelectRowAt:))) == true {
+                return previousOverflowDelegate?.tableView?(tableView, willSelectRowAt: indexPath)
+            }
+            return indexPath
+        }
+
+        private func reportOverflowVisibility() {
+            guard let owner else { return }
+            let more = owner.moreNavigationController
+            let visible = owner.selectedViewController === more && more.viewControllers.count == 1
+            guard reportedOverflowVisibility != visible else { return }
+            reportedOverflowVisibility = visible
+            Task { @MainActor [weak self, weak owner] in
+                guard let self, let owner, self.owner === owner,
+                      self.reportedOverflowVisibility == visible else { return }
+                self.onOverflowVisibilityChange?(visible)
+            }
+        }
+
+        func tabBarController(_ tabBarController: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
+            previousDelegate?.tabBarController?(tabBarController, didSelectTab: selectedTab, previousTab: previousTab)
+            reportOverflowVisibility()
+        }
+
+        func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
+            previousDelegate?.tabBarController?(tabBarController, didSelect: viewController)
+            installOverflowAction(in: tabBarController)
+            reportOverflowVisibility()
         }
 
         func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
@@ -1691,11 +1683,15 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
 
         override func responds(to selector: Selector!) -> Bool {
             super.responds(to: selector) || previousDelegate?.responds(to: selector) == true
+                || previousOverflowDelegate?.responds(to: selector) == true
+                || previousMoreDelegate?.responds(to: selector) == true
         }
 
         override func forwardingTarget(for selector: Selector!) -> Any? {
-            previousDelegate?.responds(to: selector) == true
-                ? previousDelegate : super.forwardingTarget(for: selector)
+            if previousDelegate?.responds(to: selector) == true { return previousDelegate }
+            if previousOverflowDelegate?.responds(to: selector) == true { return previousOverflowDelegate }
+            if previousMoreDelegate?.responds(to: selector) == true { return previousMoreDelegate }
+            return super.forwardingTarget(for: selector)
         }
     }
 }

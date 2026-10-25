@@ -18,8 +18,15 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertEqual(preview.label, "Arena One")
         XCTAssertEqual(preview.value as? String, "Preview")
-        XCTAssertTrue(channel("Daily News", in: app).isHittable)
-        XCTAssertEqual(preview.frame.minY - app.buttons["live-tv-category"].frame.maxY, 8, accuracy: 2)
+        XCTAssertTrue(app.staticTexts["category-preview-frame"].wait(
+            for: \.label, toEqual: "Frame: ready", timeout: 10
+        ), app.staticTexts["category-preview-frame"].label)
+        XCTAssertTrue(channel("Daily News", in: app).exists, "The guide must stay mounted below the preview.")
+        let filters = app.buttons["live-tv-category"].frame
+        XCTAssertTrue(
+            abs(preview.frame.minY - filters.maxY - 8) <= 2 || preview.frame.maxX <= filters.minX,
+            "The video must sit 8 pt below a horizontal toolbar or clear a vertical toolbar."
+        )
         XCTAssertFalse(app.buttons["Watch channel"].exists)
         let programme = app.buttons["Championship Highlights"].firstMatch
         XCTAssertTrue(programme.waitForExistence(timeout: 5))
@@ -30,14 +37,17 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [tuned], timeout: 10), .completed)
         XCTAssertEqual(preview.value as? String, "Preview")
         XCTAssertTrue(channel("Arena One", in: app).isHittable)
-        capture("channel-tap-starts-top-preview", in: app)
+        XCTAssertTrue(app.staticTexts["category-preview-frame"].wait(
+            for: \.label, toEqual: "Frame: ready", timeout: 10
+        ), app.staticTexts["category-preview-frame"].label)
         let fullscreen = app.buttons["live-channel-fullscreen"]
         if !fullscreen.isHittable {
-            preview.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.65)).tap()
+            preview.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.25)).tap()
         }
         XCTAssertTrue(fullscreen.waitForExistence(timeout: 5))
         app.buttons["live-channel-play-pause"].tap()
         XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 5))
+        capture("channel-tap-starts-top-preview", in: app)
         let loads = app.staticTexts["category-preview-loads"].label
         fullscreen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.staticTexts["category-preview-expands"].wait(for: \.label, toEqual: "Expands: 1", timeout: 5))
@@ -47,6 +57,7 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 5), .completed)
         XCTAssertEqual(app.staticTexts["category-preview-loads"].label, loads, "Fullscreen must not reload the stream.")
         XCTAssertFalse(channel("Arena One", in: app).isHittable)
+        capture("live-preview-fullscreen", in: app)
     }
 
     func testPreviewFullscreenRoundTripWithAutomaticRotation() {
@@ -554,5 +565,11 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+        for (index, screen) in XCUIScreen.screens.enumerated() where index > 0 {
+            let display = XCTAttachment(screenshot: screen.screenshot())
+            display.name = "\(name)-display-\(index)"
+            display.lifetime = .keepAlways
+            add(display)
+        }
     }
 }
