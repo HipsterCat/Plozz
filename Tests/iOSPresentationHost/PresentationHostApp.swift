@@ -9,6 +9,10 @@ import FeatureLiveTVCore
 import FeatureSettings
 @testable import AppShelliOS
 
+@objc protocol PresentationOrientationWindow {
+    var supportedPresentationOrientations: UIInterfaceOrientationMask { get }
+}
+
 @main
 struct PresentationHostApp: App {
     @UIApplicationDelegateAdaptor(PresentationOrientationDelegate.self) private var orientationDelegate
@@ -128,7 +132,11 @@ struct PresentationHostApp: App {
         func application(
             _ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?
         ) -> UIInterfaceOrientationMask {
-            PlozziOSWindowOrientation.supportedOrientations(for: window)
+            // Hosted XCTest links its own package globals; ask its window for its registry's policy.
+            if let owner = window?.windowScene?.keyWindow as? PresentationOrientationWindow {
+                return owner.supportedPresentationOrientations
+            }
+            return PlozziOSWindowOrientation.supportedOrientations(for: window)
         }
     }
 

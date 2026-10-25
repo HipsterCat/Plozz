@@ -146,6 +146,7 @@ struct PlozziOSLiveTVDestination: View {
                 canToggleFavorite: playback.canToggleFavorite,
                 onToggleFavorite: playback.onToggleFavorite,
                 isExpanded: playback.isExpanded,
+                isPreviewVisible: playback.isPreviewVisible,
                 onExpandPreview: playback.expandPreview,
                 previewReflectionHeight: playback.previewReflectionHeight,
                 previewTopReflectionHeight: playback.previewTopReflectionHeight,
@@ -214,8 +215,9 @@ struct PlozziOSLiveTVDestination: View {
         }
         .id(profileScope)
         .plozziOSLivePlayerOrientation(
-            isPresented: isActive && isExpanded && isCurrentProfileScope,
-            orientation: playbackOrientation
+            isPresented: isExpanded,
+            orientation: playbackOrientation,
+            isActive: isActive && isCurrentProfileScope
         )
         .toolbar(isExpanded ? .hidden : .visible, for: .tabBar)
         .onAppear {

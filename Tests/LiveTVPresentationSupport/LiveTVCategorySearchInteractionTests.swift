@@ -53,6 +53,59 @@ final class LiveTVCategorySearchInteractionTests: XCTestCase {
         verifyFullscreenRoundTrip(orientation: "auto")
     }
 
+    func testPhoneAutoRotationExpandsPreviewAndClosingRequiresUprightBeforeReopening() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
+        XCUIDevice.shared.orientation = .portrait
+        let app = launch(guideFirst: true)
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        let arena = channel("Arena One", in: app)
+        XCTAssertTrue(arena.waitForExistence(timeout: 15))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let browsingRotates = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.frame.width > app.frame.height
+        }, object: nil)
+        browsingRotates.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [browsingRotates], timeout: 1), .completed)
+        XCUIDevice.shared.orientation = .portrait
+        arena.tap()
+        let preview = app.otherElements["category-search-playback"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        let engineID = app.staticTexts["category-preview-engine"].label
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForPresentation("Fullscreen", preview: preview)
+        XCTAssertGreaterThan(preview.frame.width, preview.frame.height)
+        XCUIDevice.shared.orientation = .portrait
+        waitForPresentation("Preview", preview: preview)
+        XCTAssertTrue(arena.isHittable)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForPresentation("Fullscreen", preview: preview)
+        let close = app.buttons["live-channel-close"]
+        if !close.exists { preview.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap() }
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitForPresentation("Preview", preview: preview)
+        let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.frame.height > app.frame.width
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 5), .completed)
+        XCUIDevice.shared.orientation = .landscapeRight
+        let reopens = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Fullscreen"), object: preview
+        )
+        reopens.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [reopens], timeout: 1), .completed)
+        XCUIDevice.shared.orientation = .portrait
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForPresentation("Fullscreen", preview: preview)
+        XCTAssertEqual(app.staticTexts["category-preview-engine"].label, engineID)
+        XCTAssertEqual(app.staticTexts["category-preview-loads"].label, "Loads: 1")
+        capture("iphone-automatic-live-fullscreen", in: app)
+    }
+
     func testWideSidebarStaysFullHeightBesideVideoPreview() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "Requires a wide iPad sidebar.")
         XCUIDevice.shared.orientation = .landscapeLeft

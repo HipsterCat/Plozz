@@ -1,5 +1,6 @@
 import XCTest
 import Vision
+import UIKit
 
 @MainActor
 final class SettingsInteractionTests: XCTestCase {
@@ -22,6 +23,32 @@ final class SettingsInteractionTests: XCTestCase {
 
     func testSettingsTabKeepsTheCurrentPageAndNavigationStack() {
         verifyNavigationRetention(directPresentation: false)
+    }
+
+    func testPhoneBrowsingAndSettingsStayPortraitWithoutPlayback() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        launchNavigation(directPresentation: true)
+        let downloads = app.buttons["arrow.down.circle"].firstMatch
+        XCTAssertTrue(downloads.waitForExistence(timeout: 10))
+        for page in 0..<3 {
+            if page == 1 {
+                downloads.tap()
+                XCTAssertTrue(app.buttons["Download Settings"].waitForExistence(timeout: 5))
+            } else if page == 2 {
+                app.buttons["fixture-open-settings"].tap()
+                XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5))
+            }
+            XCUIDevice.shared.orientation = .landscapeLeft
+            let rotates = XCTNSPredicateExpectation(predicate: NSPredicate { [app] _, _ in
+                guard let app else { return false }
+                return app.frame.width > app.frame.height
+            }, object: nil)
+            rotates.isInverted = true
+            XCTAssertEqual(XCTWaiter.wait(for: [rotates], timeout: 1), .completed)
+            XCUIDevice.shared.orientation = .portrait
+        }
     }
 
     func testDirectSettingsPresentationKeepsTheCurrentPageAndNavigationStack() {

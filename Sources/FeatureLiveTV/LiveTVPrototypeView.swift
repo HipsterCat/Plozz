@@ -20,6 +20,7 @@ public struct LiveTVPrototypePlayback {
     public let canToggleFavorite: Bool
     public let onToggleFavorite: () -> Void
     public let isExpanded: Bool
+    public let isPreviewVisible: Bool
     public let expandPreview: () -> Void
     public let previewReflectionHeight: CGFloat
     public let previewTopReflectionHeight: CGFloat
@@ -398,7 +399,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             ? layout.videoReflectionHeight : 0
                         let topReflectionHeight = reflectionHeight > 0 ? layout.videoTopReflectionHeight : 0
                         player(playbackInput(for: pane, prepared: prepared, reflectionHeight: reflectionHeight,
-                                             topReflectionHeight: topReflectionHeight))
+                                             topReflectionHeight: topReflectionHeight,
+                                             isPreviewVisible: !expanded && layout.heroHeight > 0))
                     .environment(\.themePalette, ThemePalette.dark)
                     .environment(\.colorScheme, .dark)
                     .frame(width: videoFrame.width, height: videoFrame.height)
@@ -566,7 +568,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
 
     private func playbackInput(
         for pane: LiveTVMultiviewPane, prepared: LiveTVPreparedStream, reflectionHeight: CGFloat = 0,
-        topReflectionHeight: CGFloat = 0
+        topReflectionHeight: CGFloat = 0, isPreviewVisible: Bool = false
     ) -> LiveTVPrototypePlayback {
         let presentationID = playback.presentationID
         return LiveTVPrototypePlayback(
@@ -579,6 +581,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             canToggleFavorite: model.preferencesIssue != .loadFailed,
             onToggleFavorite: { model.toggleFavoriteWithFeedback(prepared.channel.id) },
             isExpanded: preview.isExpanded && !multiview.isEnabled,
+            isPreviewVisible: isPreviewVisible && !multiview.isEnabled,
             expandPreview: {
                 guard activity.acceptsInteraction, !multiview.isEnabled else { return }
                 playback.expandPreview(presentationID: presentationID, preparedID: prepared.id)

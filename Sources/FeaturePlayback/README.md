@@ -431,13 +431,14 @@ Live TV retains its existing guide-based program times.
 The iPhone full-screen on-demand and expanded Live TV players read the active profile's
 `PlaybackSettings.orientation` (Landscape by default, Auto, or Portrait).
 The existing playback-settings store and profile snapshot transfer carry the
-preference; it has no effect on iPad, tvOS, browsing, inline trailers, or the
-Live TV guide. Landscape permits either sideways direction.
+preference; it has no effect on iPad, tvOS, or inline trailers.
+Landscape permits either sideways direction. Ordinary iPhone browsing stays
+portrait, including the guide when no eligible preview is playing.
 
 Orientation is configured only in Settings > Playback, never in the player's
 options menu. Explicitly saved Auto or Portrait choices remain unchanged when
 loading existing profiles; older settings without an orientation use Landscape.
-The on-demand cover follows system orientation while loading versions and showing
+The on-demand cover stays portrait while loading versions and showing
 the first-use question or pre-play version picker. The saved rotation preference
 activates only after that gate completes; cancelling or failing the gate never
 forces rotation. Episode/version handoffs retain the preference once playback starts.
@@ -446,14 +447,24 @@ Failure-screen Back and end-of-playback dismissal use that same owner as the
 mobile X button, rather than a SwiftUI dismiss action outside a SwiftUI cover.
 
 The actual presented UIKit hosting controller owns on-demand orientations.
-Expanded Live TV uses the same policy through a window-scoped owner without
-moving or recreating the playing view. Collapsing the player or leaving Live TV
-releases that owner and restores the preceding guide orientation when a forced
-preference was used. Native options menus and Custom zoom controls retain the
+Live TV keeps one window-scoped owner while its destination is active, without
+moving or recreating the playing view. With Auto selected, a visible, authorized
+preview that has presented video permits system rotation: accepted landscape
+rotation expands that player, and rotating upright returns automatically expanded
+playback to the guide preview. Manual fullscreen does not collapse on rotation.
+Closing fullscreen restores portrait browsing and suppresses automatic expansion
+until the phone is physically upright again. Forced interface rotation on Close
+does not clear that suppression. Hidden previews, multiview, interrupted playback,
+external playback, and inactive destinations cannot automatically expand.
+Channel changes retain automatic return while fullscreen; callbacks still use
+the coordinator's current authorization and source checks.
+Native options menus and Custom zoom controls retain the
 expanded player's window restriction, including when a presentation temporarily
 covers its embedded owner; only removing that owner ends its policy.
-Auto continues to follow system rotation. No restriction is
-applied to other windows, the ordinary guide, or inactive profiles.
+Auto follows accepted system interface rotation rather than forcing rotation from
+sensor notifications, preserving system rotation lock. Playback ownership never
+applies a different window's or inactive profile's preference. Closing on-demand
+playback also restores the browsing policy.
 iPad follows system rotation and offers no app orientation control, preserving
 multitasking. iPadOS refuses forced Portrait/Landscape changes in multitasking
 mode, even when a window fills the display.

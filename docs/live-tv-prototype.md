@@ -148,6 +148,13 @@ disabled in landscape, fullscreen, multiview, Reduce Transparency, and when the
 preview is inactive, interrupted, or continuing on an external presentation.
 Apple TV keeps its existing browsing info bar and focus-driven preview.
 
+On iPhone, browsing stays portrait. With Playback orientation set to Auto, rotating
+a visible playing preview sideways expands the existing player; rotating upright
+returns automatically expanded playback to the guide preview. Manually opened
+fullscreen stays open on rotation. Close restores portrait browsing and waits for
+physical upright before allowing another automatic expansion. This follows system
+rotation lock; iPad browsing and playback rotation are unchanged.
+
 For isolated physical-TV iteration, build a branded Debug app using the existing
 per-branch build configuration. It has its own bundle ID, preferences and data;
 normal Plozz remains installed and untouched. Cloud sync and Top Shelf are not

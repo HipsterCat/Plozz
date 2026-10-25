@@ -91,7 +91,7 @@ private struct CategoryPreviewPlayer: View {
             input: playback.input, logoURL: nil, makeEngine: { engine },
             onPreviousChannel: playback.previousChannel, onNextChannel: playback.nextChannel,
             isFavorite: false, canToggleFavorite: false, onToggleFavorite: {},
-            isExpanded: playback.isExpanded, onExpandPreview: {
+            isExpanded: playback.isExpanded, isPreviewVisible: playback.isPreviewVisible, onExpandPreview: {
                 expansions += 1
                 playback.expandPreview()
             },

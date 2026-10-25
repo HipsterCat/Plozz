@@ -12,6 +12,26 @@ struct LiveChannelSessionReporting {
     let failed: @MainActor (LiveChannelFailureReport) -> Void
 }
 
+#if os(iOS)
+public struct LiveChannelRotationTarget: Equatable {
+    public let id: UUID
+    public let canExpand: Bool
+    public let expand: @MainActor () -> Void
+    public let returnToGuide: @MainActor () -> Void
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.canExpand == rhs.canExpand
+    }
+}
+
+public struct LiveChannelRotationTargetKey: PreferenceKey {
+    public static var defaultValue: LiveChannelRotationTarget? { nil }
+    public static func reduce(value: inout LiveChannelRotationTarget?, nextValue: () -> LiveChannelRotationTarget?) {
+        value = nextValue() ?? value
+    }
+}
+#endif
+
 /// Playback host for live channels.
 ///
 /// The host deliberately bypasses `PlayerViewModel`: live channels have no
@@ -31,6 +51,7 @@ public struct LiveChannelPlayerView: View {
     private let canToggleFavorite: Bool
     private let onToggleFavorite: () -> Void
     private let isExpanded: Bool
+    private let isPreviewVisible: Bool
     private let onExpandPreview: (() -> Void)?
     private let previewReflectionHeight: CGFloat
     private let previewTopReflectionHeight: CGFloat
@@ -123,6 +144,19 @@ public struct LiveChannelPlayerView: View {
 
     private var hasInteractiveControls: Bool { isExpanded || hasInlineControls }
 
+    #if os(iOS)
+    private var rotationTarget: LiveChannelRotationTarget? {
+        guard isActive, isAuthorized, scenePhase == .active, !isMultiview,
+              let model, sourceMatchesCurrentModel, model.hasPresentedFrame, !model.phase.isInterrupted,
+              model.interruption == nil, model.networkBlock == nil, !model.continuesExternally,
+              let reportingID, let onExpandPreview, let onReturnToGuide else { return nil }
+        return LiveChannelRotationTarget(
+            id: reportingID, canExpand: hasInlineControls && isPreviewVisible,
+            expand: onExpandPreview, returnToGuide: onReturnToGuide
+        )
+    }
+    #endif
+
     public init(
         channelID: String,
         title: String, // l10n:content — provider-supplied channel name
@@ -136,6 +170,7 @@ public struct LiveChannelPlayerView: View {
         canToggleFavorite: Bool,
         onToggleFavorite: @escaping () -> Void,
         isExpanded: Bool = true,
+        isPreviewVisible: Bool = true,
         onExpandPreview: (() -> Void)? = nil,
         previewReflectionHeight: CGFloat = 0,
         previewTopReflectionHeight: CGFloat = 0,
@@ -185,6 +220,7 @@ public struct LiveChannelPlayerView: View {
         self.canToggleFavorite = canToggleFavorite
         self.onToggleFavorite = onToggleFavorite
         self.isExpanded = isExpanded
+        self.isPreviewVisible = isPreviewVisible
         self.onExpandPreview = onExpandPreview
         self.previewReflectionHeight = previewReflectionHeight
         self.previewTopReflectionHeight = previewTopReflectionHeight
@@ -572,6 +608,7 @@ public struct LiveChannelPlayerView: View {
     public var body: some View {
         presentationObservedRoot
             #if os(iOS)
+            .preference(key: LiveChannelRotationTargetKey.self, value: rotationTarget)
             .playerTouchLevelSession(
                 isActive: isActive && isAuthorized && isExpanded && !isMultiview
                     && model?.continuesExternally != true
