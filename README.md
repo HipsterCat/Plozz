@@ -35,25 +35,35 @@
 ## A look at it
 
 <p align="center">
-  <img src="docs/assets/screenshots/tv-home.jpg" width="412" alt="The Plozz home screen, with a featured show and a Continue Watching row" />
-  <img src="docs/assets/screenshots/tv-show.jpg" width="412" alt="A series detail page showing artwork, cast, ratings and episodes" />
+  <img src="docs/assets/screenshots/tv-home-originals-9916fb8071.jpg" width="412" alt="Plozz Home on Apple TV with original demo artwork and a populated Continue Watching row" />
+  <img src="docs/assets/screenshots/tv-library-originals-c1df89807c.jpg" width="412" alt="Plozz on Apple TV browsing a large library of original illustrated posters" />
 </p>
 
 <p align="center">
-  <sub><b>Home</b> — one row set across every server you've connected.</sub>
+  <sub><b>Home</b> — return to what you're watching.</sub>
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <sub><b>Detail</b> — artwork, ratings, cast and episodes, filled in automatically.</sub>
+  <sub><b>Library</b> — browse, sort and filter your media.</sub>
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/tv-player.jpg" width="412" alt="The Plozz player showing an episode with the transport bar visible" />
-  <img src="docs/assets/screenshots/tv-settings.jpg" width="412" alt="Plozz settings, showing a library sync in progress and the settings list" />
+  <img src="docs/assets/screenshots/tv-player-originals-04d957e08c.jpg" width="412" alt="Plozz playback controls over original geometric demo footage" />
+  <img src="docs/assets/screenshots/tv-subtitles-originals-b0b1faa0c6.jpg" width="412" alt="Plozz's subtitle style editor with original demo footage and readable captions" />
 </p>
 
 <p align="center">
-  <sub><b>Player</b> — plays essentially anything, with real subtitle control.</sub>
+  <sub><b>Player</b> — playback controls over your video.</sub>
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <sub><b>Settings</b> — per-profile, and there is a lot you can change.</sub>
+  <sub><b>Subtitles</b> — style captions while you watch.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/iphone-library-originals-e08873291e.jpg" width="230" alt="Plozz on iPhone with several rows of original film posters and saved playback progress" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/assets/screenshots/ipad-home-originals-2efe2b04c6.jpg" width="374" alt="Plozz on iPad with original demo media, a populated Continue Watching row and library artwork" />
+</p>
+
+<p align="center">
+  <sub><b>iPhone and iPad</b> — your library on another screen. Real app captures using <a href="docs/screenshots.md">original demo media</a>.</sub>
 </p>
 
 <p align="center"><sub>More screens, including iPhone and iPad, are on <a href="https://plozz.app">plozz.app</a>.</sub></p>
@@ -116,7 +126,7 @@ available when you want them.
 - **Continue Watching without an app-imposed cutoff** — all titles supplied by
   your servers remain reachable, ordered by recency. Older next-up episodes move
   back instead of disappearing; server settings and your removals still apply.
-- **Plays essentially anything** — HDR, Dolby Vision, AV1, and the awkward files
+- **Plays essentially anything** — HDR, AV1, and the awkward files
   other clients hand back to you, powered by
   [AetherEngine](https://github.com/superuser404notfound/AetherEngine).
   ([The full format list](https://github.com/superuser404notfound/AetherEngine/blob/main/docs/formats.md).)

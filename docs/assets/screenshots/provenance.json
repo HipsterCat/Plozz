@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-25T00:23:57.455017+00:00",
+  "appRevision": "e4c5919399e0ad0bc95c00cc31eb41ce32a6022e",
+  "captureBootstrapSha256": "dcba68310ce4ae273d8afe7d3b5df664a0a0721d8fabca0127a1135dbed43428",
+  "libraryTitles": 37,
+  "inProgressTitles": 8,
+  "media": "Original procedural artwork, video, descriptive text and subtitles; no external metadata or artwork.",
+  "mediaLicense": "MIT; Manrope typeface under SIL OFL 1.1. Plozz UI retains its app license.",
+  "sourceArchive": "demo-media-source.zip",
+  "sourceArchiveSha256": "c557260d8415e3769d9ccf8a4bae6a1ef260fb019df500bdbc680b36bccf7b44",
+  "images": [
+    {
+      "file": "tv-home-originals-9916fb8071.jpg",
+      "sourceSha256": "9916fb807102248bb1880a3b6eb0298a04ab4d1fdb3088b9c341ce9a1b1ef15e",
+      "sha256": "eee56f4cd4c64a8167b1cdf4bb182646c4370c5b2c0c0fdf34fd47df8506178f",
+      "source": "simulator-framebuffer",
+      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+    },
+    {
+      "file": "tv-library-originals-c1df89807c.jpg",
+      "sourceSha256": "c1df89807c349a130ec7013db7d19dd5e79bb877b16851cb631a9217b18c03ee",
+      "sha256": "31b5d940bd89f036c468168d181c00aa92badeb80a49a4727de448c00fc43039",
+      "source": "simulator-framebuffer",
+      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+    },
+    {
+      "file": "tv-player-originals-04d957e08c.jpg",
+      "sourceSha256": "04d957e08cd0bb37d67de62e41549b19c00a5265d282d31848b1f729577ec301",
+      "sha256": "0cd46b81b0923781ab43fed3afa904ef7e2c08286821ed99787dd2704e8b02de",
+      "source": "simulator-framebuffer",
+      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+    },
+    {
+      "file": "tv-subtitles-originals-b0b1faa0c6.jpg",
+      "sourceSha256": "b0b1faa0c6924019ed2dc9162a32e53bd51089ae742a8a9e5e6b9b8f6dc442a3",
+      "sha256": "6c95a480764acc8cfe4ac586f5bf88e895ae813aa1520f5698803fe4e90aafbb",
+      "source": "simulator-framebuffer",
+      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+    },
+    {
+      "file": "iphone-library-originals-e08873291e.jpg",
+      "sourceSha256": "e08873291e150a5b70610d5395b8d3dc152f263a1798109cb422af16bbb2a6a9",
+      "sha256": "8e797976082871e1688edb52dcc5b1677cb313904c819da315b1435b3fc63f8c",
+      "source": "simulator-framebuffer",
+      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+    },
+    {
+      "file": "ipad-home-originals-2efe2b04c6.jpg",
+      "sourceSha256": "2efe2b04c6eb2433044ab5b5aec46f11cd5c0d4650823b768b69d4d38a190cf3",
+      "sha256": "7141f326e1c42406e24c27d879ee2f8953095dbd52b4cfe7b97499e2c9ffac60",
+      "source": "simulator-framebuffer",
+      "transform": "proportional resize, sRGB JPEG encoding; no UI alterations"
+    }
+  ]
+}
