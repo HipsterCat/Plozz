@@ -1021,7 +1021,7 @@ struct SeriesDetailView: View {
     }
 
     /// A single season tab. It reads as text-only until focused or active, then
-    /// lifts into a Liquid-glass pill (matching the Twozz player controls). The
+    /// lifts into a Liquid-glass pill (matching the Strozz player controls). The
     /// style is applied unconditionally so selection never changes the tab's
     /// identity — that is what keeps left/right focus moving between tabs.
     private func seasonChip(_ season: MediaItem, activeID: String?) -> some View {
