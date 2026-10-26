@@ -284,6 +284,17 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   removing a row or choosing a preset retains its configuration in Add row.
   Disabled libraries and a different server viewer prevent collection requests;
   failures remain distinct from empty collections.
+  Successful Watchlist server writes quietly refresh the affected profile/viewer's
+  configured collection rows. Watchlist/Watch Later-like names are prioritized,
+  not used to exclude custom names. Changes coalesce for 750 ms; one utility task
+  reads at most 20 members per collection, with 250 ms between previews and one
+  follow-up after three seconds for server automation. Duplicate collection sources
+  share a request. Unrelated accounts/feeds, library inventories, artwork caches,
+  and Top Shelf are untouched. Navigation postpones requests/publication; full Home
+  loads cancel and supersede in-flight previews. Unchanged rows are not published,
+  failures keep prior items with diagnostics, and snapshot writes are coalesced.
+  This bounds client work by configured rows, not server size; external automation
+  may still take longer than the follow-up window.
   Featured is available only for authored collection rows. Large artwork cards
   place the title logo (or text fallback) and real metadata at the lower left.
   TV rows reuse the standard media-row heading and See all action, with the same
