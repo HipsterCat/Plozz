@@ -706,6 +706,16 @@ public struct JellyfinClient: Sendable {
         }
     }
 
+    func cachedServerRatings(itemID: String) async throws -> MdbListCachedRatings {
+        let endpoint = Endpoint(
+            path: "/Plugins/MdbListRatings/CachedByItemId",
+            queryItems: [URLQueryItem(name: "itemId", value: itemID)],
+            headers: authHeaders,
+            redirectPolicy: .sameOrigin
+        )
+        return try await http.decode(MdbListCachedRatings.self, from: endpoint, baseURL: baseURL)
+    }
+
     /// `GET /Items/{id}/ThemeSongs`. Parent inheritance lets season and episode
     /// requests resolve their series theme when the server supports it.
     func themeSongs(userID: String, id: String) async throws -> ItemsResponse {

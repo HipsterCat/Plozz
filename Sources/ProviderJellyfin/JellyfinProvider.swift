@@ -18,6 +18,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     let collectionLibraryCache = MediaBrowserCollectionLibraryCache()
     let videoPlaylistCache = VideoPlaylistSnapshotCache()
     let liveTVLeases = JellyfinLiveTVLeaseStore()
+    private let serverRatings = JellyfinServerRatings()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
     private let probeDescriptors: MediaBrowserProbeDescriptorStore
@@ -680,7 +681,12 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     public func item(id: String) async throws -> MediaItem {
         let dto = try await client.item(userID: session.userID, id: id)
         await probeDescriptors.remember(itemID: id, sources: dto.MediaSources)
-        return map(item: dto)
+        var item = map(item: dto)
+        if let ratings = try await serverRatings.ratings(for: item, client: client) {
+            item.ratings = ratings
+            item.usesProviderRatings = true
+        }
+        return item
     }
 
     public func playbackItem(id: String) async throws -> MediaItem {
