@@ -9,7 +9,7 @@ obligations Plozz must meet to ship it.
 
 ## TL;DR
 
-The bundled FFmpeg is a **decode-only, LGPL-2.1-or-later** build — no `--enable-gpl` (so
+The bundled FFmpeg is a **decode-focused, LGPL-2.1-or-later** build — no `--enable-gpl` (so
 no GPL-only codecs such as x264/x265) and nothing "nonfree/unredistributable".
 It is App-Store-redistributable, subject to the LGPL relink / source-offer /
 attribution duties below. FFmpeg's `libav*` libraries ship as xcframeworks
@@ -22,8 +22,10 @@ embedded in the app bundle as frameworks (`AetherLibavcodec.framework`,
 | Component | Source (pinned) | License |
 |---|---|---|
 | AetherEngine (media engine; "Plozzigen") | `github.com/brandomoore/AetherEngine` @ `3cde25855b30b3c8998685872ecf97f133edccbd` | LGPL-3.0 with Apple Store exception |
-| FFmpeg `libav*` (demux / decode / thin HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `3.9.0` (FFmpeg **n8.1.3**) | **LGPL-2.1-or-later** |
-| dav1d (AV1 software decoder, separate xcframework) | bundled by FFmpegBuild | BSD-2-Clause (permissive) |
+| FFmpeg `libav*` (demux / decode / audio bridge / HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `3.9.0` (FFmpeg **n8.1.3**) | **LGPL-2.1-or-later** |
+| dav1d 1.5.4 (AV1 software decoder, separate xcframework) | bundled by FFmpegBuild | BSD-2-Clause (permissive) |
+| zimg 3.0.6 (image scaling and color conversion) | bundled by FFmpegBuild | WTFPL |
+| libzvbi 0.2.45 (teletext decoder) | bundled by FFmpegBuild; GPL sources excluded by its build recipe | LGPL-2.0-or-later, conveyed under LGPL-2.1; `ure.c` MIT |
 | libdovi (Dolby Vision RPU parser) | `github.com/superuser404notfound/LibDovi` @ `2.1.0` | MIT |
 | LibTrueHD (decoder and object renderer) | `github.com/superuser404notfound/LibTrueHD` @ `3.0.0` | MIT / Apache-2.0 |
 
@@ -53,8 +55,9 @@ The shared acknowledgements page credits the library and exact source tag.
 Upstream FFmpeg `libav*` and FFmpegBuild 3.9.0 are **LGPL-2.1-or-later**.
 The build enables neither `--enable-gpl` nor `--enable-version3`; the exact
 component licenses and notices live in the release's `LICENSES/` directory.
-The build is scoped to demux + decode + a thin HLS-fMP4 mux for
-the AVPlayer bridge — **no CLI binaries, no network/protocol stack, and no GPL
+The build is scoped to demux, decode, selected filters and the AVPlayer bridge.
+It includes FLAC and E-AC-3 encoders and MP4/MOV/HLS muxers for that bridge,
+but **no CLI binaries, no network/protocol stack, and no GPL
 or nonfree components** — so there is no GPL/nonfree taint to redistribution.
 
 ## LGPL obligations (what Plozz must satisfy to ship)
@@ -73,14 +76,21 @@ The bundled LGPL libraries impose **relink**, **source-offer**, and
    **n8.1.x** and its build script (`build.sh`) is public at
    `github.com/superuser404notfound/FFmpegBuild`, so the corresponding source is
    fully reproducible from a pinned upstream.
-3. **Attribution + license texts.** The in-app **Settings → Acknowledgements**
-   screen (`FeatureSettings/IntegrationsDetailView.swift`, `AttributionsDetailView`)
-   credits FFmpeg, libdovi, and the other bundled components. Ship FFmpeg's
+3. **Attribution + license texts.** The shared in-app **Attributions** data
+   (`Sources/CoreModels/PlozzAttributions.swift`) is displayed by both the tvOS
+   and iOS/iPadOS settings screens and credits FFmpeg, libdovi and the other
+   dependencies. Ship FFmpeg's
    LGPL-2.1 license text (and any bundled dependency notices) there and/or in a
    `THIRD_PARTY_LICENSES` file in the bundle.
-4. **No GPL/nonfree creep.** Keep the FFmpeg build decode-only: never adopt a
+4. **No GPL/nonfree creep.** Keep the FFmpeg build limited to its LGPL components: never adopt a
    `--enable-gpl` / `--enable-nonfree` FFmpeg (no x264/x265, etc.). This is owned
-   by the FFmpegBuild package, so pin a decode-only LGPL release.
+   by the FFmpegBuild package, so pin a compatible LGPL release.
+
+The in-app list also identifies the pinned Swift packages, current service
+integrations and bundled font families. Standard-library metadata tests in
+`tools/tests/test_ci_pipeline.py` compare every package source reference with
+`Package.resolved` and check metadata-service and font coverage. These checks do
+not resolve packages or build either app.
 
 ## Verifying the shipped license
 

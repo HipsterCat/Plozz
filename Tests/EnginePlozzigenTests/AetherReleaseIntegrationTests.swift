@@ -24,8 +24,10 @@ final class AetherReleaseIntegrationTests: XCTestCase {
     func testResolvedEngineAndSourceCreditIdentifyPinnedReleaseIntegration() throws {
         XCTAssertEqual(AetherEngine.version, "7.47.0")
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "AetherEngine" })
-        XCTAssertTrue(credit.detail.contains(
-            "https://github.com/brandomoore/AetherEngine/tree/5fe2d42d68524dcfbcfacf07cbefe5b28b618155"
+        // The metadata guard compares the exact revision with Package.resolved.
+        XCTAssertNotNil(credit.detail.range(
+            of: #"https://github\.com/brandomoore/AetherEngine/tree/[0-9a-f]{40}"#,
+            options: .regularExpression
         ))
     }
 
