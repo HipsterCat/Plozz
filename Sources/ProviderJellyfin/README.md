@@ -62,6 +62,45 @@ index even when invalid entries or Emby intro/credit markers are filtered out.
 Only ordinary chapter entries become `PlaybackRequest.chapters`; the skip-marker
 path remains separate. Missing chapter images never remove navigation entries.
 
+## Server-provided ratings
+
+Jellyfin item details display ratings supplied by the authenticated server.
+Optional rating reads are presentation-only: required item loads and playback
+inventory requests never make or await them. Details retain their native
+metadata immediately, without adding a placeholder or minimum display delay;
+the cancellable page task applies server metadata independently of load completion.
+Home uses only already-cached rating metadata during its existing hydration;
+it never requests optional ratings before publishing a carousel.
+The server-response adapter currently supports the cache format exposed by the
+[MDBList Ratings plugin](https://github.com/Druidblack/Jellyfin.Plugin.MDBList_Ratings)
+at `GET /Plugins/MdbListRatings/CachedByItemId?itemId=...`. This is a read-only
+server metadata request. Plozz does not call rating services, supply keys,
+request server-side refreshes, or load plugin scripts, artwork, or external links.
+
+Movies, series, seasons, and episodes use their own authorized server item ID.
+No plugin calls are made for listings, unsupported item types, non-Guid IDs,
+or Emby, where this Jellyfin-specific API is unavailable. Plex and Silo retain
+their existing server-rating integrations.
+
+A nonempty valid cached set replaces ambiguous native scores and uses the shared
+provider-display contract: plain-text service names (except the existing approved
+TMDb mark), stable server order, and normalized scores with explicit scales.
+Equivalent sources are deduplicated by positive vote count, keeping the first
+on ties. Existing Plozz rating visibility and spoiler controls still apply.
+No new setting is added, and the plugin's web-only presentation toggle is not
+used. External enrichment cannot add to or overwrite a supplied set.
+
+Absent caches, empty/unusable sets, unsupported endpoints, and logged plugin
+failures preserve ordinary native ratings and existing enrichment behavior.
+Background requests have a two-second cancellation deadline, never a loading
+or playback delay. Successful sets are reused for five minutes and cache misses
+for thirty seconds in a bounded, 64-item, provider-scoped memory cache.
+A missing endpoint is not
+probed again for five minutes in that provider instance. Cancellation propagates
+instead of returning a successful item. Malformed entries are logged and omitted
+without discarding other valid ratings. State is scoped to the authenticated
+provider instance; there is no global ratings cache for this integration.
+
 ## Episode identity and order
 
 `DisplayOrder` is retained as `MediaItem.episodeOrdering` for community-marker

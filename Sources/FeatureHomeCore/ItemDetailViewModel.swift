@@ -442,6 +442,7 @@ public final class ItemDetailViewModel {
     /// disk-contended) snapshot read — it only paints/enriches if it wins and
     /// never downgrades a fresher render. Cancelled on each new load.
     private nonisolated(unsafe) var snapshotRestoreTask: Task<Void, Never>?
+    private nonisolated(unsafe) var serverRatingsTask: Task<Void, Never>?
     /// Set once the live fetch publishes fresh detail, so a late snapshot restore
     /// never clobbers a fresher hero.
     @ObservationIgnored private var hasPaintedFreshDetail = false
@@ -634,6 +635,7 @@ public final class ItemDetailViewModel {
         crossServerDiscoveryTask?.cancel()
         alternateSourceEnrichmentTask?.cancel()
         snapshotRestoreTask?.cancel()
+        serverRatingsTask?.cancel()
         pendingSnapshotWrite?.cancel()
         seasonLoads.values.forEach { $0.task?.cancel() }
     }
@@ -812,9 +814,8 @@ public final class ItemDetailViewModel {
                 loadUpcomingSchedule(for: taggedItem)
                 loadRelatedTitles(for: taggedItem)
                 persistSnapshot()
-                // Trailers + ratings ARE awaited: opening a detail deterministically
-                // populates its Trailer button and rating badges. Cancelled with
-                // load() on navigate-away; heavy trailer extraction is dwell-gated.
+                // Trailers and ordinary enrichment remain on the existing load
+                // path. Optional server ratings run independently of completion.
                 await runTrailersAndRatings(
                     for: item,
                     children: fetchedChildren,
@@ -840,9 +841,8 @@ public final class ItemDetailViewModel {
                 )
                 persistSnapshot()
                 // See container branch: speculative discovery is cancellable and
-                // NOT awaited (a navigate-away drops it), while trailers + ratings
-                // ARE awaited so the Trailer button / rating badges populate
-                // deterministically before load() returns.
+                // NOT awaited (a navigate-away drops it). Trailers retain their
+                // existing load path; optional server ratings never hold it open.
                 startSpeculativeEnrichment(for: item)
                 // A film has related titles too. This sat only in the container
                 // branch above, so the row simply never loaded on a movie page —
@@ -1336,9 +1336,9 @@ public final class ItemDetailViewModel {
         }
     }
 
-    /// Resolves trailers and external ratings concurrently on the awaited `load()`
-    /// path, so opening a detail deterministically populates its Trailer button
-    /// and rating badges before `load()` returns. Cancellable via the awaiting
+    /// Resolves trailers and ordinary enrichment concurrently on the awaited `load()`
+    /// path. Server-provided ratings instead use an independently owned task,
+    /// so a missing or slow response cannot hold loading open. Cancellable via the awaiting
     /// task: a navigate-away cancels `load()`, which cancels this mid-flight (the
     /// guards below bail) instead of letting trailer metadata / a ratings fetch
     /// run to completion on the next page's back. The heavy trailer extraction is
@@ -1357,6 +1357,7 @@ public final class ItemDetailViewModel {
         )
         async let ratingsDone: Void = enrichRatings(
             for: item,
+            provider: provider,
             sourceGeneration: sourceGeneration
         )
         async let overviewDone: Void = enrichOverview(
@@ -1477,6 +1478,7 @@ public final class ItemDetailViewModel {
         streamProbeTask?.cancel(); streamProbeTask = nil
         crossServerDiscoveryTask?.cancel(); crossServerDiscoveryTask = nil
         alternateSourceEnrichmentTask?.cancel(); alternateSourceEnrichmentTask = nil
+        serverRatingsTask?.cancel(); serverRatingsTask = nil
         seasonLoadingSuspended = true
         cancelSeasonLoads()
         seasonEpisodeRosters.reset()
@@ -1497,6 +1499,10 @@ public final class ItemDetailViewModel {
                 provider: activeProvider,
                 sourceGeneration: sourceGeneration
             )
+            if serverRatingsTask == nil, !item.usesProviderRatings,
+               let server = activeProvider as? any ServerRatingsProviding {
+                startServerRatings(for: item, server: server, generation: sourceGeneration)
+            }
         }
         guard !enrichmentComplete, enrichmentTask == nil,
               let item = enrichmentItem else { return }
@@ -1837,7 +1843,7 @@ public final class ItemDetailViewModel {
             guard !Task.isCancelled, isCurrent() else { return }
         }
         guard !Task.isCancelled else { return }
-        await enrichRatings(for: item, sourceGeneration: reloadSourceGeneration)
+        await enrichRatings(for: item, provider: provider, sourceGeneration: reloadSourceGeneration)
         await enrichOverview(for: item, sourceGeneration: reloadSourceGeneration)
         await enrichDetailMetadata(for: item, sourceGeneration: reloadSourceGeneration)
         async let trailers: Void = loadTrailers(
@@ -2392,6 +2398,8 @@ public final class ItemDetailViewModel {
 
     private func invalidateSourceOperations() {
         sourceGeneration += 1
+        serverRatingsTask?.cancel()
+        serverRatingsTask = nil
         if var detail = state.value, detail.serverResumeEpisode != nil {
             detail.serverResumeEpisode = nil
             state = .loaded(detail)
@@ -2531,18 +2539,60 @@ public final class ItemDetailViewModel {
         return seriesEpisodeContext.stamping(episodes)
     }
 
-    /// Fetches external ratings off the critical path and merges them into the
-    /// already-loaded detail. Failures are silent — the screen keeps whatever
-    /// backend-native ratings it already has.
-    private func enrichRatings(for item: MediaItem, sourceGeneration: UInt64) async {
+    /// Server metadata is independent of load completion and never delays Play.
+    private func enrichRatings(
+        for item: MediaItem, provider: any MediaProvider, sourceGeneration: UInt64
+    ) async {
         guard !item.usesProviderRatings else { return }
+        if let server = provider as? any ServerRatingsProviding {
+            startServerRatings(for: item, server: server, generation: sourceGeneration)
+            return
+        }
         let external = await ratingsProvider.ratings(for: item)
-        guard !Task.isCancelled, self.sourceGeneration == sourceGeneration else { return }
-        guard !external.isEmpty else { return }
-        guard case var .loaded(detail) = state, detail.item.id == item.id,
+        guard !Task.isCancelled else { return }
+        applyRatings(external, serverSupplied: false, itemID: item.id, generation: sourceGeneration)
+    }
+
+    private func startServerRatings(for item: MediaItem, server: any ServerRatingsProviding, generation: UInt64) {
+        serverRatingsTask?.cancel()
+        let externalProvider = ratingsProvider
+        serverRatingsTask = Task { [weak self] in
+            do {
+                if let supplied = try await server.serverRatings(for: item) {
+                    guard !Task.isCancelled else { return }
+                    self?.applyRatings(supplied, serverSupplied: true, itemID: item.id, generation: generation)
+                    return
+                }
+            } catch {
+                guard !Task.isCancelled, !(error is CancellationError),
+                      error as? AppError != .cancelled else { return }
+                PlozzLog.networking.error("Unable to read server-provided rating metadata.")
+            }
+            guard !Task.isCancelled else { return }
+            let external = await externalProvider.ratings(for: item)
+            guard !Task.isCancelled else { return }
+            self?.applyRatings(external, serverSupplied: false, itemID: item.id, generation: generation)
+        }
+    }
+
+    func waitForServerRatings() async {
+        await serverRatingsTask?.value
+    }
+
+    private func applyRatings(
+        _ ratings: [ExternalRating], serverSupplied: Bool, itemID: String, generation: UInt64
+    ) {
+        guard sourceGeneration == generation, serverSupplied || !ratings.isEmpty,
+              case var .loaded(detail) = state, detail.item.id == itemID,
               !detail.item.usesProviderRatings else { return }
-        detail.item.ratings = detail.item.ratings.mergedWithAuthoritative(external)
+        if serverSupplied {
+            detail.item.ratings = ratings
+            detail.item.usesProviderRatings = true
+        } else {
+            detail.item.ratings = detail.item.ratings.mergedWithAuthoritative(ratings)
+        }
         state = .loaded(detail)
+        persistSnapshot()
     }
 
     private func enrichDetailMetadata(for item: MediaItem, sourceGeneration: UInt64) async {

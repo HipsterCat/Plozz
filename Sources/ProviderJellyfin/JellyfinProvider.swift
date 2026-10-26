@@ -7,7 +7,7 @@ import CoreNetworking
 /// Holds an authenticated `JellyfinClient` and maps Jellyfin DTOs onto the
 /// provider-agnostic `CoreModels` types. Feature modules depend only on
 /// `MediaProvider`; this is the single place Jellyfin specifics live.
-public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIdentityProviding, AuthenticatedHTTPOriginProviding, ServerAddressUpdating {
+public struct JellyfinProvider: MediaProvider, ServerRatingsProviding, SeriesResumeProviding, SeriesIdentityProviding, AuthenticatedHTTPOriginProviding, ServerAddressUpdating {
     public var playbackInventoryRequiresEnrichment: Bool { true }
 
     public let kind: ProviderKind
@@ -18,6 +18,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     let collectionLibraryCache = MediaBrowserCollectionLibraryCache()
     let videoPlaylistCache = VideoPlaylistSnapshotCache()
     let liveTVLeases = JellyfinLiveTVLeaseStore()
+    private let serverRatingsReader = JellyfinServerRatings()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
     private let probeDescriptors: MediaBrowserProbeDescriptorStore
@@ -681,6 +682,14 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         let dto = try await client.item(userID: session.userID, id: id)
         await probeDescriptors.remember(itemID: id, sources: dto.MediaSources)
         return map(item: dto)
+    }
+
+    public func serverRatings(for item: MediaItem) async throws -> [ExternalRating]? {
+        try await serverRatingsReader.ratings(for: item, client: client)
+    }
+
+    public func cachedServerRatings(for item: MediaItem) async -> [ExternalRating]? {
+        await serverRatingsReader.cachedRatings(for: item)
     }
 
     public func playbackItem(id: String) async throws -> MediaItem {

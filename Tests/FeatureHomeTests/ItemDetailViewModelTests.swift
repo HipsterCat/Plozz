@@ -7,8 +7,103 @@ import Observation
 @testable import FeatureHome
 @testable import FeatureHomeCore
 
+private final class ServerRatingsFakeProvider: FakeMediaProvider, ServerRatingsProviding, @unchecked Sendable {
+    var serverRatingsHandler: (@Sendable (MediaItem) async throws -> [ExternalRating]?)?
+
+    func serverRatings(for item: MediaItem) async throws -> [ExternalRating]? {
+        try await serverRatingsHandler?(item)
+    }
+}
+
 @MainActor
 final class ItemDetailViewModelTests: XCTestCase {
+    func testServerRatingsDoNotDelayDetailLoadOrReplaceContentWithAPlaceholder() async {
+        let native = ExternalRating(source: .community, value: 7, scale: .outOfTen)
+        let supplied = ExternalRating(source: .imdb, value: 8.7, scale: .outOfTen)
+        let item = MediaItem(id: "movie", title: "Immediate title", kind: .movie, ratings: [native])
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let provider = ServerRatingsFakeProvider(allItems: [item])
+        provider.serverRatingsHandler = { _ in
+            started.open()
+            await release.wait()
+            return [supplied]
+        }
+        let external = CapturingDiscoveryRatingsProvider()
+        let vm = ItemDetailViewModel(
+            provider: provider, itemID: item.id, ratingsProvider: external,
+            onlineTrailerResolver: { _ in [] }, playableVideoIDResolver: { _ in nil },
+            trailerCache: TrailerResolutionCache()
+        )
+        let returned = expectation(description: "Detail load returns without optional metadata")
+        let load = Task { await vm.load(); returned.fulfill() }
+        await started.wait()
+        await fulfillment(of: [returned], timeout: 1)
+        XCTAssertEqual(vm.state.value?.item.title, item.title)
+        XCTAssertEqual(vm.state.value?.item.ratings, [native])
+        XCTAssertNil(external.seenItem)
+        release.open()
+        await load.value
+        await vm.waitForServerRatings()
+        XCTAssertEqual(vm.state.value?.item.ratings, [supplied])
+        XCTAssertEqual(vm.state.value?.item.usesProviderRatings, true)
+        XCTAssertNil(external.seenItem, "A supplied set must not initiate client-side rating lookups.")
+        vm.suspendEnrichment()
+    }
+
+    func testMissingServerRatingsUseExistingFallbackWithoutHoldingLoadOpen() async {
+        let item = MediaItem(id: "movie", title: "Title", kind: .movie)
+        let release = AsyncGate()
+        let provider = ServerRatingsFakeProvider(allItems: [item])
+        provider.serverRatingsHandler = { _ in await release.wait(); return nil }
+        let external = CapturingDiscoveryRatingsProvider()
+        let vm = ItemDetailViewModel(
+            provider: provider, itemID: item.id, ratingsProvider: external,
+            onlineTrailerResolver: { _ in [] }, playableVideoIDResolver: { _ in nil },
+            trailerCache: TrailerResolutionCache()
+        )
+        let returned = expectation(description: "Detail load returns with a missing server rating response pending")
+        let load = Task { await vm.load(); returned.fulfill() }
+        await fulfillment(of: [returned], timeout: 1)
+        XCTAssertEqual(vm.state.value?.item.title, item.title)
+        XCTAssertNil(external.seenItem)
+        release.open()
+        await load.value
+        await vm.waitForServerRatings()
+        XCTAssertEqual(external.seenItem?.id, item.id)
+        XCTAssertFalse(vm.state.value?.item.ratings.isEmpty ?? true)
+        vm.suspendEnrichment()
+    }
+
+    func testLeavingDetailCancelsOptionalServerMetadataAndDoesNotFetchFallback() async {
+        let item = MediaItem(id: "movie", title: "Title", kind: .movie)
+        let started = expectation(description: "Optional request started")
+        let cancelled = expectation(description: "Optional request cancelled")
+        let provider = ServerRatingsFakeProvider(allItems: [item])
+        provider.serverRatingsHandler = { _ in
+            started.fulfill()
+            do {
+                try await Task.sleep(for: .seconds(30))
+            } catch {
+                cancelled.fulfill()
+                throw error
+            }
+            return nil
+        }
+        let external = CapturingDiscoveryRatingsProvider()
+        let vm = ItemDetailViewModel(
+            provider: provider, itemID: item.id, ratingsProvider: external,
+            onlineTrailerResolver: { _ in [] }, playableVideoIDResolver: { _ in nil },
+            trailerCache: TrailerResolutionCache()
+        )
+        await vm.load()
+        await fulfillment(of: [started], timeout: 1)
+        vm.suspendEnrichment()
+        await fulfillment(of: [cancelled], timeout: 1)
+        XCTAssertNil(external.seenItem)
+        XCTAssertEqual(vm.state.value?.item.usesProviderRatings, false)
+    }
+
     func testConfirmedNoStreamsReplacesStaleInventoryAndExplicitRetryCanRecover() async throws {
         for isEpisode in [false, true] {
             let root = MediaItem(id: "root", title: "Title", kind: isEpisode ? .series : .movie)
@@ -45,6 +140,7 @@ final class ItemDetailViewModelTests: XCTestCase {
                 await release.wait()
                 return resolved
             }
+
             _ = await EnrichmentScheduler.shared.bumpGeneration()
             let retry = Task { await vm.retryPlaybackInventory(for: target) }
             await entered.wait()
