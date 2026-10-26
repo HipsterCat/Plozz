@@ -11,9 +11,8 @@ import CoreUI
 /// no backend — so the report flow is a **QR code to a pre-filled GitHub issue**
 /// the user opens on their phone (with a short manual URL + a feedback email as
 /// fallbacks). The pre-filled body carries a small, non-secret environment
-/// summary; nothing that could contain a token ever leaves the device. Recent
-/// activity from the `PlozzLog` ring buffer is shown read-only for transparency
-/// and inherits its redaction (see `PlozzLog.LogEntry`).
+/// summary and a filtered activity projection. The full local activity buffer
+/// remains read-only on the device, separate from the export representation.
 struct HelpDiagnosticsDetailView: View {
     let appVersion: String
     let appBuild: String
@@ -34,7 +33,7 @@ struct HelpDiagnosticsDetailView: View {
             appBuild: appBuild,
             providers: providerSummary,
             repoURL: repoURL,
-            recentLogTail: PlozzLog.recentLogText(limit: 8),
+            recentLogTail: PlozzLog.privacyFilteredLogText(entries: PlozzLog.recentEntries(limit: 8)),
             marketingVersion: AppVersionIdentity.current.marketingVersion
         )
     }
@@ -112,7 +111,7 @@ struct HelpDiagnosticsDetailView: View {
     // MARK: - Send to Developer (surfaced here so it's discoverable, not buried)
 
     /// The fastest bug-report path for anyone who's turned on crash reporting:
-    /// one tap sends the redacted recent-activity log straight to the developer.
+    /// one tap sends privacy-filtered technical evidence to the developer.
     /// Placed right under "Report a Problem" so people actually find it instead
     /// of only stumbling on it deep inside the Recent Activity page.
     private var sendDiagnosticsPanel: some View {

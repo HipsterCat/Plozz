@@ -8,6 +8,12 @@ final class LibraryCollectionModeTests: XCTestCase {
     private var defaults: UserDefaults!
     private var defaultsName: String!
 
+    private func submittedLibraryRecords(scope: DiagnosticExportScope) throws -> [[String: Any]] {
+        let data = try JSONEncoder().encode(LibraryDiagnosticJournal.shared.export(scope: scope))
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try XCTUnwrap(body["entries"] as? [[String: Any]])
+    }
+
     func testSharedTabArrangementReconcilesSelectionWithoutChangingProviderCapabilities() async {
         for providerKind: ProviderKind in [.plex, .jellyfin, .emby, .silo] {
             let settings = LibraryPresentationSettingsModel(
@@ -209,6 +215,8 @@ final class LibraryCollectionModeTests: XCTestCase {
             let provider = LibraryModeProvider(kind: kind, watchingItems: [watching])
             await provider.setHubError(.decoding)
             let model = model(provider)
+            let scope = DiagnosticExportScope()
+            let previous = Set(try submittedLibraryRecords(scope: scope).compactMap { $0["record"] as? String })
             await model.loadFirstPageIfNeeded()
             XCTAssertEqual(model.recommendationState.value?.map(\.id), ["continueWatching", "recentlyAdded"])
             XCTAssertEqual(model.recommendationError, .decoding)
@@ -217,6 +225,16 @@ final class LibraryCollectionModeTests: XCTestCase {
             XCTAssertEqual(diagnostic.failures.map(\.section), [.recommendations])
             XCTAssertEqual(diagnostic.failures.map(\.error), [.decoding])
             XCTAssertEqual(model.errorServers, [provider.session.server])
+            let submitted = try submittedLibraryRecords(scope: scope).filter {
+                !previous.contains($0["record"] as? String ?? "")
+            }
+            XCTAssertTrue(submitted.contains {
+                let facts = $0["facts"] as? [String: Any]
+                let failure = (facts?["failures"] as? [[String: Any]])?.first
+                return facts?["provider"] as? String == kind.rawValue
+                    && failure?["section"] as? String == "recommendations"
+                    && failure?["reason"] as? String == "decoding"
+            }, "Send to Developer must retain the actual producer's typed recommendation failure.")
 
             await provider.setHubError(nil)
             await model.loadRecommendations()
@@ -586,7 +604,7 @@ final class LibraryCollectionModeTests: XCTestCase {
         XCTAssertEqual(model.item(at: 0)?.id, "collection-0")
     }
 
-    func testBrowseFailuresOfferDetailsAcrossProvidersAndClearOnModeChanges() async {
+    func testBrowseFailuresOfferDetailsAcrossProvidersAndClearOnModeChanges() async throws {
         for kind: ProviderKind in [.jellyfin, .emby, .plex, .silo] {
             let provider = LibraryModeProvider(kind: kind, supportsPlaylists: true)
             let model = model(provider)
@@ -594,10 +612,22 @@ final class LibraryCollectionModeTests: XCTestCase {
                 (LibraryContentMode.titles, LibraryLoadDiagnostic.Section.browse),
                 (.collections, .collections), (.playlists, .playlists)
             ] {
+                let scope = DiagnosticExportScope()
+                let previous = Set(try submittedLibraryRecords(scope: scope).compactMap { $0["record"] as? String })
                 await provider.fail(mode, at: 0)
                 await model.setContentMode(mode)
                 XCTAssertEqual(model.browseDiagnostic?.provider, kind)
                 XCTAssertEqual(model.browseDiagnostic?.failures.first?.section, section)
+                let submitted = try submittedLibraryRecords(scope: scope).filter {
+                    !previous.contains($0["record"] as? String ?? "")
+                }
+                XCTAssertTrue(submitted.contains {
+                    let facts = $0["facts"] as? [String: Any]
+                    let failure = (facts?["failures"] as? [[String: Any]])?.first
+                    return facts?["provider"] as? String == kind.rawValue
+                        && facts?["operation"] as? String == "libraryBrowse"
+                        && failure?["section"] as? String == section.rawValue
+                }, "Send to Developer must retain the actual producer's typed browse failure.")
                 await provider.clearFailures()
                 await model.loadFirstPage()
                 XCTAssertNil(model.browseDiagnostic)

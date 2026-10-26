@@ -287,7 +287,7 @@ struct PlozziOSHomeView: View {
         .toolbar {
             if trailerController.isPlaying {
                 ToolbarItem(placement: .topBarTrailing) {
-                    PlozziOSTrailerMuteToolbarButton(
+                    PlozziOSHeroAudioMuteToolbarButton(
                         isMuted: trailerController.isMuted,
                         onToggle: toggleTrailerMute
                     )

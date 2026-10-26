@@ -23,6 +23,12 @@ credential changes invalidate playback; live authorization is rechecked after
 theme and authenticated-URL resolution, including for public theme URLs.
 Audio-interruption changes cancel pending resolution and retry the still-current
 foreground detail when the interruption ends.
+On iPhone and iPad, active detail theme music uses the trailer mute button's
+trailing toolbar position. Mute changes the existing player's audio without
+changing the saved volume, restarting playback, or interrupting its fade.
+It survives temporary app inactivity but resets when that detail playback ends;
+settings previews and another profile do not inherit it. The control is absent
+for a covered page, another item's theme, or a settings preview.
 
 tvOS detail entry keeps the real primary action focusable while its play target
 loads. An early press queues one activation, replacing the icon with a spinner
@@ -176,10 +182,10 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   off. Public provider caches stay profile-independent; server-owned library titles
   continue to follow the selected server user's access rather than an invented
   app-wide maturity threshold.
-- **Home section customization** — Settings > Screens & Navigation > Customize Home
-  uses the same section editor on TV, iPhone and iPad. Tap a section to configure
-  it, Reorder to move it, or Add section to choose a collection or another existing feed. Hero
-  stays configurable at the top, outside the movable row list. Rows from different
+- **Home row customization** — Settings > Screens & Navigation > Customize Home > Rows
+  uses the same arrangement editor on TV, iPhone and iPad. Tap a row to configure
+  it, Edit to reorder or remove it, or Add row to choose a collection or another existing feed.
+  Layout/Hero and Card labels have separate destinations. Rows from different
   libraries can be interleaved, reordered or hidden, including the Libraries
   tiles. `HomeRowCustomization` stores typed identity, order and explicit
   visibility inside the profile's existing Home settings blob; profile transfer
@@ -198,7 +204,7 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   Global rows say **All libraries**; native server and library rows identify their
   source. All can be freely interleaved. Changing presets requires confirmation;
   selecting the already active preset does nothing.
-  **Merge Next Up rows** is a profile-scoped setting inside the **Continue Watching**
+  **Include Next Up** is a profile-scoped setting inside the **Continue Watching**
   section's configuration on every platform, alongside its artwork choice.
   **Continue Watching action** chooses **Play** (the unchanged default) or
   **Open details** for movie/episode cards on Home, including merged Next Up
@@ -257,7 +263,7 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   library membership. **See all** opens the existing collection browser using
   the original provider ID. All card styles open title details.
   Collection definitions persist with the profile separately from arrangement:
-  removing a row or choosing a preset retains its configuration in Add section.
+  removing a row or choosing a preset retains its configuration in Add row.
   Disabled libraries and a different server viewer prevent collection requests;
   failures remain distinct from empty collections.
   Featured is available only for authored collection rows. Large artwork cards
@@ -698,10 +704,23 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   playlists remain in `MusicProvider`. Unsupported sources (including Silo)
   do not advertise a video-playlist mode. Snapshots are bound to the provider
   account and refreshed on the first page, not during poster scrolling.
-- **Trailers** — `OnlineTrailerSource` and `TrailerResolutionCache`
-  handle the TMDb → YouTube fallback when the server has no attached
-  trailer, by routing through `ProviderTrailers.YouTubeTrailerProvider`
-  to surface a real `PlaybackRequest`.
+- **Trailers** — Server-owned trailer files retain in-app playback and take
+  priority across the title's server copies. Server-supplied YouTube links and
+  TMDB's documented videos API supply external trailer actions. Hero trailer
+  buttons are always icon-only, using the shared cutout-arrow `TrailerActionIcon`
+  for external links. "Watch on YouTube" is a VoiceOver label, not visible button
+  text; overflow menus use "Trailer" with an external-opening symbol.
+  `YouTubeTrailerOpening` opens the YouTube app, with browser fallback on mobile
+  and a visible failure on TV when no handler is available. Returning to Plozz
+  is manual; no completion callback or QR fallback is implied.
+  App links retain the complete `www.youtube.com/watch?v=…` host/path/query with
+  the `youtube` scheme; an abbreviated link may launch the TV app without
+  navigating to the requested video.
+  No YouTube scraping, stream extraction, embed probing, or media caching runs
+  during browsing or playback. Household metadata settings and the active TMDB
+  credential apply; unavailable external metadata never removes server trailers.
+  `TrailerResolutionCache` stores link decisions, not media/playability claims.
+  Its new namespace does not reuse old extracted/scraped decisions.
   Background hero trailers use one shared player. Detail departure stops its
   trailer unless the router is returning directly to a rendered, unreceded Home
   hero showing the same title with trailers enabled. Library, Watchlist, pushed
@@ -860,6 +879,13 @@ resolved heroes use the same row-recede geometry. The `PLZBOOT` row-ready events
 data from completion of the entire Home load.
 
 ## Showcase
+
+Episode-backed Home heroes use a separately scoped `MediaSeriesSynopsis` fetched
+from the authenticated parent-series record. The server's series tagline/synopsis
+is shown without episode spoiler masking; episode prose is never substituted
+when that series text is absent. The original episode overview, playback route,
+and watch state remain intact. Detail pages retain episode-specific spoiler rules.
+This description policy is shared by Showcase, the TV carousel, and mobile Home.
 
 `FocusHeroHomeView` keeps focus-driven movement and hero updates outside the
 row-building view. Posters use the profile's full normal poster dimensions.

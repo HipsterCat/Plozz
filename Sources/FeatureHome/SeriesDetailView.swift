@@ -430,6 +430,7 @@ struct SeriesDetailView: View {
                         playRemainingText: playTarget?.resumeRemainingText,
                         playSeasonEpisodeText: playTarget.flatMap { HeroForegroundModelBuilder.seasonEpisodeButtonText(for: $0) },
                         onPlayTrailer: trailerButtonAction,
+                        trailerItem: heroItem.id == series.id ? viewModel.trailers.first : nil,
                         versions: playVersions,
                         selectedVersionID: effectivePlayVersionID,
                         onSelectVersion: { selectVersion($0) },

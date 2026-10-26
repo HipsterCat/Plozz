@@ -14,7 +14,6 @@ import MetadataKit
 import FeatureSearch
 import FeatureSettings
 import FeatureProfiles
-import ProviderTrailers
 import RatingsService
 import TraktService
 import SeerService
@@ -1964,7 +1963,6 @@ struct MainTabView: View {
         let _ = plozzPrintChanges { Self._printChanges() }
         let _ = PlozzBodyRate.tick("MainTabView")
         return playbackShell
-        .detailNavigationZoom(isEnabled: navigationStyleModel.detailZoomEnabled)
         .themeMusicScope(
             controller: themeMusicController,
             model: themeMusicModel,

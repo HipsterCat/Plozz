@@ -71,6 +71,7 @@ struct DetailHeroView: View, Equatable {
             // Presence, not identity — see above.
             && (lhs.onPlay == nil) == (rhs.onPlay == nil)
             && (lhs.onPlayTrailer == nil) == (rhs.onPlayTrailer == nil)
+            && lhs.trailerItem == rhs.trailerItem
             && (lhs.onSelectVersion == nil) == (rhs.onSelectVersion == nil)
             && lhs.loadVersions?.id == rhs.loadVersions?.id
             && (lhs.onSelectSource == nil) == (rhs.onSelectSource == nil)
@@ -168,6 +169,11 @@ struct DetailHeroView: View, Equatable {
     var playSeasonEpisodeText: String? = nil
     /// When provided, a secondary "Trailer" button is shown next to Play.
     var onPlayTrailer: (() -> Void)? = nil
+    var trailerItem: MediaItem? = nil
+    private var trailerButtonLabel: some View {
+        TrailerActionButtonLabel(trailer: trailerItem)
+            .frame(width: heroIconSize, height: heroIconSize)
+    }
     /// The selectable versions for this title. When more than one exists and
     /// `onSelectVersion` is set, a "Version" picker button is shown next to Play
     /// so the user can choose which source `Play` targets.
@@ -989,9 +995,9 @@ struct DetailHeroView: View, Equatable {
                         if showsRequestPill { requestPill() }
                         if let onPlayTrailer {
                             Button(action: onPlayTrailer) {
-                                Label("Trailer", systemImage: "film.fill")
+                                trailerButtonLabel
                             }
-                            .modifier(HeroActionButtonStyle(prominent: !showsRequestPill))
+                            .modifier(HeroActionButtonStyle(prominent: !showsRequestPill, circular: true))
                             .prefersDefaultFocus(!showsRequestPill, in: heroActionsScope)
                             .focused($heroActionRowFocus, equals: .trailer)
                             .accessibilityIdentifier("detail-hero-trailer")
@@ -1010,9 +1016,9 @@ struct DetailHeroView: View, Equatable {
                     }
                     if let onPlayTrailer {
                         Button(action: onPlayTrailer) {
-                            Label("Trailer", systemImage: "film.fill")
+                            trailerButtonLabel
                         }
-                        .modifier(HeroActionButtonStyle(prominent: false))
+                        .modifier(HeroActionButtonStyle(prominent: false, circular: true))
                         .focused($heroActionRowFocus, equals: .trailer)
                         .accessibilityIdentifier("detail-hero-trailer")
                     }
@@ -1991,9 +1997,9 @@ struct DetailHeroView: View, Equatable {
         default:
             break
         }
-        return HeroLogoFallback(for: source) {
-            await ArtworkRouter.shared.artworkURL(.logo, for: source)
-        }
+        return HeroLogoFallback(for: source, localizedResolve: { language in
+            await ArtworkRouter.shared.artworkURL(.logo, for: source, language: language)
+        })
     }
 
 }

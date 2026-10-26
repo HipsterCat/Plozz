@@ -1,5 +1,5 @@
 {
-  "originHash" : "69728d6d01c5d1fbaa49f82edd1ca27dce2a6eb38a8e3be71d496fc8863f6703",
+  "originHash" : "b6b2311603adf1c28a272700fb4ea88d3d36a8067e1a11602fcc9a6a2e566d51",
   "pins" : [
     {
       "identity" : "aetherengine",
@@ -114,15 +114,6 @@
       "state" : {
         "revision" : "869129b7bf4ecc57b97d0193ad29690ca2134750",
         "version" : "1.8.1"
-      }
-    },
-    {
-      "identity" : "youtubekit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/alexeichhorn/YouTubeKit.git",
-      "state" : {
-        "revision" : "e5b7d0396ce12bf3444f0d209e8436c83373b7af",
-        "version" : "0.4.9"
       }
     }
   ],

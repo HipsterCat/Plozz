@@ -4,7 +4,6 @@ import CoreModels
 import CoreNetworking
 import MetadataKit
 import RatingsService
-import ProviderTrailers
 
 /// How much a season's cached episode list can be trusted.
 ///
@@ -320,18 +319,14 @@ public final class ItemDetailViewModel {
     /// Invalidates every publication owned by an older active source, including
     /// the initial load and its snapshot restore.
     private var sourceGeneration: UInt64 = 0
-    /// Resolves a keyless online trailer (public YouTube front-ends), used only
+    /// Resolves a metadata-supplied YouTube link, used only
     /// when the provider surfaces no local or server trailer. Injectable so tests
     /// can avoid the network.
     private let onlineTrailerResolver: OnlineTrailerResolving
-    /// Verifies which (if any) of an ordered list of YouTube video ids actually
-    /// resolves to a playable **public** stream, returning the first that does.
-    /// Used to decide whether to show the Trailer button at all — a dead server
-    /// trailer link with no playable replacement yields no button. Injectable so
-    /// tests stay off the network.
+    /// Selects a valid external video id without probing YouTube playback.
     private let playableVideoIDResolver: PlayableTrailerResolving
     /// Memo of trailer-resolution outcomes so a revisited detail page surfaces its
-    /// Trailer button instantly instead of re-running extraction/search. Injected
+    /// Trailer button instantly instead of repeating metadata requests. Injected
     /// so tests can supply an isolated cache.
     private let trailerCache: TrailerResolutionCache
     /// The account this item belongs to, propagated so the detail item and its
@@ -471,8 +466,8 @@ public final class ItemDetailViewModel {
 
     /// Dwell before any speculative discovery fan-out (cross-server discovery,
     /// alternate-source fetch) fires. A page tapped through in under this window
-    /// pays zero speculative cost. Zero under tests. (Trailer extraction has its
-    /// own dwell on the awaited path — see ``trailerExtractionDwellNanos``.)
+    /// pays zero speculative cost. Zero under tests. Trailer metadata has its
+    /// own dwell on the awaited path.
     private static var enrichmentDwellNanos: UInt64 { isRunningUnderTests ? 0 : 800_000_000 }
     /// Settle time before a bounded one-frame stream probe. This task is separate
     /// from cross-server discovery so an explicit source switch restarts it for
@@ -481,10 +476,8 @@ public final class ItemDetailViewModel {
         isRunningUnderTests ? 0 : 2_300_000_000
     }
 
-    /// Further dwell before the authoritative YouTubeKit/JavaScriptCore trailer
-    /// extraction (the single biggest CPU consumer during browsing) runs, so only
-    /// a page genuinely settled on pays it. Zero under tests.
-    private static var trailerExtractionDwellNanos: UInt64 { isRunningUnderTests ? 0 : 1_700_000_000 }
+    /// Avoid speculative trailer metadata requests while navigating quickly.
+    private static var trailerMetadataDwellNanos: UInt64 { isRunningUnderTests ? 0 : 1_700_000_000 }
 
     /// In-flight SPECULATIVE discovery (cross-server picker + alternate-source
     /// watch-state), owned as a cancellable task that `load()` does NOT await.
@@ -605,23 +598,14 @@ public final class ItemDetailViewModel {
         }
     }
 
-    /// Production online-trailer resolver: a keyless YouTube search (no API key,
-    /// no TMDb) that surfaces ranked official-trailer candidates for the title.
+    /// Metadata-only trailer links. No scraping, extraction, or YouTube probes.
     public static let defaultOnlineTrailerResolver: OnlineTrailerResolving = { item in
         await OnlineTrailerSource.trailers(for: item)
     }
 
-    /// Production trailer-existence check: a keyless YouTube oEmbed probe (cheap
-    /// HTTP, **no JavaScriptCore**) that returns the first candidate id which
-    /// exists and is embeddable, skipping any private/removed video. This decides
-    /// whether to surface the Trailer button. Full stream extraction (the ~512MB
-    /// JSContext) is deferred to tap-time playback, where the player already
-    /// re-extracts with a primary→alternatives→replacement-search fallback. This
-    /// removes trailer JavaScriptCore from the browse path — the dominant
-    /// detail-page memory cost — while keeping the "only show a button when a real
-    /// trailer exists" accuracy guarantee.
+    /// Playback availability belongs to YouTube after the external handoff.
     public static let defaultPlayableVideoIDResolver: PlayableTrailerResolving = { candidates in
-        await YouTubeTrailerProvider.firstEmbeddableVideoID(in: candidates)
+        candidates.first { MediaItem.youTubeVideoID(fromURL: $0) == $0 }
     }
 
     /// Env-gated (`SCRUB_DIAG=1`) stdout tracer for trailer-source resolution,
@@ -1072,9 +1056,9 @@ public final class ItemDetailViewModel {
             }
             return
         }
-        if Self.trailerExtractionDwellNanos > 0 {
+        if Self.trailerMetadataDwellNanos > 0 {
             try? await Task.sleep(
-                nanoseconds: Self.trailerExtractionDwellNanos
+                nanoseconds: Self.trailerMetadataDwellNanos
             )
         }
         guard isStillLoaded(item, sourceGeneration: sourceGeneration) else {
@@ -1356,7 +1340,7 @@ public final class ItemDetailViewModel {
     /// path, so opening a detail deterministically populates its Trailer button
     /// and rating badges before `load()` returns. Cancellable via the awaiting
     /// task: a navigate-away cancels `load()`, which cancels this mid-flight (the
-    /// guards below bail) instead of letting YouTube extraction / a ratings fetch
+    /// guards below bail) instead of letting trailer metadata / a ratings fetch
     /// run to completion on the next page's back. The heavy trailer extraction is
     /// additionally gated behind a cancellable dwell (see ``loadTrailers(for:)``)
     /// so rapid tap-through never pays it.
@@ -1519,24 +1503,8 @@ public final class ItemDetailViewModel {
         startSpeculativeEnrichment(for: item)
     }
 
-    /// Fetches the item's trailers off the critical path. The Trailer button is
-    /// surfaced **fast** (optimistically, from the server's own trailer id) and
-    /// the verified, actually-playable id is refined in the background — so the
-    /// button appears in well under a second instead of waiting 5–10s for the full
-    /// extract → byte-check → keyless-search chain to finish.
-    ///
-    /// Flow:
-    ///  1. A local server trailer file wins outright (a real asset, no network).
-    ///  2. A cached outcome for this item (working id or "none") applies instantly.
-    ///  3. Otherwise, if the server has a remote (YouTube) trailer id, show the
-    ///     button **immediately** from it, then verify in the same pass: refine to
-    ///     the first id that actually plays, search for a replacement when the
-    ///     server ids are all dead, and retract only when nothing plays at all.
-    ///  4. With no server id, a keyless search decides whether to show a button.
-    ///
-    /// The verified outcome is cached so revisiting the page is instant, and the
-    /// player's own primary→alternatives→error fallback means an optimistic button
-    /// self-heals at tap time rather than ever being a dead end.
+    /// Prefer provider-owned files, including cross-server copies. Otherwise show
+    /// a server or TMDB YouTube link. Video availability is handled by YouTube.
     private func loadTrailers(
         for item: MediaItem,
         provider: any MediaProvider,
@@ -1576,7 +1544,7 @@ public final class ItemDetailViewModel {
         let serverIDs = orderedUnique(provided.compactMap(\.youTubeTrailerVideoID))
 
         // 2) A cached decision applies instantly — the main reason a revisited page
-        //    no longer re-pays the extraction/search cost.
+        //    no longer repeats the metadata lookup.
         if let cached = trailerCache.outcome(for: item.id) {
             guard isStillLoaded(item, sourceGeneration: sourceGeneration) else { return }
             switch cached {
@@ -1593,25 +1561,13 @@ public final class ItemDetailViewModel {
             surfaceTrailer(videoID: optimistic, for: item)
         }
 
-        // Dwell gate: the verify/replace pass below now uses a cheap keyless oEmbed
-        // existence check (no JavaScriptCore), but it's still speculative network
-        // work, so a short settle keeps fast browsing from firing a burst of checks.
-        // Roughly 1.7s of continuous settle on ONE page before any trailer
-        // verification runs — so flying through pages triggers none, only a page the
-        // user has genuinely settled on. The optimistic button above (server-id
-        // items) has already appeared, so this never delays what the user sees.
-        // trailers run on the awaited load() path, so a navigate-away cancels load()
-        // — and this dwell with it (the guard below bails). Skipped under tests so
-        // the (injected, instant) verify/search pass is deterministic.
-        if Self.trailerExtractionDwellNanos > 0 {
-            try? await Task.sleep(nanoseconds: Self.trailerExtractionDwellNanos)
+        if serverIDs.isEmpty, Self.trailerMetadataDwellNanos > 0 {
+            try? await Task.sleep(nanoseconds: Self.trailerMetadataDwellNanos)
             guard !Task.isCancelled,
                   isStillLoaded(item, sourceGeneration: sourceGeneration) else { return }
         }
 
-        // Verify (existence): confirm the server id exists+embeds via oEmbed, else
-        // search for a replacement and confirm that, then cache the outcome. Full
-        // stream extraction (JavaScriptCore) is deferred to tap-time playback.
+        // Validate link syntax only. Do not scrape, probe, or extract YouTube media.
         var workingID = await playableVideoIDResolver(serverIDs)
         guard !Task.isCancelled else { return }
         if workingID == nil {
@@ -1627,8 +1583,7 @@ public final class ItemDetailViewModel {
             surfaceTrailer(videoID: workingID, for: item)
             trailerCache.record(.working(workingID), for: item.id)
         } else {
-            // Nothing playable anywhere — retract the optimistic button (rare; a
-            // server trailer with no working video and no findable replacement).
+            // Neither the server nor metadata supplied a usable link.
             trailers = []
             trailerCache.record(.none, for: item.id)
         }
@@ -1678,9 +1633,7 @@ public final class ItemDetailViewModel {
         return nil
     }
 
-    /// Builds and shows the online (YouTube) Trailer button for `videoID`, stamped
-    /// with the item's context so a play-time replacement search has a clean
-    /// title/year to work with.
+    /// Builds an external YouTube trailer action with the title's presentation context.
     private func surfaceTrailer(videoID: String, for item: MediaItem) {
         let trailer = MediaItem.youTubeTrailer(
             videoID: videoID,
@@ -1702,11 +1655,8 @@ public final class ItemDetailViewModel {
         return out
     }
 
-    /// Stamps the parent title and year onto an online (YouTube) trailer so that,
-    /// if its video later proves unavailable at play time, the keyless search for
-    /// a replacement trailer has a clean title/year to work with (server trailers
-    /// often carry only a generic name like "Trailer" and no year). Local trailers
-    /// and already-populated fields are left untouched.
+    /// Keep external trailer metadata attached to the parent title. Local trailers
+    /// and already-populated fields remain untouched.
     private func stampTrailerContext(_ trailer: MediaItem, from item: MediaItem) -> MediaItem {
         guard trailer.isYouTubeTrailer else { return trailer }
         var copy = trailer

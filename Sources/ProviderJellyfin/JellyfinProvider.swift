@@ -415,6 +415,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             provider: kind, operation: .homeContinueWatching,
             failures: [.init(section: .continueWatching, error: error)]
         )
+        LibraryDiagnosticJournal.shared.record(diagnostic)
         PlozzLog.networking.error(
             "History \(endpoint) failed (\(scope)): \(diagnostic.supportText)"
         )
@@ -731,8 +732,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         async let remoteTask = client.remoteTrailers(userID: session.userID, id: itemID)
 
         // Local trailer files play through the normal provider path; server
-        // remote trailers are YouTube URLs that route to the keyless YouTube
-        // trailer provider. Both are best-effort so one failing doesn't hide the
+        // remote trailers are links that open in YouTube. Both are best-effort
+        // so one failing doesn't hide the
         // other.
         let local = ((try? await localTask) ?? []).map(map(item:))
         let remote = ((try? await remoteTask) ?? []).compactMap { link -> MediaItem? in

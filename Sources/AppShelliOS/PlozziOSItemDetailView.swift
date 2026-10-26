@@ -176,11 +176,13 @@ struct PlozziOSItemDetailView: View {
 }
 
 private struct PlozziOSCanonicalItemDetailView: View {
+    @State private var trailerOpening = YouTubeTrailerOpening()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.themePalette) private var palette
     @Environment(HeroTrailerController.self) private var trailerController
+    @Environment(\.themeMusicController) private var themeMusicController
     @Environment(PlozziOSAppModel.self) private var appModel
     /// Pushes another title from the Related row. Read here rather than only in a
     /// subview because a `navigationDestination` is hosted by the stack, so it
@@ -300,6 +302,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 detailMetadataResolver: { await DetailMetadataResolver.household.resolve($0) },
                 sourceAccountID: selectedSource?.accountID ?? item.sourceAccountID,
                 originSourceAccountID: originSourceAccountID,
+                onlineTrailerResolver: { await DetailMetadataResolver.household.trailers(for: $0) },
                 initialSources: initialSources,
                 alternateProviderResolver: { accountID in
                     appModel.accountsProviders.provider(forAccountID: accountID)
@@ -361,14 +364,12 @@ private struct PlozziOSCanonicalItemDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if trailerController.isPlaying,
-                   trailerController.activeSurfaceRole == .detail,
-                   trailerController.currentItemID == viewModel.state.value?.item.id {
-                    PlozziOSTrailerMuteToolbarButton(
-                        isMuted: trailerController.isMuted,
-                        onToggle: trailerController.toggleMuted
-                    )
-                }
+                PlozziOSDetailAudioMuteControl(
+                    trailer: trailerController, themeMusic: themeMusicController,
+                    itemID: viewModel.state.value?.item.id,
+                    themePlaybackID: viewModel.themeMusicPlaybackID,
+                    isActive: isPageVisible && playbackRequest == nil
+                )
 
                 if let detail = viewModel.state.value {
                     if seriesDownloadPresentation(for: detail).isVisible {
@@ -451,6 +452,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
             seriesHeroShowsSeries = false
         }
         .modifier(requestPresentation(inDownloadSheet: false))
+        .youTubeTrailerOpeningFailures(trailerOpening)
         .alert("Couldn't load versions", isPresented: Binding(
             get: { viewModel.playbackInventoryRetryError != nil },
             set: { if !$0 { viewModel.playbackInventoryRetryError = nil } }
@@ -970,6 +972,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func play(_ item: MediaItem, fromBeginning: Bool = false) {
+        if item.isYouTubeTrailer {
+            Task { await trailerOpening.open(item) }
+            return
+        }
         let origin = playlistOrigin?.containsSelection(item) == true ? playlistOrigin : nil
         let playlist = origin.map {
             VideoPlaylistPlaybackContext(

@@ -201,25 +201,6 @@ final class ProfileSettingsModelTests: XCTestCase {
         XCTAssertTrue(model.navigationStyleModel.preventsAccidentalExit)
     }
 
-    func testRebuildScopesDetailZoomToTheActiveProfile() {
-        let first = "DetailZoom.first.\(UUID().uuidString)"
-        let second = "DetailZoom.second.\(UUID().uuidString)"
-        defer {
-            for namespace in [first, second] {
-                UserDefaults.standard.removeObject(forKey: SettingsKey.scoped(
-                    NavigationStyleSettingsStore.detailZoomStorageKey, namespace: namespace
-                ))
-            }
-        }
-        let model = ProfileSettingsModel(namespace: first)
-        XCTAssertFalse(model.navigationStyleModel.detailZoomEnabled)
-        model.navigationStyleModel.detailZoomEnabled = true
-        model.rebuild(namespace: second)
-        XCTAssertFalse(model.navigationStyleModel.detailZoomEnabled)
-        model.rebuild(namespace: first)
-        XCTAssertTrue(model.navigationStyleModel.detailZoomEnabled)
-    }
-
     func testHomeLayoutSelectionSurvivesProfileSwitchWithoutChangingNavigation() {
         let primary = "HomeLayout.primary.\(UUID().uuidString)"
         let other = "HomeLayout.other.\(UUID().uuidString)"
