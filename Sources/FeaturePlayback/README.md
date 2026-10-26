@@ -416,6 +416,15 @@ stop callers await the same teardown. Reports remain best-effort on real server
 failures; final-report failures are logged explicitly, not retried as potentially
 duplicate watched/scrobble writes.
 
+Native teardown disconnects the presentation layer, removes owned subtitle/video
+outputs, cancels pending seeks and asset loads, and replaces the outgoing player's
+item with nil before releasing it. A retained presentation or diagnostics reference
+must not keep a stopped media pipeline attached. Reloads perform the same cleanup
+before resolving the replacement URL on both platforms. Cancelled loads return to
+idle only while they still own the load generation, and late audio-track selections
+cannot mutate a stopped or replaced item. Stop does not deactivate the app-wide
+audio session, which may still be in use by another player.
+
 ## On-demand read-ahead
 
 Playback's device-local read-ahead setting controls Plozzigen's existing disk
