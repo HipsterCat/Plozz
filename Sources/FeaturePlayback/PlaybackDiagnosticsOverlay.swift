@@ -309,8 +309,8 @@ struct PlaybackDiagnosticsOverlay: View {
                     .locale(locale)
                 row(LocalizedStringResource("Cache storage", comment: "Playback diagnostics: whether buffered media is kept in memory or on disk."),
                     cache.storage == .memory
-                        ? Text(LocalizedStringResource("Memory", comment: "Playback cache storage in RAM."))
-                        : Text(LocalizedStringResource("Disk", comment: "Playback cache storage in temporary files.")))
+                        ? Text(LocalizedStringResource("playback.diagnostics.cache.memory", defaultValue: "Memory", comment: "Playback cache storage in RAM."))
+                        : Text(LocalizedStringResource("playback.diagnostics.cache.disk", defaultValue: "Disk", comment: "Playback cache storage in temporary files.")))
                 row("Playback cache",
                     "\(cache.residentBytes.formatted(format)) / \(cache.effectiveBudgetBytes.formatted(format))")
                 if let target = cache.targetSeconds, target.isFinite, target > 0 {
