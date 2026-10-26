@@ -165,7 +165,7 @@ struct AppearanceDetailView: View {
                 }.groupedContent(),
                 SettingsSplitRow(
                     id: "navigation",
-                    title: "Navigation"
+                    title: "App navigation"
                 ) {
                     NavigationAppearanceDetail(
                         navigation: navigation,

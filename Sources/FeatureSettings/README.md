@@ -257,7 +257,8 @@ watch history and planning-list behavior are documented in
 ## Responsibility
 
 - **Screen customization hierarchy** follows task boundaries. Screens & Navigation presents
-  app navigation before shared screen preferences and individual screen editors.
+  App navigation before shared screen preferences and individual screen editors.
+  The App navigation entry and destination share that title on TV and mobile.
   Customize Home opens Layout/Hero, Card labels, or Rows through matching
   full-height navigation rows, without redundant subtitles. TV shows the current
   layout as a secondary value. Home rows owns Preset, one Add row action, the

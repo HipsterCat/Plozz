@@ -2,6 +2,31 @@ import XCTest
 
 @MainActor
 final class SettingsWorkspaceRemoteTests: XCTestCase {
+    func testAppNavigationEntryAndTitleStayConsistent() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings()
+        defer { app.terminate() }
+        try focus(section("screensNavigation", in: app), in: app)
+        XCUIRemote.shared.press(.select)
+        let navigation = app.buttons["settings-page-navigation"]
+        try focus(navigation, in: app)
+        XCTAssertEqual(navigation.label, "App navigation")
+        XCTAssertLessThan(navigation.frame.maxY, app.buttons["settings-page-customize-home"].frame.minY)
+        capture("app-navigation-entry", in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.buttons["Top Bar"].waitForExistence(timeout: 5))
+        assertInlineSettingsHeader("App navigation", back: pageBack("settings-workspace-back", in: app), in: app)
+        capture("app-navigation-page", in: app)
+        try focus(app.buttons["Reset Navigation"], in: app)
+        capture("app-navigation-arrangement", in: app)
+        XCUIRemote.shared.press(.menu)
+        waitForEnabled(navigation)
+        XCTAssertTrue(hasFocus(navigation), "Back must restore focus to App navigation.")
+        #else
+        throw XCTSkip("Simulator-only navigation screenshot review.")
+        #endif
+    }
+
     func testDetailZoomIsOptInAndSurvivesRelaunch() throws {
         #if targetEnvironment(simulator)
         for (expected, updated) in [("0", "1"), ("1", "0"), ("0", "0")] {

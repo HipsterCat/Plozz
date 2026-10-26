@@ -296,7 +296,7 @@ final class SettingsInteractionTests: XCTestCase {
             openSettingsPage(title)
             let children = title == "Appearance"
                 ? ["Theme", "Cards", "Artwork", "Circadian Mode"]
-                : ["Spoiler Protection", "Customize Home", "Customize Libraries", "Navigation", "Detail Page"]
+                : ["Spoiler Protection", "Customize Home", "Customize Libraries", "App navigation", "Detail Page"]
             for child in children {
                 let row = button(child)
                 reveal(row)
@@ -328,6 +328,26 @@ final class SettingsInteractionTests: XCTestCase {
         app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(ratings.waitForExistence(timeout: 3))
         XCTAssertEqual(ratings.value as? String, value)
+    }
+
+    func testAppNavigationEntryAndTitleStayConsistent() {
+        openSettingsPage("Screens & Navigation")
+        let navigation = button("App navigation")
+        reveal(navigation, fullyVisible: true)
+        XCTAssertGreaterThanOrEqual(navigation.frame.height, 44)
+        XCTAssertLessThan(navigation.frame.maxY, button("Customize Home").frame.minY)
+        XCTAssertFalse(button("Navigation").exists)
+        capture("app-navigation-entry")
+        navigation.tap()
+        XCTAssertTrue(app.navigationBars["App navigation"].waitForExistence(timeout: 3))
+        assertInlineTitle("App navigation")
+        capture("app-navigation-page")
+        let reset = app.buttons["Reset Navigation"]
+        XCTAssertTrue(reset.isHittable)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(reset.frame))
+        app.navigationBars["App navigation"].buttons["BackButton"].tap()
+        XCTAssertTrue(app.navigationBars["Screens & Navigation"].waitForExistence(timeout: 3))
+        XCTAssertTrue(navigation.isHittable)
     }
 
     func testThemeMusicMuteUsesTheDetailToolbarAndCurrentPlayback() {
@@ -978,7 +998,7 @@ final class SettingsInteractionTests: XCTestCase {
     func testSettingsSectionsOpenTheirOwnDestinations() {
         for title in [
             "Playback", "Subtitles", "Live TV", "Libraries", "Appearance", "Screens & Navigation",
-            "Trackers", "Customize Home", "Navigation", "Detail Page", "Theme", "Spoiler Protection", "Circadian Mode",
+            "Trackers", "Customize Home", "App navigation", "Detail Page", "Theme", "Spoiler Protection", "Circadian Mode",
             "Profiles", "Servers", "Downloads", "Seerr", "Metadata Providers", "Help & Diagnostics", "Attributions"
         ] {
             openSettingsPage(title)
@@ -1833,7 +1853,7 @@ final class SettingsInteractionTests: XCTestCase {
     ) {
         launch(settingsRoot: true, arguments: arguments)
         let parent: String? = switch title {
-        case "Customize Home", "Customize Libraries", "Navigation", "Detail Page", "Spoiler Protection":
+        case "Customize Home", "Customize Libraries", "App navigation", "Detail Page", "Spoiler Protection":
             "Screens & Navigation"
         case "Theme", "Circadian Mode": "Appearance"
         default: nil

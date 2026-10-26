@@ -1701,7 +1701,7 @@ private struct PlozziOSScreensNavigationSettingsView: View {
             switch self {
             case .home: "Customize Home"
             case .libraries: "Customize Libraries"
-            case .navigation: "Navigation"
+            case .navigation: "App navigation"
             case .detail: "Detail Page"
             case .spoilers: "Spoiler Protection"
             }
@@ -1820,7 +1820,7 @@ private struct PlozziOSNavigationSettingsView: View {
             }
         }
         .settingsPageSurface()
-        .navigationTitle("Navigation")
+        .navigationTitle("App navigation")
     }
 }
 
