@@ -2002,7 +2002,7 @@ struct MainTabView: View {
             }
         }
         .onChange(of: activeDestinationKey) {
-            themeMusicController.stop()
+            themeMusicController.fadeOutAndStop()
             heroTrailerController.stop()
         }
         .environment(musicPlayerModel)
