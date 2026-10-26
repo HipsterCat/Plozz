@@ -99,7 +99,8 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                 if view == .continueWatching {
                     XCTAssertTrue(text.contains("Home"), text)
                     XCTAssertTrue(text.contains("Recommended"), text)
-                    XCTAssertTrue(text.contains("Follow page"), text)
+                    XCTAssertTrue(text.contains("Use default"), text)
+                    XCTAssertTrue(text.contains("Uses this page's default."), text)
                 }
             }
         }
@@ -213,6 +214,12 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                                page.controls.count + 1 + (scope.pages.count > 1 ? 1 : 0))
                 XCTAssertTrue(text.contains(scope == .home ? "Card labels" : "Customize labels"), text)
                 XCTAssertTrue(text.contains(String(localized: page.title)), text)
+                XCTAssertEqual(text.contains("Overrides"), page.hasOverrides, text)
+                if page.hasOverrides {
+                    XCTAssertTrue(text.contains("Default"), text)
+                    XCTAssertTrue(text.contains("Use default"), text)
+                    XCTAssertTrue(text.contains(String(localized: try XCTUnwrap(page.sharedRowNote))), text)
+                }
                 for view in page.controls where view == .continueWatching || page == .detail {
                     XCTAssertTrue(text.contains(String(localized: view.cardLabelTitle)), text)
                 }

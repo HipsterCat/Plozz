@@ -289,7 +289,7 @@ struct CardCaptionViewChoices: View {
         ) {
             ForEach(view.customizationChoices) { choice in
                 Text(view == .continueWatching && choice == .automatic
-                    ? LocalizedStringResource("Follow page") : choice.displayName).tag(choice)
+                    ? LocalizedStringResource("Use default") : choice.displayName).tag(choice)
             }
         }
         #else
@@ -323,7 +323,7 @@ extension CardCaptionSettings {
 
     func customizationValue(in view: CardCaptionView) -> LocalizedStringResource {
         if view == .continueWatching, customization(in: view) == .automatic {
-            return "Follow page"
+            return "Use default"
         }
         return customization(in: view).displayName
     }

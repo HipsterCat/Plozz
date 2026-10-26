@@ -567,7 +567,7 @@ final class SettingsInteractionTests: XCTestCase {
         capture("detail-labels-round-trip")
     }
 
-    func testLibraryLabelEditorUsesTouchSelectionAndPreservesFollowPage() {
+    func testLibraryLabelEditorUsesTouchSelectionAndPreservesUseDefault() {
         openSettingsPage("Customize Libraries")
         XCTAssertFalse(app.buttons["card-label-view-recommended"].exists)
         let customize = app.buttons["library-customize-labels"]
@@ -581,6 +581,11 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(target.value as? String, "Recommended")
         XCTAssertTrue(value.exists)
         XCTAssertTrue(watching.exists, "Recommended must show both options together.")
+        XCTAssertEqual(value.label, "Default")
+        XCTAssertEqual(watching.label, "Continue Watching")
+        XCTAssertTrue(app.staticTexts["Overrides"].exists)
+        XCTAssertLessThan(value.frame.maxY, app.staticTexts["Overrides"].frame.minY)
+        XCTAssertLessThan(app.staticTexts["Overrides"].frame.maxY, watching.frame.minY)
         XCTAssertEqual(value.value as? String, "Mixed")
         let explanation = app.staticTexts["card-label-mixed-help"]
         XCTAssertTrue(explanation.exists)
@@ -590,25 +595,25 @@ final class SettingsInteractionTests: XCTestCase {
         selectCustomization(value, expecting: "Off")
         XCTAssertFalse(explanation.exists, "Mixed help must follow the selected setting.")
         capture("library-labels-recommended-off")
-        XCTAssertEqual(watching.value as? String, "Follow page")
+        XCTAssertEqual(watching.value as? String, "Use default")
         let home = app.descendants(matching: .any)["card-label-preview-home"].firstMatch
         let recommended = app.descendants(matching: .any)["card-label-preview-recommended"].firstMatch
         XCTAssertFalse(home.exists, "The preview should stay on the selected page.")
         XCTAssertTrue(recommended.exists)
-        XCTAssertTrue(app.staticTexts[
-            "Follow page uses each page's setting. On/Off overrides Home and Recommended."
-        ].exists)
+        XCTAssertTrue(app.staticTexts["Shared with Home."].exists)
         selectCustomization(watching, expecting: "On")
         capture("library-labels-watching-shared-on")
         XCTAssertEqual(value.value as? String, "Off", "Continue Watching must not edit the page's labels.")
         selectCustomization(target, expecting: "Browse")
         XCTAssertFalse(watching.exists, "Continue Watching is not another page or a Browse option.")
+        XCTAssertFalse(app.staticTexts["Overrides"].exists)
+        XCTAssertEqual(app.buttons["card-label-view-browse"].label, "Card labels")
         XCTAssertEqual(app.buttons["card-label-view-browse"].value as? String, "On")
         capture("library-labels-browse")
         selectCustomization(target, expecting: "Recommended")
         XCTAssertEqual(value.value as? String, "Off")
         XCTAssertEqual(watching.value as? String, "On")
-        selectCustomization(watching, expecting: "Follow page")
+        selectCustomization(watching, expecting: "Use default")
         app.navigationBars["Customize labels"].buttons["BackButton"].tap()
         XCTAssertTrue(customize.waitForExistence(timeout: 3))
     }
@@ -1501,7 +1506,7 @@ final class SettingsInteractionTests: XCTestCase {
         portrait.tap()
         let labels = app.buttons["card-label-view-continueWatchingPortrait"]
         XCTAssertTrue(labels.waitForExistence(timeout: 3))
-        XCTAssertEqual(labels.value as? String, "Follow page")
+        XCTAssertEqual(labels.value as? String, "Use default")
         let details = app.buttons["continue-watching-playback-details"]
         XCTAssertTrue(details.exists)
         XCTAssertEqual(details.value as? String, "Detailed")
@@ -1546,7 +1551,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(labels.value as? String, "Off", "Changing artwork must preserve the label override.")
         XCTAssertEqual(details.value as? String, "Progress only", "Artwork and caption changes must preserve playback details.")
         selectCustomization(details, expecting: "Detailed")
-        selectCustomization(labels, expecting: "Follow page")
+        selectCustomization(labels, expecting: "Use default")
     }
 
     func testContinueWatchingGroupedControlsKeepSelectionsIndependent() {

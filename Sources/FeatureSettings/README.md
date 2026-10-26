@@ -277,9 +277,12 @@ watch history and planning-list behavior are documented in
   row-geometry guidance; the deprecated text-height focus strip must not return.
 - **Customize labels** uses one shared, page-organized visual editor from
   Appearance's Cards page and the scoped Home, Libraries, and Detail Page links.
-  Home and Recommended each show Card labels and the shared Continue Watching
-  override together. Detail Page groups Episodes, Related, and Extras; Search,
-  Watchlist, and People are also available from the full editor. Scoped
+  Home and Recommended each show Default (On/Off/Mixed), followed by an Overrides
+  section containing Continue Watching (Use default/On/Off). The short footer names
+  the other page sharing that override; Use default inherits each page's own choice.
+  Single-control pages retain Card labels without Default or Overrides headings.
+  Detail Page keeps independent Episodes, Related titles, and Extras controls;
+  Search, Watchlist, and People are also available from the full editor. Scoped
   single-page editors omit the Page selector. All entry points edit the same
   profile-scoped caption settings; navigation and preview focus never change
   saved values. Previews highlight the affected captions, not a duplicate table
@@ -300,11 +303,11 @@ watch history and planning-list behavior are documented in
   Customize labels is the attached lower group beneath those controls, using
   `SettingsConnectedControlGroups` rather than a prominent list of overrides.
   Its editor selects a page: Recommended, Browse, Collections, or Playlists.
-  Recommended has Card labels and Continue Watching controls together; the other
+  Recommended has Default and a separate Continue Watching override; the other
   pages each have one Card labels control. TV focus and mobile value changes
   highlight the affected captions on that page, without a duplicate status table.
   VoiceOver retains the equivalent state description.
-  Follow page retains the existing inheritance; On/Off remains
+  Use default retains the existing inheritance; On/Off remains
   one shared override, explicitly noted as also affecting Home.
   Recommended highlights Continue Watching only while it
   follows the page. Collection/playlist covers are distinct from titles inside,
@@ -408,7 +411,7 @@ watch history and planning-list behavior are documented in
   preference. The presentation is profile-scoped and also applies to library
   Continue Watching rows. All three styles expose a Labels control bound to the same
   Continue Watching override in Appearance -> Cards -> Labels by view:
-  Follow page inherits Home rows or Recommended; On/Off controls the labels
+  Use default inherits Home or Recommended's default; On/Off controls the labels
   below any Continue Watching artwork. Each preview shows or hides its caption
   lines using the same choice. The previous portrait override is preserved.
   Caption presets/reset clear this override, and

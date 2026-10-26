@@ -33,12 +33,34 @@ final class ViewCustomizationCycleTests: XCTestCase {
 
     func testSharedRowCopyDistinguishesEachParentFromTheSharedOverride() throws {
         let home = try XCTUnwrap(CardCaptionSettingsPage.home.sharedRowNote)
-        XCTAssertEqual(home, CardCaptionSettingsPage.recommended.sharedRowNote)
-        let text = String(localized: home)
-        XCTAssertTrue(text.contains("each page's setting"))
-        XCTAssertTrue(text.contains("On/Off overrides Home and Recommended"))
+        XCTAssertEqual(String(localized: home), "Shared with Recommended.")
+        let recommended = try XCTUnwrap(CardCaptionSettingsPage.recommended.sharedRowNote)
+        XCTAssertEqual(String(localized: recommended), "Shared with Home.")
         for page in CardCaptionSettingsPage.allCases where page != .home && page != .recommended {
             XCTAssertNil(page.sharedRowNote)
+        }
+        var settings = CardCaptionSettings.default
+        for choice in [CardCaptionOverride.show, .hide] {
+            settings.setOverride(choice, for: .continueWatching)
+            XCTAssertEqual(settings.cardLabelHelp(in: .continueWatching),
+                           settings.customizationDetail(in: .continueWatching))
+        }
+        settings.setOverride(.automatic, for: .continueWatching)
+        XCTAssertEqual(String(localized: settings.cardLabelHelp(in: .continueWatching)), "Uses this page's default.")
+    }
+
+    func testOnlyPagesWithOverridesUseDefaultControlTitles() {
+        for page in CardCaptionSettingsPage.allCases {
+            XCTAssertEqual(page.hasOverrides, page == .home || page == .recommended)
+            for view in page.controls {
+                let expected: String
+                if page == .detail || view == .continueWatching {
+                    expected = String(localized: view.cardLabelTitle)
+                } else {
+                    expected = page.hasOverrides ? "Default" : "Card labels"
+                }
+                XCTAssertEqual(String(localized: page.controlTitle(for: view)), expected)
+            }
         }
     }
 
@@ -306,7 +328,7 @@ final class ViewCustomizationCycleTests: XCTestCase {
         XCTAssertEqual(String(localized: labels.customizationValue(in: .recommended)), "Mixed")
         XCTAssertEqual(String(localized: labels.customizationDetail(in: .home)),
                        "Labels are visible except in Showcase and on series artwork.")
-        XCTAssertEqual(String(localized: labels.customizationValue(in: .continueWatching)), "Follow page")
+        XCTAssertEqual(String(localized: labels.customizationValue(in: .continueWatching)), "Use default")
         for view in CardCaptionView.allCases where view != .home && view != .recommended && view != .continueWatching {
             XCTAssertEqual(String(localized: labels.customizationValue(in: view)), "On")
         }

@@ -36,10 +36,17 @@ enum CardCaptionSettingsPage: String, CaseIterable {
 
     var firstControl: CardCaptionView { controls[0] }
 
+    var hasOverrides: Bool { controls.contains(.continueWatching) }
+
+    func controlTitle(for view: CardCaptionView) -> LocalizedStringResource {
+        if self == .detail || view == .continueWatching { return view.cardLabelTitle }
+        return hasOverrides ? "Default" : "Card labels"
+    }
+
     var sharedRowNote: LocalizedStringResource? {
         switch self {
-        case .home, .recommended:
-            "Follow page uses each page's setting. On/Off overrides Home and Recommended."
+        case .home: "Shared with Recommended."
+        case .recommended: "Shared with Home."
         default: nil
         }
     }
@@ -111,13 +118,7 @@ struct CardCaptionCustomizationContent: View {
                     .modifier(ViewCustomizationRowFocus(id: "card-label-page"))
                 }
             }
-            Section {
-                labelControls
-            } footer: {
-                if let note = selectedPage.sharedRowNote {
-                    Text(note)
-                }
-            }
+            labelSections
         }
         #else
         ViewCustomizationList(title: title, initialRowID: "") {
@@ -133,22 +134,7 @@ struct CardCaptionCustomizationContent: View {
                     }
                 }
             }
-            Section {
-                labelControls
-            } footer: {
-                VStack(alignment: .leading, spacing: 4) {
-                    if selectedPage != .detail && selectedPage != .home {
-                        Text(selectedPage.firstControl.cardLabelDetail)
-                    }
-                    if let explanation = settings.cardLabelMixedExplanation(in: selectedPage.firstControl) {
-                        Text(explanation)
-                            .accessibilityIdentifier("card-label-mixed-help")
-                    }
-                    if let note = selectedPage.sharedRowNote {
-                        Text(note)
-                    }
-                }
-            }
+            labelSections
             Section {
                 CardLabelScopePreview(preview: preview(editing: previewView), style: style)
             }
@@ -157,20 +143,50 @@ struct CardCaptionCustomizationContent: View {
         #endif
     }
 
-    private var labelControls: some View {
-        ForEach(views, id: \.self) { view in
-            CardCaptionViewChoices(
-                view: view,
-                settings: Binding(
-                    get: { settings },
-                    set: {
-                        previewView = view
-                        settings = $0
-                    }
-                ),
-                title: selectedPage == .detail || view == .continueWatching ? view.cardLabelTitle : "Card labels"
-            )
+    @ViewBuilder
+    private var labelSections: some View {
+        Section {
+            ForEach(views.filter { $0 != .continueWatching }, id: \.self) { view in
+                labelControl(view)
+            }
+        } footer: {
+            #if !os(tvOS)
+            VStack(alignment: .leading, spacing: 4) {
+                if selectedPage != .detail && !selectedPage.hasOverrides {
+                    Text(selectedPage.firstControl.cardLabelDetail)
+                }
+                if let explanation = settings.cardLabelMixedExplanation(in: selectedPage.firstControl) {
+                    Text(explanation)
+                        .accessibilityIdentifier("card-label-mixed-help")
+                }
+            }
+            #endif
         }
+        if selectedPage.hasOverrides {
+            Section {
+                labelControl(.continueWatching)
+            } header: {
+                Text("Overrides", comment: "Card label settings that override the selected page's Default choice.")
+            } footer: {
+                if let note = selectedPage.sharedRowNote {
+                    Text(note)
+                }
+            }
+        }
+    }
+
+    private func labelControl(_ view: CardCaptionView) -> some View {
+        CardCaptionViewChoices(
+            view: view,
+            settings: Binding(
+                get: { settings },
+                set: {
+                    previewView = view
+                    settings = $0
+                }
+            ),
+            title: selectedPage.controlTitle(for: view)
+        )
     }
 
     private func preview(editing view: CardCaptionView) -> CardLabelScopePreview.Snapshot {
@@ -207,7 +223,7 @@ extension CardCaptionView {
         case .playlists:
             "Changes labels below playlist covers in all libraries. Titles inside a playlist use Browse."
         case .continueWatching:
-            "Shared by Home and Recommended. Follow page uses each page's label setting; On or Off overrides both."
+            "Use default follows each page. On or Off applies to both Home and Recommended."
         case .search: "Changes labels below cards in search results."
         case .watchlist: "Changes labels below cards on the Watchlist page."
         case .episodes: "Changes episode labels in the episode browser and on detail pages."
@@ -229,7 +245,10 @@ extension CardCaptionSettings {
     }
 
     func cardLabelHelp(in view: CardCaptionView) -> LocalizedStringResource {
-        cardLabelMixedExplanation(in: view) ?? view.cardLabelDetail
+        if view == .continueWatching {
+            return customization(in: view) == .automatic ? "Uses this page's default." : customizationDetail(in: view)
+        }
+        return cardLabelMixedExplanation(in: view) ?? view.cardLabelDetail
     }
 }
 

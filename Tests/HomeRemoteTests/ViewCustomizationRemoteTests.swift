@@ -255,7 +255,7 @@ final class ViewCustomizationRemoteTests: XCTestCase {
         XCTAssertTrue(waitUntil { self.hasFocus(page) && page.value as? String == "Home" })
         XCTAssertEqual(app.buttons["card-label-view-home"].value as? String, "Mixed",
                        "Selecting pages must not commit caption changes.")
-        XCTAssertEqual(app.buttons["card-label-view-continueWatchingPortrait"].value as? String, "Follow page")
+        XCTAssertEqual(app.buttons["card-label-view-continueWatchingPortrait"].value as? String, "Use default")
         capture(app, "labels-home-after-menu-return")
     }
 
