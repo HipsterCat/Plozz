@@ -466,6 +466,9 @@ final class PlozziOSAppModel {
                     item: item
                 )
             },
+            watchlistProviderChange: { [unowned self] accountID in
+                self.watchlistProviderChange(for: accountID)
+            },
             resolveDurableWatchlist: { [unowned self] items in
                 self.resolvedUniversalWatchlistItems(candidates: items)
             },

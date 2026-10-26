@@ -228,6 +228,7 @@ struct HomeTab: View {
         runtime.homeViewModel.value(forKey: runtime.scopeKey) {
             HomeViewModel(
                 accounts: accounts,
+                profileNamespace: libraryPreferencesNamespace,
                 layoutStore: homeLayoutStore,
                 contentStore: homeContentStore,
                 identitySources: identitySources,

@@ -1130,6 +1130,7 @@ struct PlozziOSTabShell: View {
     ) -> HomeViewModel {
         HomeViewModel(
             accounts: appModel.accountsProviders.homeAccounts,
+            profileNamespace: appModel.profiles.activeNamespace,
             contentStore: HomeContentStore(
                 namespace: appModel.profiles.activeNamespace
             ),
