@@ -79,7 +79,9 @@ struct PlozziOSFirstRunView: View {
             if let selection = appModel.plexHomeUsers.pendingPlexUserSelection
                 ?? lastPlexSelection {
                 PlozziOSPlexUserSelectionView(
+                    appModel: appModel,
                     selection: selection,
+                    onImportAll: appModel.importPlexHomeProfilesDuringOnboarding,
                     onSelect: appModel.selectPlexUserDuringOnboarding
                 )
             }

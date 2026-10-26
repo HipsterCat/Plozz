@@ -74,7 +74,9 @@ struct PlozziOSProfileSetupView: View {
         // the libraries step.
         .plozzSheet(item: plexUserSelectionBinding) { selection in
             PlozziOSPlexUserSelectionView(
+                appModel: appModel,
                 selection: selection,
+                onImportAll: appModel.importPlexHomeProfilesDuringOnboarding,
                 onSelect: appModel.selectPlexUserDuringOnboarding
             )
         }
@@ -235,6 +237,7 @@ struct PlozziOSProfileOnboardingCover: View {
                 EmptyView()
             }
         }
+        .id(appModel.profileOnboardingID)
         .transaction { $0.animation = nil }
     }
 }

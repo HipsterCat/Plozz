@@ -1299,6 +1299,10 @@ public final class AppState {
         accountsProviders.credentialRevision = { [weak self] account in
             self?.plexHomeUsers.effectiveCredentialRevision(for: account) ?? account.credentialRevision
         }
+        accountsProviders.cloudTokenResolver = { [weak self] account, revision in
+            guard let self else { throw CancellationError() }
+            return try await self.plexHomeUsers.resolveCloudToken(for: account, expectedRevision: revision)
+        }
         accountsProviders.onAccountsInvalidated = { [weak self] in
             self?.mediaItemActionHandler.invalidateAccountCaches()
             self?.universalWatchlistProfileID = nil
@@ -1827,7 +1831,9 @@ public final class AppState {
                         accountID: accountID,
                         serverName: session.server.name,
                         users: users,
-                        isFirstRun: isFirstRun
+                        isFirstRun: isFirstRun,
+                        applyToAccountIDs: self.pendingPlexUserApplyToAccountIDs.isEmpty
+                            ? [accountID] : self.pendingPlexUserApplyToAccountIDs
                     ))
                     self.apply(.plexUserSelectionRequired)
                 } else {
@@ -1854,8 +1860,11 @@ public final class AppState {
     /// confirm screen shows who's watching. `applyPlexIdentity` records whether a
     /// freshly-picked Plex Home user still needs applying once the step completes
     /// (deferred so the PIN prompt doesn't interrupt onboarding).
-    private func beginLibrarySelection(isFirstRun: Bool, seedName: String, seedAvatar: String?, applyPlexIdentity: Bool, skipSelectionStep: Bool = false) {
-        if isFirstRun {
+    private func beginLibrarySelection(
+        isFirstRun: Bool, seedName: String, seedAvatar: String?, applyPlexIdentity: Bool,
+        skipSelectionStep: Bool = false, seedIdentity: Bool = true
+    ) {
+        if isFirstRun && seedIdentity {
             profilesModel.seedDefaultProfileIdentity(name: seedName, avatarImageURL: seedAvatar)
         }
         pendingOnboardingContinuation = PendingOnboardingContinuation(
@@ -1894,29 +1903,36 @@ public final class AppState {
     /// that user (so the confirm screen shows *who's watching*, not the account
     /// owner). Then continues to the profile confirm step (first run) or the
     /// app, applying the binding so the Plex identity switches.
-    public func selectPlexUserDuringOnboarding(_ user: PlexHomeUser?) {
+    public func selectPlexUserDuringOnboarding(_ user: PlexHomeUser?, addAllProfiles: Bool = false) {
         guard let pending = plexHomeUsers.pendingPlexUserSelection else { return }
         if let user {
-            let binding = PlexHomeUserBinding(
-                homeUserID: user.id,
-                name: user.name,
-                avatarURL: user.avatarURL?.absoluteString,
-                requiresPIN: user.requiresPIN,
-                pinRequirementVerified: user.pinRequirementVerified
-            )
-            // Apply the chosen Home user to every newly-added Plex account in the
-            // batch (they belong to the same Plex account and share Home users),
-            // falling back to just the one that triggered the pick.
-            let targets = pendingPlexUserApplyToAccountIDs.isEmpty
-                ? [pending.accountID]
-                : pendingPlexUserApplyToAccountIDs
-            var updated = profilesModel.activeProfile
-            for accountID in targets {
-                updated = updated.settingHomeUserBinding(binding, forPlexAccount: accountID)
+            guard plexHomeUsers.selectOnboardingUser(user, addAllProfiles: addAllProfiles) else { return }
+            if addAllProfiles, let profileID = plexHomeUsers.importedOnboardingProfileID(for: user) {
+                profileFlow.switchProfileForPlexOnboarding(to: profileID) { [weak self] in
+                    self?.finishPlexUserOnboarding(user, pending: pending, imported: true)
+                }
+                return
             }
-            profilesModel.update(updated)
         }
+        finishPlexUserOnboarding(user, pending: pending, imported: false)
+    }
+
+    public func importPlexHomeProfilesDuringOnboarding() -> PlexHomeProfileImportResult {
+        plexHomeUsers.importOnboardingProfiles()
+    }
+
+    private func finishPlexUserOnboarding(
+        _ user: PlexHomeUser?, pending: PlexHomeUsersModel.PendingPlexUserSelection, imported: Bool
+    ) {
         plexHomeUsers.clearUserSelection()
+        if imported, !pending.isFirstRun, profilesModel.activeProfile.needsSetup {
+            pendingLibrarySelectionAccountIDs = []
+            pendingPlexUserApplyToAccountIDs = []
+            apply(.accountAuthenticated)
+            plexHomeUsers.ensurePlexIdentityForActiveProfile()
+            profileFlow.resumeSetupIfNeeded()
+            return
+        }
         // Continue to the "choose your libraries" step. First run seeds the
         // profile identity from the picked user; a later add applies the Plex
         // identity once the library step completes.
@@ -1924,7 +1940,8 @@ public final class AppState {
             isFirstRun: pending.isFirstRun,
             seedName: user?.name ?? "",
             seedAvatar: user?.avatarURL?.absoluteString,
-            applyPlexIdentity: !pending.isFirstRun
+            applyPlexIdentity: !pending.isFirstRun,
+            seedIdentity: !imported
         )
     }
 
@@ -1955,6 +1972,7 @@ public final class AppState {
 
     /// Defers Plex PIN presentation until all appearance choices are complete.
     public func finishHomeLayoutSelection() {
+        profileFlow.completeAppearanceSetup(for: profilesModel.activeProfileID)
         apply(.homeLayoutSelected)
         plexHomeUsers.ensurePlexIdentityForActiveProfile()
     }
