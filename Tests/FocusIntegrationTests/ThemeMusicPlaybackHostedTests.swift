@@ -21,6 +21,7 @@ final class ThemeMusicPlaybackHostedTests: XCTestCase {
             let owner = model.controller.detailOwner
             let item = try XCTUnwrap(model.controller.player.currentItem)
             model.controller.setAppActive(false)
+            try await self.waitUntil { !model.controller.isPlaying }
             let paused = model.controller.player.currentTime().seconds
             try await Task.sleep(for: .milliseconds(100))
             XCTAssertEqual(model.controller.detailOwner, owner)
@@ -29,6 +30,32 @@ final class ThemeMusicPlaybackHostedTests: XCTestCase {
             model.controller.setAppActive(true)
             try await self.waitUntil { model.controller.player.currentTime().seconds > paused + 0.05 }
             XCTAssertTrue(model.controller.player.currentItem === item)
+        }
+    }
+
+    func testLeavingDetailThroughVisibilityOrRemovalFadesThenReleasesPlayer() async throws {
+        for remove in [false, true] {
+            try await withFixture { model in
+                try await self.waitUntil {
+                    model.controller.player.currentTime().seconds > 0.1
+                        && model.controller.player.volume > 0.01
+                }
+                let item = try XCTUnwrap(model.controller.player.currentItem)
+                let startingVolume = model.controller.player.volume
+                if remove {
+                    model.showsDetails = false
+                } else {
+                    model.foreground = -1
+                }
+                try await self.waitUntil { model.controller.detailOwner == nil }
+                XCTAssertTrue(model.controller.player.currentItem === item)
+                try await Task.sleep(for: .milliseconds(250))
+                XCTAssertGreaterThan(model.controller.player.volume, 0)
+                XCTAssertLessThan(model.controller.player.volume, startingVolume)
+                XCTAssertTrue(model.controller.player.currentItem === item)
+                try await self.waitUntil { model.controller.player.currentItem == nil }
+                XCTAssertFalse(model.controller.isPlaying)
+            }
         }
     }
 
@@ -192,6 +219,7 @@ final class ThemeMusicPlaybackHostedTests: XCTestCase {
         let queuedItems = QueuedItemRecorder()
         var scope = "profile:account:revision-1"
         var foreground = 0
+        var showsDetails = true
         var accountAllowed = true
         var detailAllowed = true
         @ObservationIgnored var liveAllowed = true
@@ -217,8 +245,10 @@ final class ThemeMusicPlaybackHostedTests: XCTestCase {
 
         var body: some View {
             VStack {
-                page(0)
-                page(1)
+                if model.showsDetails {
+                    page(0)
+                    page(1)
+                }
             }
             .themeMusicScope(
                 controller: model.controller, model: model.settings,

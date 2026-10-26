@@ -33,6 +33,9 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     private var hasFadedIn = false
     private var hasStartedPlayback = false
     private let fadeInDuration: Double = 5
+    @ObservationIgnored private var fadeOutTask: Task<Void, Never>?
+    private var fadeOutResetsItem = false
+    private let fadeOutDuration: Duration = .milliseconds(750)
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var sampleURL: URL?
     private var authorizationID: String?
@@ -53,21 +56,25 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     private var canPlay: Bool { !isBlocked && isAppActive && !isInterrupted }
 
     public func setAppActive(_ active: Bool) {
+        guard isAppActive != active else { return }
         isAppActive = active
         if !active, isPreviewing {
             stop()
         } else if active, canPlay, currentPlaybackID != nil {
             beginPlaybackIfReady()
         } else if !active {
-            player.pause()
-            isPlaying = false
+            fadeOut(resetItem: false)
         }
     }
 
     func setInterrupted(_ interrupted: Bool) {
         isInterrupted = interrupted
         if interrupted {
-            if isPreviewing { stop() }
+            if isPreviewing || currentPlaybackID == nil { stop() }
+            cancelFadeOut()
+            removeFadeObserver()
+            hasStartedPlayback = false
+            hasFadedIn = false
             player.pause()
             isPlaying = false
         } else if canPlay, currentPlaybackID != nil {
@@ -149,7 +156,7 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     }
 
     public func stop() {
-        guard isPlaying || currentPlaybackID != nil || previewOwner != nil || detailOwner != nil else { return }
+        guard player.currentItem != nil || previewOwner != nil || detailOwner != nil else { return }
         stopPlayback(resetItem: true)
         previewOwner = nil
         detailOwner = nil
@@ -165,14 +172,30 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
         PlozzLog.app.info("Theme music: stopped")
     }
 
-    public func stopDetail(owner: UUID) {
+    public func stopDetail(owner: UUID, fadingOut: Bool = false) {
         guard detailOwner == owner else { return }
-        stop()
+        if fadingOut {
+            fadeOutAndStop()
+        } else {
+            stop()
+        }
+    }
+
+    public func fadeOutAndStop() {
+        guard !isPreviewing else {
+            stop()
+            return
+        }
+        // Release ownership before fading so a late lookup cannot revive this page.
+        detailOwner = nil
+        detailPlaybackID = nil
+        currentPlaybackID = nil
+        fadeOut(resetItem: true)
     }
 
     public func updateVolume(_ volume: ThemeMusicVolume) {
         fadeTarget = volume.gain
-        if hasFadedIn || isPreviewing { player.volume = fadeTarget }
+        if fadeOutTask == nil, hasFadedIn || isPreviewing { player.volume = fadeTarget }
     }
 
     public func toggleMuted() {
@@ -238,6 +261,7 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     }
 
     private func stopPlayback(resetItem: Bool) {
+        cancelFadeOut()
         removeFadeObserver()
         hasFadedIn = false
         hasStartedPlayback = false
@@ -260,24 +284,26 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     }
 
     private func beginPlaybackIfReady() {
-        guard canPlay, player.currentItem?.status == .readyToPlay else { return }
+        guard canPlay, currentPlaybackID != nil, player.currentItem?.status == .readyToPlay else { return }
+        cancelFadeOut()
         if !hasStartedPlayback {
             hasStartedPlayback = true
-            if !isPreviewing { installFadeObserver() }
+            if !isPreviewing { installFadeObserver(from: player.volume) }
         }
         player.play()
         isPlaying = true
     }
 
-    private func installFadeObserver() {
+    private func installFadeObserver(from startingVolume: Float) {
         removeFadeObserver()
+        hasFadedIn = false
         guard fadeTarget > 0, fadeInDuration > 0 else {
             player.volume = fadeTarget
             hasFadedIn = true
             return
         }
 
-        player.volume = 0
+        let startTime = player.currentTime().seconds
         let interval = CMTime(seconds: 0.05, preferredTimescale: 600)
         fadeTimeObserver = player.addPeriodicTimeObserver(
             forInterval: interval,
@@ -285,16 +311,15 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
         ) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self, !self.hasFadedIn else { return }
-                let elapsed = time.seconds
+                let elapsed = time.seconds - startTime
                 guard elapsed.isFinite else { return }
                 if elapsed >= self.fadeInDuration {
                     self.player.volume = self.fadeTarget
                     self.hasFadedIn = true
                     self.removeFadeObserver()
                 } else {
-                    self.player.volume = self.fadeTarget * Float(
-                        max(0, elapsed / self.fadeInDuration)
-                    )
+                    let progress = Float(max(0, elapsed / self.fadeInDuration))
+                    self.player.volume = startingVolume + (self.fadeTarget - startingVolume) * progress
                 }
             }
         }
@@ -304,6 +329,56 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
         guard let fadeTimeObserver else { return }
         player.removeTimeObserver(fadeTimeObserver)
         self.fadeTimeObserver = nil
+    }
+
+    private func fadeOut(resetItem: Bool) {
+        if fadeOutTask != nil, !resetItem || fadeOutResetsItem { return }
+        let wasStarted = hasStartedPlayback || fadeOutTask != nil
+        cancelFadeOut()
+        removeFadeObserver()
+        hasStartedPlayback = false
+        hasFadedIn = false
+        guard wasStarted, player.volume > 0, !isMuted else {
+            finishFadeOut(resetItem: resetItem)
+            return
+        }
+
+        let startingVolume = player.volume
+        let start = ContinuousClock.now
+        let duration = fadeOutDuration
+        fadeOutResetsItem = resetItem
+        fadeOutTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(25))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, let self else { return }
+                let progress = min(1, start.duration(to: .now) / duration)
+                self.player.volume = startingVolume * Float(1 - progress)
+                if progress >= 1 {
+                    self.fadeOutTask = nil
+                    self.finishFadeOut(resetItem: resetItem)
+                    return
+                }
+            }
+        }
+    }
+
+    private func finishFadeOut(resetItem: Bool) {
+        player.volume = 0
+        if resetItem {
+            stop()
+        } else {
+            player.pause()
+            isPlaying = false
+        }
+    }
+
+    private func cancelFadeOut() {
+        fadeOutTask?.cancel()
+        fadeOutTask = nil
     }
 
     private func observeEnd(of item: AVPlayerItem) {
@@ -372,6 +447,7 @@ public final class ThemeMusicController: ThemeMusicPreviewControlling {
     }
 
     isolated deinit {
+        fadeOutTask?.cancel()
         for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let fadeTimeObserver { player.removeTimeObserver(fadeTimeObserver) }

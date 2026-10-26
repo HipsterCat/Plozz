@@ -11,8 +11,13 @@ Theme audio is owned by `FeatureHomeCore.ThemeMusicController` and the shared
 `themeMusicScope` / `themeMusicPlayback` modifiers on both TV and mobile.
 Only the frontmost active detail owns playback. Full video, Live TV, hero trailers,
 and full music playback take precedence. Volume changes update the same player
-without re-resolving or restarting a source. Detail audio pauses on app inactivity
-and resumes its retained timeline on return; settings previews instead stop and
+without re-resolving or restarting a source. Leaving a detail for Home or a library
+fades its current volume to silence over 750ms before releasing the player.
+App inactivity uses the same bounded fade before pausing, then resumes the retained
+timeline with a fade-in on return. Rapid returns cancel the outgoing fade without
+discarding the item. Forced termination cannot guarantee a fade. Playback
+suppression, authorization changes, and audio interruptions still stop or pause
+immediately. Settings previews instead stop and
 require a new adjustment or Play action. Late resolution cannot revive a stopped
 preview, switch profiles, or bypass current playback suppression.
 Each detail instance owns a separate theme-playback token, even when a repeated

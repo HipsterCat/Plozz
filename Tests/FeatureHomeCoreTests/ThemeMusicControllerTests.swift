@@ -133,6 +133,7 @@ final class ThemeMusicControllerTests: XCTestCase {
         try await waitUntil { controller.player.currentTime().seconds > 0.1 }
         let item = try XCTUnwrap(controller.player.currentItem)
         controller.setAppActive(false)
+        try await waitUntil { !controller.isPlaying }
         let pausedTime = controller.player.currentTime().seconds
         XCTAssertFalse(controller.isPlaying)
         XCTAssertEqual(controller.player.rate, 0)
@@ -145,6 +146,164 @@ final class ThemeMusicControllerTests: XCTestCase {
         XCTAssertTrue(controller.player.currentItem === item)
         controller.updateVolume(ThemeMusicVolume(1))
         XCTAssertTrue(controller.player.currentItem === item)
+    }
+
+    func testLeavingDetailFadesBeforeReleasingItemAndRejectsLateResolution() async throws {
+        try await withPlayingDetail { controller, theme, url, owner in
+            let item = try XCTUnwrap(controller.player.currentItem)
+            let startingVolume = controller.player.volume
+            let start = ContinuousClock.now
+            controller.stopDetail(owner: owner, fadingOut: true)
+            XCTAssertNil(controller.detailOwner)
+            XCTAssertNil(controller.currentPlaybackID)
+            XCTAssertTrue(controller.isPlaying)
+            XCTAssertTrue(controller.player.currentItem === item)
+            XCTAssertEqual(controller.player.volume, startingVolume)
+            controller.play(theme, resolvedURL: url, playbackID: "account:movie", owner: owner,
+                            authorizationID: "scope", settings: ThemeMusicSettings(isEnabled: true))
+            controller.updateVolume(.high)
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertTrue(controller.player.currentItem === item)
+            XCTAssertGreaterThan(controller.player.volume, 0)
+            XCTAssertLessThan(controller.player.volume, startingVolume * 0.9)
+            controller.fadeOutAndStop()
+            XCTAssertTrue(controller.player.currentItem === item, "Duplicate exit signals must not cut the fade short.")
+            try await self.waitUntil { controller.player.currentItem == nil }
+            XCTAssertGreaterThanOrEqual(start.duration(to: .now), .milliseconds(700))
+            XCTAssertLessThan(start.duration(to: .now), .seconds(2))
+            XCTAssertEqual(controller.player.volume, 0)
+            XCTAssertFalse(controller.isPlaying)
+        }
+    }
+
+    func testInactivityFadesBeforePausingAndResumesFromSilence() async throws {
+        try await withPlayingDetail { controller, _, _, owner in
+            let item = try XCTUnwrap(controller.player.currentItem)
+            let startingVolume = controller.player.volume
+            controller.setAppActive(false)
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertTrue(controller.isPlaying)
+            XCTAssertGreaterThan(controller.player.rate, 0)
+            XCTAssertGreaterThan(controller.player.volume, 0)
+            XCTAssertLessThan(controller.player.volume, startingVolume * 0.9)
+            controller.setAppActive(false)
+            try await self.waitUntil { !controller.isPlaying }
+            let pausedTime = controller.player.currentTime().seconds
+            XCTAssertEqual(controller.player.volume, 0)
+            XCTAssertEqual(controller.player.rate, 0)
+            XCTAssertEqual(controller.detailOwner, owner)
+            XCTAssertEqual(controller.currentPlaybackID, "account:movie")
+            XCTAssertTrue(controller.player.currentItem === item)
+            controller.setAppActive(true)
+            XCTAssertEqual(controller.player.volume, 0)
+            try await self.waitUntil { controller.player.currentTime().seconds > pausedTime + 0.1 }
+            XCTAssertGreaterThan(controller.player.volume, 0)
+            XCTAssertTrue(controller.player.currentItem === item)
+        }
+    }
+
+    func testQuickForegroundReturnCancelsPauseWithoutVolumeJumpOrDelayedStop() async throws {
+        try await withPlayingDetail { controller, _, _, _ in
+            let item = try XCTUnwrap(controller.player.currentItem)
+            controller.setAppActive(false)
+            try await Task.sleep(for: .milliseconds(200))
+            let fadedVolume = controller.player.volume
+            controller.setAppActive(true)
+            XCTAssertEqual(controller.player.volume, fadedVolume)
+            try await Task.sleep(for: .seconds(1))
+            XCTAssertTrue(controller.isPlaying)
+            XCTAssertGreaterThan(controller.player.rate, 0)
+            XCTAssertGreaterThan(controller.player.volume, fadedVolume)
+            XCTAssertTrue(controller.player.currentItem === item)
+        }
+    }
+
+    func testReplacementDetailCannotBeStoppedByOutgoingFade() async throws {
+        try await withPlayingDetail { controller, theme, url, owner in
+            controller.stopDetail(owner: owner, fadingOut: true)
+            try await Task.sleep(for: .milliseconds(100))
+            let replacement = UUID()
+            XCTAssertTrue(controller.claimDetail(owner: replacement, playbackID: "account:other",
+                                                authorizationID: "scope"))
+            controller.play(theme, resolvedURL: url, playbackID: "account:other", owner: replacement,
+                            authorizationID: "scope", settings: ThemeMusicSettings(isEnabled: true))
+            controller.stopDetail(owner: owner, fadingOut: true)
+            try await Task.sleep(for: .seconds(1))
+            XCTAssertEqual(controller.detailOwner, replacement)
+            XCTAssertEqual(controller.currentPlaybackID, "account:other")
+            XCTAssertNotNil(controller.player.currentItem)
+            XCTAssertGreaterThan(controller.player.rate, 0)
+        }
+    }
+
+    func testAuthorizationAndPlaybackSuppressionCancelOutgoingFadeImmediately() async throws {
+        try await withPlayingDetail { controller, _, _, owner in
+            controller.stopDetail(owner: owner, fadingOut: true)
+            XCTAssertNotNil(controller.player.currentItem)
+            controller.setAuthorization("new-scope")
+            XCTAssertNil(controller.player.currentItem)
+            XCTAssertFalse(controller.isPlaying)
+        }
+        try await withPlayingDetail { controller, _, _, owner in
+            controller.stopDetail(owner: owner, fadingOut: true)
+            controller.setBlocked(true)
+            XCTAssertNil(controller.player.currentItem)
+            XCTAssertFalse(controller.isPlaying)
+        }
+    }
+
+    func testInterruptionPausesImmediatelyDuringInactivityFade() async throws {
+        try await withPlayingDetail { controller, _, _, _ in
+            let item = try XCTUnwrap(controller.player.currentItem)
+            controller.setAppActive(false)
+            controller.setInterrupted(true)
+            XCTAssertEqual(controller.player.rate, 0)
+            XCTAssertFalse(controller.isPlaying)
+            controller.setAppActive(true)
+            XCTAssertEqual(controller.player.rate, 0)
+            controller.setInterrupted(false)
+            try await Task.sleep(for: .seconds(1))
+            XCTAssertTrue(controller.isPlaying)
+            XCTAssertGreaterThan(controller.player.rate, 0)
+            XCTAssertTrue(controller.player.currentItem === item)
+        }
+    }
+
+    func testLeavingDetailDuringInactivityFadeReleasesRatherThanRetainsItem() async throws {
+        try await withPlayingDetail { controller, _, _, owner in
+            controller.setAppActive(false)
+            try await Task.sleep(for: .milliseconds(100))
+            controller.stopDetail(owner: owner, fadingOut: true)
+            XCTAssertNotNil(controller.player.currentItem)
+            try await self.waitUntil { controller.player.currentItem == nil }
+            controller.setAppActive(true)
+            XCTAssertNil(controller.currentPlaybackID)
+            XCTAssertFalse(controller.isPlaying)
+        }
+    }
+
+    private func withPlayingDetail(
+        _ body: (ThemeMusicController, ThemeMusic, URL, UUID) async throws -> Void
+    ) async throws {
+        let controller = ThemeMusicController()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("theme-fade-\(UUID()).wav")
+        try ThemeMusicPreviewSample.data().write(to: url)
+        defer {
+            controller.stop()
+            try? FileManager.default.removeItem(at: url)
+        }
+        let owner = UUID()
+        let theme = ThemeMusic(
+            itemID: "movie",
+            playbackSource: .publicURL(try SecretFreeURLSource(url: URL(string: "https://example.test/theme.mp3")!))
+        )
+        controller.setAuthorization("scope")
+        XCTAssertTrue(controller.claimDetail(owner: owner, playbackID: "account:movie", authorizationID: "scope"))
+        controller.play(theme, resolvedURL: url, playbackID: "account:movie", owner: owner,
+                        authorizationID: "scope", settings: ThemeMusicSettings(isEnabled: true))
+        controller.player.isMuted = true
+        try await waitUntil { controller.player.volume > 0.01 && controller.player.currentTime().seconds > 0.1 }
+        try await body(controller, theme, url, owner)
     }
 
     func testCoveredPageWithSameMediaIDCannotReleaseForegroundOwner() throws {

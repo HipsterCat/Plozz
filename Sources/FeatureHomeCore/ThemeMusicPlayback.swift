@@ -105,7 +105,7 @@ private struct ThemeMusicPlaybackModifier: ViewModifier {
                 guard let controller else { return }
                 guard !controller.isPreviewing else { return }
                 guard isActive, detailAllowed else {
-                    controller.stopDetail(owner: owner)
+                    controller.stopDetail(owner: owner, fadingOut: detailAllowed && !isActive)
                     return
                 }
                 guard let playbackID, let source, let authorizationID = authorization.id,
@@ -168,7 +168,7 @@ private struct ThemeMusicPlaybackModifier: ViewModifier {
             }
             .onDisappear {
                 resolutionGeneration &+= 1
-                controller?.stopDetail(owner: owner)
+                controller?.stopDetail(owner: owner, fadingOut: true)
             }
     }
 }
