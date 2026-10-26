@@ -9,7 +9,7 @@ obligations Plozz must meet to ship it.
 
 ## TL;DR
 
-The bundled FFmpeg is a **decode-only, LGPL-2.1-or-later** build — no `--enable-gpl` (so
+The bundled FFmpeg is an **LGPL-2.1-or-later media-library** build — no `--enable-gpl` (so
 no GPL-only codecs such as x264/x265) and nothing "nonfree/unredistributable".
 It is App-Store-redistributable, subject to the LGPL relink / source-offer /
 attribution duties below. FFmpeg's `libav*` libraries ship as xcframeworks
@@ -21,11 +21,11 @@ embedded in the app bundle as frameworks (`AetherLibavcodec.framework`,
 
 | Component | Source (pinned) | License |
 |---|---|---|
-| AetherEngine (media engine; "Plozzigen") | `github.com/brandomoore/AetherEngine` @ `3cde25855b30b3c8998685872ecf97f133edccbd` | LGPL-3.0 with Apple Store exception |
-| FFmpeg `libav*` (demux / decode / thin HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `3.9.0` (FFmpeg **n8.1.3**) | **LGPL-2.1-or-later** |
+| AetherEngine (media engine; "Plozzigen") | `github.com/brandomoore/AetherEngine` @ `c5eeb230b9cd78a64f57448aee5d553bd3368ad3` | LGPL-3.0 with Apple Store exception |
+| FFmpeg `libav*` (demux / decode / audio bridge / thin HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `3.10.1` (FFmpeg **n8.1.3**) | **LGPL-2.1-or-later** |
 | dav1d (AV1 software decoder, separate xcframework) | bundled by FFmpegBuild | BSD-2-Clause (permissive) |
 | libdovi (Dolby Vision RPU parser) | `github.com/superuser404notfound/LibDovi` @ `2.1.0` | MIT |
-| LibTrueHD (decoder and object renderer) | `github.com/superuser404notfound/LibTrueHD` @ `3.0.0` | MIT / Apache-2.0 |
+| LibTrueHD (decoder and object renderer) | `github.com/superuser404notfound/LibTrueHD` @ `3.1.0` | MIT / Apache-2.0 |
 
 Plozz's own `Package.swift` declares **only** AetherEngine for this stack;
 FFmpegBuild, LibDovi and LibTrueHD are its transitive dependencies (AetherEngine owns their version
@@ -40,7 +40,7 @@ The pinned fork exports AetherEngine dynamically to separate its two Rust decode
 runtimes from Plozz's Objective-C/C++ unwind table. Both apps embed and sign
 `AetherEngine.framework`; FFmpeg remains in separate dynamic frameworks.
 
-[LibTrueHD 3.0.0](https://github.com/superuser404notfound/LibTrueHD/tree/3.0.0)
+[LibTrueHD 3.1.0](https://github.com/superuser404notfound/LibTrueHD/tree/3.1.0)
 is linked into the engine even when its object-audio mode is off. Its C API and
 Apple packaging are MIT, copyright Quick104 and Vincent Herbst; the compiled
 truehd and oamd crates are Apache-2.0, copyright Rainbaby and contributors.
@@ -50,11 +50,12 @@ The shared acknowledgements page credits the library and exact source tag.
 
 ## FFmpeg license facts
 
-Upstream FFmpeg `libav*` and FFmpegBuild 3.9.0 are **LGPL-2.1-or-later**.
+Upstream FFmpeg `libav*` and FFmpegBuild 3.10.1 are **LGPL-2.1-or-later**.
 The build enables neither `--enable-gpl` nor `--enable-version3`; the exact
 component licenses and notices live in the release's `LICENSES/` directory.
-The build is scoped to demux + decode + a thin HLS-fMP4 mux for
-the AVPlayer bridge — **no CLI binaries, no network/protocol stack, and no GPL
+The build is scoped to demux, decode, the audio bridge and a thin HLS-fMP4 mux.
+Its audio encoders include AAC-LC and ALAC for silent tails when audio ends before
+video. It ships **no CLI binaries, no network/protocol stack, and no GPL
 or nonfree components** — so there is no GPL/nonfree taint to redistribution.
 
 ## LGPL obligations (what Plozz must satisfy to ship)
@@ -78,9 +79,9 @@ The bundled LGPL libraries impose **relink**, **source-offer**, and
    credits FFmpeg, libdovi, and the other bundled components. Ship FFmpeg's
    LGPL-2.1 license text (and any bundled dependency notices) there and/or in a
    `THIRD_PARTY_LICENSES` file in the bundle.
-4. **No GPL/nonfree creep.** Keep the FFmpeg build decode-only: never adopt a
+4. **No GPL/nonfree creep.** Never adopt a
    `--enable-gpl` / `--enable-nonfree` FFmpeg (no x264/x265, etc.). This is owned
-   by the FFmpegBuild package, so pin a decode-only LGPL release.
+   by the FFmpegBuild package, so pin its LGPL media-library release.
 
 ## Verifying the shipped license
 

@@ -13,6 +13,7 @@ final class PlaybackDiagnosticsAudioEncodingTests: XCTestCase {
             ("TRUEHD Atmos → APAC 7.1.4", "Lossy encoding"),
             ("DTS:X → APAC 9.1.6", "Lossy encoding"),
             ("Stream-copy (EAC3+JOC Atmos)", "No re-encoding"),
+            ("EAC3 Atmos → renderer (compressed)", "No re-encoding"),
             ("Stream-copy (FLAC)", "No re-encoding"),
             ("libavcodec DTS → CoreAudio", "Decoded to PCM")
         ]
@@ -30,7 +31,8 @@ final class PlaybackDiagnosticsAudioEncodingTests: XCTestCase {
 
     func testUnknownOrUnsupportedPathsDoNotAcquireAnEncodingClaim() {
         for pipeline in [nil, "", "AVPlayer", "DTS", "Stream-copy ()", "DTS → unknown bridge",
-                         "FLAC → unknown bridge", " → FLAC bridge", "DTS → FLAC bridge → unknown"] {
+                         "FLAC → unknown bridge", " → FLAC bridge", "DTS → FLAC bridge → unknown",
+                         "DTS Atmos → renderer (compressed)", "EAC3 → renderer (compressed)"] {
             let diagnostics = PlaybackDiagnostics(
                 audioCodec: "FLAC", audioChannels: 8,
                 audioPipelineDescription: pipeline, mode: .plozzigen

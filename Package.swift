@@ -82,9 +82,9 @@ let package = Package(
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
         // See docs/playback-engines.md for integration and fork corrections.
         //
-        // Pinned to the playback-corrected fork integrating upstream 7.47.0
-        // (a1a70cd63c1fef89cffcf0e8110456807d0fab05). This retains Plozz's
-        // AAC timing, ASS duration and dynamic-linking corrections.
+        // Pinned to the playback-corrected fork integrating upstream 7.48.0
+        // (263dc11579274e83458bd3839715caf99f3d8969). This retains Plozz's
+        // AAC timing, ASS duration, dynamic linkage, frame/cache APIs and privacy manifest.
         //
         // Everything the old `plozz-pin-*` stack existed for is upstream
         // as of 5.23.2:
@@ -225,8 +225,8 @@ let package = Package(
         // life.
         //
         // The current fork retains that correction and exports the engine dynamically.
-        // Enable production spatial conversion, never the measurement-only
-        // TrueHDReferenceRender. Runtime eligibility and profile choice still apply.
+        // Enable production spatial conversion only.
+        // Runtime eligibility and profile choice still apply.
         // Progressive segment delivery remains off.
         // Both apps embed the engine framework and its dependency notices.
         //
@@ -236,15 +236,19 @@ let package = Package(
         //
         // SMB enters AetherEngine only through Plozz's protocol-neutral custom-source
         // bridge; the engine's legacy SMB URL product is not linked.
+        // 7.48.0 adds VP9 hardware decoding where available, AV1 Dolby Vision,
+        // software-path spatial audio, and bounded MPEG-DASH VOD support.
+        // FFmpegBuild 3.10.1 and LibTrueHD 3.1.x are owned by the engine.
+        // New host-controlled Now Playing and background retention remain opt-in.
         .package(
             url: "https://github.com/brandomoore/AetherEngine",
-            revision: "3cde25855b30b3c8998685872ecf97f133edccbd",
+            revision: "c5eeb230b9cd78a64f57448aee5d553bd3368ad3",
             traits: [
                 "TrueHDObjectAudio", "DTSXObjectAudio",
                 "DualLayerDolbyVision", "DolbyVisionStillReshaping",
             ]
         ),
-        // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only) and LibDovi (Dolby Vision
+        // NOTE: FFmpegBuild (FFmpeg n8.1.x media libraries) and LibDovi (Dolby Vision
         // RPU parser) are transitive dependencies — AetherEngine declares and
         // consumes them, along with LibTrueHD for TrueHDObjectAudio.
         // The retired hybrid-engine target needed

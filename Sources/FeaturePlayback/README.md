@@ -829,8 +829,11 @@ APAC intermediate bed for supported on-demand playback. This is lossy conversion
 not a speaker inventory or bitstream passthrough. Saved Off choices survive.
 `PlayerViewModel` captures the active preference for initial and handoff loads;
 live streams, shared players, muted previews and other platforms stay off.
-The engine owns source eligibility and fallback; FEL uses channel PCM.
+The engine owns source eligibility and fallback. On tvOS 26+, software/FEL
+playback can use the same spatial-audio choice; other platforms keep channel PCM.
 Stream-copy and software-decoding routes retain the engine's own labels.
+The software route's compressed E-AC-3/JOC renderer is also **No re-encoding**;
+it is not mislabeled as PCM or inferred from the source badge.
 The row is unknown until the engine publishes a pipeline and follows track
 changes, fallbacks, and teardown. Do not infer it from the Atmos source badge,
 channel count or requested bridge mode, or parse the label to make

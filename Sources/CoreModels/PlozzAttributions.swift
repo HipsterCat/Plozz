@@ -73,7 +73,7 @@ public enum PlozzAttributions {
             title: "AetherEngine",
             detail:
                 "Playback is powered by AetherEngine by Vincent Herbst. "
-                + "Source: https://github.com/brandomoore/AetherEngine/tree/3cde25855b30b3c8998685872ecf97f133edccbd",
+                + "Source: https://github.com/brandomoore/AetherEngine/tree/c5eeb230b9cd78a64f57448aee5d553bd3368ad3",
             licenses: [.init("LGPL-3.0", family: .lgpl)]
         ),
         PlozzAttribution(
@@ -95,7 +95,7 @@ public enum PlozzAttributions {
                 "TrueHD/Atmos decoder used for optional spatial audio conversion. "
                 + "By Quick104 and "
                 + "Vincent Herbst, using truehdd and oamd by Rainbaby and contributors. "
-                + "Source: https://github.com/superuser404notfound/LibTrueHD/tree/3.0.0. "
+                + "Source: https://github.com/superuser404notfound/LibTrueHD/tree/3.1.0. "
                 + "Complete notices and license texts are bundled in LibTrueHDNotices.txt, "
                 + "LibTrueHDLicense.txt and LibTrueHDApacheLicense.txt.",
             licenses: [
