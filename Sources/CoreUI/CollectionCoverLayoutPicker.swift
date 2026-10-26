@@ -4,16 +4,20 @@ import SwiftUI
 
 public struct CollectionCoverLayoutPicker: View {
     @Binding private var selection: CollectionCoverLayout
+    private let title: LocalizedStringResource
 
-    public init(selection: Binding<CollectionCoverLayout>) {
+    public init(selection: Binding<CollectionCoverLayout>, title: LocalizedStringResource = "Covers") {
         _selection = selection
+        self.title = title
     }
 
     public var body: some View {
-        Picker("Covers", selection: $selection) {
+        Picker(selection: $selection) {
             ForEach(CollectionCoverLayout.allCases, id: \.self) { layout in
                 Text(layout.title).tag(layout)
             }
+        } label: {
+            Text(title)
         }
         .pickerStyle(.menu)
         .accessibilityIdentifier("collection-cover-layout")

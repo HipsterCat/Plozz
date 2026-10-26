@@ -657,12 +657,6 @@ public struct LibraryBrowseView: View {
                 if let library = viewModel.fileBrowserLibrary {
                     LibraryFileBrowseButton(library: library, onSelect: onSelect)
                 }
-                if viewModel.showsCollectionCoverLayout {
-                    CollectionCoverLayoutPicker(selection: Binding(
-                        get: { viewModel.collectionCoverLayout },
-                        set: { viewModel.collectionCoverLayout = $0 }
-                    ))
-                }
             }
             if !viewModel.availableSortFields.isEmpty {
                 HStack(spacing: PlozzTheme.Spacing.medium) {

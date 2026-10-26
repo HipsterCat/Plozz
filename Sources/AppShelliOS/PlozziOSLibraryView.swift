@@ -481,12 +481,6 @@ struct PlozziOSLibraryGridView: View {
 
     @ViewBuilder
     private var queryControls: some View {
-        if viewModel.showsCollectionCoverLayout {
-            CollectionCoverLayoutPicker(selection: Binding(
-                get: { viewModel.collectionCoverLayout },
-                set: { viewModel.collectionCoverLayout = $0 }
-            ))
-        }
         if !viewModel.availableSortFields.isEmpty {
             sortControl
         }

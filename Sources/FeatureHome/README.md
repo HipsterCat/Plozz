@@ -272,6 +272,9 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   Auto/Posters/Landscape cover layout. Overrides are profile-scoped and keyed
   independently by Home row or account/library/browser/Recommended row. Browsers
   resolve Auto from the initial page and retain that shape through later pages.
+  Cover layout controls live only in Settings: Customize Libraries owns each
+  library's collection browser and Recommended rows; Customize Home owns Home
+  rows. Browse headers contain query controls, not cover appearance controls.
   Landscape collection covers still open the collection, never direct playback.
   Collection definitions persist with the profile separately from arrangement:
   removing a row or choosing a preset retains its configuration in Add row.
