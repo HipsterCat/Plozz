@@ -196,7 +196,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             ? max(0, buffered - position) : nil
         let audioPipeline = engine.activeAudioDecoder
         let cache = engine.isSessionReady
-            ? Self.sessionCacheTelemetry(engine.diagnostics.sessionCacheStatus) : nil
+            ? engine.softwareReadAheadStatus.map(Self.packetCacheTelemetry)
+                ?? Self.sessionCacheTelemetry(engine.diagnostics.sessionCacheStatus) : nil
         guard t != nil || bufferAhead != nil || audioPipeline != nil || cache != nil else { return nil }
         return EngineLiveTelemetry(
             droppedFrameCount: t?.droppedFrameCount,
@@ -212,7 +213,20 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         guard status.capability == .active, status.cleanupReason == nil else { return nil }
         return EngineSessionCache(
             residentBytes: Int64(status.currentResidentBytes),
-            effectiveBudgetBytes: Int64(status.effectiveBudgetBytes)
+            effectiveBudgetBytes: Int64(status.effectiveBudgetBytes),
+            targetSeconds: Double(status.forwardWindowSegments) * 4
+        )
+    }
+
+    nonisolated static func packetCacheTelemetry(_ status: SoftwareReadAheadStatus) -> EngineSessionCache {
+        let storage: EngineSessionCache.Storage
+        switch status.storage {
+        case .memory: storage = .memory
+        case .disk: storage = .disk
+        }
+        return EngineSessionCache(
+            residentBytes: Int64(status.budgetedBytes), effectiveBudgetBytes: Int64(status.byteBudget),
+            storage: storage, targetSeconds: status.targetSeconds, byteLimitReached: status.byteLimitReached
         )
     }
 
@@ -333,6 +347,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     private let authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
     private let readAheadPreference: @MainActor () -> PlaybackReadAhead
     private let liveBufferPreference: @MainActor () -> LivePlaybackBuffer
+    private let losslessAudioPreference: @MainActor () -> Bool
     private var liveOutputPolicy = LiveChannelOutputPolicy()
     private var outputPolicyReload: Task<Void, Never>?
     private var outputLoadGeneration = UUID()
@@ -363,7 +378,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         networkFileResolver: (any MediaTransportNetworkFileResolving)? = nil,
         authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil,
         readAheadPreference: @escaping @MainActor () -> PlaybackReadAhead = { .default },
-        liveBufferPreference: @escaping @MainActor () -> LivePlaybackBuffer = { .default }
+        liveBufferPreference: @escaping @MainActor () -> LivePlaybackBuffer = { .default },
+        losslessAudioPreference: @escaping @MainActor () -> Bool = { LosslessAudioSettingsStore().load() }
     ) throws {
         self.engine = try AEEngine()
         // Plozz owns its audio session, and on an E-AC-3/Atmos bitstream-passthrough route the HDMI sink
@@ -375,6 +391,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         self.authenticatedHTTPResolver = authenticatedHTTPResolver
         self.readAheadPreference = readAheadPreference
         self.liveBufferPreference = liveBufferPreference
+        self.losslessAudioPreference = losslessAudioPreference
         #if canImport(UIKit)
         let surface = AetherPlayerView()
         engine.bind(view: surface)
@@ -806,8 +823,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             isLocalFile = (request.streamURL ?? source?.publicURL)?.isFileURL == true
         }
         let options = Self.onDemandLoadOptions(
-            audioChannels: request.sourceMetadata?.audio?.channels
-                ?? (request.isTranscoding ? nil : request.localRemuxSource?.sourceMetadata.audio?.channels) ?? 0,
+            losslessAudioEnabled: losslessAudioPreference(),
             trueHDAtmosEnabled: request.trueHDAtmosEnabled,
             dolbyVisionFELEnabled: request.dolbyVisionFELEnabled,
             outputPolicy: outputPolicy,
@@ -818,16 +834,15 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     nonisolated static func onDemandLoadOptions(
-        audioChannels: Int,
+        losslessAudioEnabled: Bool = LosslessAudioSettingsStore.defaultEnabled,
         trueHDAtmosEnabled: Bool = PlaybackSettings.default.trueHDAtmosEnabled,
         dolbyVisionFELEnabled: Bool = PlaybackSettings.default.dolbyVisionFELEnabled,
         outputPolicy: LiveChannelOutputPolicy = .init(),
         readAhead: PlaybackReadAhead = .default
     ) -> LoadOptions {
-        // Keep the full 7.1 fallback: the compatibility EAC3 bridge caps at 5.1.
         var options = LoadOptions(
             matchContentEnabled: true,
-            audioBridgeMode: audioChannels > 6 ? .lossless : .surroundCompat
+            audioBridgeMode: losslessAudioEnabled ? .lossless : .surroundCompat
         )
         options.objectAudioRendering = .off
         options.preferDualLayerDolbyVision = dolbyVisionFELEnabled
@@ -865,14 +880,15 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         liveStartupBuffer = buffer
         return Self.liveLoadOptions(
             httpHeaders: httpHeaders, url: url, sourceFormat: sourceFormat,
-            buffer: buffer
+            buffer: buffer, losslessAudioEnabled: losslessAudioPreference()
         )
     }
 
     nonisolated static func liveLoadOptions(
         httpHeaders: [String: String], url: URL? = nil,
         sourceFormat: PlozzigenLiveSourceProbe.Format? = nil,
-        buffer: LivePlaybackBuffer = .default
+        buffer: LivePlaybackBuffer = .default,
+        losslessAudioEnabled: Bool = LosslessAudioSettingsStore.defaultEnabled
     ) -> LoadOptions {
         let suffix = url?.pathExtension.lowercased() ?? ""
         let format = sourceFormat ?? (["ts", "m2ts", "mts"].contains(suffix)
@@ -882,6 +898,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         // does not silently opt the app into an arbitrary disk timeshift policy.
         return LoadOptions(
             httpHeaders: httpHeaders,
+            audioBridgeMode: losslessAudioEnabled ? .lossless : .surroundCompat,
             isLive: true,
             dvrWindowSeconds: nil,
             // Raw live sources have no existing HLS window to fill the initial
@@ -1394,6 +1411,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     public var nowPlayingPlayer: AVPlayer? { engine.currentAVPlayer }
+    #if os(iOS)
+    public func previewVideoFrame() -> CVPixelBuffer? { engine.latestSoftwareVideoFrame() }
+    public var previewFrameGeneration: UInt64? { engine.softwareVideoFrameGeneration }
+    #endif
     public var needsBackgroundReload: Bool { hasReachedSessionReadiness && !engine.isSessionReady }
 
     private var backgroundAudioEnabled = false

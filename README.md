@@ -35,8 +35,8 @@
 ## A look at it
 
 <p align="center">
-  <img src="docs/assets/screenshots/tv-home-originals-9916fb8071.jpg" width="412" alt="Plozz Home on Apple TV with original demo artwork and a populated Continue Watching row" />
-  <img src="docs/assets/screenshots/tv-library-originals-c1df89807c.jpg" width="412" alt="Plozz on Apple TV browsing a large library of original illustrated posters" />
+  <img src="docs/assets/screenshots/tv-home-licensed-1fb96bffee.jpg" width="412" alt="Plozz Home on Apple TV with Sol Levante artwork and Continue Watching" />
+  <img src="docs/assets/screenshots/tv-library-licensed-aea97840a6.jpg" width="412" alt="Plozz on Apple TV browsing a populated library with licensed film artwork" />
 </p>
 
 <p align="center">
@@ -46,8 +46,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/tv-player-originals-04d957e08c.jpg" width="412" alt="Plozz playback controls over original geometric demo footage" />
-  <img src="docs/assets/screenshots/tv-subtitles-originals-b0b1faa0c6.jpg" width="412" alt="Plozz's subtitle style editor with original demo footage and readable captions" />
+  <img src="docs/assets/screenshots/tv-player-licensed-96e9b81d2f.jpg" width="412" alt="Plozz playback controls during Wing It!" />
+  <img src="docs/assets/screenshots/tv-subtitles-licensed-a7ae03ca39.jpg" width="412" alt="Plozz's subtitle style editor during Wing It! with scene-description captions" />
 </p>
 
 <p align="center">
@@ -57,13 +57,13 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/iphone-library-originals-e08873291e.jpg" width="230" alt="Plozz on iPhone with several rows of original film posters and saved playback progress" />
+  <img src="docs/assets/screenshots/iphone-library-licensed-c25db35ada.jpg" width="230" alt="Plozz on iPhone with several rows of licensed film artwork and saved playback progress" />
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/assets/screenshots/ipad-home-originals-2efe2b04c6.jpg" width="374" alt="Plozz on iPad with original demo media, a populated Continue Watching row and library artwork" />
+  <img src="docs/assets/screenshots/ipad-home-licensed-4a234f3e0d.jpg" width="374" alt="Plozz on iPad with Sol Levante artwork, several Continue Watching entries and a populated library" />
 </p>
 
 <p align="center">
-  <sub><b>iPhone and iPad</b> — your library on another screen. Real app captures using <a href="docs/screenshots.md">original demo media</a>.</sub>
+  <sub><b>iPhone and iPad</b> — your library on another screen. Real app captures with <a href="https://plozz.app/media-credits/">media credits and licenses</a>; <a href="docs/screenshots.md">capture details</a>.</sub>
 </p>
 
 <p align="center"><sub>More screens, including iPhone and iPad, are on <a href="https://plozz.app">plozz.app</a>.</sub></p>

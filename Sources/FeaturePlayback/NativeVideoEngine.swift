@@ -229,6 +229,10 @@ public final class NativeVideoEngine: VideoEngine {
         configureAudioSession()
         // Tear down any previous player (e.g. a failed direct-play attempt being
         // retried under a transcode) without reporting a stop.
+        #if os(iOS)
+        // Disconnect the retained layer first so it can present the replacement player.
+        videoOutputView?.player = nil
+        #endif
         teardownPlayer()
         #if os(tvOS)
         displayCriteria.invalidatePendingLoad()

@@ -1957,7 +1957,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         let audioStream = audio.map { a in
             MediaSourceMetadata.AudioStream(
                 codec: a.Codec,
-                profile: a.Profile,
+                profile: MediaSourceMetadata.audioProfile(a.Profile, displayTitles: [a.DisplayTitle, a.Title]),
                 channels: a.Channels,
                 channelLayout: a.ChannelLayout,
                 sampleRate: a.SampleRate,
@@ -1998,14 +1998,16 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         case "DOLBYVISION":
             let dovi = embyDolbyVisionInfo(stream.ExtendedVideoSubType)
             switch dovi.compatibilityID {
-            case 1: return "DOVIWithHDR10"
+            case 1:
+                let range = (stream.VideoRangeType ?? "").uppercased()
+                return range.contains("HDR10PLUS") || range.contains("HDR10+")
+                    ? "DOVIWithHDR10Plus" : "DOVIWithHDR10"
             case 2: return "DOVIWithSDR"
             case 4: return "DOVIWithHLG"
             case 0: return "DOVI"
             default:
-                // Without a compatibility id, profiles 7/8 conventionally carry
-                // an HDR10-compatible base layer; otherwise make no fallback claim.
-                if dovi.profile == 7 || dovi.profile == 8 {
+                // Profile 8 alone does not distinguish HDR10, HLG and SDR bases.
+                if dovi.profile == 7 {
                     return "DOVIWithHDR10"
                 }
                 return "DOVI"
@@ -2031,7 +2033,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             return profile
         }
         switch (videoRangeType ?? "").uppercased() {
-        case "DOVIWITHHDR10", "DOVIWITHHLG", "DOVIWITHSDR":
+        case "DOVIWITHHDR10", "DOVIWITHHDR10PLUS", "DOVIWITHHDR10+", "DOVIWITHHLG", "DOVIWITHSDR":
             return 8
         case "DOVI", "DOLBYVISION":
             return 5

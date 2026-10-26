@@ -103,6 +103,9 @@ struct LiveChannelOverlay: View {
     var touchBackgroundTapRevision = 0
     var touchTimelineOnly = false
     var onTouchScrubbingChanged: (Bool) -> Void = { _ in }
+    var onExpandPreview: (() -> Void)?
+    var onCollapsePreview: (() -> Void)?
+    var previewStatus: LocalizedStringResource?
 
     @Environment(\.playerCardMetrics) private var metrics
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -292,7 +295,11 @@ struct LiveChannelOverlay: View {
     @ViewBuilder
     private var layout: some View {
         #if os(iOS)
-        touchLayout
+        if let onExpandPreview {
+            inlinePreviewLayout(expand: onExpandPreview)
+        } else {
+            touchLayout
+        }
         #else
         ZStack(alignment: .top) {
             // Measured as a sibling so it is the same box the menu layer is laid
@@ -1366,6 +1373,49 @@ extension LiveChannelOverlay {
         .onChange(of: touchBackgroundTapRevision) { _, _ in backgroundTapped() }
     }
 
+    private func inlinePreviewLayout(expand: @escaping () -> Void) -> some View {
+        ZStack {
+            if !hasTouchGestureSurface {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: backgroundTapped)
+            }
+            if let previewStatus {
+                Text(previewStatus)
+                    .font(.subheadline)
+            } else {
+                centerTransport
+                    .reportSubtitleControlsFrame(
+                        in: tracks.subtitles.controlsLayout, region: .centerTransport, isVisible: true
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                HStack(spacing: 12) {
+                    Text(program?.title ?? title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    touchGoLiveBadge
+                    touchBadge(
+                        "Full Screen", systemImage: "arrow.up.left.and.arrow.down.right",
+                        action: expand
+                    )
+                    .accessibilityIdentifier("live-channel-fullscreen")
+                }
+                .reportSubtitleControlsFrame(
+                    in: tracks.subtitles.controlsLayout, region: .title, isVisible: true
+                )
+            }
+            .padding(12)
+        }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { touchViewportSize = $0 }
+        .onChange(of: touchBackgroundTapRevision) { _, _ in backgroundTapped() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("live-channel-preview-controls")
+    }
+
     private var touchScrim: some View {
         LinearGradient(
             colors: [
@@ -1417,7 +1467,13 @@ extension LiveChannelOverlay {
     }
 
     private var compactTransport: Bool {
-        PlayerTouchLayout.usesCompactTransport(in: touchViewportSize)
+        onExpandPreview != nil || PlayerTouchLayout.usesCompactTransport(in: touchViewportSize)
+    }
+
+    private var playPauseDiameter: CGFloat {
+        guard onExpandPreview != nil else { return compactTransport ? 44 : PlayerTouchLayout.playDiameter }
+        // Keep the centered primary control clear of the 44 pt footer and its 12 pt inset.
+        return min(64, max(44, touchViewportSize.height - 2 * (44 + 12)))
     }
 
     /// Stands in for the host's activity panel while the controls are up, so
@@ -1437,9 +1493,9 @@ extension LiveChannelOverlay {
                 }
             }
             .labelStyle(.iconOnly)
-            .font(.system(size: compactTransport ? 24 : 44))
+            .font(.system(size: onExpandPreview != nil ? playPauseDiameter / 2 : (compactTransport ? 24 : 44)))
         }
-        .buttonStyle(PlayerGlassCircleButtonStyle(diameter: compactTransport ? 44 : PlayerTouchLayout.playDiameter))
+        .buttonStyle(PlayerGlassCircleButtonStyle(diameter: playPauseDiameter))
         // A stream with no time-shift can't pause; the button stays put so the
         // row doesn't reflow, but says so.
         .disabled(isBusy || !(canPause || phase == .paused))
@@ -1491,7 +1547,17 @@ extension LiveChannelOverlay {
                     .reportSubtitleControlsFrame(in: tracks.subtitles.controlsLayout, region: .timeline)
                     .transition(.opacity)
             }
-            touchTabRow
+            HStack(spacing: 12) {
+                touchTabRow
+                if let onCollapsePreview {
+                    Spacer(minLength: 0)
+                    touchBadge(
+                        "Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left",
+                        action: onCollapsePreview
+                    )
+                    .accessibilityIdentifier("live-channel-exit-fullscreen")
+                }
+            }
                 .playerTouchChromeHidden(touchChromeHidden)
             if cardOpen {
                 card

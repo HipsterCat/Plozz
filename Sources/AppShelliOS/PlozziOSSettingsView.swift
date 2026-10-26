@@ -2178,6 +2178,9 @@ struct PlozziOSPlaybackSettingsView: View {
                     isOn: $model.settings.rememberSubtitleTrackPerSeries
                 )
             }
+            SettingsSectionGroup("Audio") {
+                LosslessAudioControl()
+            }
             SettingsSectionGroup {
                 Button { showsAdvancedPlayback = true } label: {
                     SettingsDisclosureLabel { Text("Advanced") }

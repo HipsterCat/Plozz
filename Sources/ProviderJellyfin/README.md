@@ -45,6 +45,15 @@ supported capability remains at parity.
 - **Co-equal with `ProviderPlex`.** Any new `MediaProvider` capability must be
   implemented here whenever it's implemented for Plex (and vice versa).
 
+## Format badges
+
+Existing detail and per-version badges share the same source classifier.
+Jellyfin's `DOVIWithHDR10Plus` and confirmed Emby compatibility survive mapping;
+the UI groups Dolby Vision and its declared HDR10+/HDR10/HLG compatibility into
+one badge. Selected audio stream profile, display title, and track title retain
+explicit Atmos/JOC or DTS:X hints. No other track or filename supplies those
+facts, and this does not add probes or requests.
+
 ## Playback chapters
 
 Playback detail's `Chapters` array supplies chapter navigation on both backends.

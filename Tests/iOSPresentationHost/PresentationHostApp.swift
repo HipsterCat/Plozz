@@ -9,6 +9,10 @@ import FeatureLiveTVCore
 import FeatureSettings
 @testable import AppShelliOS
 
+@objc protocol PresentationOrientationWindow {
+    var supportedPresentationOrientations: UIInterfaceOrientationMask { get }
+}
+
 @main
 struct PresentationHostApp: App {
     @UIApplicationDelegateAdaptor(PresentationOrientationDelegate.self) private var orientationDelegate
@@ -44,6 +48,11 @@ struct PresentationHostApp: App {
         model.settings.cardStyle.artwork = .default
         model.settings.cardStyle.style = .borderless
         model.settings.theme.theme = .dark
+        if ProcessInfo.processInfo.arguments.contains("--search-light-theme") {
+            model.settings.theme.theme = .light
+        } else if ProcessInfo.processInfo.arguments.contains("--search-black-theme") {
+            model.settings.theme.theme = .pureBlack
+        }
         model.settings.theme.gradientEnabled = true
         model.settings.playback.settings = .default
         if ProcessInfo.processInfo.arguments.contains("--reset-read-ahead") {
@@ -80,11 +89,21 @@ struct PresentationHostApp: App {
             }
             // Explicitly show fixture pages even when their empty content would hide them automatically.
             model.settings.navigation.applyLibrarySections(
-                .init(enabled: [], disabled: available), available: available
+                .init(enabled: [NavigationLibraryLayout.settingsKey],
+                      disabled: available.filter { $0 != NavigationLibraryLayout.settingsKey }),
+                available: available,
+                automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
+            )
+            model.settings.navigation.applyLibrarySections(
+                .init(enabled: [NavigationLibraryLayout.homeKey],
+                      disabled: available.filter { $0 != NavigationLibraryLayout.homeKey }),
+                available: available,
+                automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
             )
             model.settings.navigation.applyLibrarySections(
                 .init(enabled: enabled, disabled: available.filter { !enabled.contains($0) }),
-                available: available
+                available: available,
+                automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
             )
         }
         interactionModel = model
@@ -128,7 +147,11 @@ struct PresentationHostApp: App {
         func application(
             _ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?
         ) -> UIInterfaceOrientationMask {
-            PlozziOSWindowOrientation.supportedOrientations(for: window)
+            // Hosted XCTest links its own package globals; ask its window for its registry's policy.
+            if let owner = window?.windowScene?.keyWindow as? PresentationOrientationWindow {
+                return owner.supportedPresentationOrientations
+            }
+            return PlozziOSWindowOrientation.supportedOrientations(for: window)
         }
     }
 
@@ -566,8 +589,10 @@ private struct SettingsInteractionFixture: View {
         .environment(appModel)
         .environment(language)
         .environment(\.locale, Locale(identifier: "en_US"))
-        .environment(\.themePalette, .dark)
+        .environment(\.themePalette, ThemePalette.palette(
+            for: appModel.settings.theme.theme, systemColorScheme: .dark
+        ))
         .environment(\.plozzMetrics, .touch(density: .standard))
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(appModel.settings.theme.theme.preferredColorScheme ?? .dark)
     }
 }

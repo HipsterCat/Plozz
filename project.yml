@@ -504,6 +504,10 @@ targets:
       - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
       - path: Tests/SubtitlePresentationSupport/Fixtures/four-three.mp4
         buildPhase: resources
+      - path: Tests/SubtitlePresentationSupport/Fixtures/live-continuity.mp4
+        buildPhase: resources
+      - path: Tests/SubtitlePresentationSupport/Fixtures/live-continuity-dim.mp4
+        buildPhase: resources
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: App/Resources/Localizable.xcstrings
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
@@ -548,6 +552,7 @@ targets:
     platform: iOS
     sources:
       - path: Tests/iOSPresentationTests
+      - path: Tests/FeatureLiveTVCoreTests/LiveTVPlaybackCoordinatorTests.swift
       - path: Tests/FeatureLiveTVTests/LiveTVGuideRowLayoutTests.swift
       - path: Tests/CoreModelsTests/SettingsHydrationTests.swift
       - path: Tests/CoreModelsTests/ProfileLockPresentationTests.swift

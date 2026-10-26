@@ -153,6 +153,92 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.scrollView(in: $0) }.first
     }
 
+    func testReadAheadDiagnosticsRenderMemoryAndDiskOnBothPresentations() throws {
+        for memory in [true, false] {
+            var diagnostics = fixture(mode: .plozzigen)
+            diagnostics.engineName = "AetherEngine v7.47.0"
+            diagnostics.sourceFileName = memory ? "Sample P7.mkv" : "Sample P8.mkv"
+            diagnostics.videoCodec = "hevc"
+            diagnostics.resolution = .init(width: 3840, height: 2160)
+            diagnostics.hdr = .dolbyVision
+            diagnostics.dolbyVisionProfile = memory ? 7 : 8
+            diagnostics.videoBitrate = 95_000_000
+            diagnostics.indicatedBitrate = nil
+            diagnostics.observedBitrate = nil
+            diagnostics.audioOutput = nil
+            diagnostics.audioOutputDescription = nil
+            diagnostics.sourceFileSizeBytes = nil
+            diagnostics.streamTransport = nil
+            diagnostics.deviceModel = "Apple TV 4K"
+            if memory {
+                diagnostics.positionSeconds = nil
+                diagnostics.durationSeconds = nil
+                diagnostics.seekableStartSeconds = nil
+                diagnostics.seekableEndSeconds = nil
+            }
+            diagnostics.bufferedSecondsAhead = memory ? 8 : 24
+            diagnostics.engineBufferedSecondsAhead = memory ? nil : 180
+            diagnostics.sessionCache = .init(
+                residentBytes: memory ? 96 << 20 : 1_280 << 20,
+                effectiveBudgetBytes: memory ? 96 << 20 : 2_048 << 20,
+                storage: memory ? .memory : .disk, targetSeconds: 300,
+                byteLimitReached: memory
+            )
+            for television in [true, false] {
+                let overlay = PlaybackDiagnosticsOverlay(
+                    diagnostics: diagnostics, presentation: television ? .television : .mobile
+                )
+                let content = Group {
+                    if television {
+                        overlay.televisionPanel(width: 1280)
+                    } else {
+                        overlay.mobileContent(width: 844).frame(width: 844)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                let renderer = ImageRenderer(content: content
+                    .environment(\.themePalette, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                    .background(.black))
+                renderer.scale = 2
+                let image = try XCTUnwrap(renderer.cgImage)
+                if television {
+                    let headerImage = try XCTUnwrap(image.cropping(to: CGRect(
+                        x: 0, y: 0, width: image.width, height: min(160, image.height)
+                    )))
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    try VNImageRequestHandler(cgImage: headerImage).perform([request])
+                    let observations = request.results ?? []
+                    for text in ["Playback Diagnostics", "Playing from", "AetherEngine"] {
+                        let observation = try XCTUnwrap(observations.first {
+                            $0.topCandidates(1).first?.string.contains(text) == true
+                        }, "Missing header \(text)")
+                        if text == "Playback Diagnostics" {
+                            XCTAssertEqual(observation.boundingBox.minX * Double(image.width) / 2,
+                                           24, accuracy: 4)
+                        } else {
+                            XCTAssertLessThan(observation.boundingBox.maxX * Double(image.width) / 2,
+                                              640, "Source and engine must remain grouped on the left.")
+                        }
+                    }
+                }
+                let attachment = XCTAttachment(image: UIImage(cgImage: image))
+                attachment.name = "\(television ? "TV" : "Mobile") \(memory ? "memory" : "disk") read-ahead"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                let text = try renderedText(image, locale: "en_US")
+                XCTAssertTrue(text.contains("Cache storage"), text)
+                XCTAssertTrue(text.contains("v7.47.0"), text)
+                XCTAssertTrue(text.contains("Read-ahead target"), text)
+                XCTAssertTrue(text.contains("5 min"), text)
+                XCTAssertEqual(text.contains("Memory limit reached"), memory, text)
+                XCTAssertTrue(text.replacingOccurrences(of: "O", with: "0")
+                    .contains(memory ? "8.0s" : "180.0s"), text)
+            }
+        }
+    }
+
     func testTelevisionDiagnosticsUseTheSameLocalizedLabels() throws {
         let panel = PlaybackDiagnosticsOverlay(diagnostics: fixture(mode: .transcode), presentation: .television)
         let text = try renderedText(

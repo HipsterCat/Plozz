@@ -61,13 +61,13 @@ final class AetherReleaseIntegrationTests: XCTestCase {
         XCTAssertEqual(options.objectAudioRendering, .off)
         XCTAssertFalse(options.progressiveSegmentDelivery)
         XCTAssertFalse(options.preferDualLayerDolbyVision)
-        XCTAssertFalse(PlozzigenVideoEngine.onDemandLoadOptions(audioChannels: 8).preferDualLayerDolbyVision)
+        XCTAssertFalse(PlozzigenVideoEngine.onDemandLoadOptions().preferDualLayerDolbyVision)
     }
 
     func testFELPreferenceReachesOnDemandOptionsWithoutDisablingAudioForOtherSources() {
         for enabled in [false, true] {
             let options = PlozzigenVideoEngine.onDemandLoadOptions(
-                audioChannels: 8, dolbyVisionFELEnabled: enabled
+                dolbyVisionFELEnabled: enabled
             )
             XCTAssertEqual(options.preferDualLayerDolbyVision, enabled)
             XCTAssertEqual(options.dolbyVisionHandling, .automatic)
@@ -110,14 +110,14 @@ final class AetherReleaseIntegrationTests: XCTestCase {
     }
 
     func testOnDemandSpatialChoicePreservesChannelFallbackAndBuffering() {
-        for channels in [0, 2, 6, 8] {
+        for lossless in [false, true] {
             for enabled in [false, true] {
                 for buffer in PlaybackReadAhead.allCases {
                     let options = PlozzigenVideoEngine.onDemandLoadOptions(
-                        audioChannels: channels, trueHDAtmosEnabled: enabled, readAhead: buffer
+                        losslessAudioEnabled: lossless, trueHDAtmosEnabled: enabled, readAhead: buffer
                     )
                     assertSpatialRendering(options, enabled: enabled)
-                    XCTAssertEqual(options.audioBridgeMode, channels > 6 ? .lossless : .surroundCompat)
+                    XCTAssertEqual(options.audioBridgeMode, lossless ? .lossless : .surroundCompat)
                     XCTAssertEqual(options.sessionCacheByteBudget, buffer == .automatic ? nil : Int.max)
                     XCTAssertTrue(options.matchContentEnabled)
                     XCTAssertFalse(options.isLive)
@@ -134,7 +134,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
             .init(isAudible: false, sharesAudioSession: true, suppressesDisplayMatching: true)
         ] {
             let options = PlozzigenVideoEngine.onDemandLoadOptions(
-                audioChannels: 8, dolbyVisionFELEnabled: true, outputPolicy: policy
+                dolbyVisionFELEnabled: true, outputPolicy: policy
             )
             XCTAssertEqual(options.objectAudioRendering, .off)
             XCTAssertFalse(options.preferDualLayerDolbyVision)
@@ -146,7 +146,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
 
     func testDisplaySuppressedPreviewDoesNotRequestFEL() {
         let options = PlozzigenVideoEngine.onDemandLoadOptions(
-            audioChannels: 8, dolbyVisionFELEnabled: true,
+            dolbyVisionFELEnabled: true,
             outputPolicy: .init(isAudible: true, suppressesDisplayMatching: true)
         )
         XCTAssertFalse(options.preferDualLayerDolbyVision)
