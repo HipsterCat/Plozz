@@ -171,8 +171,8 @@ public struct ResponseValidationDiagnostic: Encodable, Equatable, Sendable {
 }
 
 public struct LibraryLoadDiagnostic: Equatable, Sendable {
-    public enum Operation: String, Sendable { case libraryRecommendations, libraryBrowse, homeContinueWatching }
-    public enum Section: String, Sendable {
+    public enum Operation: String, Encodable, Sendable { case libraryRecommendations, libraryBrowse, homeContinueWatching }
+    public enum Section: String, Encodable, Sendable {
         case continueWatching, recommendations, recentlyAdded
         case browse, collections, playlists, collectionMembers, playlistMembers
 

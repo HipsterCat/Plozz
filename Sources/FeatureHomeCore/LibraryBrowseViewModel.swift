@@ -1214,6 +1214,7 @@ public final class LibraryBrowseViewModel {
         errorServers = failedServers
         recommendationDiagnostic = failures.isEmpty ? nil : .init(provider: provider.kind, failures: failures)
         if let recommendationDiagnostic {
+            LibraryDiagnosticJournal.shared.record(recommendationDiagnostic)
             PlozzLog.app.error("Library recommendations failed: \(recommendationDiagnostic.supportText)")
         }
         recommendationsDirty = firstError != nil
@@ -1275,6 +1276,7 @@ public final class LibraryBrowseViewModel {
             )
         ])
         queryPresentation.failureDiagnostic = diagnostic
+        LibraryDiagnosticJournal.shared.record(diagnostic)
         PlozzLog.app.error("Library browse failed: \(diagnostic.supportText)")
         return mapped
     }

@@ -76,6 +76,10 @@ from failed enrollment, suppression, changed profile scope or stale presentation
 The attachment is a typed JSON report, not a copy of Recent Activity or the
 free-form playback trace. It retains category/severity history, version-preparation
 request/decode evidence, playback/connection failures, codecs and timings.
+Library browsing, recommendations and Continue Watching additionally retain
+typed section, route, decode/paging facts and numeric errors, rather than relying
+on the local free-form log. These and preparation failures use bounded local
+record buffers with explicit dropped-record counts.
 Source/account/profile/attempt references are remapped within each report,
 including relationships between journals; stable local hashes and UUIDs do not
 leave the device. Record times are relative ages. The optional written message

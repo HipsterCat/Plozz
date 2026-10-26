@@ -64,6 +64,9 @@ optional message, which is sent as written. Submission copy does not promise
 confirmed server delivery. Privacy-policy content is maintained on the website.
 Manual attachments are constructed from typed activity categories/severity,
 bounded technical operation timings, and structured playback/source journals.
+Library browsing, recommendations and Continue Watching failures retain their
+typed section, HTTP/decode route, coding-field path and paging evidence in a
+bounded in-memory journal; arbitrary error descriptions are never attached.
 Raw recent-activity messages and free-form persistent playback traces stay local:
 they can contain server addresses, account identifiers, titles or search text.
 Journal identifiers are replaced with report-local aliases and record times are

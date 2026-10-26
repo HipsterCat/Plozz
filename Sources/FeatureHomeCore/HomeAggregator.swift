@@ -765,6 +765,7 @@ public struct HomeAggregator: Sendable {
                     )
                 ])
                 if let diagnostic {
+                    LibraryDiagnosticJournal.shared.record(diagnostic)
                     PlozzLog.app.error("Home Continue Watching failed: \(diagnostic.supportText)")
                 }
             }

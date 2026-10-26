@@ -49,6 +49,10 @@ final class CrashDiagnosticsTests: XCTestCase {
                 XCTFail("No preparation collection without consent")
                 return PlaybackPreparationDiagnostics.export(scope: DiagnosticExportScope())
             },
+            libraryDiagnostics: {
+                XCTFail("No library collection without consent")
+                return LibraryDiagnosticJournal().export(scope: DiagnosticExportScope())
+            },
             captureEvent: { _, _ in XCTFail("No consent"); return .empty },
             captureFeedback: { _ in XCTFail("No consent"); return .empty }
         ))
@@ -270,6 +274,19 @@ final class CrashDiagnosticsTests: XCTestCase {
                         facts: .init(provider: .jellyfin, engine: .plozzigen, request: request),
                         failure: .init(.serverHTTP(401)))
         let journal = await playback.export(scope: scope)
+        let library = LibraryDiagnosticJournal()
+        library.record(.init(provider: .plex, operation: .libraryBrowse, failures: [
+            .init(
+                section: .collections, error: .unknown(privateValues.joined(separator: " ")),
+                responses: [.init(
+                    route: .collectionCandidates, httpStatus: 200, bytes: 512, payload: .object,
+                    error: DecodingError.typeMismatch([String].self, .init(
+                        codingPath: [], debugDescription: privateValues.joined(separator: " ")
+                    ))
+                )],
+                paging: [.init(stage: .collectionCandidates, reason: .emptyID, start: 0, rows: 3, total: 4)]
+            )
+        ]))
         do {
             let _: Int = try await PlaybackPreparationDiagnostics.capture(provider: .jellyfin, operation: .versions) {
                 HTTPResponseDiagnostics.recordRequest(.init(
@@ -292,6 +309,7 @@ final class CrashDiagnosticsTests: XCTestCase {
             activity: { PlozzLog.activityExport(scope: scope) },
             sourceDiagnostics: { sources.export(scope: scope) },
             preparationDiagnostics: { PlaybackPreparationDiagnostics.export(scope: scope) },
+            libraryDiagnostics: { library.export(scope: scope) },
             playbackDiagnostics: journal, operations: operations,
             captureEvent: { _, attachment in
                 let body = self.payload(attachment)
@@ -307,6 +325,12 @@ final class CrashDiagnosticsTests: XCTestCase {
                 XCTAssertEqual(records?.first?["attempt"] as? String, records?.last?["attempt"] as? String)
                 XCTAssertEqual((records?.first?["facts"] as? [String: Any])?["sourceVideo"] as? String, "hevc")
                 XCTAssertNotNil(body["operations"])
+                let libraryEntry = (body["library"] as? [String: Any])?["entries"] as? [[String: Any]]
+                let libraryFacts = libraryEntry?.first?["facts"] as? [String: Any]
+                let libraryFailure = (libraryFacts?["failures"] as? [[String: Any]])?.first
+                XCTAssertEqual(libraryFailure?["section"] as? String, "collections")
+                XCTAssertEqual((libraryFailure?["responses"] as? [[String: Any]])?.first?["reason"] as? String, "wrongType")
+                XCTAssertEqual((libraryFailure?["paging"] as? [[String: Any]])?.first?["reason"] as? String, "emptyID")
                 let preparation = (body["preparation"] as? [String: Any])?["entries"] as? [[String: Any]]
                 XCTAssertTrue(preparation?.contains {
                     let facts = $0["facts"] as? [String: Any]

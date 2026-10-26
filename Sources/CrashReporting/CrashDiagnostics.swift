@@ -30,6 +30,7 @@ public enum CrashDiagnostics {
             activity: { PlozzLog.activityExport(scope: scope) },
             sourceDiagnostics: { LiveTVSourceDiagnostics.captureExport(scope: scope) },
             preparationDiagnostics: { PlaybackPreparationDiagnostics.export(scope: scope) },
+            libraryDiagnostics: { LibraryDiagnosticJournal.shared.export(scope: scope) },
             playbackDiagnostics: playbackJournal,
             captureEvent: { event, attachment in
                 SentrySDK.capture(event: event) { scope in
@@ -55,6 +56,9 @@ public enum CrashDiagnostics {
         preparationDiagnostics: @MainActor () -> PlaybackPreparationDiagnostics.Export = {
             PlaybackPreparationDiagnostics.export(scope: DiagnosticExportScope())
         },
+        libraryDiagnostics: @MainActor () -> LibraryDiagnosticJournal.Export = {
+            LibraryDiagnosticJournal.shared.export(scope: DiagnosticExportScope())
+        },
         playbackDiagnostics: PlaybackDiagnosticJournal.Export? = nil,
         operations: PerformanceDiagnostics = .shared,
         captureEvent: (Event, Attachment) -> SentryId,
@@ -64,6 +68,7 @@ public enum CrashDiagnostics {
 
         let report = TechnicalReport(
             activity: activity(), sources: sourceDiagnostics(), preparation: preparationDiagnostics(),
+            library: libraryDiagnostics(),
             playback: playbackDiagnostics,
             operations: operations.snapshot()
         )
@@ -114,6 +119,7 @@ public enum CrashDiagnostics {
         let activity: PlozzLog.ActivityExport
         let sources: LiveTVSourceDiagnostics.Export
         let preparation: PlaybackPreparationDiagnostics.Export
+        let library: LibraryDiagnosticJournal.Export
         let playback: PlaybackDiagnosticJournal.Export?
         let operations: PerformanceDiagnostics.Snapshot?
     }

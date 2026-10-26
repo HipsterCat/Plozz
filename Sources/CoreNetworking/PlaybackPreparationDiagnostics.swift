@@ -69,42 +69,19 @@ public enum PlaybackPreparationDiagnostics {
         let validation: [ResponseValidationDiagnostic]
     }
 
-    private struct Entry: Sendable {
-        let timestamp: Date
-        let attempt: UUID
-        let facts: Facts
-    }
-
-    private final class Recorder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var entries: [Entry] = []
-
-        func append(_ facts: Facts) {
-            lock.withLock {
-                entries.append(Entry(timestamp: Date(), attempt: UUID(), facts: facts))
-                if entries.count > 32 { entries.removeFirst(entries.count - 32) }
-            }
-        }
-
-        func snapshot() -> [Entry] {
-            lock.withLock {
-                let oldest = Date().addingTimeInterval(-48 * 3_600)
-                entries.removeAll { $0.timestamp < oldest }
-                return entries
-            }
-        }
-    }
-
-    private static let recorder = Recorder()
+    private static let recorder = DiagnosticRecordBuffer<Facts>()
 
     public struct Export: Encodable, Sendable {
         private let schema = 1
+        private let dropped: Int
         private let entries: [ExportEntry]
 
         fileprivate init(scope: DiagnosticExportScope) {
-            entries = PlaybackPreparationDiagnostics.recorder.snapshot().map {
+            let snapshot = PlaybackPreparationDiagnostics.recorder.snapshot()
+            dropped = snapshot.dropped
+            entries = snapshot.entries.map {
                 ExportEntry(ageMilliseconds: scope.ageMilliseconds(for: $0.timestamp),
-                            attempt: scope.alias(for: $0.attempt.uuidString), facts: $0.facts)
+                            attempt: scope.alias(for: $0.id.uuidString), facts: $0.value)
             }
         }
     }

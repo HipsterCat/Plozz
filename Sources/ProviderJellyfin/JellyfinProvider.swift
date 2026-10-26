@@ -415,6 +415,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             provider: kind, operation: .homeContinueWatching,
             failures: [.init(section: .continueWatching, error: error)]
         )
+        LibraryDiagnosticJournal.shared.record(diagnostic)
         PlozzLog.networking.error(
             "History \(endpoint) failed (\(scope)): \(diagnostic.supportText)"
         )
