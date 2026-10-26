@@ -73,13 +73,20 @@ This is separate from automatic Sentry events and the in-memory performance
 snapshot below. It captures pseudonymous source/account/profile transitions and
 a fresh source-storage snapshot so a disappearing source can be distinguished
 from failed enrollment, suppression, changed profile scope or stale presentation.
+The attachment is a typed JSON report, not a copy of Recent Activity or the
+free-form playback trace. It retains category/severity history, version-preparation
+request/decode evidence, playback/connection failures, codecs and timings.
+Source/account/profile/attempt references are remapped within each report,
+including relationships between journals; stable local hashes and UUIDs do not
+leave the device. Record times are relative ages. The optional written message
+is submitted separately as written, so feedback is not guaranteed anonymous.
 
 Opted-in reports also carry a bounded, in-memory performance snapshot. It records
 coarse operation/provider categories, elapsed time, start-thread identity,
 overlapping work, and available item/row/credit/account/request/byte counts.
 Home fetching, merging and state publication are distinguished from HTTP
 transport/JSON decoding, share scans, playlist imports, guide batches and
-automatic-channel work. Active operations remain visible if a hang prevents
+automatic-channel work and search counts/timing (never search text). Active operations remain visible if a hang prevents
 their completion. Slow completed operations are retained separately from recent
 work so a burst of fast requests cannot immediately erase them.
 Terminal outcomes include failures in requested individual Home rows and earlier

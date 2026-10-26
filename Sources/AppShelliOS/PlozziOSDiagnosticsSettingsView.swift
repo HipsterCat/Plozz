@@ -25,7 +25,7 @@ struct PlozziOSDiagnosticsSettingsView: View {
             appBuild: version.build,
             providers: providers.isEmpty ? "None" : providers,
             repoURL: AppLinks.repository.absoluteString,
-            recentLogTail: PlozzLog.recentLogText(limit: 8),
+            recentLogTail: PlozzLog.privacyFilteredLogText(entries: PlozzLog.recentEntries(limit: 8)),
             marketingVersion: version.marketingVersion
         )
     }
@@ -73,11 +73,10 @@ struct PlozziOSDiagnosticsSettingsView: View {
                 Button {
                     appModel.applyCrashReportingPreference()
                     let note = diagnosticNote.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let log = PlozzLog.recentLogText(limit: 200)
                     isSending = true
                     Task {
                         defer { isSending = false }
-                        let sent = await CrashDiagnostics.send(logText: log, note: note)
+                        let sent = await CrashDiagnostics.send(note: note)
                         sendStatus = sent
                             ? "Diagnostics submitted for delivery. Thank you."
                             : "Couldn't submit diagnostics. Check that crash reporting is enabled and try again."
@@ -150,11 +149,7 @@ private struct PlozziOSRecentActivityView: View {
     }
 
     private var shareText: String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return filtered.reversed()
-            .map { "\(formatter.string(from: $0.date)) [\($0.level.rawValue)] \($0.category): \($0.message)" }
-            .joined(separator: "\n")
+        PlozzLog.privacyFilteredLogText(entries: Array(filtered.reversed()))
     }
 
     var body: some View {

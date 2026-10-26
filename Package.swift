@@ -548,6 +548,7 @@ let package = Package(
             name: "CrashReporting",
             dependencies: [
                 "CoreModels",
+                "CoreNetworking",
                 .product(name: "Sentry-Static", package: "sentry-apple-binaries"),
             ]
         ),

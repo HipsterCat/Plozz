@@ -62,6 +62,15 @@ categories and performance diagnostics, not a blanket anonymity guarantee.
 Manual uploads disclose additional playback/connection records and the user's
 optional message, which is sent as written. Submission copy does not promise
 confirmed server delivery. Privacy-policy content is maintained on the website.
+Manual attachments are constructed from typed activity categories/severity,
+bounded technical operation timings, and structured playback/source journals.
+Raw recent-activity messages and free-form persistent playback traces stay local:
+they can contain server addresses, account identifiers, titles or search text.
+Journal identifiers are replaced with report-local aliases and record times are
+relative ages, preserving relationships and timing without exporting persistent
+identity hashes or session UUIDs. Activity copy/share and prefilled issue links
+use the same filtered activity projection. Filtering cannot make the optional
+message anonymous or hide connection metadata from the receiving service.
 
 On tvOS, Video buffer and Live TV buffer use the shared `SettingsMenuRow`: one
 compact row showing the current value, with choices in the native menu and help

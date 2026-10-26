@@ -33,6 +33,9 @@ and every provider/feature that talks to a remote server.
   Users can reproduce once and use **Help & Diagnostics → Send Recent Activity
   to Developer** with their existing crash-reporting consent. This is an explicit
   user-submitted attachment, not a new automatic Sentry event or upload permission.
+  Failures also retain up to 32 typed records in memory for 48 hours, so the
+  privacy-filtered sender keeps request/decode/validation evidence without
+  parsing the free-form log. Attempt identifiers become fresh report-local aliases.
 - `ServerURLNormalizer`: turns user-typed addresses (with/without scheme,
   trailing slash, port) into a well-formed `URL` for both Jellyfin and Plex.
 - `ProviderIconLoader`: best-effort, origin-only `/favicon.ico` requests for

@@ -37,19 +37,10 @@ struct SendDiagnosticsCard: View {
 
                     Button {
                         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let recentActivity = PlozzLog.recentLogText(limit: 500)
-                        let playbackJournal = HandoffDiagnostics.persistentPlaybackLogText()
-                        let logText = playbackJournal.isEmpty
-                            ? recentActivity
-                            : recentActivity
-                                + "\n\n--- Persistent playback journal ---\n"
-                                + playbackJournal
                         isSending = true
                         Task {
                             defer { isSending = false }
-                            let ok = await CrashDiagnostics.send(
-                                logText: logText, note: trimmed.isEmpty ? nil : trimmed
-                            )
+                            let ok = await CrashDiagnostics.send(note: trimmed.isEmpty ? nil : trimmed)
                             sendState = ok ? .sent : .failed
                             if ok { message = "" }
                         }
