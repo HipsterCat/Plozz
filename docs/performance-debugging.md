@@ -51,6 +51,16 @@ early (the decision tree in §4 routes you):
 
 ---
 
+## Downloads rendering boundary
+
+Mobile Downloads rows read a cached artwork index and grouped library. Storage
+resolution, existence checks, and artwork writes belong to the artwork actor,
+not SwiftUI `body` or synchronous row getters. Refreshing Downloads revalidates
+local files so removed artwork can still be repaired without changing the media.
+Fatal iOS 18 Downloads samples have included filesystem metadata lookup during
+episode-row rendering; a sampled UI frame alone does not prove a decoder fault
+or establish that every Downloads hang shares one cause.
+
 ## Sentry diagnostics and matching symbols
 
 Crash-reporting consent gates all uploads. Automatic UI/network breadcrumbs and
