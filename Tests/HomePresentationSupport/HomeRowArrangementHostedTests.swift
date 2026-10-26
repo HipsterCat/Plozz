@@ -179,6 +179,113 @@ final class HomeRowsFocusHost: UIHostingController<AnyView> {
 }
 @MainActor
 final class HomeRowArrangementHostedTests: XCTestCase {
+    func testEveryCardLabelIllustrationRendersAcrossStylesVisibilityAndDirection() throws {
+        #if os(tvOS)
+        let width: CGFloat = CardLabelScopePreview.illustrationWidth
+        let metrics = PlozzMetrics(density: .standard)
+        #else
+        let width: CGFloat = 340
+        let metrics = PlozzMetrics.touch(density: .standard)
+        #endif
+        for style in CardStyle.allCases {
+            for showsLabels in [true, false] {
+                for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                    let palette: ThemePalette = direction == .leftToRight ? .dark : .light
+                    let content = Grid(alignment: .topLeading, horizontalSpacing: 24, verticalSpacing: 24) {
+                        ForEach(0..<3) { line in
+                            GridRow(alignment: .top) {
+                                ForEach(Array(CardCaptionSettingsPage.allCases[(line * 3)..<(line * 3 + 3)]), id: \.self) { page in
+                                    CardLabelScopePreview(
+                                        preview: CardLabelScopePreview.snapshot(
+                                            page: page, editing: page.firstControl,
+                                            settings: .init(preference: showsLabels ? .show : .hide),
+                                            isShowcase: false, seriesArtwork: true, layout: .landscape
+                                        ),
+                                        style: style
+                                    )
+                                    .frame(width: width)
+                                }
+                            }
+                        }
+                    }
+                    .padding(24)
+                    .background(palette.settingsBackground)
+                    .environment(\.themePalette, palette)
+                    .environment(\.plozzMetrics, metrics)
+                    .environment(\.layoutDirection, direction)
+                    .environment(\.horizontalSizeClass, direction == .leftToRight ? .compact : .regular)
+                    .environment(\.dynamicTypeSize, direction == .leftToRight ? .large : .accessibility1)
+                    .environment(\.colorScheme, palette.isLight ? .light : .dark)
+                    let renderer = ImageRenderer(content: content)
+                    renderer.scale = 2
+                    let image = try XCTUnwrap(renderer.uiImage)
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.recognitionLanguages = ["en-US"]
+                    try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+                    let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                    for page in CardCaptionSettingsPage.allCases {
+                        XCTAssertTrue(text.contains(String(localized: page.title)), "\(page): \(text)")
+                    }
+                    XCTAssertTrue(text.contains("Recently Added"), text)
+                    XCTAssertFalse(text.contains("Card labels"), "Do not invent a Card labels row on Home.")
+                    let attachment = XCTAttachment(image: image)
+                    attachment.name = "label-illustrations-\(style.rawValue)-\(showsLabels)-\(direction)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
+            }
+        }
+    }
+
+    func testArtworkAndPickerIllustrationsContactSheet() throws {
+        let areas = ArtworkArea.allCases
+        let renderer = ImageRenderer(content:
+            VStack(spacing: 24) {
+                Grid(horizontalSpacing: 20, verticalSpacing: 20) {
+                    ForEach(0..<Int(ceil(Double(areas.count) / 4))) { line in
+                        GridRow {
+                            ForEach(Array(areas.dropFirst(line * 4).prefix(4)), id: \.self) { area in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(verbatim: area.rawValue).font(.caption).foregroundStyle(.white)
+                                    ArtworkScopeDiagram(area: area)
+                                        .frame(width: 320, height: 180)
+                                }
+                            }
+                        }
+                    }
+                }
+                HStack(spacing: 20) {
+                    ForEach(NavigationStyle.allCases, id: \.self) { style in
+                        NavigationStyleSwatch(style: style).frame(width: 320, height: 180)
+                    }
+                }
+                HStack(spacing: 20) {
+                    ForEach(HeroStyle.allCases, id: \.self) { style in
+                        HomeLayoutSwatch(style: style).frame(width: 320, height: 180)
+                    }
+                    DisplaySizeSwatch(density: .standard).frame(width: 320, height: 180)
+                }
+                HStack(spacing: 20) {
+                    CardStyleSwatch(style: .framed).frame(width: 320, height: 180)
+                    CardStyleSwatch(style: .borderless).frame(width: 320, height: 180)
+                    ContinueWatchingArtworkSwatch(style: .logoAndArtwork, showsCaptions: true)
+                        .frame(width: 320, height: 180)
+                }
+            }
+            .padding(24)
+            .background(ThemePalette.dark.settingsBackground)
+            .environment(\.themePalette, .dark)
+        )
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.uiImage)
+        XCTAssertGreaterThan(image.size.height, 800)
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "artwork-and-picker-illustrations"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testFeaturedLogosUseOnDarkTreatmentInEveryPageTheme() async throws {
         let cache = try XCTUnwrap(ArtworkSession.shared.configuration.urlCache)
         let artworkURL = try XCTUnwrap(URL(string: "https://featured-contrast.invalid/\(UUID())/artwork.png"))

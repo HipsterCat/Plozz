@@ -1,6 +1,7 @@
 import CoreModels
 import CoreUI
 @testable import FeatureSettings
+import SwiftUI
 import XCTest
 
 final class ViewCustomizationCycleTests: XCTestCase {
@@ -35,7 +36,7 @@ final class ViewCustomizationCycleTests: XCTestCase {
         XCTAssertEqual(home, CardCaptionSettingsPage.recommended.sharedRowNote)
         let text = String(localized: home)
         XCTAssertTrue(text.contains("each page's setting"))
-        XCTAssertTrue(text.contains("On or Off applies to both Home and Recommended"))
+        XCTAssertTrue(text.contains("On/Off overrides Home and Recommended"))
         for page in CardCaptionSettingsPage.allCases where page != .home && page != .recommended {
             XCTAssertNil(page.sharedRowNote)
         }
@@ -133,6 +134,88 @@ final class ViewCustomizationCycleTests: XCTestCase {
             }
         }
         XCTAssertEqual(settings, .default)
+    }
+
+    func testEveryLabelIllustrationUsesPackedCardsAndTheActualArtworkShape() throws {
+        for viewport: CGFloat in [390, 1024, 1920] {
+            let metrics = viewport == 1920 ? PlozzMetrics(density: .standard) : .touch(density: .standard)
+            for style in CardStyle.allCases {
+                for page in CardCaptionSettingsPage.allCases {
+                    for layout in ContinueWatchingCardLayout.allCases {
+                        for seriesArtwork in [false, true] {
+                            let preview = CardLabelScopePreview.snapshot(
+                                page: page, editing: page.firstControl, settings: .init(preference: .show),
+                                isShowcase: false, seriesArtwork: seriesArtwork, layout: layout
+                            )
+                            XCTAssertEqual(preview.seriesArtwork, seriesArtwork)
+                            for details in ContinueWatchingPlaybackDetails.allCases {
+                                for row in preview.rows {
+                                    let geometry = SettingsIllustrationCardGeometry(
+                                        row: row, preview: preview, style: style, metrics: metrics,
+                                        playbackDetails: details, viewportWidth: viewport
+                                    )
+                                    let first = try XCTUnwrap(geometry.cards.first)
+                                    let second = try XCTUnwrap(geometry.cards.dropFirst().first)
+                                    XCTAssertEqual(first.surface.minX, 0, accuracy: 0.001)
+                                    XCTAssertEqual(second.surface.minX - first.surface.maxX, geometry.gap, accuracy: 0.001)
+                                    XCTAssertLessThan(geometry.gap / first.artwork.width, 0.3,
+                                                      "A media row must not distribute its cards across empty space.")
+                                    let landscape = row.isContinueWatching ? layout == .landscape
+                                        : row.view == .episodes || row.view == .extras
+                                    let expected: CGFloat = if row.isContinueWatching && layout == .portrait {
+                                        details.cardAspectRatio
+                                    } else if row.isContinueWatching && seriesArtwork {
+                                        ContinueWatchingCardShape.aspectRatio
+                                    } else {
+                                        landscape ? 16.0 / 9 : 2.0 / 3
+                                    }
+                                    XCTAssertEqual(first.artwork.width / first.artwork.height, expected, accuracy: 0.005)
+                                    for card in geometry.cards {
+                                        XCTAssertLessThanOrEqual(card.surface.maxY, geometry.height + 0.001)
+                                        XCTAssertGreaterThan(card.captions[0].minY, card.artwork.maxY)
+                                        XCTAssertLessThan(card.captions[0].width, card.artwork.width)
+                                    }
+                                    if preview.isGrid {
+                                        XCTAssertEqual(Set(geometry.cards.map(\.artwork.minY)).count, 2)
+                                        XCTAssertTrue(geometry.cards.allSatisfy {
+                                            $0.surface.maxX <= SettingsIllustrationCardGeometry.width + 0.001
+                                        })
+                                    } else {
+                                        XCTAssertEqual(Set(geometry.cards.map(\.artwork.minY)).count, 1)
+                                        XCTAssertGreaterThanOrEqual(try XCTUnwrap(geometry.cards.last).surface.maxX, 300)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testLabelIllustrationsKeepGeometryStableWithoutDrawingEmptyFramesAsCaptions() throws {
+        let metrics = PlozzMetrics(density: .standard)
+        for page in CardCaptionSettingsPage.allCases {
+            let preview = CardLabelScopePreview.snapshot(
+                page: page, editing: page.firstControl, settings: .init(preference: .show),
+                isShowcase: false, seriesArtwork: true, layout: .landscape
+            )
+            for row in preview.rows {
+                let hidden = CardLabelScopePreview.Row(view: row.view, showsLabels: false, highlighted: row.highlighted)
+                let shown = SettingsIllustrationCardGeometry(
+                    row: row, preview: preview, style: .framed, metrics: metrics,
+                    playbackDetails: .detailed, viewportWidth: 1920
+                )
+                let off = SettingsIllustrationCardGeometry(
+                    row: hidden, preview: preview, style: .framed, metrics: metrics,
+                    playbackDetails: .detailed, viewportWidth: 1920
+                )
+                XCTAssertEqual(shown.height, off.height)
+                XCTAssertEqual(shown.cards.map(\.artwork), off.cards.map(\.artwork))
+                XCTAssertLessThan(try XCTUnwrap(off.cards.first).surface.height,
+                                  try XCTUnwrap(shown.cards.first).surface.height)
+            }
+        }
     }
 
     func testArtworkCyclesThroughExactlyItsSupportedChoicesAndRemainsCustom() {
@@ -301,6 +384,25 @@ final class ViewCustomizationCycleTests: XCTestCase {
             .contains { $0.kind == .navigation })
         XCTAssertEqual(ArtworkScopeDiagram.regions(for: .search, navigationStyle: .rail)
             .filter { $0.kind == .navigation }.count, 1)
+    }
+
+    func testArtworkGridCardsHaveConsistentGuttersWithoutOverlappingRows() throws {
+        for area in [ArtworkArea.browse, .collections, .playlists, .search, .watchlist] {
+            for navigation in NavigationStyle.allCases {
+                let posters = ArtworkScopeDiagram.regions(for: area, navigationStyle: navigation)
+                    .filter { $0.kind == .poster }
+                for (index, poster) in posters.enumerated() {
+                    for other in posters.dropFirst(index + 1) {
+                        XCTAssertFalse(poster.frame.intersects(other.frame), "\(area): overlapping cards")
+                    }
+                }
+                let first = try XCTUnwrap(posters.first)
+                let next = try XCTUnwrap(posters.dropFirst().first)
+                let gap = next.frame.minX - first.frame.maxX
+                XCTAssertGreaterThan(gap, 2)
+                XCTAssertLessThan(gap / first.frame.width, 0.3)
+            }
+        }
     }
 
     func testIllustrationsPreservePosterThumbnailAndAlbumAspectRatios() {

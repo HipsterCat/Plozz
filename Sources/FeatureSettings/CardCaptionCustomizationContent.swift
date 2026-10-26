@@ -238,6 +238,14 @@ struct CardLabelScopePreview: View {
         let page: CardCaptionSettingsPage
         let rows: [Row]
         let layout: ContinueWatchingCardLayout
+        var seriesArtwork = true
+
+        var isGrid: Bool {
+            switch page {
+            case .browse, .collections, .playlists, .search, .watchlist: true
+            case .home, .recommended, .detail, .people: false
+            }
+        }
 
         var accessibilitySummary: Text {
             var text = Text(page.title)
@@ -258,14 +266,16 @@ struct CardLabelScopePreview: View {
 
         var isContinueWatching: Bool { view == .continueWatching }
         var title: LocalizedStringResource {
-            [.continueWatching, .episodes, .related, .extras].contains(view) ? view.cardLabelTitle : "Card labels"
+            switch view {
+            case .home, .recommended: HomeGlobalRow.recentlyAdded.title
+            default: view.cardLabelTitle
+            }
         }
     }
 
     let preview: Snapshot
     let style: CardStyle
     @Environment(\.themePalette) private var palette
-    @Environment(\.layoutDirection) private var layoutDirection
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -273,8 +283,13 @@ struct CardLabelScopePreview: View {
                 .font(.caption.weight(.semibold))
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
-            diagram
-                .aspectRatio(320 / diagramHeight, contentMode: .fit)
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(preview.rows, id: \.view) { row in
+                    CardLabelPreviewRow(row: row, preview: preview, style: style)
+                }
+            }
+                .padding(12)
+                .background(palette.settingsBackground, in: RoundedRectangle(cornerRadius: 10))
                 .accessibilityHidden(true)
         }
         .accessibilityElement(children: .ignore)
@@ -284,73 +299,7 @@ struct CardLabelScopePreview: View {
 
     #if os(tvOS)
     static let illustrationWidth: CGFloat = 420
-    private let rowHeight: CGFloat = 100
-    private let rowTitleSize: CGFloat = 18
-    private let artworkTop: CGFloat = 28
-    #else
-    private let rowHeight: CGFloat = 86
-    private let rowTitleSize: CGFloat = 9
-    private let artworkTop: CGFloat = 14
     #endif
-
-    private var diagramHeight: CGFloat { CGFloat(max(2, preview.rows.count)) * rowHeight + 8 }
-
-    private var diagram: some View {
-        Canvas { context, size in
-            context.scaleBy(x: size.width / 320, y: size.height / diagramHeight)
-            if layoutDirection == .rightToLeft {
-                context.translateBy(x: 320, y: 0)
-                context.scaleBy(x: -1, y: 1)
-            }
-            context.fill(Path(CGRect(x: 0, y: 0, width: 320, height: diagramHeight)),
-                         with: .color(palette.settingsBackground))
-            let rows = preview.rows.count == 1 ? preview.rows + preview.rows : preview.rows
-            for (index, row) in rows.enumerated() {
-                let top = CGFloat(index) * rowHeight + 8
-                context.draw(
-                    Text(row.title).font(.system(size: rowTitleSize, weight: .medium))
-                        .foregroundColor(palette.secondaryText),
-                    at: CGPoint(x: 12, y: top), anchor: .topLeading
-                )
-                let landscape = (row.isContinueWatching && preview.layout == .landscape)
-                    || row.view == .episodes || row.view == .extras
-                #if os(tvOS)
-                let width: CGFloat = landscape ? 96 : 36
-                let count = landscape ? 2 : 4
-                let height: CGFloat = 54
-                let stride = (296 - width) / CGFloat(count - 1)
-                #else
-                let width: CGFloat = landscape ? 88 : 32
-                let count = landscape ? 3 : 6
-                let height: CGFloat = landscape ? 49.5 : 48
-                let stride: CGFloat = landscape ? 102 : 50
-                #endif
-                for column in 0..<count {
-                    let x = 12 + CGFloat(column) * stride
-                    let y = top + artworkTop
-                    if style == .framed {
-                        context.fill(Path(roundedRect: CGRect(x: x - 3, y: y - 3, width: width + 6, height: height + 17),
-                                          cornerRadius: 4), with: .color(palette.fill))
-                    }
-                    let art = CGRect(x: x, y: y, width: width, height: height)
-                    context.fill(Path(roundedRect: art, cornerRadius: 3), with: .color(palette.tertiaryText.opacity(0.3)))
-                    var icon = context.resolve(Image(systemName: "photo"))
-                    icon.shading = .color(palette.tertiaryText)
-                    context.draw(icon, in: CGRect(x: art.midX - 9, y: art.midY - 7, width: 18, height: 14))
-                    let label = Path(roundedRect: CGRect(x: x, y: art.maxY + 4, width: width, height: 7), cornerRadius: 2)
-                    let ink = row.highlighted ? palette.accent : palette.tertiaryText
-                    if row.showsLabels {
-                        context.fill(label, with: .color(ink))
-                    }
-                    if row.highlighted {
-                        context.stroke(label, with: .color(ink),
-                                       style: StrokeStyle(lineWidth: 1.5, dash: row.showsLabels ? [] : [3, 2]))
-                    }
-                }
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
 
     static func snapshot(
         page: CardCaptionSettingsPage, editing view: CardCaptionView, settings: CardCaptionSettings,
@@ -372,7 +321,168 @@ struct CardLabelScopePreview: View {
                     && settings.override(for: .continueWatching) == .automatic)
             )
         }
-        return Snapshot(page: page, rows: rows, layout: layout)
+        return Snapshot(page: page, rows: rows, layout: layout, seriesArtwork: seriesArtwork)
+    }
+}
+
+private struct CardLabelPreviewRow: View {
+    let row: CardLabelScopePreview.Row
+    let preview: CardLabelScopePreview.Snapshot
+    let style: CardStyle
+    @Environment(\.themePalette) private var palette
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzContinueWatchingPlaybackDetails) private var playbackDetails
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
+    private var viewportWidth: CGFloat {
+        #if os(tvOS)
+        1920
+        #else
+        sizeClass == .regular ? 1024 : 390
+        #endif
+    }
+
+    var body: some View {
+        let geometry = SettingsIllustrationCardGeometry(
+            row: row, preview: preview, style: style, metrics: metrics,
+            playbackDetails: playbackDetails, viewportWidth: viewportWidth
+        )
+        VStack(alignment: .leading, spacing: 8) {
+            if !preview.isGrid {
+                Text(row.title)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Canvas { context, size in
+                let scale = size.width / SettingsIllustrationCardGeometry.width
+                context.scaleBy(x: scale, y: scale)
+                if layoutDirection == .rightToLeft {
+                    context.translateBy(x: SettingsIllustrationCardGeometry.width, y: 0)
+                    context.scaleBy(x: -1, y: 1)
+                }
+                for card in geometry.cards {
+                    if style == .framed {
+                        context.fill(Path(roundedRect: card.surface, cornerRadius: 4), with: .color(palette.fill))
+                    }
+                    let artwork = Path(roundedRect: card.artwork, cornerRadius: 3)
+                    context.fill(artwork, with: .linearGradient(
+                        Gradient(colors: [palette.tertiaryText.opacity(0.5), palette.tertiaryText.opacity(0.2)]),
+                        startPoint: card.artwork.origin,
+                        endPoint: CGPoint(x: card.artwork.maxX, y: card.artwork.maxY)
+                    ))
+                    var icon = context.resolve(Image(systemName: "photo"))
+                    icon.shading = .color(palette.tertiaryText)
+                    let iconWidth = min(20, card.artwork.width * 0.32)
+                    context.draw(icon, in: CGRect(
+                        x: card.artwork.midX - iconWidth / 2, y: card.artwork.midY - iconWidth * 0.35,
+                        width: iconWidth, height: iconWidth * 0.7
+                    ))
+                    if row.isContinueWatching {
+                        if preview.seriesArtwork && preview.layout == .landscape {
+                            context.fill(Path(roundedRect: CGRect(
+                                x: card.artwork.minX + card.artwork.width * 0.2,
+                                y: card.artwork.maxY - 14,
+                                width: card.artwork.width * 0.6, height: 4
+                            ), cornerRadius: 1), with: .color(palette.secondaryText))
+                        }
+                        let progress = CGRect(
+                            x: card.artwork.minX + 4, y: card.artwork.maxY - 6,
+                            width: card.artwork.width - 8, height: 2
+                        )
+                        context.fill(Path(roundedRect: progress, cornerRadius: 1), with: .color(palette.secondaryText.opacity(0.3)))
+                        context.fill(Path(roundedRect: CGRect(
+                            origin: progress.origin, size: CGSize(width: progress.width * 0.42, height: progress.height)
+                        ), cornerRadius: 1), with: .color(palette.secondaryText))
+                    }
+                    if row.showsLabels {
+                        let ink = row.highlighted ? palette.accent : palette.secondaryText
+                        for (index, caption) in card.captions.enumerated() {
+                            context.fill(Path(roundedRect: caption, cornerRadius: 1),
+                                         with: .color(ink.opacity(index == 0 ? 0.9 : 0.45)))
+                        }
+                    }
+                }
+            }
+            .aspectRatio(SettingsIllustrationCardGeometry.width / geometry.height, contentMode: .fit)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipped()
+        }
+    }
+}
+
+struct SettingsIllustrationCardGeometry {
+    struct Card {
+        let artwork: CGRect
+        let surface: CGRect
+        let captions: [CGRect]
+    }
+
+    static let width: CGFloat = 320
+    let cards: [Card]
+    let height: CGFloat
+    let gap: CGFloat
+
+    init(
+        row: CardLabelScopePreview.Row, preview: CardLabelScopePreview.Snapshot,
+        style: CardStyle, metrics: PlozzMetrics, playbackDetails: ContinueWatchingPlaybackDetails,
+        viewportWidth: CGFloat
+    ) {
+        let landscape = row.isContinueWatching ? preview.layout == .landscape
+            : row.view == .episodes || row.view == .extras
+        let cardStyle: PosterCardView.Style = landscape ? .landscape : .poster
+        var size = metrics.artworkSize(
+            for: cardStyle, showsSeriesArtwork: row.isContinueWatching && preview.seriesArtwork,
+            playbackDetails: playbackDetails
+        )
+        if row.isContinueWatching && !landscape {
+            size.height = size.width / playbackDetails.cardAspectRatio
+        }
+        let scale = Self.width / viewportWidth
+        let inset = style == .framed ? metrics.cardInset * scale : 0
+        let spacing = Self.visibleGap(metrics: metrics, style: style) * scale
+        let captionGap = max(3, (landscape ? metrics.landscapeCaptionTopSpacing : metrics.posterCaptionTopSpacing) * scale)
+        let captionHeight = max(2, metrics.cardTitleFontSize * scale * 0.65)
+        let captionLineGap = max(2, captionHeight * 0.6)
+        let columns: Int
+        let artworkWidth: CGFloat
+        if preview.isGrid {
+            columns = max(2, Int(viewportWidth / (metrics.posterWidth + metrics.gridSpacing)))
+            artworkWidth = (Self.width - CGFloat(columns - 1) * spacing) / CGFloat(columns) - inset * 2
+        } else {
+            artworkWidth = size.width * scale
+            columns = Int(ceil(Self.width / (artworkWidth + inset * 2 + spacing)))
+        }
+        let artworkHeight = artworkWidth * size.height / size.width
+        let captionBlock = captionGap + captionHeight * 1.75 + captionLineGap
+        let surfaceHeight = artworkHeight + inset * 2 + (row.showsLabels ? captionBlock : 0)
+        let rowHeight = artworkHeight + inset * 2 + captionBlock
+        let rows = preview.isGrid ? 2 : 1
+        gap = spacing
+        height = CGFloat(rows) * rowHeight + CGFloat(rows - 1) * max(8, metrics.gridSpacing * scale)
+        cards = (0..<rows).flatMap { line in
+            (0..<columns).map { column in
+                let x = CGFloat(column) * (artworkWidth + inset * 2 + spacing)
+                let y = CGFloat(line) * (rowHeight + max(8, metrics.gridSpacing * scale))
+                let artwork = CGRect(x: x + inset, y: y + inset, width: artworkWidth, height: artworkHeight)
+                return Card(
+                    artwork: artwork,
+                    surface: CGRect(x: x, y: y, width: artworkWidth + inset * 2, height: surfaceHeight),
+                    captions: [
+                        CGRect(x: artwork.minX, y: artwork.maxY + captionGap, width: artworkWidth * 0.78, height: captionHeight),
+                        CGRect(x: artwork.minX, y: artwork.maxY + captionGap + captionHeight + captionLineGap,
+                               width: artworkWidth * 0.52, height: captionHeight * 0.75)
+                    ]
+                )
+            }
+        }
+    }
+
+    static func visibleGap(metrics: PlozzMetrics, style: CardStyle) -> CGFloat {
+        metrics.cardSpacing + (style == .borderless ? metrics.borderlessCardSideMargin * 2 : 0)
     }
 }
 #endif

@@ -858,7 +858,12 @@ watch history and planning-list behavior are documented in
   Customization lists and their inset contextual cards occupy separate regions.
   Larger 16:9 illustrations highlight only the affected artwork, beside one sentence
   of help; full-page outlines sit inside the preview's rounded corners rather than
-  being clipped by its mask. Label settings reuse the card-style preview. Navigation follows the active
+  being clipped by its mask. Scoped label illustrations show tightly packed media
+  rows or a two-row grid, using the live card sizes, spacing, frame insets, and
+  Continue Watching aspect ratios. Row headings stay native text, including in RTL;
+  grid pages do not repeat invented section headings. Hidden labels disappear rather
+  than leaving dashed bars, and framing ends at the artwork when labels are off.
+  The all-page label presets retain the single-card comparison swatch. Navigation follows the active
   profile, including native sidebar, pinned rail, and top-tab differences. Ordinary
   title rows use 2:3 posters; episode/player thumbnails use their landscape ratios.
   Home follows the active Fullscreen Hero/Showcase layout, including disabled heroes;

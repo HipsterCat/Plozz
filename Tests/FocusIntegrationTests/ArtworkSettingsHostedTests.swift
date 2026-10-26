@@ -211,7 +211,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                 let page = try XCTUnwrap(scope.pages.first)
                 XCTAssertEqual(self.focusItems(in: window).count,
                                page.controls.count + 1 + (scope.pages.count > 1 ? 1 : 0))
-                XCTAssertTrue(text.contains("Customize labels"), text)
+                XCTAssertTrue(text.contains(scope == .home ? "Card labels" : "Customize labels"), text)
                 XCTAssertTrue(text.contains(String(localized: page.title)), text)
                 for view in page.controls where view == .continueWatching || page == .detail {
                     XCTAssertTrue(text.contains(String(localized: view.cardLabelTitle)), text)
@@ -1161,7 +1161,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                     XCTAssertFalse(text.contains("Mixed hides labels"), text)
                 }
                 XCTAssertTrue(text.contains("each page's setting"), text)
-                XCTAssertTrue(text.contains("both Home and Recommended"), text)
+                XCTAssertTrue(text.contains("Home and Recommended"), text)
                 XCTAssertFalse(text.contains("Labels are visible"), text)
                 XCTAssertFalse(text.contains("Labels are hidden"), text)
             }
