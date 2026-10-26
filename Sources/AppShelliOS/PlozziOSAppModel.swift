@@ -2696,24 +2696,9 @@ final class PlozziOSAppModel {
         self.pendingAdditionalUser = nil
     }
 
-    func selectPlexUserDuringOnboarding(_ user: PlexHomeUser) {
+    func selectPlexUserDuringOnboarding(_ user: PlexHomeUser, addAllProfiles: Bool) {
         guard let pending = plexHomeUsers.pendingPlexUserSelection else { return }
-        let binding = PlexHomeUserBinding(
-            homeUserID: user.id,
-            name: user.name,
-            avatarURL: user.avatarURL?.absoluteString,
-            requiresPIN: user.requiresPIN,
-            pinRequirementVerified: user.pinRequirementVerified
-        )
-        var profile = profiles.activeProfile
-        for accountID in pending.applyToAccountIDs {
-            profile = profile.settingHomeUserBinding(
-                binding,
-                forPlexAccount: accountID
-            )
-        }
-
-        profiles.update(profile)
+        guard plexHomeUsers.selectOnboardingUser(user, addAllProfiles: addAllProfiles) else { return }
         if pending.isFirstRun {
             profiles.seedDefaultProfileIdentity(
                 name: user.name,

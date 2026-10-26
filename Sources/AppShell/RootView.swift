@@ -1341,7 +1341,9 @@ private struct OnboardingPageContent: View {
             if let selection {
                 PlexUserSelectionView(
                     selection: selection,
-                    onSelect: { user in appState.selectPlexUserDuringOnboarding(user) }
+                    onSelect: { user, addAll in
+                        appState.selectPlexUserDuringOnboarding(user, addAllProfiles: addAll)
+                    }
                 )
             } else {
                 LaunchView()

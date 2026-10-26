@@ -474,6 +474,7 @@ targets:
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchFixture.swift
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
+      - path: Tests/AuthPresentationSupport/PlexHomeOnboardingFixture.swift
       - path: Tests/FeatureLiveTVRemoteTests/NavigationRailFixture.swift
       - path: App/Resources/Assets.xcassets
       - path: App/Resources/CommunityAssets.xcassets
@@ -511,6 +512,7 @@ targets:
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: App/Resources/Localizable.xcstrings
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
+      - path: Tests/AuthPresentationSupport/PlexHomeOnboardingFixture.swift
       - path: App/PlozziOS/Assets.xcassets
       - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/ReleaseNotes.json
@@ -592,6 +594,7 @@ targets:
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchInteractionTests.swift
       - path: Tests/HomeRemoteTests/ServerAddressNavigationInteractionTests.swift
+      - path: Tests/HomeRemoteTests/PlexHomeOnboardingInteractionTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.InteractionTests

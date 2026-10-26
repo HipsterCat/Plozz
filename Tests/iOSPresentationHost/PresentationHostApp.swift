@@ -177,6 +177,8 @@ struct PresentationHostApp: App {
                 PlaybackFailureFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--server-address-fixture") {
                 ServerAddressNavigationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--plex-home-onboarding-fixture") {
+                PlexHomeOnboardingFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--iptv-organization-fixture") {
                 IPTVOrganizationFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--category-search-fixture") {

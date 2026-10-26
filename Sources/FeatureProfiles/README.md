@@ -47,6 +47,18 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
 - **Default profile is special.** Stable id
   `ProfileStore.defaultProfileID` (`com.plozz.profile.default`); `nil`
   settings namespace; cannot be removed. Don't break the upgrade path.
+- **Plex Home onboarding is opt-in.** After linking Plex, the shared page offers
+  Add all profiles or Just me, then shows the Home users' photos for the viewer
+  to choose themselves. The choice changes in place with a short lift/fade;
+  Reduce Motion uses only a fade. The viewer keeps the active Plozz profile.
+  Importing adds only missing Home users, preserving existing profiles and their
+  customization. New profiles have explicit membership in that login's selected
+  Plex servers, their own Home-user bindings/photos, and the normal setup gate.
+  Import is metadata-only: no other user's PIN or session is requested, and
+  each user's current Plex protection is checked when they enter their profile.
+  First-run import also keeps the viewer in setup until confirmation completes.
+  Extra imported profiles cannot skip the remaining onboarding pages; once the
+  viewer finishes, a synced household still avoids repeating first-run elsewhere.
 - **Photo fallback.** Borrowed photos fall back to the profile's emoji or
   symbol if loading fails; preserve symbol-only profiles on both platforms.
 - **Profile-aware everywhere.** Any feature reading per-user state

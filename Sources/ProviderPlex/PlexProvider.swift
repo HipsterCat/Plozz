@@ -113,6 +113,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
             resolver: makeResolver(session.server.alternateConnectionURLs ?? [], advertised),
             deviceProfile: deviceProfile,
             token: session.accessToken,
+            serverID: session.server.id,
             http: http,
             interactiveHTTP: interactiveHTTP,
             hybridEngineEnabled: hybridEngineEnabled

@@ -1827,7 +1827,9 @@ public final class AppState {
                         accountID: accountID,
                         serverName: session.server.name,
                         users: users,
-                        isFirstRun: isFirstRun
+                        isFirstRun: isFirstRun,
+                        applyToAccountIDs: self.pendingPlexUserApplyToAccountIDs.isEmpty
+                            ? [accountID] : self.pendingPlexUserApplyToAccountIDs
                     ))
                     self.apply(.plexUserSelectionRequired)
                 } else {
@@ -1894,27 +1896,10 @@ public final class AppState {
     /// that user (so the confirm screen shows *who's watching*, not the account
     /// owner). Then continues to the profile confirm step (first run) or the
     /// app, applying the binding so the Plex identity switches.
-    public func selectPlexUserDuringOnboarding(_ user: PlexHomeUser?) {
+    public func selectPlexUserDuringOnboarding(_ user: PlexHomeUser?, addAllProfiles: Bool = false) {
         guard let pending = plexHomeUsers.pendingPlexUserSelection else { return }
         if let user {
-            let binding = PlexHomeUserBinding(
-                homeUserID: user.id,
-                name: user.name,
-                avatarURL: user.avatarURL?.absoluteString,
-                requiresPIN: user.requiresPIN,
-                pinRequirementVerified: user.pinRequirementVerified
-            )
-            // Apply the chosen Home user to every newly-added Plex account in the
-            // batch (they belong to the same Plex account and share Home users),
-            // falling back to just the one that triggered the pick.
-            let targets = pendingPlexUserApplyToAccountIDs.isEmpty
-                ? [pending.accountID]
-                : pendingPlexUserApplyToAccountIDs
-            var updated = profilesModel.activeProfile
-            for accountID in targets {
-                updated = updated.settingHomeUserBinding(binding, forPlexAccount: accountID)
-            }
-            profilesModel.update(updated)
+            guard plexHomeUsers.selectOnboardingUser(user, addAllProfiles: addAllProfiles) else { return }
         }
         plexHomeUsers.clearUserSelection()
         // Continue to the "choose your libraries" step. First run seeds the

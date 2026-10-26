@@ -57,6 +57,8 @@ struct FocusHostApp: App {
                 SubtitleStyleInputFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--home-layout-onboarding-fixture") {
                 HomeLayoutOnboardingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--plex-home-onboarding-fixture") {
+                PlexHomeOnboardingFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--library-showcase-fixture") {
                 LibraryShowcaseFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--library-held-scroll-fixture") {
