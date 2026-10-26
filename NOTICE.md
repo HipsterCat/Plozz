@@ -21,10 +21,11 @@ embedded in the app bundle as frameworks (`AetherLibavcodec.framework`,
 
 | Component | Source (pinned) | License |
 |---|---|---|
-| AetherEngine (media engine; "Plozzigen") | `github.com/brandomoore/AetherEngine` @ `4b7552a06c4cf646bb94eb7eb273946f8b916a70` (7.34.1 + fork fixes) | LGPL-3.0 with Apple Store exception |
-| FFmpeg `libav*` (demux / decode / thin HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `3.7.0` (FFmpeg **n8.1.3**) | **LGPL-2.1-or-later** |
+| AetherEngine (media engine; "Plozzigen") | `github.com/brandomoore/AetherEngine` @ `3cde25855b30b3c8998685872ecf97f133edccbd` | LGPL-3.0 with Apple Store exception |
+| FFmpeg `libav*` (demux / decode / thin HLS-fMP4 mux) | `github.com/superuser404notfound/FFmpegBuild` @ `3.9.0` (FFmpeg **n8.1.3**) | **LGPL-2.1-or-later** |
 | dav1d (AV1 software decoder, separate xcframework) | bundled by FFmpegBuild | BSD-2-Clause (permissive) |
 | libdovi (Dolby Vision RPU parser) | `github.com/superuser404notfound/LibDovi` @ `2.1.0` | MIT |
+| LibTrueHD (decoder and object renderer) | `github.com/superuser404notfound/LibTrueHD` @ `3.0.0` | MIT / Apache-2.0 |
 
 Plozz's own `Package.swift` declares **only** AetherEngine for this stack;
 FFmpegBuild, LibDovi and LibTrueHD are its transitive dependencies (AetherEngine owns their version
@@ -39,7 +40,7 @@ The pinned fork exports AetherEngine dynamically to separate its two Rust decode
 runtimes from Plozz's Objective-C/C++ unwind table. Both apps embed and sign
 `AetherEngine.framework`; FFmpeg remains in separate dynamic frameworks.
 
-[LibTrueHD 2.2.0](https://github.com/superuser404notfound/LibTrueHD/tree/2.2.0)
+[LibTrueHD 3.0.0](https://github.com/superuser404notfound/LibTrueHD/tree/3.0.0)
 is linked into the engine even when its object-audio mode is off. Its C API and
 Apple packaging are MIT, copyright Quick104 and Vincent Herbst; the compiled
 truehd and oamd crates are Apache-2.0, copyright Rainbaby and contributors.
@@ -49,7 +50,7 @@ The shared acknowledgements page credits the library and exact source tag.
 
 ## FFmpeg license facts
 
-Upstream FFmpeg `libav*` and FFmpegBuild 3.7.0 are **LGPL-2.1-or-later**.
+Upstream FFmpeg `libav*` and FFmpegBuild 3.9.0 are **LGPL-2.1-or-later**.
 The build enables neither `--enable-gpl` nor `--enable-version3`; the exact
 component licenses and notices live in the release's `LICENSES/` directory.
 The build is scoped to demux + decode + a thin HLS-fMP4 mux for

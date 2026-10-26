@@ -238,7 +238,7 @@ let package = Package(
         // bridge; the engine's legacy SMB URL product is not linked.
         .package(
             url: "https://github.com/brandomoore/AetherEngine",
-            revision: "00af4201a2dc5546a4547eec242a01b18c13de31",
+            revision: "3cde25855b30b3c8998685872ecf97f133edccbd",
             traits: [
                 "TrueHDObjectAudio", "DTSXObjectAudio",
                 "DualLayerDolbyVision", "DolbyVisionStillReshaping",

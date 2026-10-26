@@ -66,6 +66,8 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: App/Plozz
+      - path: App/Privacy/tvOS/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: App/Resources/Assets.xcassets
       - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/Fonts
@@ -306,6 +308,8 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: TopShelf/ContentProvider.swift
+      - path: TopShelf/PrivacyInfo.xcprivacy
+        buildPhase: resources
       # The snapshot model + store are compiled into the extension directly so
       # it stays free of CoreModels and the rest of the app's stack.
       - path: Sources/TopShelfKit/TopShelfSnapshot.swift
@@ -333,6 +337,8 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: App/PlozziOS
+      - path: App/Privacy/iOS/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/Fonts
       # Same shared catalog as the tvOS target — see the note there.
