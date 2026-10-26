@@ -6,7 +6,12 @@ public struct CollectionCoverLayoutPicker: View {
     @Binding private var selection: CollectionCoverLayout
     private let title: LocalizedStringResource
 
-    public init(selection: Binding<CollectionCoverLayout>, title: LocalizedStringResource = "Covers") {
+    public init(
+        selection: Binding<CollectionCoverLayout>,
+        title: LocalizedStringResource = LocalizedStringResource(
+            "Covers", comment: "Short label for the collection cover image layout setting."
+        )
+    ) {
         _selection = selection
         self.title = title
     }

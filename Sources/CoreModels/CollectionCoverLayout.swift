@@ -9,7 +9,11 @@ public enum CollectionCoverLayout: String, Codable, CaseIterable, Sendable {
 
     public var title: LocalizedStringResource {
         switch self {
-        case .auto: "Auto"
+        case .auto:
+            LocalizedStringResource(
+                "collectionCoverLayout.auto", defaultValue: "Auto",
+                comment: "Collection cover layout option that chooses one card shape from the collection cover image shapes."
+            )
         case .poster: "Posters"
         case .landscape: "Landscape"
         }
