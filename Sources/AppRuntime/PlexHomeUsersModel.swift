@@ -97,6 +97,10 @@ public final class PlexHomeUsersModel {
     /// with 2+ Home users signs in (and this profile hasn't bound one yet).
     /// `RootView` presents the picker bound to this; `nil` when none is pending.
     public private(set) var pendingPlexUserSelection: PendingPlexUserSelection?
+    @ObservationIgnored
+    private var importedOnboardingProfiles: [String: String] = [:]
+    @ObservationIgnored private var onboardingProfileAccess: AutomaticSignInStore.Session.ProfileAccess?
+    @ObservationIgnored private var onboardingCredentialSource: CredentialSource?
 
     /// A PIN entered to unlock a Plozz profile whose lock the user linked to
     /// their Plex PIN, waiting to be spent on that profile's next Plex
@@ -568,6 +572,77 @@ public final class PlexHomeUsersModel {
 
     // MARK: Plex Home users ("Who's watching?")
 
+    public func importOnboardingProfiles() -> PlexHomeProfileImportResult {
+        guard let selection = pendingPlexUserSelection,
+              let owner = accountsProviders.accounts.first(where: { $0.id == selection.accountID }),
+              owner.server.provider == .plex,
+              onboardingProfileAccess == .init(profilesModel.activeProfile),
+              onboardingCredentialSource == CredentialSource(owner),
+              !selection.users.isEmpty else {
+            PlozzLog.auth.error("Plex Home import has no current sign-in")
+            return .failed
+        }
+        let targets = accountsProviders.accounts.filter {
+            selection.applyToAccountIDs.contains($0.id)
+                && $0.server.provider == .plex && $0.userID == owner.userID
+        }.map(\.id)
+        guard targets.contains(owner.id) else {
+            PlozzLog.auth.error("Plex Home import has no matching servers")
+            return .failed
+        }
+        let before = profilesModel.profiles.count
+        if selection.isFirstRun, importedOnboardingProfiles.isEmpty,
+           profilesModel.profiles.count == 1,
+           profilesModel.activeProfileID == ProfileStore.defaultProfileID,
+           let first = selection.users.first(where: \.isAdmin) ?? selection.users.first {
+            guard selectOnboardingUser(first, addAllProfiles: false) else { return .failed }
+            var profile = profilesModel.activeProfile
+            profile.name = first.name
+            profilesModel.update(profile)
+        }
+        var imported: [String: String] = [:]
+        for user in selection.users {
+            if let existing = profilesModel.profiles.first(where: { profile in
+                matchesOnboardingHomeUser(profile, userID: user.id, owner: owner)
+            }) {
+                imported[user.id] = existing.id
+                continue
+            }
+            let binding = PlexHomeUserBinding(
+                homeUserID: user.id, name: user.name,
+                avatarURL: user.avatarURL?.absoluteString, requiresPIN: user.requiresPIN,
+                isManaged: user.isRestricted, pinRequirementVerified: user.pinRequirementVerified
+            )
+            let added = profilesModel.add(
+                name: user.name, colorIndex: profilesModel.profiles.count,
+                linkedAccountID: owner.id, activeAccountIDs: targets,
+                plexHomeUserBindings: Dictionary(uniqueKeysWithValues: targets.map { ($0, binding) }),
+                avatarImageURL: user.avatarURL?.absoluteString, isAwaitingSetup: true
+            )
+            imported[user.id] = added.id
+        }
+        importedOnboardingProfiles = imported
+        return profilesModel.profiles.count > before ? .added : .existing
+    }
+
+    public func importedOnboardingProfileID(for user: PlexHomeUser) -> String? {
+        guard let selection = pendingPlexUserSelection,
+              selection.users.contains(user),
+              let owner = accountsProviders.accounts.first(where: { $0.id == selection.accountID }),
+              onboardingCredentialSource == CredentialSource(owner),
+              let id = importedOnboardingProfiles[user.id],
+              let profile = profilesModel.profiles.first(where: { $0.id == id }),
+              matchesOnboardingHomeUser(profile, userID: user.id, owner: owner) else { return nil }
+        return id
+    }
+
+    private func matchesOnboardingHomeUser(_ profile: Profile, userID: String, owner: Account) -> Bool {
+        let bindings = accountsProviders.accounts.filter {
+            $0.server.provider == .plex && $0.userID == owner.userID
+        }.compactMap { profile.homeUserBinding(forPlexAccount: $0.id) }
+        return !bindings.isEmpty && bindings.allSatisfy { $0.homeUserID == userID }
+    }
+
     /// Imports metadata only. Each profile still authenticates its own Home user
     /// when selected; importing never grants a session or copies another user's PIN.
     @discardableResult
@@ -575,9 +650,21 @@ public final class PlexHomeUsersModel {
         guard let selection = pendingPlexUserSelection,
               selection.users.contains(user),
               let owner = accountsProviders.accounts.first(where: { $0.id == selection.accountID }),
-              owner.server.provider == .plex else {
+              owner.server.provider == .plex,
+              onboardingProfileAccess == .init(profilesModel.activeProfile),
+              onboardingCredentialSource == CredentialSource(owner) else {
             PlozzLog.auth.error("Plex onboarding selection is no longer current")
             return false
+        }
+        if addAllProfiles {
+            if importedOnboardingProfiles.isEmpty {
+                guard importOnboardingProfiles() != .failed else { return false }
+            }
+            guard importedOnboardingProfileID(for: user) != nil else {
+                PlozzLog.auth.error("Imported Plex Home profile is no longer available")
+                return false
+            }
+            return true
         }
         let targets = accountsProviders.accounts.filter {
             selection.applyToAccountIDs.contains($0.id)
@@ -604,28 +691,6 @@ public final class PlexHomeUsersModel {
         }
         profilesModel.update(selectedProfile)
 
-        if addAllProfiles {
-            let homeAccountIDs = accountsProviders.accounts.filter {
-                $0.server.provider == .plex && $0.userID == owner.userID
-            }.map(\.id)
-            for other in selection.users where other.id != user.id {
-                let alreadyAdded = profilesModel.profiles.contains { profile in
-                    homeAccountIDs.contains {
-                        profile.homeUserBinding(forPlexAccount: $0)?.homeUserID == other.id
-                    }
-                }
-                guard !alreadyAdded else { continue }
-                profilesModel.add(
-                    name: other.name,
-                    colorIndex: profilesModel.profiles.count,
-                    linkedAccountID: owner.id,
-                    activeAccountIDs: targets,
-                    plexHomeUserBindings: Dictionary(uniqueKeysWithValues: targets.map { ($0, binding(for: other)) }),
-                    avatarImageURL: other.avatarURL?.absoluteString,
-                    isAwaitingSetup: true
-                )
-            }
-        }
         return true
     }
 
@@ -1211,6 +1276,24 @@ public final class PlexHomeUsersModel {
         return plexDiscoverTokens.token(for: accountID)
     }
 
+    public func resolveCloudToken(
+        for account: Account, expectedRevision: CredentialRevision
+    ) async throws -> String? {
+        func isCurrent() -> Bool {
+            accountsProviders.activeAccountIDs.contains(account.id)
+                && accountsProviders.accounts.first(where: { $0.id == account.id }).map(CredentialSource.init)
+                    == CredentialSource(account)
+                && hasResolvedWatchMutationIdentity(forAccountID: account.id)
+                && effectiveCredentialRevision(for: account) == expectedRevision
+        }
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
+        let token = try await resolveDiscoverToken(for: account.id)
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
+        return token
+    }
+
     /// Repairs an authorized unprotected Home user's missing cloud credential
     /// without refreshing the library
     /// session or using an owner credential for cloud requests.
@@ -1520,7 +1603,7 @@ public final class PlexHomeUsersModel {
         plexCredentialSources.removeAll()
         plexHomeAuthorizationScopes.removeAll()
         plexHomeUserTokenCache.removeAll()
-        pendingPlexUserSelection = nil
+        clearUserSelection()
         pendingPlexPINRequest = nil
         plexPINEntryAvailability = .checking
         plexPINError = nil
@@ -1528,11 +1611,19 @@ public final class PlexHomeUsersModel {
 
     /// Presents (or clears) the "which Plex user are you?" onboarding selection.
     public func presentUserSelection(_ selection: PendingPlexUserSelection?) {
+        importedOnboardingProfiles = [:]
+        onboardingProfileAccess = selection.map { _ in .init(profilesModel.activeProfile) }
+        onboardingCredentialSource = selection.flatMap { selection in
+            accountsProviders.accounts.first(where: { $0.id == selection.accountID }).map(CredentialSource.init)
+        }
         pendingPlexUserSelection = selection
     }
 
     /// Clears the pending user selection once the onboarding step consumes it.
     public func clearUserSelection() {
+        importedOnboardingProfiles = [:]
+        onboardingProfileAccess = nil
+        onboardingCredentialSource = nil
         pendingPlexUserSelection = nil
     }
 }

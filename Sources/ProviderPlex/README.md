@@ -50,6 +50,10 @@ first-class backends; co-equal with `ProviderJellyfin`.
   or cancellation is never converted to an empty result. Resource-token lookup
   reads the server grant directly, without requiring advertised connection URLs
   or probing servers just to resolve credentials.
+  Browsing providers receive a live cloud-credential reader fenced to their
+  account and effective credential revision. Sharing verification uses that
+  Home-user token, never the server-scoped token, and rechecks identity after
+  the cloud response before publishing an empty inventory.
 
 ## Format badges
 

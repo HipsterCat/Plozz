@@ -69,7 +69,6 @@ public struct RootView: View {
     @State private var showSyncErasure = false
     @State private var showsMarkerPreview = false
     /// Library discovery for the setup step's cover.
-    @State private var setupLibraries = ProfileSetupLibrariesLoader()
     @State private var showSyncSend = false
     @State private var rootPresentation = RootPresentationCoordinator()
     @State private var startupNotesPrepared = false
@@ -582,10 +581,10 @@ public struct RootView: View {
                 ProfileSetupFlowView(
                     appState: appState,
                     profile: setupProfile,
-                    librariesStore: setupLibraries,
                     deviceColorScheme: systemColorScheme,
                     onAppearanceSelected: completeAppearanceIntroductions
                 )
+                .id(setupProfile.id)
             } else {
                 switch appState.rootPresentationState {
             case .launching:
@@ -1341,6 +1340,7 @@ private struct OnboardingPageContent: View {
             if let selection {
                 PlexUserSelectionView(
                     selection: selection,
+                    onImportAll: appState.importPlexHomeProfilesDuringOnboarding,
                     onSelect: { user, addAll in
                         appState.selectPlexUserDuringOnboarding(user, addAllProfiles: addAll)
                     }
@@ -1436,7 +1436,7 @@ struct AccountSetupOverlay: ViewModifier {
 private struct ProfileSetupFlowView: View {
     let appState: AppState
     let profile: Profile
-    let librariesStore: ProfileSetupLibrariesLoader
+    @State private var librariesStore = ProfileSetupLibrariesLoader()
     let deviceColorScheme: ColorScheme
     let onAppearanceSelected: () -> Void
     @State private var stage: ProfileSetupStage = .libraries

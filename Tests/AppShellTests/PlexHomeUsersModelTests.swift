@@ -159,6 +159,40 @@ final class PlexHomeUsersModelTests: XCTestCase {
         }
     }
 
+    func testProviderCloudCredentialLookupUsesTheLiveHomeIdentityAndRejectsOldRevisions() async throws {
+        let (model, hub, profiles) = try makeModel(accountIDs: ["a"])
+        model.plexHomeUsersFetch = { _, _ in [.init(id: "parent", name: "Parent", requiresPIN: true)] }
+        model.plexHomeUserSwitch = { _, _, _, _ in "parent-cloud" }
+        model.plexServerTokenResolve = { _, _, _ in "parent-server" }
+        activateSavedUser(model, profiles: profiles, accountID: "a",
+                          user: .init(id: "parent", name: "Parent", requiresPIN: true))
+        model.submitPlexPIN("2468")
+        await model.waitForPlexPINRequirementCheck()
+        hub.credentialRevision = { model.effectiveCredentialRevision(for: $0) }
+        hub.cloudTokenResolver = { try await model.resolveCloudToken(for: $0, expectedRevision: $1) }
+        let account = try XCTUnwrap(hub.accounts.first)
+        let context = hub.providerResolutionContext(for: account, token: "parent-server")
+        let resolve = try XCTUnwrap(context.cloudTokenResolver)
+        let token = try await resolve()
+        XCTAssertEqual(token, "parent-cloud")
+        let savedProfile = profiles.activeProfile
+        profiles.update(savedProfile.settingHomeUserBinding(
+            .init(homeUserID: "other", name: "Other", requiresPIN: true), forPlexAccount: "a"
+        ))
+        do {
+            _ = try await resolve()
+            XCTFail("A changed binding must invalidate the reader before reconciliation runs.")
+        } catch is CancellationError {
+        }
+        profiles.update(savedProfile)
+        model.beginExplicitProfileActivation()
+        do {
+            _ = try await resolve()
+            XCTFail("A retained provider must not read a later profile activation's cloud credential.")
+        } catch is CancellationError {
+        }
+    }
+
     func testSharedHomeAuthorizationCannotCommitAfterItsContextChanges() async throws {
         enum Mutation: CaseIterable {
             case sourceCredential, targetCredential, sourceRemoval, disableTarget, activation, profileBinding
@@ -278,6 +312,30 @@ final class PlexHomeUsersModelTests: XCTestCase {
         XCTAssertFalse(model.selectOnboardingUser(
             .init(id: "unknown", name: "Unknown", requiresPIN: false), addAllProfiles: true
         ))
+    }
+
+    func testAllProfilesExistBeforeTheViewerIsChosenAndImportIsIdempotent() throws {
+        let (model, _, profiles) = try makeModel(accountIDs: ["a", "b"], samePlexLogin: true)
+        let users = [
+            PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true, isAdmin: true),
+            PlexHomeUser(id: "child", name: "Child", requiresPIN: false)
+        ]
+        model.presentUserSelection(.init(
+            accountID: "a", serverName: "Plex", users: users, isFirstRun: true, applyToAccountIDs: ["a", "b"]
+        ))
+        XCTAssertEqual(model.importOnboardingProfiles(), .added)
+        XCTAssertEqual(profiles.profiles.count, 2)
+        XCTAssertTrue(profiles.profiles.allSatisfy(\.needsSetup))
+        XCTAssertEqual(profiles.activeProfile.homeUserBinding(forPlexAccount: "a")?.homeUserID, "parent")
+        let childID = try XCTUnwrap(model.importedOnboardingProfileID(for: users[1]))
+        XCTAssertNotEqual(childID, profiles.activeProfileID)
+        XCTAssertTrue(model.selectOnboardingUser(users[1], addAllProfiles: true))
+        XCTAssertEqual(profiles.activeProfile.homeUserBinding(forPlexAccount: "a")?.homeUserID, "parent",
+                       "Choosing an imported profile must not overwrite the default owner's identity.")
+        XCTAssertEqual(model.importOnboardingProfiles(), .existing)
+        XCTAssertEqual(model.importedOnboardingProfileID(for: users[1]), childID)
+        XCTAssertEqual(profiles.profiles.count, 2)
+        XCTAssertNil(model.resolvedToken(for: "a"))
     }
 
     func testResolvedTokenFallsBackToAdminTokenWithoutOverride() throws {

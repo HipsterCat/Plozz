@@ -123,7 +123,9 @@ struct PlozziOSSettingsView: View {
         }
         .plozzSheet(item: plexUserSelectionBinding) { selection in
             PlozziOSPlexUserSelectionView(
+                appModel: appModel,
                 selection: selection,
+                onImportAll: appModel.importPlexHomeProfilesDuringOnboarding,
                 onSelect: appModel.selectPlexUserDuringOnboarding
             )
         }

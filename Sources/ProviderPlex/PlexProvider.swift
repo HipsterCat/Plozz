@@ -54,6 +54,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         session: UserSession,
         accountID: String? = nil,
         credentialRevision: CredentialRevision = CredentialRevision(),
+        cloudTokenResolver: (@Sendable () async throws -> String?)? = nil,
         http: HTTPClient = URLSessionHTTPClient(),
         interactiveHTTP: HTTPClient? = nil,
         hybridEngineEnabled: Bool = false,
@@ -114,6 +115,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
             deviceProfile: deviceProfile,
             token: session.accessToken,
             serverID: session.server.id,
+            cloudTokenResolver: cloudTokenResolver,
             http: http,
             interactiveHTTP: interactiveHTTP,
             hybridEngineEnabled: hybridEngineEnabled

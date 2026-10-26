@@ -8,10 +8,11 @@ import CoreUI
 /// until onboarding completes; other imported users are never authenticated here.
 struct PlexUserSelectionView: View {
     let selection: PlexHomeUsersModel.PendingPlexUserSelection
+    let onImportAll: () -> PlexHomeProfileImportResult
     let onSelect: (PlexHomeUser, Bool) -> Void
 
     var body: some View {
-        PlexHomeOnboardingView(users: selection.users, onSelect: onSelect)
+        PlexHomeOnboardingView(users: selection.users, onImportAll: onImportAll, onSelect: onSelect)
             .id(selection.id)
     }
 }

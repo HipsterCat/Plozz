@@ -4,6 +4,7 @@ import SwiftUI
 
 struct PlexHomeOnboardingFixture: View {
     @State private var result: String?
+    @State private var imported = false
 
     var body: some View {
         Group {
@@ -15,8 +16,11 @@ struct PlexHomeOnboardingFixture: View {
                     .init(id: "parent", name: "Alex", requiresPIN: true, isAdmin: true),
                     .init(id: "child", name: "Sam", requiresPIN: false, isRestricted: true),
                     .init(id: "guest", name: "Taylor", requiresPIN: false)
-                ], reduceMotion: ProcessInfo.processInfo.arguments.contains("--plex-home-reduce-motion")) { user, addAll in
-                    result = "\(user.id):\(addAll ? "all" : "one")"
+                ], reduceMotion: ProcessInfo.processInfo.arguments.contains("--plex-home-reduce-motion"), onImportAll: {
+                    imported = true
+                    return .added
+                }) { user, addAll in
+                    result = addAll && !imported ? "incorrect-order" : "\(user.id):\(addAll ? "all" : "one")"
                 }
             }
         }
@@ -24,5 +28,8 @@ struct PlexHomeOnboardingFixture: View {
         .background { AppBackground(palette: .dark) }
         .environment(\.themePalette, .dark)
         .environment(\.colorScheme, .dark)
+        #if os(iOS)
+        .environment(\.plozzMetrics, .touch(density: .standard))
+        #endif
     }
 }

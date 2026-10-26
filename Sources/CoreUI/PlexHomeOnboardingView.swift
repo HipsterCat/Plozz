@@ -1,22 +1,35 @@
 #if canImport(SwiftUI)
 import CoreModels
+import CoreNetworking
 import SwiftUI
+
+public enum PlexHomeProfileImportResult: Equatable, Sendable {
+    case added, existing, failed
+}
 
 /// One Plex Home decision followed by the viewer's identity, without authenticating
 /// any of the other profiles being imported.
 public struct PlexHomeOnboardingView: View {
     private let users: [PlexHomeUser]
     private let onSelect: (PlexHomeUser, Bool) -> Void
+    private let onImportAll: () -> PlexHomeProfileImportResult
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(users: [PlexHomeUser], onSelect: @escaping (PlexHomeUser, Bool) -> Void) {
+    public init(
+        users: [PlexHomeUser],
+        onImportAll: @escaping () -> PlexHomeProfileImportResult,
+        onSelect: @escaping (PlexHomeUser, Bool) -> Void
+    ) {
         self.users = users
+        self.onImportAll = onImportAll
         self.onSelect = onSelect
     }
 
     public var body: some View {
-        PlexHomeOnboardingContent(users: users, reduceMotion: reduceMotion, onSelect: onSelect)
+        PlexHomeOnboardingContent(
+            users: users, reduceMotion: reduceMotion, onImportAll: onImportAll, onSelect: onSelect
+        )
     }
 }
 
@@ -24,12 +37,20 @@ struct PlexHomeOnboardingContent: View {
     let users: [PlexHomeUser]
     let reduceMotion: Bool
     let onSelect: (PlexHomeUser, Bool) -> Void
-    @State private var addAllProfiles: Bool?
+    let onImportAll: () -> PlexHomeProfileImportResult
+    private enum Stage: Hashable { case choice, added, existing, allProfiles, oneUser }
+    @State private var stage: Stage = .choice
+    @State private var importFailed = false
     @FocusState private var focused: String?
 
-    init(users: [PlexHomeUser], reduceMotion: Bool, onSelect: @escaping (PlexHomeUser, Bool) -> Void) {
+    init(
+        users: [PlexHomeUser], reduceMotion: Bool,
+        onImportAll: @escaping () -> PlexHomeProfileImportResult,
+        onSelect: @escaping (PlexHomeUser, Bool) -> Void
+    ) {
         self.users = users
         self.reduceMotion = reduceMotion
+        self.onImportAll = onImportAll
         self.onSelect = onSelect
     }
 
@@ -50,10 +71,14 @@ struct PlexHomeOnboardingContent: View {
     var body: some View {
         ScrollView {
             ZStack(alignment: .top) {
-                if let addAllProfiles {
-                    userSelection(addAllProfiles: addAllProfiles)
+                switch stage {
+                case .allProfiles, .oneUser:
+                    userSelection(addAllProfiles: stage == .allProfiles)
                         .transition(pageTransition)
-                } else {
+                case .added, .existing:
+                    importConfirmation
+                        .transition(pageTransition)
+                case .choice:
                     importChoice
                         .transition(pageTransition)
                 }
@@ -66,10 +91,23 @@ struct PlexHomeOnboardingContent: View {
         .defaultScrollAnchor(.center)
         .animation(
             reduceMotion ? .easeInOut(duration: 0.14) : .smooth(duration: 0.38, extraBounce: 0),
-            value: addAllProfiles
+            value: stage
         )
-        .task(id: addAllProfiles) {
-            focused = addAllProfiles == nil ? "add-all" : orderedUsers.first?.id
+        .task(id: stage) {
+            if stage == .added || stage == .existing {
+                do {
+                    try await Task.sleep(for: .milliseconds(reduceMotion ? 800 : 1_000))
+                    guard !Task.isCancelled else { return }
+                    stage = .allProfiles
+                } catch is CancellationError {
+                    return
+                } catch {
+                    PlozzLog.app.error("Plex Home confirmation transition failed: \(error)")
+                    stage = .allProfiles
+                }
+            } else {
+                focused = stage == .choice ? "add-all" : orderedUsers.first?.id
+            }
         }
     }
 
@@ -81,30 +119,51 @@ struct PlexHomeOnboardingContent: View {
                         .accessibilityHidden(true)
                 }
             }
-            OnboardingHeader(
-                Text("Add your Plex Home profiles?"),
-                subtitle: Text("Keep everyone's Plex name, photo, and PIN protection.")
-            )
+            OnboardingHeader(Text("Add your Plex Home profiles?"))
             VStack(spacing: 16) {
-                Button("Add all profiles") { addAllProfiles = true }
+                Button("Add all profiles") {
+                    importFailed = false
+                    switch onImportAll() {
+                    case .added: stage = .added
+                    case .existing: stage = .existing
+                    case .failed: importFailed = true
+                    }
+                }
                     .plozzActionButton(role: .primary)
                     .focused($focused, equals: "add-all")
                     .accessibilityIdentifier("plex-home-add-all")
-                Button("Just me") { addAllProfiles = false }
+                Button("Just me") { stage = .oneUser }
                     .plozzActionButton(role: .secondary)
                     .accessibilityIdentifier("plex-home-just-me")
             }
+            if importFailed {
+                Text("Couldn't add profiles. Try again.")
+                    .plozzForeground(.secondary)
+            }
+        }
+    }
+
+    private var importConfirmation: some View {
+        VStack(spacing: 28) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)], spacing: 12) {
+                ForEach(orderedUsers) { user in
+                    PlexHomeUserAvatar(user: user, size: 64)
+                }
+            }
+            Label {
+                if stage == .added { Text("Profiles added") }
+                else { Text("Profiles ready") }
+            } icon: {
+                Image(systemName: "checkmark.circle.fill")
+            }
+            .font(.title2.weight(.bold))
+            .accessibilityAddTraits(.isHeader)
         }
     }
 
     private func userSelection(addAllProfiles: Bool) -> some View {
         VStack(spacing: 24) {
-            OnboardingHeader(
-                Text("Who are you?"),
-                subtitle: addAllProfiles
-                    ? Text("Everyone will have a profile. Choose yours to continue.")
-                    : Text("Only your profile will be added.")
-            )
+            OnboardingHeader(addAllProfiles ? Text("Choose your profile") : Text("Choose your Plex user"))
             VStack(spacing: 14) {
                 ForEach(orderedUsers) { user in
                     Button {
@@ -123,12 +182,16 @@ struct PlexHomeOnboardingContent: View {
                     .accessibilityIdentifier("plex-home-user-\(user.id)")
                 }
             }
-            Button("Back") { self.addAllProfiles = nil }
-                .plozzActionButton(role: .secondary)
-                .accessibilityIdentifier("plex-home-back")
+            if !addAllProfiles {
+                Button("Back") { stage = .choice }
+                    .plozzActionButton(role: .secondary)
+                    .accessibilityIdentifier("plex-home-back")
+            }
         }
         #if os(tvOS)
-        .onExitCommand { self.addAllProfiles = nil }
+        .onExitCommand {
+            if !addAllProfiles { stage = .choice }
+        }
         #endif
     }
 }

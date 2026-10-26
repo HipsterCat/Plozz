@@ -382,7 +382,9 @@ public struct PlozziOSRootView: View {
             item: plexUserSelectionBinding
         ) { selection in
             PlozziOSPlexUserSelectionView(
+                appModel: appModel,
                 selection: selection,
+                onImportAll: appModel.importPlexHomeProfilesDuringOnboarding,
                 onSelect: appModel.selectPlexUserDuringOnboarding
             )
         }
@@ -550,7 +552,8 @@ public struct PlozziOSRootView: View {
     private var profileAccessGateBinding: Binding<Bool> {
         Binding(
             get: {
-                guard !showsLaunchProfilePicker, !showingProfileSwitcher else { return false }
+                guard !showsLaunchProfilePicker, !showingProfileSwitcher,
+                      appModel.plexHomeUsers.pendingPlexUserSelection == nil else { return false }
                 if appModel.lockedSwitch != nil { return true }
                 if appModel.parentalSwitch != nil { return true }
                 guard !showingSettings,

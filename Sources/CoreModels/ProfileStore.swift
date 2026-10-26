@@ -971,7 +971,7 @@ public final class ProfilesModel {
     /// Marks the one-time first-run profile setup as done so it never runs
     /// again — even if the user later signs out of every server and re-adds one.
     public func markFirstRunProfileSetupComplete() {
-        if var profile = profiles.first, profile.needsSetup {
+        if var profile = profiles.first(where: { $0.id == activeProfileID }), profile.needsSetup {
             profile.needsSetup = false
             update(profile)
         }

@@ -90,6 +90,51 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         XCTAssertEqual(harness.profiles.activeProfile.name, "Me")
     }
 
+    func testImportedFirstRunCompletionDoesNotReopenAppearanceOnReselectOrReload() async throws {
+        let harness = try makeHarness()
+        harness.state.bootstrap()
+        let users = [
+            PlexHomeUser(id: "parent", name: "Parent", requiresPIN: false, isAdmin: true),
+            PlexHomeUser(id: "child", name: "Child", requiresPIN: false)
+        ]
+        harness.state.plexHomeUsers.plexHomeUsersFetch = { _, _ in users }
+        harness.state.plexHomeUsers.plexHomeUserSwitch = { user, _, _, _ in "cloud-\(user)" }
+        harness.state.plexHomeUsers.plexServerTokenResolve = { _, _, _ in "server-token" }
+        harness.state.addAccount(provider: .plex)
+        XCTAssertTrue(harness.state.didAuthenticate(.init(
+            server: .init(id: "server", name: "Server", baseURL: URL(string: "https://server.example")!, provider: .plex),
+            userID: "owner", userName: "Owner", deviceID: "fixture", accessToken: "fixture-owner"
+        )))
+        for _ in 0..<200 {
+            if harness.state.plexHomeUsers.pendingPlexUserSelection != nil { break }
+            await Task.yield()
+        }
+        XCTAssertNotNil(harness.state.plexHomeUsers.pendingPlexUserSelection)
+        XCTAssertEqual(harness.state.importPlexHomeProfilesDuringOnboarding(), .added)
+        harness.state.selectPlexUserDuringOnboarding(users[1], addAllProfiles: true)
+        let selected = harness.profiles.activeProfileID
+        XCTAssertNotEqual(selected, ProfileStore.defaultProfileID)
+        XCTAssertTrue(harness.state.profileFlow.hasResumableSetup)
+        harness.state.confirmLibrarySelection()
+        harness.state.confirmFirstRunProfile()
+        harness.state.completeFirstRunSeerrSetup()
+        harness.state.finishThemeSelection()
+        harness.state.finishNavigationSelection()
+        harness.state.finishHomeLayoutSelection()
+        XCTAssertFalse(harness.state.profileFlow.hasResumableSetup)
+        harness.state.profileFlow.switchProfile(to: selected)
+        XCTAssertFalse(harness.state.profileFlow.isPickingAppearanceForNewProfile)
+        XCTAssertFalse(harness.state.profileFlow.hasResumableSetup)
+        let reloaded = AppState(
+            accountStore: harness.accounts, registry: ProviderRegistry(),
+            profilesModel: ProfilesModel(store: ProfileStore(defaults: harness.defaults)),
+            appAdmissionStore: AppAdmissionStore(defaults: harness.defaults)
+        )
+        reloaded.profileFlow.resumeSetupIfNeeded()
+        XCTAssertFalse(reloaded.profileFlow.hasResumableSetup)
+        XCTAssertFalse(reloaded.profileFlow.isPickingAppearanceForNewProfile)
+    }
+
     func testPendingPlexHomeIdentityKeepsNavigationWithoutAuthorizingProviderAccess() throws {
         let harness = try makeHarness(profileSetupComplete: true, withAccount: true, accountProvider: .plex)
         harness.profiles.update(harness.profiles.activeProfile.settingHomeUserBinding(

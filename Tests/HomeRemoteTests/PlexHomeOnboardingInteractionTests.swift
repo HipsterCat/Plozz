@@ -40,19 +40,21 @@ final class PlexHomeOnboardingInteractionTests: XCTestCase {
         app.launchArguments = ["--plex-home-onboarding-fixture"]
         app.launch()
         defer { app.terminate() }
-        activate(app.buttons["plex-home-add-all"])
+        activate(app.buttons["plex-home-just-me"])
         let parent = app.buttons["plex-home-user-parent"]
         XCTAssertTrue(parent.waitForExistence(timeout: 5))
         #if os(tvOS)
         XCUIRemote.shared.press(.menu)
         #else
-        activate(app.buttons["plex-home-back"])
+        let back = app.buttons["plex-home-back"]
+        if !back.waitForExistence(timeout: 2) { app.scrollViews.firstMatch.swipeUp() }
+        activate(back)
         #endif
-        activate(app.buttons["plex-home-just-me"])
+        activate(app.buttons["plex-home-add-all"])
         activate(app.buttons["plex-home-user-parent"])
         let result = app.staticTexts["plex-home-result"]
         XCTAssertTrue(result.waitForExistence(timeout: 5))
-        XCTAssertEqual(result.label, "parent:one")
+        XCTAssertEqual(result.label, "parent:all")
     }
 
     func testReducedMotionRetainsChoicesAndUserSelection() {

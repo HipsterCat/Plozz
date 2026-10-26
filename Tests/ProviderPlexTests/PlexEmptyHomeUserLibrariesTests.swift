@@ -50,6 +50,44 @@ final class PlexEmptyHomeUserLibrariesTests: XCTestCase {
         }
     }
 
+    func testRemovedServerGrantIsCheckedWithTheDistinctLiveCloudToken() async throws {
+        let http = StubHTTPClient()
+        http.stub(pathSuffix: "/library/sections", json: "{}", status: 401)
+        http.stub(pathSuffix: "/api/v2/resources", json: "[]")
+        let provider = PlexProvider(
+            session: .init(
+                server: .init(id: "server", name: "Server", baseURL: URL(string: "https://server.example")!, provider: .plex),
+                userID: "owner", userName: "Owner", deviceID: "fixture", accessToken: "server-scoped-token"
+            ),
+            cloudTokenResolver: { "home-user-cloud" },
+            http: http
+        )
+        let libraries = try await provider.libraries()
+        XCTAssertTrue(libraries.isEmpty)
+        XCTAssertEqual(http.sentHeaders.map { $0["X-Plex-Token"] }, ["server-scoped-token", "home-user-cloud"])
+    }
+
+    func testCloudIdentityChangedDuringGrantCheckCannotPublishAnEmptyInventory() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/library/sections", json: "{}", status: 401)
+        stub.stub(pathSuffix: "/api/v2/resources", json: "[]")
+        let state = CloudIdentity()
+        let http = GatedResourcesHTTP(stub: stub) { await state.invalidate() }
+        let provider = PlexProvider(
+            session: .init(
+                server: .init(id: "server", name: "Server", baseURL: URL(string: "https://server.example")!, provider: .plex),
+                userID: "owner", userName: "Owner", deviceID: "fixture", accessToken: "server-scoped-token"
+            ),
+            cloudTokenResolver: { try await state.token() },
+            http: http
+        )
+        do {
+            _ = try await provider.libraries()
+            XCTFail("A superseded Home identity must not publish a sharing result.")
+        } catch is CancellationError {
+        }
+    }
+
     func testExistingServerGrantCannotBeConvertedToEmptyLibraries() async throws {
         let http = StubHTTPClient()
         http.stub(pathSuffix: "/library/sections", json: "{}", status: 401)
@@ -61,6 +99,15 @@ final class PlexEmptyHomeUserLibrariesTests: XCTestCase {
             XCTFail("A server's rejection with an existing grant is not proof of no shared libraries.")
         } catch let error as AppError {
             XCTAssertEqual(error, .unauthorized)
+        }
+    }
+
+    private actor CloudIdentity {
+        private var isCurrent = true
+        func invalidate() { isCurrent = false }
+        func token() throws -> String {
+            guard isCurrent else { throw CancellationError() }
+            return "home-user-cloud"
         }
     }
 
