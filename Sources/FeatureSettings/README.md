@@ -69,12 +69,10 @@ text below. Opening, focusing, or cancelling the menu does not save a choice;
 Select does. Mobile retains its native pickers. These remain independent,
 device-local preferences with Automatic as the default.
 
-**Screens & Navigation → Navigation → Zoom when opening titles** is a tvOS-only,
-profile-scoped opt-in. Off uses native page opening and closing; on restores the
-cinematic artwork transition. The hero's staged content reveal is shared by both
-modes, without waiting for backdrop artwork when zoom is off.
-It defaults off for both new and existing profiles,
-stays local to the device, and still respects Reduce Motion.
+Title navigation uses native page opening and closing. The former
+**Zoom when opening titles** setting is removed, and saved values are ignored.
+The hero's staged content reveal remains, without waiting for backdrop artwork,
+and still respects Reduce Motion.
 
 Home hero, Showcase (TV), Recommended Page (TV), and Detail Page have independent
 profile-scoped **Logo size** controls. Thirteen stops span 0.5x to 1.5x, with finer
