@@ -183,6 +183,7 @@ struct HomeSectionSettingsView: View {
     let accounts: [ResolvedAccount]
     var showsRemoveAction = true
     @Environment(CardStyleSettingsModel.self) private var cards
+    @Environment(LibraryPresentationSettingsModel.self) private var libraryPresentation: LibraryPresentationSettingsModel?
     #if os(tvOS)
     @Environment(HeroSettingsModel.self) private var hero
     #endif
@@ -194,6 +195,14 @@ struct HomeSectionSettingsView: View {
             HStack(spacing: 12) {
                 choice.homeEditorProviderMark
                 choice.homeEditorSource.font(.subheadline).plozzForeground(.secondary)
+            }
+            if hasCollectionCovers, let libraryPresentation {
+                SettingsSectionGroup {
+                    CollectionCoverLayoutPicker(selection: Binding(
+                        get: { libraryPresentation.settings.collectionCoverLayout(at: coverAddress) },
+                        set: { libraryPresentation.settings.collectionCoverLayouts[coverAddress] = $0 }
+                    ))
+                }
             }
             if choice.id == .global(.continueWatching) {
                 ContinueWatchingArtworkPicker(style: Binding(
@@ -252,6 +261,18 @@ struct HomeSectionSettingsView: View {
             settings: Binding(get: { cards.captions }, set: { cards.captions = $0 }),
             title: "Labels"
         )
+    }
+
+    private var coverAddress: String {
+        LibraryPresentationSettings.collectionCoverAddress(for: choice.id)
+    }
+
+    private var hasCollectionCovers: Bool {
+        if choice.hasCollectionCovers { return true }
+        guard let row = choice.serverRow, let libraryID = row.section.libraryID else { return false }
+        return libraries.contains {
+            $0.accountID == row.accountID && $0.library.id == libraryID && $0.library.kind == .collection
+        }
     }
 
     @ViewBuilder

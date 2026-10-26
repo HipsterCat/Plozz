@@ -267,6 +267,12 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   and membership, showing supported movie and series cards without reconstructing
   library membership. **See all** opens the existing collection browser using
   the original provider ID. All card styles open title details.
+  This member-row layout is separate from collection **covers**. Lists and Home
+  or Recommended rows containing only collection containers use a uniform
+  Auto/Posters/Landscape cover layout. Overrides are profile-scoped and keyed
+  independently by Home row or account/library/browser/Recommended row. Browsers
+  resolve Auto from the initial page and retain that shape through later pages.
+  Landscape collection covers still open the collection, never direct playback.
   Collection definitions persist with the profile separately from arrangement:
   removing a row or choosing a preset retains its configuration in Add row.
   Disabled libraries and a different server viewer prevent collection requests;

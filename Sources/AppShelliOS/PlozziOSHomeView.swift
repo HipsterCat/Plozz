@@ -554,7 +554,8 @@ struct PlozziOSHomeView: View {
             // here — the view itself is left in place.
 
             ForEach(HomePresentationRow.resolve(
-                rows: rows, content: content, visibility: visibility.visibility, liveTV: liveTV
+                rows: rows, content: content, visibility: visibility.visibility, liveTV: liveTV,
+                presentation: appModel.settings.libraryPresentation.settings
             )) { presentation in
                 switch presentation.source {
                 case let .home(row):
@@ -2899,7 +2900,7 @@ struct PlozziOSHomeMediaCard: View {
             // The chip is requested explicitly rather than riding an implicit
             // "landscape means playable" rule, so presentation and behaviour stay
             // independently controlled.
-            showsResumeChip: showsResumeChip || isLandscape || interaction == .play,
+            showsResumeChip: item.kind != .collection && (showsResumeChip || isLandscape || interaction == .play),
             downloadState: liveDownloadRecord?.badgeState,
             // No visible "…" while browsing: the actions people actually reach for
             // live on the detail page, which is far more discoverable than a tiny

@@ -2397,6 +2397,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             isPlayed: serverPlayed && !isRewatching,
             hasBeenPlayed: serverPlayed || hasContainerHistory,
             posterURL: Self.imageURL(for: dto, kind: .primary, maxWidth: 500, client: client),
+            primaryImageAspectRatio: dto.PrimaryImageAspectRatio,
             seriesPosterURL: dto.SeriesId.flatMap {
                 client.imageURL(itemID: $0, kind: .primary, maxWidth: 500)
             },

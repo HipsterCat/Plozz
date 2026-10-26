@@ -591,6 +591,13 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   accepting curated container logos must not admit landscape episode stills as
   movie/series posters. Library-tile collages likewise accept wide container covers
   while retaining their aspect guard for ordinary media posters.
+  Collection-cover groups resolve one uniform shape using Auto, Posters, or
+  Landscape. Auto samples at most nine initial primary covers, uses a strict
+  landscape majority, and falls back to posters for ties or unknown artwork.
+  Server-reported ratios avoid image requests; absent ratios use the normal
+  authenticated artwork loader before publication. Paging never changes the
+  browser's chosen shape. The native tvOS grid accepts and fits container covers
+  without relaxing the portrait filter for ordinary media.
 - **Mobile media corners** — posters and Continue Watching share a 12pt artwork
   radius at every display size and responsive width. Borderless cards use that
   radius directly; glass frames add their inset to remain concentric. Loaded

@@ -230,6 +230,19 @@ struct LibraryRecommendedRowsSettingsView: View {
                     model.settings.recommendedRows[address] = updated
                 }
             )
+            ForEach(choices.filter { CollectionCoverLayout.isCollectionGroup($0.items) }) { row in
+                let coverAddress = LibraryPresentationSettings.collectionCoverAddress(
+                    accountID: library.accountID, libraryID: library.library.id, rowID: row.id
+                )
+                SettingsSectionGroup {
+                    row.displayName.font(.headline)
+                    CollectionCoverLayoutPicker(selection: Binding(
+                        get: { model.settings.collectionCoverLayout(at: coverAddress) },
+                        set: { model.settings.collectionCoverLayouts[coverAddress] = $0 }
+                    ))
+                }
+                .disabled(isLifting)
+            }
             Text("Changes apply only to this library's Recommended page, not Home.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
