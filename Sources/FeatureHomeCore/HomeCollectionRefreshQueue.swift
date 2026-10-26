@@ -75,7 +75,7 @@ struct HomeCollectionRefreshQueue {
     private static func isWatchlistLike(_ name: String) -> Bool {
         let normalized = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .filter { $0.isLetter || $0.isNumber }
-        return ["watchlist", "watchlater", "towatch", "watchnext", "watchqueue", "wishlist", "favorites", "favourites"]
+        return ["watchlist", "watchlater", "towatch", "watchnext", "watchqueue", "wishlist", "favorites", "favourites", "mylist"]
             .contains { normalized.contains($0) }
     }
 }

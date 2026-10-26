@@ -16,27 +16,37 @@ final class WatchlistProviderConfirmationTests: XCTestCase {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         let change = WatchlistProviderChange(profileNamespace: "p", accountID: "a", serverUserID: "viewer")
+        var currentChange = change
         var failureCount = 0
         let coordinator = MediaItemActionCoordinator(
             providerResolver: { _ in provider }, primaryAccountID: { "a" },
             crossServerWatchSyncEnabled: { false }, enqueueWatchMutation: { _ in },
-            watchlistProviderChange: { account in account == "a" ? change : nil },
+            watchlistProviderChange: { account in account == "a" ? currentChange : nil },
             makeWatchlistFailureFeedback: { { failureCount += 1 } }
         )
         let item = MediaItem(id: "movie", title: "Movie", kind: .movie, sourceAccountID: "a")
         coordinator.perform(.addToWatchlist, on: item, context: .none)
         try await waitUntil { await provider.attempts == 1 }
         XCTAssertTrue(changes.isEmpty)
+        currentChange = .init(profileNamespace: "another-profile", accountID: "a", serverUserID: "another-viewer")
         await provider.finish(failure: false)
         try await waitUntil { changes.count == 1 }
-        XCTAssertEqual(changes, [change])
+        XCTAssertEqual(changes, [change], "An in-flight write belongs to its original profile and viewer.")
 
+        currentChange = change
         await provider.hold()
         coordinator.perform(.removeFromWatchlist, on: item, context: .none)
         try await waitUntil { await provider.attempts == 2 }
         await provider.finish(failure: true)
         try await waitUntil { failureCount == 1 }
         XCTAssertEqual(changes, [change], "A rejected write must not schedule collection reads.")
+
+        await provider.hold()
+        coordinator.perform(.removeFromWatchlist, on: item, context: .none)
+        try await waitUntil { await provider.attempts == 3 }
+        await provider.finish(failure: false)
+        try await waitUntil { changes.count == 2 }
+        XCTAssertEqual(changes, [change, change], "Successful removal must refresh collections too.")
     }
 
     private func waitUntil(_ condition: () async -> Bool) async throws {

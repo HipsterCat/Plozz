@@ -455,6 +455,7 @@ public final class HomeViewModel {
     @ObservationIgnored private nonisolated(unsafe) var collectionRefreshTask: Task<Void, Never>?
     @ObservationIgnored var collectionRefreshQueue = HomeCollectionRefreshQueue()
     @ObservationIgnored private var collectionRefreshWorkerGeneration: UInt64 = 0
+    @ObservationIgnored private var collectionRefreshWaitingForDeadline = false
     @ObservationIgnored private var collectionRefreshNeedsSave = false
     private let profileNamespace: String?
 
@@ -756,6 +757,7 @@ public final class HomeViewModel {
         collectionRefreshTask?.cancel()
         collectionRefreshTask = nil
         collectionRefreshWorkerGeneration &+= 1
+        collectionRefreshWaitingForDeadline = false
         isRefreshing = true
         loadGeneration &+= 1
         let generation = loadGeneration
@@ -771,13 +773,13 @@ public final class HomeViewModel {
                 wantsReloadAfterCurrent = true
             }
             isLoading = false
-            armCollectionRefresh()
             loadingVisibility = nil
             if wantsReloadAfterCurrent {
                 wantsReloadAfterCurrent = false
                 Task { await load(showLoadingState: false) }
             } else {
                 isRefreshing = false
+                armCollectionRefresh()
             }
         }
         PlozzLog.boot("HomeVM.load START vm=\(UInt(bitPattern: ObjectIdentifier(self).hashValue)) accounts=\(accounts.count) state=\(state.diagnosticName) silent=\(!showLoadingState)")
@@ -2123,6 +2125,13 @@ public final class HomeViewModel {
         }
         guard !sections.isEmpty else { return }
         collectionRefreshQueue.enqueue(sections, now: .now)
+        if collectionRefreshWaitingForDeadline {
+            // Wake only a deadline wait, never an in-flight preview or its pacing delay.
+            collectionRefreshTask?.cancel()
+            collectionRefreshTask = nil
+            collectionRefreshWorkerGeneration &+= 1
+            collectionRefreshWaitingForDeadline = false
+        }
         armCollectionRefresh()
     }
 
@@ -2163,6 +2172,7 @@ public final class HomeViewModel {
             defer {
                 if let self, self.collectionRefreshWorkerGeneration == workerGeneration {
                     self.collectionRefreshTask = nil
+                    self.collectionRefreshWaitingForDeadline = false
                     if self.collectionRefreshNeedsSave, let content = self.state.value {
                         self.collectionRefreshNeedsSave = false
                         self.scheduleDurableWatchlistSave(content)
@@ -2173,7 +2183,10 @@ public final class HomeViewModel {
                 while !Task.isCancelled, let request = self?.collectionRefreshQueue.next(now: .now) {
                     let delay = ContinuousClock.now.duration(to: request.due)
                     if delay > .zero {
+                        self?.collectionRefreshWaitingForDeadline = true
                         try await Task.sleep(for: delay)
+                        try Task.checkCancellation()
+                        self?.collectionRefreshWaitingForDeadline = false
                         continue
                     }
                     if let delay = self?.collectionInteractionDelay, delay > .zero {
@@ -2201,7 +2214,7 @@ public final class HomeViewModel {
                     try await Task.sleep(for: HomeCollectionRefreshQueue.spacing)
                 }
             } catch is CancellationError {
-                // A full Home load or model teardown owns cancellation.
+                // New confirmations wake deadline waits; loads and teardown supersede the worker.
             } catch {
                 PlozzLog.app.error("Collection refresh scheduling failed")
             }
