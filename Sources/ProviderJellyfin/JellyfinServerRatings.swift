@@ -4,11 +4,23 @@ import CoreNetworking
 
 /// Reads only the installed plugin's cache, never its upstream providers or refresh endpoints.
 actor JellyfinServerRatings {
+    private struct Cached {
+        let ratings: [ExternalRating]?
+        let expires: ContinuousClock.Instant
+    }
+
     private var unavailableUntil: ContinuousClock.Instant?
+    private var cached: [String: Cached] = [:]
+    private var cacheOrder: [String] = []
     private let timeout: Duration
 
     init(timeout: Duration = .seconds(2)) {
         self.timeout = timeout
+    }
+
+    func cachedRatings(for item: MediaItem) -> [ExternalRating]? {
+        guard let entry = cached[item.id], ContinuousClock.now < entry.expires else { return nil }
+        return entry.ratings
     }
 
     func ratings(for item: MediaItem, client: JellyfinClient) async throws -> [ExternalRating]? {
@@ -20,6 +32,7 @@ actor JellyfinServerRatings {
               id.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) })
         else { return nil }
         try Task.checkCancellation()
+        if let entry = cached[item.id], ContinuousClock.now < entry.expires { return entry.ratings }
         if let unavailableUntil, ContinuousClock.now < unavailableUntil { return nil }
         do {
             let response = try await withThrowingTaskGroup(of: MdbListCachedRatings.self) { group in
@@ -33,9 +46,16 @@ actor JellyfinServerRatings {
                 return response
             }
             try Task.checkCancellation()
-            guard response.hasCache else { return nil }
-            let ratings = response.displayRatings()
-            return ratings.isEmpty ? nil : ratings
+            let supplied = response.hasCache ? response.displayRatings() : []
+            let ratings = supplied.isEmpty ? nil : supplied
+            cached[item.id] = Cached(
+                ratings: ratings,
+                expires: ContinuousClock.now.advanced(by: ratings == nil ? .seconds(30) : .seconds(300))
+            )
+            cacheOrder.removeAll { $0 == item.id }
+            cacheOrder.append(item.id)
+            if cacheOrder.count > 64 { cached.removeValue(forKey: cacheOrder.removeFirst()) }
+            return ratings
         } catch {
             if Task.isCancelled || error is CancellationError || error as? AppError == .cancelled {
                 throw CancellationError()

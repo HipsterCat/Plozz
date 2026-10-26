@@ -65,6 +65,12 @@ path remains separate. Missing chapter images never remove navigation entries.
 ## Server-provided ratings
 
 Jellyfin item details display ratings supplied by the authenticated server.
+Optional rating reads are presentation-only: required item loads and playback
+inventory requests never make or await them. Details retain their native
+metadata immediately, without adding a placeholder or minimum display delay;
+the cancellable page task applies server metadata independently of load completion.
+Home uses only already-cached rating metadata during its existing hydration;
+it never requests optional ratings before publishing a carousel.
 The server-response adapter currently supports the cache format exposed by the
 [MDBList Ratings plugin](https://github.com/Druidblack/Jellyfin.Plugin.MDBList_Ratings)
 at `GET /Plugins/MdbListRatings/CachedByItemId?itemId=...`. This is a read-only
@@ -86,7 +92,10 @@ used. External enrichment cannot add to or overwrite a supplied set.
 
 Absent caches, empty/unusable sets, unsupported endpoints, and logged plugin
 failures preserve ordinary native ratings and existing enrichment behavior.
-Requests have a two-second cancellation deadline; a missing endpoint is not
+Background requests have a two-second cancellation deadline, never a loading
+or playback delay. Successful sets are reused for five minutes and cache misses
+for thirty seconds in a bounded, 64-item, provider-scoped memory cache.
+A missing endpoint is not
 probed again for five minutes in that provider instance. Cancellation propagates
 instead of returning a successful item. Malformed entries are logged and omitted
 without discarding other valid ratings. State is scoped to the authenticated

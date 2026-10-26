@@ -354,8 +354,14 @@ private struct PlozziOSCanonicalItemDetailView: View {
         }
         .artworkGradientBackground(scope: ObjectIdentifier(viewModel), isVisible: isPageVisible)
         .background(palette.backgroundBase.ignoresSafeArea())
-        .onAppear { isPageVisible = true }
-        .onDisappear { isPageVisible = false }
+        .onAppear {
+            isPageVisible = true
+            viewModel.resumeEnrichmentIfNeeded()
+        }
+        .onDisappear {
+            isPageVisible = false
+            viewModel.suspendEnrichment()
+        }
         .themeMusicPlayback(
             playbackID: viewModel.themeMusicPlaybackID,
             source: viewModel.currentSourceForDisplay,

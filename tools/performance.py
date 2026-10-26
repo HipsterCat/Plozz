@@ -36,6 +36,13 @@ HOME_HOST_FITTING_COUNTERS = [
     "hostFittingMaxNanoseconds", "hostFittingReentrantCalls",
 ]
 SCENARIOS = {
+    "server-ratings-critical-path": {
+        "suite": "network", "target": "ProviderJellyfinTests",
+        "test": "ServerRatingsLatencyTests/testPerformanceRequiredItemAndPlayback",
+        "file": "Tests/ProviderJellyfinTests/ServerRatingsLatencyTests.swift",
+        "description": "Load four item details and playback inventories with a 150-ms optional server-rating cache endpoint.",
+        "counters": ["items", "playbackItems", "nativeRequests", "playbackRequests", "cacheRequests"],
+    },
     "mobile-video-glow-hd": {
         "suite": "ui", "platforms": ["iOS"],
         "test": "LiveTVPreviewPresentationTests/testPerformanceHDVideoGlow",

@@ -29,6 +29,15 @@ final class JellyfinServerRatingsTests: XCTestCase {
         #"{"hasCache":true,"ratings":["# + entries + "]}"
     }
 
+    private func ratedItem(_ provider: JellyfinProvider, id: String? = nil) async throws -> MediaItem {
+        var authorized = try await provider.item(id: id ?? itemID)
+        if let supplied = try await provider.serverRatings(for: authorized) {
+            authorized.ratings = supplied
+            authorized.usesProviderRatings = true
+        }
+        return authorized
+    }
+
     func testReadsOnlyAuthenticatedServerCacheAndUsesExistingDisplayContract() async throws {
         let http = StubHTTPClient()
         stubItem(http)
@@ -42,7 +51,7 @@ final class JellyfinServerRatingsTests: XCTestCase {
         """))
         let provider = JellyfinProvider(session: session(), http: http)
 
-        let item = try await provider.item(id: itemID)
+        let item = try await ratedItem(provider)
 
         XCTAssertTrue(item.usesProviderRatings)
         XCTAssertEqual(item.ratings.map(\.id), ["imdb", "tomatoes", "popcorn", "letterboxd", "tmdb", "custom_service"])
@@ -65,7 +74,7 @@ final class JellyfinServerRatingsTests: XCTestCase {
             let http = StubHTTPClient()
             stubItem(http, type: type)
             http.stub(pathSuffix: cachePath, json: response(#"{"source":"imdb","score":81}"#))
-            let item = try await JellyfinProvider(session: session(), http: http).item(id: itemID)
+            let item = try await ratedItem(JellyfinProvider(session: session(), http: http))
             XCTAssertTrue(item.usesProviderRatings, type)
             XCTAssertEqual(http.queryItems(forPathSuffix: cachePath), [URLQueryItem(name: "itemId", value: itemID)], type)
             XCTAssertEqual(item.ratings.first?.displayValue, "8.1", type)
@@ -127,7 +136,7 @@ final class JellyfinServerRatingsTests: XCTestCase {
             let http = StubHTTPClient()
             stubItem(http)
             http.stub(pathSuffix: cachePath, json: json)
-            let item = try await JellyfinProvider(session: session(), http: http).item(id: itemID)
+            let item = try await ratedItem(JellyfinProvider(session: session(), http: http))
             XCTAssertFalse(item.usesProviderRatings)
             XCTAssertEqual(item.ratings.map(\.value), [7.2, 74])
         }
@@ -137,8 +146,8 @@ final class JellyfinServerRatingsTests: XCTestCase {
         let http = StubHTTPClient()
         stubItem(http)
         let provider = JellyfinProvider(session: session(), http: http)
-        let first = try await provider.item(id: itemID)
-        let second = try await provider.item(id: itemID)
+        let first = try await ratedItem(provider)
+        let second = try await ratedItem(provider)
         XCTAssertEqual(first.ratings, second.ratings)
         XCTAssertEqual(http.sentPaths.filter { $0 == cachePath }.count, 1)
     }
@@ -149,10 +158,10 @@ final class JellyfinServerRatingsTests: XCTestCase {
             stubItem(http)
             http.stub(pathSuffix: cachePath, json: #"{"unexpected":true}"#, status: status)
             let provider = JellyfinProvider(session: session(), http: http)
-            let first = try await provider.item(id: itemID)
+            let first = try await ratedItem(provider)
             XCTAssertFalse(first.usesProviderRatings)
             XCTAssertEqual(first.ratings.map(\.value), [7.2, 74])
-            _ = try await provider.item(id: itemID)
+            _ = try await ratedItem(provider)
             XCTAssertEqual(http.sentPaths.filter { $0 == cachePath }.count, 2)
         }
     }
@@ -160,11 +169,11 @@ final class JellyfinServerRatingsTests: XCTestCase {
     func testAvailabilityAndScoresAreNotSharedAcrossAuthenticatedProviders() async throws {
         let absent = StubHTTPClient()
         stubItem(absent)
-        _ = try await JellyfinProvider(session: session(), http: absent).item(id: itemID)
+        _ = try await ratedItem(JellyfinProvider(session: session(), http: absent))
         let available = StubHTTPClient()
         stubItem(available)
         available.stub(pathSuffix: cachePath, json: response(#"{"source":"imdb","score":91}"#))
-        let item = try await JellyfinProvider(session: session(token: "other-token"), http: available).item(id: itemID)
+        let item = try await ratedItem(JellyfinProvider(session: session(token: "other-token"), http: available))
         XCTAssertEqual(item.ratings.first?.displayValue, "9.1")
         XCTAssertTrue(available.sentHeaders.last?["Authorization"]?.contains("other-token") == true)
     }
@@ -177,7 +186,7 @@ final class JellyfinServerRatingsTests: XCTestCase {
         ] {
             let http = StubHTTPClient()
             stubItem(http, type: type, id: id)
-            _ = try await JellyfinProvider(session: session(kind: kind), http: http).item(id: id)
+            _ = try await ratedItem(JellyfinProvider(session: session(kind: kind), http: http), id: id)
             XCTAssertEqual(http.sentPaths, ["/Users/viewer/Items/\(id)"])
         }
     }
@@ -192,6 +201,28 @@ final class JellyfinServerRatingsTests: XCTestCase {
             XCTAssertEqual(error as? AppError, .unauthorized)
         }
         XCTAssertEqual(http.sentPaths, ["/Users/viewer/Items/\(itemID)"])
+    }
+
+    func testRequiredItemFetchNeverCallsTheOptionalCache() async throws {
+        let http = StubHTTPClient()
+        stubItem(http)
+        http.stub(pathSuffix: cachePath, json: response(#"{"source":"imdb","score":87}"#))
+        let item = try await JellyfinProvider(session: session(), http: http).item(id: itemID)
+        XCTAssertFalse(item.usesProviderRatings)
+        XCTAssertEqual(item.ratings.map(\.value), [7.2, 74])
+        XCTAssertEqual(http.sentPaths, ["/Users/viewer/Items/\(itemID)"])
+    }
+
+    func testRepeatedPresentationReadsReuseScopedServerMetadata() async throws {
+        let http = StubHTTPClient()
+        stubItem(http)
+        http.stub(pathSuffix: cachePath, json: response(#"{"source":"imdb","score":87}"#))
+        let provider = JellyfinProvider(session: session(), http: http)
+        let first = try await ratedItem(provider)
+        let second = try await ratedItem(provider)
+        XCTAssertEqual(first.ratings, second.ratings)
+        XCTAssertEqual(http.sentPaths.filter { $0 == cachePath }.count, 1)
+        XCTAssertEqual(http.sentPaths.filter { $0 == "/Users/viewer/Items/\(itemID)" }.count, 2)
     }
 
     func testCacheDeadlineCancelsRequestAndPreservesFallback() async throws {
