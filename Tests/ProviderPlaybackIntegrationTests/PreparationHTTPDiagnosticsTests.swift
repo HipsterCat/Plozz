@@ -104,9 +104,10 @@ final class PreparationHTTPDiagnosticsTests: XCTestCase {
     private func fixture(
         _ kind: ProviderKind, inventory: LoopbackHTTPServer.Response
     ) async throws -> (any MediaProvider, LoopbackHTTPServer) {
+        let serverID = UUID().uuidString
         let server = try LoopbackHTTPServer { request in
             switch request.target.split(separator: "?").first {
-            case "/System/Info/Public": return .json(#"{"Id":"fixture"}"#)
+            case "/System/Info/Public": return .json(#"{"Id":"\#(serverID)"}"#)
             case "/Users/private-user/Items/private-item":
                 return .json(#"{"Id":"private-item","Name":"private-title","Type":"Movie"}"#)
             case "/Items/private-item/PlaybackInfo": return inventory
@@ -116,7 +117,7 @@ final class PreparationHTTPDiagnosticsTests: XCTestCase {
         addTeardownBlock { await server.stop() }
         let url = try await server.start()
         let session = UserSession(
-            server: MediaServer(id: "fixture", name: "private-server", baseURL: url, provider: kind),
+            server: MediaServer(id: serverID, name: "private-server", baseURL: url, provider: kind),
             userID: "private-user", userName: "private-user", deviceID: "device", accessToken: "private-token"
         )
         let registry = ManagedProviderRegistry.make()
