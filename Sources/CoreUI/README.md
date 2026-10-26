@@ -54,6 +54,15 @@ which puts the shared minimum height and padding inside the TV focus fill.
 `SettingsFocusButtonStyle` is only for labels that already supply their own
 control geometry. Standalone and inline actions use `plozzActionButton`; do not
 use a text-height focus strip as a smaller action-button variant.
+The text-height disclosure-row treatment is deprecated: never apply
+`SettingsFocusButtonStyle` directly to a compact label such as
+`HomeEditorRowLabel`. Use a full-row wrapper such as `HomeEditorLink`, or a
+padding-free disclosure label with `SettingsFormButtonStyle`. Padding outside
+the button's focus fill does not replace its required internal row geometry.
+
+`SettingsPageHeader` accepts a trailing native action for page-scoped commands.
+Keep it in the header's full-width focus section and scroll the header with the
+page; do not add a separate action strip or shrink the native button.
 
 `SettingsStepper` retains every adjustment stop while limiting dense range tracks
 to 21 visual ticks. `ThemeMusicPreviewControlling` is the Settings-to-runtime
@@ -328,16 +337,16 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   boolean destinations retain native navigation outside this workspace,
   including iOS/iPadOS. `SettingsPageMotion` is also used by nested form and
   subtitle panels, with Reduce Motion respected by their hosts.
-- **Title navigation** — tvOS uses native page pushes and pops by default.
-  The profile's **Zoom when opening titles** preference opts into cinematic
-  transitions. `detailNavigationZoom(isEnabled:)` applies the same policy to
-  SwiftUI destinations and the window-scoped native card/router preparation.
-  Both modes share the logo, metadata, controls, and episode entrance sequence.
-  With zoom off it starts when the native page appears, without a cover, window
+- **Title navigation** — tvOS uses native page pushes and pops. The app no longer
+  installs `detailNavigationZoom(isEnabled:)` or reads the retired zoom preference.
+  The logo, metadata, controls, and episode entrance sequence remains.
+  It starts when the native page appears, without a cover, window
   input guard, artwork wait, or custom Back handler. Leaving cancels the reveal;
   returning to an existing page does not replay it. Reduce Motion shows everything
   immediately. iOS/iPadOS navigation is unchanged.
-- **Opt-in cinematic detail returns** — TV browse stacks install
+- **Retained cinematic transition infrastructure** — the zoom implementation and
+  its focused fixtures remain available for future work, but no production shell
+  enables it. TV browse stacks install
   `cinematicDetailNavigation(path:)` on the stack so its destinations inherit it.
   Back changes that bound path in the reverse transition's nonanimated transaction:
   SwiftUI's environment dismiss action can still animate a native pop underneath

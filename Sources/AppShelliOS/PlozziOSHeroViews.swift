@@ -2607,7 +2607,9 @@ private struct PlozziOSHeroMetadata: View {
         case .folder, .collection, .playlist, .unknown:
             return nil
         default:
-            return HeroLogoFallback(for: item) { await ArtworkRouter.shared.artworkURL(.logo, for: item) }
+            return HeroLogoFallback(for: item, localizedResolve: { language in
+                await ArtworkRouter.shared.artworkURL(.logo, for: item, language: language)
+            })
         }
     }
 
@@ -2924,15 +2926,49 @@ private struct PlozziOSDetailCredits: View {
 
 }
 
-struct PlozziOSTrailerMuteToolbarButton: View {
+struct PlozziOSDetailAudioMuteControl: View {
+    let trailer: HeroTrailerController
+    let themeMusic: ThemeMusicController?
+    let itemID: String?
+    let themePlaybackID: String?
+    let isActive: Bool
+
+    var body: some View {
+        if trailer.isPlaying, trailer.activeSurfaceRole == .detail,
+           trailer.currentItemID == itemID {
+            PlozziOSHeroAudioMuteToolbarButton(isMuted: trailer.isMuted, onToggle: trailer.toggleMuted)
+        } else if let themeMusic, let themePlaybackID,
+                  themeMusic.isPlaying, !themeMusic.isPreviewing,
+                  themeMusic.currentPlaybackID == themePlaybackID, isActive {
+            PlozziOSHeroAudioMuteToolbarButton(
+                isMuted: themeMusic.isMuted, onToggle: themeMusic.toggleMuted, source: .themeMusic
+            )
+        }
+    }
+}
+
+struct PlozziOSHeroAudioMuteToolbarButton: View {
     let isMuted: Bool
     let onToggle: () -> Void
+    var source: Source = .trailer
+
+    enum Source {
+        case trailer, themeMusic
+
+        func label(isMuted: Bool) -> LocalizedStringResource {
+            switch self {
+            case .trailer: isMuted ? "Unmute trailer" : "Mute trailer"
+            case .themeMusic: isMuted ? "Unmute theme music" : "Mute theme music"
+            }
+        }
+    }
 
     var body: some View {
         Button(action: onToggle) {
             Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
         }
-        .accessibilityLabel(isMuted ? "Unmute trailer" : "Mute trailer")
+        .accessibilityLabel(Text(source.label(isMuted: isMuted)))
+        .accessibilityIdentifier(source == .themeMusic ? "theme-music-mute" : "trailer-mute")
     }
 }
 

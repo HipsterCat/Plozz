@@ -1963,7 +1963,6 @@ struct MainTabView: View {
         let _ = plozzPrintChanges { Self._printChanges() }
         let _ = PlozzBodyRate.tick("MainTabView")
         return playbackShell
-        .detailNavigationZoom(isEnabled: navigationStyleModel.detailZoomEnabled)
         .themeMusicScope(
             controller: themeMusicController,
             model: themeMusicModel,

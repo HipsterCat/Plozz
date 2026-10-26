@@ -6,6 +6,62 @@ import XCTest
 
 @MainActor
 final class ThemeMusicControllerTests: XCTestCase {
+    func testDetailMutePreservesPlayerVolumeAndSurvivesInactivity() async throws {
+        let controller = ThemeMusicController()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("theme-mute-\(UUID()).wav")
+        try ThemeMusicPreviewSample.data().write(to: url)
+        defer {
+            controller.stop()
+            try? FileManager.default.removeItem(at: url)
+        }
+        let owner = UUID()
+        let settings = ThemeMusicSettings(isEnabled: true, volume: .low)
+        let theme = ThemeMusic(
+            itemID: "movie",
+            playbackSource: .publicURL(try SecretFreeURLSource(url: URL(string: "https://example.test/theme.mp3")!))
+        )
+        controller.setAuthorization("scope")
+        XCTAssertTrue(controller.claimDetail(owner: owner, playbackID: "account:movie", authorizationID: "scope"))
+        controller.play(theme, resolvedURL: url, playbackID: "account:movie", owner: owner,
+                        authorizationID: "scope", settings: settings)
+        let item = try XCTUnwrap(controller.player.currentItem)
+        let initialVolume = controller.player.volume
+        controller.toggleMuted()
+        XCTAssertTrue(controller.isMuted)
+        XCTAssertTrue(controller.player.isMuted)
+        XCTAssertEqual(controller.player.volume, initialVolume)
+        controller.updateVolume(.high)
+        try await waitUntil { controller.player.currentTime().seconds > 0.1 }
+        XCTAssertTrue(controller.player.isMuted, "Fade-in and volume updates must not undo mute.")
+        controller.setAppActive(false)
+        controller.setAppActive(true)
+        XCTAssertTrue(controller.isMuted)
+        XCTAssertTrue(controller.player.currentItem === item)
+        let fadedVolume = controller.player.volume
+        controller.toggleMuted()
+        XCTAssertFalse(controller.isMuted)
+        XCTAssertFalse(controller.player.isMuted)
+        XCTAssertEqual(controller.player.volume, fadedVolume)
+        XCTAssertTrue(controller.player.currentItem === item, "Mute must not restart or resolve the source.")
+        XCTAssertEqual(settings.volume, .low, "The persisted volume is independent of the live mute.")
+        controller.toggleMuted()
+        controller.setAuthorization("replacement-scope")
+        XCTAssertFalse(controller.isMuted, "Mute belongs to the current detail playback, not another profile.")
+        XCTAssertNil(controller.player.currentItem)
+    }
+
+    func testSettingsPreviewDoesNotInheritDetailMute() async throws {
+        let controller = ThemeMusicController()
+        defer { controller.stop() }
+        controller.setAuthorization("scope")
+        XCTAssertTrue(controller.claimDetail(owner: UUID(), playbackID: "account:movie", authorizationID: "scope"))
+        controller.toggleMuted()
+        await controller.preview(owner: UUID(), volume: .low, resolve: { nil }, authenticatedHTTPResolver: nil)
+        XCTAssertTrue(controller.isPreviewing)
+        XCTAssertFalse(controller.isMuted)
+        XCTAssertFalse(controller.player.isMuted)
+    }
+
     func testGeneratedSampleIsBoundedAudiblePCMWithoutClipping() throws {
         let data = ThemeMusicPreviewSample.data()
         XCTAssertEqual(String(data: data.prefix(4), encoding: .utf8), "RIFF")

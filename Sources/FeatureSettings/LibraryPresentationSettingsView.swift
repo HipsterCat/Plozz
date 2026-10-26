@@ -45,22 +45,28 @@ public struct LibraryPresentationSettingsView: View {
                 )
             }
             .accessibilityIdentifier("library-navigation-settings")
-            SettingsSectionGroup("Card labels") {
-                CardCaptionSettingsControls(cards: cards, scope: .libraries)
-            } footer: {
-                Text("Choices apply across all libraries. Continue Watching shares its label setting with Home.")
-            }
             #if os(tvOS)
-            SettingsSectionGroup("Recommended Page") {
-                HeroLogoSizeControl(
-                    size: $model.settings.logoSize, textSize: $model.settings.textSize,
-                    surface: .showcase, showsLibraryPreview: true
-                )
+            SettingsFormGroup(title: Text("Page appearance"), hasGroupedContent: true) {
+                SettingsConnectedControlGroups {
+                    VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
+                        Text("Recommended Page").font(.headline)
+                        HeroLogoSizeControl(
+                            size: $model.settings.logoSize, textSize: $model.settings.textSize,
+                            surface: .showcase, showsLibraryPreview: true
+                        )
+                    }
+                    CardCaptionSettingsLink(cards: cards, scope: .libraries, visibility: visibility)
+                }
+            }
+            #else
+            SettingsSectionGroup("Page appearance") {
+                CardCaptionSettingsLink(cards: cards, scope: .libraries, visibility: visibility)
             }
             #endif
-            Text("Libraries")
+            Text("Recommended rows")
                 .font(.headline)
                 .padding(.top)
+                .accessibilityAddTraits(.isHeader)
             Text("Choose a library to arrange or hide rows on its Recommended page.")
                 .font(.callout)
                 .foregroundStyle(.secondary)

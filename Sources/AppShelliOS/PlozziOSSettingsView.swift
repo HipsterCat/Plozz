@@ -1648,7 +1648,11 @@ struct PlozziOSAppearanceSettingsView: View {
             case .theme:
                 PlozziOSThemeSettingsView(theme: theme, transparency: transparency)
             case .cards:
-                CardAppearanceControls(cards: cardStyle, watchIndicator: watchIndicator, density: density)
+                CardAppearanceControls(
+                    cards: cardStyle, watchIndicator: watchIndicator,
+                    density: density, visibility: appModel.settings.homeVisibility
+                )
+                .environment(appModel.settings.hero)
             case .artwork:
                 PlozziOSArtworkSettingsView(
                     appModel: appModel, cardStyle: cardStyle, canManageProviders: canManageProviders
@@ -1697,7 +1701,7 @@ private struct PlozziOSScreensNavigationSettingsView: View {
             switch self {
             case .home: "Customize Home"
             case .libraries: "Customize Libraries"
-            case .navigation: "Navigation"
+            case .navigation: "App navigation"
             case .detail: "Detail Page"
             case .spoilers: "Spoiler Protection"
             }
@@ -1706,14 +1710,18 @@ private struct PlozziOSScreensNavigationSettingsView: View {
 
     var body: some View {
         List {
+            SettingsSectionGroup {
+                Button { destination = .navigation } label: {
+                    SettingsDisclosureLabel { Text(Page.navigation.title) }
+                }
+                .accessibilityIdentifier("screens-navigation")
+            }
             SettingsSectionGroup("All screens") {
                 ContentRatingToggle(model: appModel.settings.contentRatings)
-                ForEach([Page.spoilers, .navigation]) { page in
-                    Button { destination = page } label: {
-                        SettingsDisclosureLabel { Text(page.title) }
-                    }
-                    .accessibilityIdentifier("screens-\(page.rawValue)")
+                Button { destination = .spoilers } label: {
+                    SettingsDisclosureLabel { Text(Page.spoilers.title) }
                 }
+                .accessibilityIdentifier("screens-spoilers")
             }
             SettingsSectionGroup("Customize individual screens") {
                 ForEach([Page.home, .libraries, .detail]) { page in
@@ -1812,7 +1820,7 @@ private struct PlozziOSNavigationSettingsView: View {
             }
         }
         .settingsPageSurface()
-        .navigationTitle("Navigation")
+        .navigationTitle("App navigation")
     }
 }
 
@@ -1955,10 +1963,7 @@ private struct PlozziOSDetailPageSettingsView: View {
 
     var body: some View {
         List {
-            SettingsSectionGroup("Card labels") {
-                CardCaptionSettingsControls(cards: cards, scope: .detail)
-            }
-            SettingsSectionGroup {
+            SettingsSectionGroup("Hero") {
                 HeroLogoSizeControl(
                     size: $detailPage.settings.logoSize, textSize: $detailPage.settings.textSize, surface: .detail
                 )
@@ -1997,6 +2002,9 @@ private struct PlozziOSDetailPageSettingsView: View {
                 }
             } footer: {
                 Text("Choose what plays behind the hero on a movie or show's detail page. Trailer and theme music never play together.")
+            }
+            SettingsSectionGroup("Cards") {
+                CardCaptionSettingsLink(cards: cards, scope: .detail)
             }
         }
         .settingsPageSurface()
