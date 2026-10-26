@@ -1,5 +1,23 @@
 #if canImport(SwiftUI)
+import CoreModels
 import SwiftUI
+
+public struct TrailerActionButtonLabel: View {
+    public let trailer: MediaItem?
+
+    public init(trailer: MediaItem?) {
+        self.trailer = trailer
+    }
+
+    public var body: some View {
+        Label {
+            Text(trailer?.trailerActionTitle ?? LocalizedStringResource("Trailer"))
+        } icon: {
+            TrailerActionIcon(isExternal: trailer?.isYouTubeTrailer == true)
+        }
+        .labelStyle(.iconOnly)
+    }
+}
 
 public struct TrailerActionIcon: View {
     public let isExternal: Bool
@@ -34,6 +52,7 @@ public struct TrailerActionIcon: View {
                 lineJoin: .round
             ))
             .frame(width: 12 * size / 19, height: 12 * size / 19)
+            .scaleEffect(10.0 / 12.0, anchor: .bottomLeading)
             .offset(y: -1.5 * size / 19)
     }
 }

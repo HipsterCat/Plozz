@@ -38,9 +38,8 @@ public extension MediaItem {
     var youTubeTrailerAppURL: URL? {
         guard let watch = youTubeTrailerWatchURL,
               var components = URLComponents(url: watch, resolvingAgainstBaseURL: false) else { return nil }
+        // tvOS needs the full watch URL, not youtube://watch?v=, to select a video.
         components.scheme = "youtube"
-        components.host = "watch"
-        components.path = ""
         return components.url
     }
 

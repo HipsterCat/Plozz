@@ -2046,15 +2046,11 @@ struct PlozziOSDetailHeroForeground: View {
             // when they'd otherwise wrap — and the same page always lays out the
             // same way for a given width.
             ViewThatFits(in: .horizontal) {
-                // Widest first: everything inline with Trailer labelled, then the
-                // same row with Trailer reduced to its glyph, and only then start
-                // folding actions into "…".
-                actionRow(actions: entries, collapsing: 0, labelledTrailer: true, resume: .full)
+                // Keep icon-only trailer actions inline before folding into overflow.
                 ForEach(0...extras.count, id: \.self) { collapseCount in
                     actionRow(
                         actions: entries,
                         collapsing: collapseCount,
-                        labelledTrailer: false,
                         resume: .full
                     )
                 }
@@ -2066,13 +2062,11 @@ struct PlozziOSDetailHeroForeground: View {
                 actionRow(
                     actions: entries,
                     collapsing: extras.count,
-                    labelledTrailer: false,
                     resume: .seasonEpisodeOnly
                 )
                 actionRow(
                     actions: entries,
                     collapsing: extras.count,
-                    labelledTrailer: false,
                     resume: .hidden
                 )
                 stackedActionRows(actions: entries)
@@ -2159,8 +2153,7 @@ struct PlozziOSDetailHeroForeground: View {
 
     /// Fold priority, lowest folds into "…" first. Navigation goes
     /// before everyday watch-state actions, and the trailer is the last to leave
-    /// the row. It sheds its label first (see `actionRow`), which usually buys
-    /// enough width that it never has to leave at all.
+    /// the row. Its icon-only treatment preserves room for the other actions.
     private func foldRank(_ extra: InlineExtra) -> Int {
         switch extra {
         case .primary(let entry):
@@ -2175,7 +2168,6 @@ struct PlozziOSDetailHeroForeground: View {
     private func actionRow(
         actions: [ActionEntry],
         collapsing collapseCount: Int,
-        labelledTrailer: Bool,
         resume: PlayResumeButtonLabel.ResumeTrailingStyle
     ) -> some View {
         let extras = orderedInlineExtras(from: actions)
@@ -2201,7 +2193,7 @@ struct PlozziOSDetailHeroForeground: View {
             playActionButton(resume: resume)
             heroRequestButton
             ForEach(inline) { extra in
-                inlineExtraButton(extra, labelled: labelledTrailer)
+                inlineExtraButton(extra)
             }
             if hasSourceVersionOptions || !menu.isEmpty || fileBrowserAction != nil {
                 sourceVersionMenuButton(actions: menu, fileBrowserAction: fileBrowserAction)
@@ -2221,7 +2213,7 @@ struct PlozziOSDetailHeroForeground: View {
             if !extras.isEmpty || hasSourceVersionOptions || fileBrowserAction != nil {
                 WrappingHStackLayout(alignment: style == .compactPortrait ? .center : .leading) {
                     ForEach(extras) { extra in
-                        inlineExtraButton(extra, labelled: false)
+                        inlineExtraButton(extra)
                     }
                     if hasSourceVersionOptions || fileBrowserAction != nil {
                         sourceVersionMenuButton(actions: [], fileBrowserAction: fileBrowserAction)
@@ -2242,15 +2234,12 @@ struct PlozziOSDetailHeroForeground: View {
     }
 
     @ViewBuilder
-    private func inlineExtraButton(
-        _ extra: InlineExtra,
-        labelled labelledTrailer: Bool
-    ) -> some View {
+    private func inlineExtraButton(_ extra: InlineExtra) -> some View {
         switch extra {
         case .primary(let entry):
             primaryActionButton(entry)
         case .trailer:
-            trailerActionButton(labelled: labelledTrailer)
+            trailerActionButton()
         }
     }
 
@@ -2262,32 +2251,18 @@ struct PlozziOSDetailHeroForeground: View {
         }
     }
 
-    /// `labelled` false renders the glyph alone, which is about a third of the
-    /// width. Tried before any action is pushed into "…", because a recognisable
-    /// icon in the row beats a full word hidden in a menu.
     @ViewBuilder
-    private func trailerActionButton(labelled: Bool) -> some View {
+    private func trailerActionButton() -> some View {
         if let trailerItem, let onPlayTrailer {
             Button {
                 onPlayTrailer(trailerItem)
             } label: {
-                if labelled {
-                    Label {
-                        Text(trailerItem.trailerActionTitle)
-                    } icon: {
-                        TrailerActionIcon(isExternal: trailerItem.isYouTubeTrailer)
-                    }
-                } else {
-                    TrailerActionIcon(isExternal: trailerItem.isYouTubeTrailer)
-                }
+                TrailerActionButtonLabel(trailer: trailerItem)
             }
-            // Without a label this is a glyph like the watchlist and download
-            // buttons beside it, so it takes their circle. A capsule around a
-            // lone icon read as a different kind of control.
             .buttonStyle(
                 PlozziOSHeroActionButtonStyle(
                     kind: .secondary,
-                    circular: !labelled
+                    circular: true
                 )
             )
             .accessibilityLabel(Text(trailerItem.trailerActionTitle))
@@ -2398,7 +2373,7 @@ struct PlozziOSDetailHeroForeground: View {
         if let trailerItem, onPlayTrailer != nil {
             result.append(PlaybackSourceMenuAction(
                 id: "trailer",
-                title: trailerItem.trailerActionTitle,
+                title: "Trailer",
                 systemImage: trailerItem.isYouTubeTrailer ? "arrow.up.right" : "film.fill"
             ))
         }

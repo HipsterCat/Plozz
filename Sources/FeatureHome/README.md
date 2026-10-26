@@ -700,11 +700,16 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   account and refreshed on the first page, not during poster scrolling.
 - **Trailers** — Server-owned trailer files retain in-app playback and take
   priority across the title's server copies. Server-supplied YouTube links and
-  TMDB's documented videos API supply external trailer actions, labelled
-  "Watch on YouTube" with the shared cutout-arrow `TrailerActionIcon`.
+  TMDB's documented videos API supply external trailer actions. Hero trailer
+  buttons are always icon-only, using the shared cutout-arrow `TrailerActionIcon`
+  for external links. "Watch on YouTube" is a VoiceOver label, not visible button
+  text; overflow menus use "Trailer" with an external-opening symbol.
   `YouTubeTrailerOpening` opens the YouTube app, with browser fallback on mobile
   and a visible failure on TV when no handler is available. Returning to Plozz
   is manual; no completion callback or QR fallback is implied.
+  App links retain the complete `www.youtube.com/watch?v=…` host/path/query with
+  the `youtube` scheme; an abbreviated link may launch the TV app without
+  navigating to the requested video.
   No YouTube scraping, stream extraction, embed probing, or media caching runs
   during browsing or playback. Household metadata settings and the active TMDB
   credential apply; unavailable external metadata never removes server trailers.

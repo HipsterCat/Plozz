@@ -171,11 +171,8 @@ struct DetailHeroView: View, Equatable {
     var onPlayTrailer: (() -> Void)? = nil
     var trailerItem: MediaItem? = nil
     private var trailerButtonLabel: some View {
-        Label {
-            Text(trailerItem?.trailerActionTitle ?? LocalizedStringResource("Trailer"))
-        } icon: {
-            TrailerActionIcon(isExternal: trailerItem?.isYouTubeTrailer == true)
-        }
+        TrailerActionButtonLabel(trailer: trailerItem)
+            .frame(width: heroIconSize, height: heroIconSize)
     }
     /// The selectable versions for this title. When more than one exists and
     /// `onSelectVersion` is set, a "Version" picker button is shown next to Play
@@ -1000,7 +997,7 @@ struct DetailHeroView: View, Equatable {
                             Button(action: onPlayTrailer) {
                                 trailerButtonLabel
                             }
-                            .modifier(HeroActionButtonStyle(prominent: !showsRequestPill))
+                            .modifier(HeroActionButtonStyle(prominent: !showsRequestPill, circular: true))
                             .prefersDefaultFocus(!showsRequestPill, in: heroActionsScope)
                             .focused($heroActionRowFocus, equals: .trailer)
                             .accessibilityIdentifier("detail-hero-trailer")
@@ -1021,7 +1018,7 @@ struct DetailHeroView: View, Equatable {
                         Button(action: onPlayTrailer) {
                             trailerButtonLabel
                         }
-                        .modifier(HeroActionButtonStyle(prominent: false))
+                        .modifier(HeroActionButtonStyle(prominent: false, circular: true))
                         .focused($heroActionRowFocus, equals: .trailer)
                         .accessibilityIdentifier("detail-hero-trailer")
                     }

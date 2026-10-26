@@ -26,6 +26,8 @@ without geometry state or an extra hidden copy of the badge views.
 layout footprint. `PlayResumeButtonLabel.isLoading` uses it without changing the
 button's dimensions or the existing resume/placeholder layout.
 
+`TrailerActionButtonLabel` always renders icon-only on TV and mobile, preserving
+the destination description for accessibility regardless of available width.
 `TrailerActionIcon` keeps the film symbol for server files and adds a small
 outgoing arrow for external YouTube links. The arrow's surrounding stroke removes
 symbol pixels transparently, rather than painting a badge or background color,
