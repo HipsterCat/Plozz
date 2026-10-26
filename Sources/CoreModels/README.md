@@ -271,11 +271,15 @@ country flags. `Multi` is not a language and adds no count.
 These display facts never create selectable tracks or change track preferences.
 The compact row highlights a reported preferred language and counts the rest
 (`English | +9` in one chip) without discarding the complete language inventory.
-`MediaSourceDisplayName` extracts a readable `torrent_name` from URL/query-backed
-sources (including percent-encoded names) before taking a basename. It also
-cleans cached locator-like names at presentation time. Only the decoded name,
-not unrelated query parameters, supplies release text or edition/quality hints;
-playback locators and source IDs remain unchanged.
+`MediaSourceDisplayName` formats ordinary filenames, paths and source labels.
+A filename in a URL's path wins over query hints. When the path has no filename,
+only `filename` and `file_name` query parameters are accepted, decoded once.
+Conflicting hints, nested URLs and unrelated query fields supply no filename;
+the picker falls back to the server's other labels and technical metadata.
+Bare query text is never shown as a source label. Cached locator-like names are
+cleaned at presentation time without changing stored values, playback locators
+or source IDs. Only the resulting filename supplies release text or
+filename-derived edition/quality hints.
 Multiline remote-source labels can identify their release file on a folder-marked
 line, including continuation lines through the file extension; presentation
 extracts that filename rather than displaying the entire provider description.
