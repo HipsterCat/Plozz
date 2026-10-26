@@ -1,6 +1,7 @@
 import Foundation
 import CoreModels
 import CoreNetworking
+import CoreUI
 
 /// Fans out over every active account's provider and merges the results into the
 /// unified Home/Settings content, tagging each item/library with its owning
@@ -810,17 +811,17 @@ public struct HomeAggregator: Sendable {
                         )
                     }
                 }
-                return sections.filter {
+                var prepared = sections.filter {
                     visibility.isHomeRowVisible(
                         HomeRowChoice(section: $0, library: library)
                     )
-                }.map { section in
-                    var section = section
-                    section.items = section.items.map {
-                        $0.taggingSource(library.accountID).taggingLibrary(library.library.id)
-                    }
-                    return section
                 }
+                for index in prepared.indices {
+                    prepared[index].items = try await CollectionCoverArtwork.preparing(prepared[index].items.map {
+                        $0.taggingSource(library.accountID).taggingLibrary(library.library.id)
+                    })
+                }
+                return prepared
             })
         case let .collection(index, definition):
             let resolved = accounts[index]
@@ -858,7 +859,7 @@ public struct HomeAggregator: Sendable {
                 if case let .failure(error) = result, error != .cancelled {
                     PlozzLog.app.error("Home server section failed: provider=\(resolved.provider.kind)")
                 }
-                results[definition.id] = result.map { items in
+                let scoped = result.map { items in
                     items.map { item in
                         let tagged = item.taggingSource(resolved.account.id)
                         return tagged.taggingLibrary(item.libraryID ?? definition.section.libraryID)
@@ -866,6 +867,18 @@ public struct HomeAggregator: Sendable {
                         definition.section.isAccountWideHistory
                             || $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled)
                     }
+                }
+                switch scoped {
+                case let .success(items):
+                    do {
+                        results[definition.id] = .success(try await CollectionCoverArtwork.preparing(items))
+                    } catch is CancellationError {
+                        results[definition.id] = .failure(.cancelled)
+                    } catch {
+                        PlozzLog.app.error("Unable to prepare server collection covers")
+                        results[definition.id] = .failure(.invalidResponse)
+                    }
+                case let .failure(error): results[definition.id] = .failure(error)
                 }
             }
             return .server(results)

@@ -532,6 +532,61 @@ final class LibraryCollectionModeTests: XCTestCase {
         XCTAssertEqual(model.item(at: 8)?.id, "collection-8")
     }
 
+    func testCollectionShapeIsStableAcrossPagingAndOverridesDoNotRefetchOrAffectMembers() async {
+        for kind: ProviderKind in [.jellyfin, .emby, .plex] {
+            let provider = LibraryModeProvider(
+                kind: kind, collectionCount: 30, collectionCoverRatios: [16.0 / 9, 16.0 / 9, 16.0 / 9, 16.0 / 9]
+            )
+            let model = model(provider)
+            await model.setContentMode(.collections)
+            XCTAssertTrue(model.showsCollectionCoverLayout)
+            XCTAssertEqual(model.gridStyle, .landscape)
+            await model.itemAppeared(at: 15)
+            XCTAssertEqual(model.gridStyle, .landscape, "Later portrait pages cannot relayout the initial group.")
+            let firstPageRequests = await provider.requests.filter { $0.page.startIndex == 0 }.count
+            let generation = model.contentGeneration
+            let slot = model.slot(at: 0)
+            model.collectionCoverLayout = .poster
+            XCTAssertEqual(model.gridStyle, .poster)
+            XCTAssertTrue(model.slot(at: 0) === slot)
+            model.collectionCoverLayout = .landscape
+            XCTAssertEqual(model.gridStyle, .landscape)
+            let after = await provider.requests.filter { $0.page.startIndex == 0 }.count
+            XCTAssertEqual(after, firstPageRequests, "Presentation changes must not restart pagination.")
+            XCTAssertEqual(model.contentGeneration, generation)
+            let reopened = self.model(provider)
+            await reopened.setContentMode(.collections)
+            XCTAssertEqual(reopened.collectionCoverLayout, .landscape)
+            let other = self.model(provider, accountID: "another-account")
+            XCTAssertEqual(other.collectionCoverLayout, .auto)
+            let members = LibraryBrowseViewModel(
+                provider: provider, containerID: "collection", containerKind: .collection,
+                defaults: defaults, browseScope: .collectionMembers, presentation: model.presentation
+            )
+            XCTAssertFalse(members.showsCollectionCoverLayout)
+            XCTAssertEqual(members.gridStyle, .poster)
+        }
+    }
+
+    func testRecommendedCollectionShapeAndOverrideLeaveMovieRowsUnchanged() async throws {
+        let cover = MediaItem(
+            id: "cover", title: "Collection", kind: .collection, primaryImageAspectRatio: 16.0 / 9
+        )
+        let movie = MediaItem(id: "movie", title: "Movie", kind: .movie)
+        let provider = LibraryModeProvider(nativeSections: [
+            .init(id: "collections", title: "Collections", items: [cover]),
+            .init(id: "movies", title: "Movies", items: [movie])
+        ])
+        let model = model(provider)
+        await model.loadRecommendationsIfNeeded()
+        let sections = try XCTUnwrap(model.recommendationState.value)
+        let collection = try XCTUnwrap(sections.first { $0.title == "Collections" })
+        XCTAssertEqual(model.visibleRecommendedRows(sections).first { $0.id == collection.id }?.style, .landscape)
+        model.presentation.settings.collectionCoverLayouts[model.collectionCoverAddress(rowID: collection.id)] = .poster
+        XCTAssertEqual(model.visibleRecommendedRows(sections).first { $0.id == collection.id }?.style, .poster)
+        XCTAssertEqual(model.visibleRecommendedRows(sections).first { $0.title == "Movies" }?.style, .poster)
+    }
+
     func testNewLibraryOrAccountStartsInRecommendedAndRetainsItsOwnSource() async {
         let firstProvider = LibraryModeProvider(accountID: "server-a")
         let first = model(firstProvider, accountID: "account-a")
@@ -776,6 +831,23 @@ final class LibraryCollectionModeTests: XCTestCase {
         XCTAssertNil(model.collectionProgress)
     }
 
+    func testProgressiveCollectionShapeIsFrozenBeforeItsFirstVisibleCards() async {
+        let provider = LibraryModeProvider(
+            collectionCount: 12, collectionCoverRatios: Array(repeating: 16.0 / 9, count: 4)
+        )
+        await provider.enableCollectionProgress()
+        await provider.hold(.collections, at: 0)
+        let model = model(provider)
+        let initial = Task { await model.setContentMode(.collections) }
+        await provider.waitForHeldRequest(.collections, at: 0)
+        XCTAssertEqual(model.loadedCount, 4)
+        XCTAssertEqual(model.gridStyle, .landscape)
+        await provider.release(.collections, at: 0)
+        await initial.value
+        XCTAssertEqual(model.loadedCount, 12)
+        XCTAssertEqual(model.gridStyle, .landscape, "Completing discovery must not change the visible cover shape.")
+    }
+
     func testPartialCollectionFailureKeepsCardsAndTransportDetailsThenRetries() async {
         let provider = LibraryModeProvider()
         await provider.enableCollectionProgress()
@@ -866,6 +938,7 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
     nonisolated let capabilities: ProviderCapability
     private let titleCount: Int
     private let collectionCount: Int
+    private let collectionCoverRatios: [Double]
     private let supportsPlaylists: Bool
     private var watchingItems: [MediaItem]
     private var nativeSections: [LibrarySection]
@@ -889,6 +962,7 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
         supportsPlaylists: Bool = false,
         titleCount: Int = 40,
         collectionCount: Int = 12,
+        collectionCoverRatios: [Double] = [],
         watchingItems: [MediaItem] = [],
         nativeSections: [LibrarySection] = [],
         failHubs: Bool = false
@@ -896,6 +970,7 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
         self.kind = kind
         self.titleCount = titleCount
         self.collectionCount = collectionCount
+        self.collectionCoverRatios = collectionCoverRatios
         self.supportsPlaylists = supportsPlaylists
         self.watchingItems = watchingItems
         self.nativeSections = nativeSections
@@ -947,7 +1022,10 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
     ) async throws -> MediaPage {
         func update(_ count: Int, checked: Int) -> LibraryCollectionProgress {
             .init(items: (0..<count).map {
-                MediaItem(id: "collection-\($0)", title: "collection \($0)", kind: .collection)
+                MediaItem(
+                    id: "collection-\($0)", title: "collection \($0)", kind: .collection,
+                    primaryImageAspectRatio: $0 < collectionCoverRatios.count ? collectionCoverRatios[$0] : 2.0 / 3
+                )
             }, checked: checked, total: 20)
         }
         if progressiveCollections { await progress(update(4, checked: 4)) }
@@ -1006,7 +1084,11 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
         let end = min(start + page.limit, total)
         return MediaPage(
             items: (start..<end).map {
-                MediaItem(id: "\(prefix)-\($0)", title: "\(prefix) \($0)", kind: kind)
+                MediaItem(
+                    id: "\(prefix)-\($0)", title: "\(prefix) \($0)", kind: kind,
+                    primaryImageAspectRatio: mode == .collections
+                        ? ($0 < collectionCoverRatios.count ? collectionCoverRatios[$0] : 2.0 / 3) : nil
+                )
             },
             startIndex: page.startIndex, totalCount: total
         )

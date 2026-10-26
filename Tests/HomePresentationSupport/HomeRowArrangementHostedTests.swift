@@ -487,6 +487,62 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         }
     }
 
+    #if os(tvOS)
+    func testEmptySectionSharesThePopulatedRowHeaderAndPinnedNavigationKeyline() async throws {
+        let item = MediaItem(
+            id: "status-reference", title: "Reference title", kind: .movie,
+            allowsTitleBasedMetadataMatching: false
+        )
+        let issue = HomeSectionIssue(
+            choice: .init(id: .server(accountID: "fixture", section: "empty"), title: "Collection row", isProviderDefault: true),
+            reason: .empty, serverName: "Collection server", providerKind: .jellyfin
+        )
+        for pinned in [false, true] {
+            try await withWindow {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        MediaRowView(title: Text("Collection row"), items: [item], onSelect: { _ in })
+                        HomeSectionStatusRow(issue: issue, onRetry: {})
+                    }
+                }
+                .environment(\.plozzPinnedSidebarActive, pinned)
+                .environment(\.plozzNavigationContentInset, pinned ? 64 : 0)
+                .environment(\.plozzCardFocusStyle, .system)
+            } inspect: { window in
+                let image = try await self.snapshot(window, name: "Empty row keyline pinned \(pinned)")
+                let bitmap = try XCTUnwrap(image.cgImage)
+                let pixels = try self.rgba(bitmap)
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                try VNImageRequestHandler(cgImage: bitmap).perform([request])
+                let observations = request.results ?? []
+                let lines = observations.compactMap { observation in
+                    observation.topCandidates(1).first.map { ($0.string, observation.boundingBox) }
+                }
+                let text = lines.map(\.0).joined(separator: " | ")
+                let headings = try observations.filter { $0.topCandidates(1).first?.string == "Collection row" }
+                    .map { try self.textInkBounds($0, bitmap: bitmap, pixels: pixels) }.sorted { $0.minY < $1.minY }
+                XCTAssertEqual(headings.count, 2, text)
+                let reference = try XCTUnwrap(headings.first)
+                let empty = try XCTUnwrap(headings.last)
+                XCTAssertEqual(empty.minX, reference.minX, accuracy: 3)
+                XCTAssertEqual(empty.height, reference.height, accuracy: 3)
+                XCTAssertTrue(text.contains("No titles to show"), text)
+                XCTAssertTrue(text.contains("Collection server"), text)
+                for title in ["Details", "Retry"] {
+                    let label = try XCTUnwrap(lines.first { $0.0.contains(title) }, text).1
+                    let point = CGPoint(x: label.midX * window.bounds.width, y: (1 - label.midY) * window.bounds.height)
+                    let target = try XCTUnwrap(self.focusableItem(at: point, in: window))
+                    XCTAssertTrue(target.canBecomeFocused)
+                    try await self.focus(target, in: window)
+                    XCTAssertTrue(UIFocusSystem.focusSystem(for: window)?.focusedItem === target)
+                }
+            }
+        }
+    }
+    #endif
+
     func testPersonalCollectionSourceUsesCurrentAccountBrand() throws {
         for kind in [ProviderKind.plex, .jellyfin] {
             let provider = HomeSettingsLibraryProvider(name: "Collection server", kind: kind)
@@ -537,31 +593,19 @@ final class HomeRowArrangementHostedTests: XCTestCase {
                 request.recognitionLevel = .accurate
                 request.recognitionLanguages = ["en-US"]
                 try VNImageRequestHandler(cgImage: bitmap).perform([request])
-                // Vision locates words; its approximate boxes are not glyph geometry.
-                func inkBounds(_ observation: VNRecognizedTextObservation) throws -> CGRect {
-                    let box = observation.boundingBox
-                    let search = CGRect(
-                        x: box.minX * CGFloat(bitmap.width), y: (1 - box.maxY) * CGFloat(bitmap.height),
-                        width: box.width * CGFloat(bitmap.width), height: box.height * CGFloat(bitmap.height)
-                    ).insetBy(dx: -12, dy: -12).intersection(CGRect(x: 0, y: 0, width: bitmap.width, height: bitmap.height))
-                    var ink = CGRect.null
-                    for y in Int(search.minY)..<Int(search.maxY) {
-                        for x in Int(search.minX)..<Int(search.maxX) {
-                            let offset = (y * bitmap.width + x) * 4
-                            if pixels[offset] > 80, pixels[offset + 1] > 80, pixels[offset + 2] > 80 {
-                                ink = ink.union(CGRect(x: x, y: y, width: 1, height: 1))
-                            }
-                        }
-                    }
-                    XCTAssertFalse(ink.isNull)
-                    return ink
-                }
                 let lines = request.results ?? []
-                let reference = try inkBounds(XCTUnwrap(lines.first { $0.topCandidates(1).first?.string == "Reference row" }))
-                let featured = try inkBounds(XCTUnwrap(lines.first { $0.topCandidates(1).first?.string == "Featured row" }))
+                let reference = try self.textInkBounds(
+                    XCTUnwrap(lines.first { $0.topCandidates(1).first?.string == "Reference row" }),
+                    bitmap: bitmap, pixels: pixels
+                )
+                let featured = try self.textInkBounds(
+                    XCTUnwrap(lines.first { $0.topCandidates(1).first?.string == "Featured row" }),
+                    bitmap: bitmap, pixels: pixels
+                )
                 XCTAssertEqual(featured.minX, reference.minX, accuracy: 3)
                 XCTAssertEqual(featured.height, reference.height, accuracy: 3)
-                let actions = try lines.filter { $0.topCandidates(1).first?.string == "See all" }.map(inkBounds)
+                let actions = try lines.filter { $0.topCandidates(1).first?.string == "See all" }
+                    .map { try self.textInkBounds($0, bitmap: bitmap, pixels: pixels) }
                 XCTAssertEqual(actions.count, 2)
                 if actions.count == 2 {
                     XCTAssertEqual(actions[0].maxX, actions[1].maxX, accuracy: 3)
@@ -1938,6 +1982,28 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         }
     }
     #endif
+
+    private func textInkBounds(
+        _ observation: VNRecognizedTextObservation, bitmap: CGImage, pixels: [UInt8]
+    ) throws -> CGRect {
+        // Vision locates words; its approximate boxes are not glyph geometry.
+        let box = observation.boundingBox
+        let search = CGRect(
+            x: box.minX * CGFloat(bitmap.width), y: (1 - box.maxY) * CGFloat(bitmap.height),
+            width: box.width * CGFloat(bitmap.width), height: box.height * CGFloat(bitmap.height)
+        ).insetBy(dx: -12, dy: -12).intersection(CGRect(x: 0, y: 0, width: bitmap.width, height: bitmap.height))
+        var ink = CGRect.null
+        for y in Int(search.minY)..<Int(search.maxY) {
+            for x in Int(search.minX)..<Int(search.maxX) {
+                let offset = (y * bitmap.width + x) * 4
+                if pixels[offset] > 80, pixels[offset + 1] > 80, pixels[offset + 2] > 80 {
+                    ink = ink.union(CGRect(x: x, y: y, width: 1, height: 1))
+                }
+            }
+        }
+        XCTAssertFalse(ink.isNull)
+        return ink
+    }
 
     private func withWindow<Content: View>(
         size: CGSize? = nil,

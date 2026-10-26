@@ -27,6 +27,12 @@ Detail Page exposes episodes, related titles, and extras. Central presets still
 replace all overrides; contextual edits preserve other views. Screen-specific
 sizing stays with its screen, while overall display size stays in Appearance.
 
+Collection-cover layout is a presentation setting, not a browse filter.
+Customize Libraries lists collection directories alongside video libraries and
+owns each library's Auto/Posters/Landscape choice. Collection-only directories
+do not request or display a Recommended-page editor. Home and Recommended rows
+retain their separate cover-layout choices in their settings editors.
+
 Live TV settings exposes TV sources and the automatic Plozz channels switch on
 the root page. Sources have a regular Add source header action and reuse the
 shared fading scroll container above four entries. Guide/browsing preferences

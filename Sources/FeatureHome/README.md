@@ -254,6 +254,10 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   dynamic recommendations may be empty or changed. Normal empty default library
   feeds remain quiet unless explicitly added. Existing usable cached/partial
   cards remain visible, with any load warning available in the editor.
+  Empty and failed Home rows use the same header and keyline as populated rows,
+  including pinned-navigation clearance. Status/source and native recovery
+  actions stay compact; they do not use a full-page error panel or reserve an
+  empty poster wall. Mobile uses its ordinary media-section heading and insets.
   Warnings are runtime-only, scoped to the current profile, accounts, server
   users, credentials, and settings; cancellation is not a failure and successful
   recovery clears the warning. Details expose safe error categories, not URLs,
@@ -267,6 +271,15 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   and membership, showing supported movie and series cards without reconstructing
   library membership. **See all** opens the existing collection browser using
   the original provider ID. All card styles open title details.
+  This member-row layout is separate from collection **covers**. Lists and Home
+  or Recommended rows containing only collection containers use a uniform
+  Auto/Posters/Landscape cover layout. Overrides are profile-scoped and keyed
+  independently by Home row or account/library/browser/Recommended row. Browsers
+  resolve Auto from the initial page and retain that shape through later pages.
+  Cover layout controls live only in Settings: Customize Libraries owns each
+  library's collection browser and Recommended rows; Customize Home owns Home
+  rows. Browse headers contain query controls, not cover appearance controls.
+  Landscape collection covers still open the collection, never direct playback.
   Collection definitions persist with the profile separately from arrangement:
   removing a row or choosing a preset retains its configuration in Add row.
   Disabled libraries and a different server viewer prevent collection requests;
