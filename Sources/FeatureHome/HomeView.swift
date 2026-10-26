@@ -1388,16 +1388,14 @@ public struct HomeView: View {
         title: Text, error: AppError, report: PlaybackDiagnosticReport? = nil,
         onFocusEntered: (() -> Void)? = nil
     ) -> some View {
-        VStack(alignment: .leading, spacing: metrics.sectionTitleSpacing) {
-            title
-                .font(.system(size: metrics.sectionHeaderFontSize, weight: .bold))
-                .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
-            ContentStateView<Bool, EmptyView>(
-                state: .failed(error),
-                errorReport: report,
-                onRetry: { Task { await viewModel.load(showLoadingState: false) } }
-            ) { _ in EmptyView() }
-            .frame(height: metrics.posterHeight)
+        MediaRowSection(title: title, insetsContent: true) {
+            MediaRowStatusContent(message: error.userMessage, symbol: "exclamationmark.triangle") {
+                EmptyView()
+            } actions: {
+                ContentFailureActions(report: report) {
+                    Task { await viewModel.load(showLoadingState: false) }
+                }
+            }
             .disabled(viewModel.isRefreshing)
         }
         .background {
@@ -1823,11 +1821,9 @@ public struct HomeView: View {
     }
 
     private func sectionStatusView(_ issue: HomeSectionIssue, browseItem: MediaItem?) -> some View {
-        HomeSectionStatusView(issue: issue, onSeeAll: browseItem.map { item in { onSelectItem(item) } }) {
+        HomeSectionStatusRow(issue: issue, onSeeAll: browseItem.map { item in { onSelectItem(item) } }) {
             Task { await viewModel.load(showLoadingState: false) }
         }
-        .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
-        .padding(.vertical, metrics.sectionTitleSpacing)
         .disabled(viewModel.isRefreshing)
     }
 

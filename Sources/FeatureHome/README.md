@@ -254,6 +254,10 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   dynamic recommendations may be empty or changed. Normal empty default library
   feeds remain quiet unless explicitly added. Existing usable cached/partial
   cards remain visible, with any load warning available in the editor.
+  Empty and failed Home rows use the same header and keyline as populated rows,
+  including pinned-navigation clearance. Status/source and native recovery
+  actions stay compact; they do not use a full-page error panel or reserve an
+  empty poster wall. Mobile uses its ordinary media-section heading and insets.
   Warnings are runtime-only, scoped to the current profile, accounts, server
   users, credentials, and settings; cancellation is not a failure and successful
   recovery clears the warning. Details expose safe error categories, not URLs,

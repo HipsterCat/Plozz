@@ -598,6 +598,12 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   authenticated artwork loader before publication. Paging never changes the
   browser's chosen shape. The native tvOS grid accepts and fits container covers
   without relaxing the portrait filter for ordinary media.
+- **Home row recovery** — ordinary rails and compact empty/failed rows share
+  `MediaRowSection` and `MediaRowHeader`, including typography, header spacing,
+  pinned-navigation inset, and trailing safe space. `MediaRowStatusContent`
+  keeps the summary/source concise and wraps native recovery actions at narrow
+  widths. Detailed explanations stay behind Details. Inline Settings warnings
+  reuse the status content without adopting Home's full rail header.
 - **Mobile media corners** — posters and Continue Watching share a 12pt artwork
   radius at every display size and responsive width. Borderless cards use that
   radius directly; glass frames add their inset to remain concentric. Loaded
