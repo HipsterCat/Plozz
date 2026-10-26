@@ -699,6 +699,7 @@ public struct ItemDetailView: View {
                         playRemainingText: canPlay ? detail.item.resumeRemainingText : nil,
                         playSeasonEpisodeText: canPlay ? HeroForegroundModelBuilder.seasonEpisodeButtonText(for: detail.item) : nil,
                         onPlayTrailer: viewModel.trailers.first.map { trailer in { onPlay(trailer) } },
+                        trailerItem: viewModel.trailers.first,
                         versions: usesExternalDetail ? [] : effectiveVersions,
                         selectedVersionID: effectiveVersionID,
                         onSelectVersion: { id in selectVersion(id, for: detail.item) },

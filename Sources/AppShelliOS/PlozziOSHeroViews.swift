@@ -2272,10 +2272,13 @@ struct PlozziOSDetailHeroForeground: View {
                 onPlayTrailer(trailerItem)
             } label: {
                 if labelled {
-                    Label("Trailer", systemImage: "film.fill")
+                    Label {
+                        Text(trailerItem.trailerActionTitle)
+                    } icon: {
+                        TrailerActionIcon(isExternal: trailerItem.isYouTubeTrailer)
+                    }
                 } else {
-                    Image(systemName: "film.fill")
-                        .font(.headline)
+                    TrailerActionIcon(isExternal: trailerItem.isYouTubeTrailer)
                 }
             }
             // Without a label this is a glyph like the watchlist and download
@@ -2287,7 +2290,7 @@ struct PlozziOSDetailHeroForeground: View {
                     circular: !labelled
                 )
             )
-            .accessibilityLabel("Trailer")
+            .accessibilityLabel(Text(trailerItem.trailerActionTitle))
         }
     }
 
@@ -2392,11 +2395,11 @@ struct PlozziOSDetailHeroForeground: View {
             )
         }
         // So a collapsed Trailer is still reachable rather than simply gone.
-        if trailerItem != nil, onPlayTrailer != nil {
+        if let trailerItem, onPlayTrailer != nil {
             result.append(PlaybackSourceMenuAction(
                 id: "trailer",
-                title: "Trailer",
-                systemImage: "film.fill"
+                title: trailerItem.trailerActionTitle,
+                systemImage: trailerItem.isYouTubeTrailer ? "arrow.up.right" : "film.fill"
             ))
         }
         return result

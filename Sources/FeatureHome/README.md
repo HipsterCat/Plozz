@@ -698,10 +698,18 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   playlists remain in `MusicProvider`. Unsupported sources (including Silo)
   do not advertise a video-playlist mode. Snapshots are bound to the provider
   account and refreshed on the first page, not during poster scrolling.
-- **Trailers** — `OnlineTrailerSource` and `TrailerResolutionCache`
-  handle the TMDb → YouTube fallback when the server has no attached
-  trailer, by routing through `ProviderTrailers.YouTubeTrailerProvider`
-  to surface a real `PlaybackRequest`.
+- **Trailers** — Server-owned trailer files retain in-app playback and take
+  priority across the title's server copies. Server-supplied YouTube links and
+  TMDB's documented videos API supply external trailer actions, labelled
+  "Watch on YouTube" with the shared cutout-arrow `TrailerActionIcon`.
+  `YouTubeTrailerOpening` opens the YouTube app, with browser fallback on mobile
+  and a visible failure on TV when no handler is available. Returning to Plozz
+  is manual; no completion callback or QR fallback is implied.
+  No YouTube scraping, stream extraction, embed probing, or media caching runs
+  during browsing or playback. Household metadata settings and the active TMDB
+  credential apply; unavailable external metadata never removes server trailers.
+  `TrailerResolutionCache` stores link decisions, not media/playability claims.
+  Its new namespace does not reuse old extracted/scraped decisions.
   Background hero trailers use one shared player. Detail departure stops its
   trailer unless the router is returning directly to a rendered, unreceded Home
   hero showing the same title with trailers enabled. Library, Watchlist, pushed

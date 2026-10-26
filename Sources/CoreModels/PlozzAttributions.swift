@@ -209,10 +209,5 @@ public enum PlozzAttributions {
                 + "These fonts are used under the SIL Open Font License 1.1.",
             licenses: [.init("OFL-1.1", family: .ofl)]
         ),
-        PlozzAttribution(
-            title: "YouTubeKit",
-            detail: "Trailer playback uses YouTubeKit by Alexander Eichhorn.",
-            licenses: [.init("MIT", family: .mit)]
-        ),
     ]
 }

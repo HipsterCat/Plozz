@@ -71,6 +71,7 @@ struct DetailHeroView: View, Equatable {
             // Presence, not identity — see above.
             && (lhs.onPlay == nil) == (rhs.onPlay == nil)
             && (lhs.onPlayTrailer == nil) == (rhs.onPlayTrailer == nil)
+            && lhs.trailerItem == rhs.trailerItem
             && (lhs.onSelectVersion == nil) == (rhs.onSelectVersion == nil)
             && lhs.loadVersions?.id == rhs.loadVersions?.id
             && (lhs.onSelectSource == nil) == (rhs.onSelectSource == nil)
@@ -168,6 +169,14 @@ struct DetailHeroView: View, Equatable {
     var playSeasonEpisodeText: String? = nil
     /// When provided, a secondary "Trailer" button is shown next to Play.
     var onPlayTrailer: (() -> Void)? = nil
+    var trailerItem: MediaItem? = nil
+    private var trailerButtonLabel: some View {
+        Label {
+            Text(trailerItem?.trailerActionTitle ?? LocalizedStringResource("Trailer"))
+        } icon: {
+            TrailerActionIcon(isExternal: trailerItem?.isYouTubeTrailer == true)
+        }
+    }
     /// The selectable versions for this title. When more than one exists and
     /// `onSelectVersion` is set, a "Version" picker button is shown next to Play
     /// so the user can choose which source `Play` targets.
@@ -989,7 +998,7 @@ struct DetailHeroView: View, Equatable {
                         if showsRequestPill { requestPill() }
                         if let onPlayTrailer {
                             Button(action: onPlayTrailer) {
-                                Label("Trailer", systemImage: "film.fill")
+                                trailerButtonLabel
                             }
                             .modifier(HeroActionButtonStyle(prominent: !showsRequestPill))
                             .prefersDefaultFocus(!showsRequestPill, in: heroActionsScope)
@@ -1010,7 +1019,7 @@ struct DetailHeroView: View, Equatable {
                     }
                     if let onPlayTrailer {
                         Button(action: onPlayTrailer) {
-                            Label("Trailer", systemImage: "film.fill")
+                            trailerButtonLabel
                         }
                         .modifier(HeroActionButtonStyle(prominent: false))
                         .focused($heroActionRowFocus, equals: .trailer)

@@ -65,6 +65,48 @@ public struct TMDbMetadataProvider: ArtworkProvider {
 
     public var isEnabled: Bool { access.isEnabled }
 
+    /// Trailer links from TMDB's documented videos API; no YouTube requests or media extraction.
+    public func trailerVideoIDs(for query: MetadataQuery, limit: Int = 6) async throws -> [String] {
+        guard isEnabled, limit > 0,
+              [.movie, .video, .series].contains(query.kind),
+              let id = try await detailID(for: query),
+              let url = url("/3/\(query.isTV ? "tv" : "movie")/\(id)/videos") else { return [] }
+        try Task.checkCancellation()
+        guard let response = try await detailResponse(TrailerVideos.self, url: url) else { return [] }
+        try Task.checkCancellation()
+        return Self.trailerVideoIDs(from: response, limit: limit)
+    }
+
+    struct TrailerVideos: Decodable, Sendable {
+        let results: [TrailerVideo]
+    }
+
+    struct TrailerVideo: Decodable, Sendable {
+        let key: String?
+        let site: String?
+        let type: String?
+        let official: Bool?
+    }
+
+    static func trailerVideoIDs(from response: TrailerVideos, limit: Int) -> [String] {
+        guard limit > 0 else { return [] }
+        let candidates = response.results.enumerated().filter {
+            $0.element.site == "YouTube"
+                && ($0.element.type == "Trailer" || $0.element.type == "Teaser")
+        }.sorted {
+            let lhs = ($0.element.type == "Trailer" ? 2 : 0) + ($0.element.official == true ? 1 : 0)
+            let rhs = ($1.element.type == "Trailer" ? 2 : 0) + ($1.element.official == true ? 1 : 0)
+            return lhs == rhs ? $0.offset < $1.offset : lhs > rhs
+        }
+        var seen = Set<String>()
+        return candidates.compactMap { candidate in
+            guard let key = candidate.element.key,
+                  MediaItem.youTubeVideoID(fromURL: key) == key,
+                  seen.insert(key).inserted else { return nil }
+            return key
+        }.prefix(limit).map { $0 }
+    }
+
     /// The work's original spoken language (ISO-639-1), when TMDb knows it.
     ///
     /// This is not a cosmetic metadata lookup. Playback's "Original" audio

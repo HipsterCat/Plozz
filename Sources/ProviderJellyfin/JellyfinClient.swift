@@ -819,8 +819,7 @@ public struct JellyfinClient: Sendable {
 
     /// The item's online trailer links (`BaseItemDto.RemoteTrailers`) — YouTube
     /// watch URLs the server resolved from its own metadata provider. Unlike
-    /// local trailers these have no server item id; the caller extracts the
-    /// YouTube video id and plays it through the keyless trailer path. Returns an
+    /// local trailers these have no server item id and open externally. Returns an
     /// empty array when the server has none.
     func remoteTrailers(userID: String, id: String) async throws -> [MediaUrlDto] {
         let endpoint = Endpoint(

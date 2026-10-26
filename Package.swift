@@ -37,7 +37,6 @@ let package = Package(
         .library(name: "ProviderIPTV", targets: ["ProviderIPTV"]),
         .library(name: "ProviderPlex", targets: ["ProviderPlex"]),
         .library(name: "ProviderShare", targets: ["ProviderShare"]),
-        .library(name: "ProviderTrailers", targets: ["ProviderTrailers"]),
         .library(name: "RatingsService", targets: ["RatingsService"]),
         .library(name: "TraktService", targets: ["TraktService"]),
         .library(name: "CoreTrackerAuth", targets: ["CoreTrackerAuth"]),
@@ -78,13 +77,6 @@ let package = Package(
         .library(name: "AppShelliOS", targets: ["AppShelliOS"])
     ],
     dependencies: [
-        // Pure-Swift, dependency-free YouTube stream extractor. Backs online
-        // trailer playback: TMDb hands us a YouTube video id, YouTubeKit resolves
-        // a natively-playable progressive stream URL we feed straight to AVPlayer
-        // (the same approach Infuse uses). It includes an optional remote fallback
-        // so extraction keeps working when YouTube changes its internal API.
-        .package(url: "https://github.com/alexeichhorn/YouTubeKit.git", from: "0.4.8"),
-
         // AetherEngine — production media player engine for Apple platforms.
         // FFmpeg demuxes, VideoToolbox decodes, AVPlayer handles Dolby Atmos.
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
@@ -380,18 +372,6 @@ let package = Package(
                 .product(name: "SMBClient", package: "SMBClient"),
             ]
         ),
-        // Synthetic provider for online (TMDb → YouTube) trailers. Conforms to
-        // `MediaProvider` so a trailer can be played by the existing player; only
-        // `playbackInfo(for:)` does real work (YouTubeKit stream extraction), the
-        // rest are inert stubs. Kept in its own leaf module so YouTubeKit stays
-        // out of every other target's link graph.
-        .target(
-            name: "ProviderTrailers",
-            dependencies: [
-                "CoreModels",
-                .product(name: "YouTubeKit", package: "YouTubeKit")
-            ]
-        ),
         .target(
             name: "RatingsService",
             dependencies: ["CoreModels", "CoreNetworking"]
@@ -460,8 +440,7 @@ let package = Package(
                 // unguarded tvOS-only API and is never compiled for iOS.
                 "CoreUI",
                 "MetadataKit",
-                "RatingsService",
-                "ProviderTrailers"
+                "RatingsService"
             ]
         ),
         .target(
@@ -470,7 +449,7 @@ let package = Package(
         ),
         .target(
             name: "FeatureHome",
-            dependencies: ["CoreModels", "CoreNetworking", "CoreUI", "FeatureHomeCore", "HeroUI", "MetadataKit", "TopShelfKit", "RatingsService", "ProviderTrailers"]
+            dependencies: ["CoreModels", "CoreNetworking", "CoreUI", "FeatureHomeCore", "HeroUI", "MetadataKit", "TopShelfKit", "RatingsService"]
         ),
         .target(
             name: "FeaturePlayback",
@@ -867,7 +846,6 @@ let package = Package(
                 "ProviderSilo",
                 "ProviderPlex",
                 "ProviderShare",
-                "ProviderTrailers",
                 "RatingsService",
                 "TraktService",
                 "SeerService",
@@ -1024,10 +1002,6 @@ let package = Package(
         .testTarget(
             name: "ProviderPlexTests",
             dependencies: ["ProviderPlex", "CoreModels", "CoreNetworking"]
-        ),
-        .testTarget(
-            name: "ProviderTrailersTests",
-            dependencies: ["ProviderTrailers", "CoreModels"]
         ),
         .testTarget(
             name: "RatingsServiceTests",

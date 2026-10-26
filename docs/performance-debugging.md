@@ -1619,7 +1619,8 @@ sometimes crashed. "It's an artwork/scroll bug."
   collector** — alongside `JavaScriptCore libpas scavenger` and `JSC Heap Collector
   Thread`. Aggregated **by leaf binary**: a huge `UNKNOWN` (JIT) bucket plus
   `JavaScriptCore`. JavaScriptCore is pulled in by exactly one dependency:
-  **YouTubeKit** (trailer extraction).
+  **YouTubeKit** (trailer extraction in that historical build). That dependency
+  and extraction path have since been removed; current YouTube trailers open externally.
 
 **Root cause.** Opening a detail page speculatively verified its trailer button by
 running `YouTubeTrailerProvider.firstPlayableVideoID`, which extracted **every**

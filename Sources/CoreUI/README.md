@@ -26,6 +26,12 @@ without geometry state or an extra hidden copy of the badge views.
 layout footprint. `PlayResumeButtonLabel.isLoading` uses it without changing the
 button's dimensions or the existing resume/placeholder layout.
 
+`TrailerActionIcon` keeps the film symbol for server files and adds a small
+outgoing arrow for external YouTube links. The arrow's surrounding stroke removes
+symbol pixels transparently, rather than painting a badge or background color,
+so native glass, focus, light/dark appearances, and reduced transparency still
+come from the existing button styles.
+
 The tvOS detail entrance checks cancellation after every timed reveal. A sleep
 that expired before cancellation can still be waiting for the main actor; it
 must not overwrite a finished entrance and hide already-visible controls.
