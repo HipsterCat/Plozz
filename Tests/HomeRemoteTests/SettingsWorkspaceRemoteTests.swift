@@ -2,6 +2,55 @@ import XCTest
 
 @MainActor
 final class SettingsWorkspaceRemoteTests: XCTestCase {
+    func testCompactSkipDefaultMenuAndContentExceptions() throws {
+        #if targetEnvironment(simulator)
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = ["--skip-settings-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        defer { app.terminate() }
+        let shared = app.buttons["Default behavior"]
+        XCTAssertTrue(shared.waitForExistence(timeout: 10), app.debugDescription)
+        try focus(shared, in: app)
+        XCTAssertEqual(shared.value as? String, "Skip instantly")
+        capture("compact-skip-TV-default-page", in: app)
+        let intro = app.buttons["Intros"]
+        try focus(intro, in: app)
+        XCUIRemote.shared.press(.select)
+        let movie = app.buttons["Movies"]
+        let anime = app.buttons["Anime"]
+        XCTAssertTrue(movie.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(movie.value as? String, "Skip instantly (default)")
+        XCTAssertEqual(anime.value as? String, "Show skip button")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Default:")).firstMatch.exists)
+        try focus(anime, in: app)
+        capture("compact-skip-TV-closed", in: app)
+        try focus(movie, in: app)
+        XCUIRemote.shared.press(.select)
+        for title in ["Use default", "Off", "Show skip button", "Skip instantly", "Skip after"] {
+            XCTAssertTrue(app.cells.containing(.any, identifier: title).firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        }
+        capture("compact-skip-TV-menu-open", in: app)
+        try focus(app.cells.containing(.any, identifier: "Show skip button").firstMatch, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.cells.containing(.any, identifier: "Use default").firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(movie.value as? String, "Show skip button")
+        XCTAssertEqual(anime.value as? String, "Show skip button")
+        try focus(movie, in: app)
+        XCUIRemote.shared.press(.select)
+        try focus(app.cells.containing(.any, identifier: "Use default").firstMatch, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.cells.containing(.any, identifier: "Use default").firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(movie.value as? String, "Skip instantly (default)")
+        try focus(pageBack(in: app), in: app)
+        XCUIRemote.shared.press(.select)
+        waitForEnabled(intro)
+        XCTAssertTrue(hasFocus(intro), "Back must restore the marker link.")
+        #else
+        throw XCTSkip("Never changes skipping preferences on a physical device.")
+        #endif
+    }
+
     func testAppNavigationEntryAndTitleStayConsistent() throws {
         #if targetEnvironment(simulator)
         let app = try launchSettings()
@@ -1000,13 +1049,14 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             try focus(section(category, in: app), in: app)
             XCUIRemote.shared.press(.select)
             if category == "playback" {
-                let separate = app.switches["Set each marker separately"]
-                XCTAssertTrue(separate.waitForExistence(timeout: 5), app.debugDescription)
+                let enabled = app.switches["Skip intros, credits & more"]
+                XCTAssertTrue(enabled.waitForExistence(timeout: 5), app.debugDescription)
                 XCTAssertFalse(app.buttons["settings-page-skip-intros-mode"].exists)
-                try focus(separate, in: app)
-                let community = app.switches["Use community markers"]
-                XCTAssertTrue(community.exists, app.debugDescription)
-                try focus(community, in: app)
+                XCTAssertFalse(app.switches["Set each marker separately"].exists)
+                let customize = app.buttons["Customize"]
+                XCTAssertTrue(customize.exists, app.debugDescription)
+                try focus(customize, in: app)
+                XCTAssertFalse(app.switches["Use community markers"].exists, "Customization belongs on the child page.")
                 capture("playback-inline-skip-controls", in: app)
             }
             for page in pages {
