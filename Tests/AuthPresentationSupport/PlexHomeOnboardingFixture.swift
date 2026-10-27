@@ -8,7 +8,7 @@ struct PlexHomeOnboardingFixture: View {
 
     private var users: [PlexHomeUser] {
         let initial: [PlexHomeUser] = [
-            .init(id: "parent", name: "Alex", requiresPIN: true, isAdmin: true),
+            .init(id: "parent", name: "alexander-morgan", requiresPIN: true, isAdmin: true),
             .init(id: "child", name: "Sam", requiresPIN: false, isRestricted: true),
             .init(id: "guest", name: "Taylor", requiresPIN: false)
         ]

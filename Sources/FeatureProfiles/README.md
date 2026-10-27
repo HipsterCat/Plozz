@@ -77,6 +77,9 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   viewer finishes, a synced household still avoids repeating first-run elsewhere.
   Short choice pages center vertically; overflowing viewer lists start at the
   top so initial native focus stays visible and remote navigation scrolls normally.
+  The import preview and confirmation show every household avatar in centered,
+  wrapping rows. Viewer names have their own line; owner/PIN metadata sits below
+  rather than competing with the name for horizontal space.
 - **Photo fallback.** Borrowed photos fall back to the profile's emoji or
   symbol if loading fails; preserve symbol-only profiles on both platforms.
 - **Profile-aware everywhere.** Any feature reading per-user state

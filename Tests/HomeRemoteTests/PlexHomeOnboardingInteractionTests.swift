@@ -7,6 +7,8 @@ final class PlexHomeOnboardingInteractionTests: XCTestCase {
         app.launchArguments = ["--plex-home-onboarding-fixture", "--plex-home-long-list"]
         app.launch()
         defer { app.terminate() }
+        assertPreviewCount(16, in: app)
+        capture(app, name: "All Plex Home profiles before import")
         activate(app.buttons["plex-home-add-all"])
         let parent = app.buttons["plex-home-user-parent"]
         XCTAssertTrue(parent.waitForExistence(timeout: 5))
@@ -52,6 +54,7 @@ final class PlexHomeOnboardingInteractionTests: XCTestCase {
         app.launchArguments = ["--plex-home-onboarding-fixture"]
         app.launch()
         defer { app.terminate() }
+        assertPreviewCount(3, in: app)
         let addAll = app.buttons["plex-home-add-all"]
         XCTAssertTrue(addAll.waitForExistence(timeout: 10))
         #if os(tvOS)
@@ -65,6 +68,20 @@ final class PlexHomeOnboardingInteractionTests: XCTestCase {
         #if os(tvOS)
         waitForFocus(parent)
         #endif
+        let name = parent.staticTexts["server-user-name"]
+        let owner = parent.staticTexts["Account owner"]
+        let pin = parent.staticTexts["PIN required"]
+        XCTAssertTrue(name.exists)
+        XCTAssertTrue(owner.exists)
+        XCTAssertTrue(pin.exists)
+        XCTAssertGreaterThanOrEqual(owner.frame.minY, name.frame.maxY)
+        XCTAssertGreaterThanOrEqual(pin.frame.minY, name.frame.maxY)
+        XCTAssertTrue(parent.frame.contains(name.frame))
+        XCTAssertTrue(parent.frame.contains(owner.frame))
+        XCTAssertTrue(parent.frame.contains(pin.frame))
+        let shortName = app.buttons["plex-home-user-guest"].staticTexts["server-user-name"]
+        XCTAssertEqual(name.frame.height, shortName.frame.height, accuracy: 1,
+                       "Owner and PIN metadata must not force this name onto another line.")
         capture(app, name: "Plex Home viewer choice")
         activate(parent)
         let result = app.staticTexts["plex-home-result"]
@@ -122,6 +139,17 @@ final class PlexHomeOnboardingInteractionTests: XCTestCase {
         #else
         button.tap()
         #endif
+    }
+
+    private func assertPreviewCount(_ count: Int, in app: XCUIApplication) {
+        let avatars = app.images.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "plex-home-preview-"
+        ))
+        XCTAssertTrue(avatars.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(avatars.count, count)
+        for avatar in avatars.allElementsBoundByIndex {
+            XCTAssertTrue(app.frame.contains(avatar.frame), "Every profile preview should fit on screen.")
+        }
     }
 
     #if os(tvOS)

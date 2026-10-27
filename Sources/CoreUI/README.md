@@ -6,6 +6,10 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
+`ServerUserRow` keeps the user's name above its owner/PIN metadata. The metadata
+wraps independently, preserving the avatar, native focus treatment, and trailing
+selection indicator without squeezing the name alongside badges.
+
 `PlozzTypography` owns semantic text metrics, including additional line spacing,
 and composes local adjustments with `plozzAppTextScale` once at a surface boundary.
 SwiftUI text and the UIKit Home foreground resolve the same styles; badge children

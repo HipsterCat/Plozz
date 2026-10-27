@@ -114,12 +114,7 @@ struct PlexHomeOnboardingContent: View {
 
     private var importChoice: some View {
         VStack(spacing: 28) {
-            HStack(spacing: 12) {
-                ForEach(Array(orderedUsers.prefix(3))) { user in
-                    PlexHomeUserAvatar(user: user, size: 64)
-                        .accessibilityHidden(true)
-                }
-            }
+            profileAvatars
             OnboardingHeader(Text("Add your Plex Home profiles?"))
             VStack(spacing: 16) {
                 Button("Add all profiles") {
@@ -146,11 +141,7 @@ struct PlexHomeOnboardingContent: View {
 
     private var importConfirmation: some View {
         VStack(spacing: 28) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)], spacing: 12) {
-                ForEach(orderedUsers) { user in
-                    PlexHomeUserAvatar(user: user, size: 64)
-                }
-            }
+            profileAvatars
             Label {
                 if stage == .added { Text("Profiles added") }
                 else { Text("Profiles ready") }
@@ -160,6 +151,26 @@ struct PlexHomeOnboardingContent: View {
             .font(.title2.weight(.bold))
             .accessibilityAddTraits(.isHeader)
         }
+    }
+
+    private var profileAvatars: some View {
+        WrappingHStackLayout(alignment: .center, spacing: 12, lineSpacing: 12) {
+            ForEach(orderedUsers) { user in
+                PlexHomeUserAvatar(user: user, size: previewAvatarSize)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(verbatim: user.name))
+                    .accessibilityAddTraits(.isImage)
+                    .accessibilityIdentifier("plex-home-preview-\(user.id)")
+            }
+        }
+    }
+
+    private var previewAvatarSize: CGFloat {
+        #if os(tvOS)
+        64
+        #else
+        52
+        #endif
     }
 
     private func userSelection(addAllProfiles: Bool) -> some View {
