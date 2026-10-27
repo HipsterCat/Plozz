@@ -88,11 +88,7 @@ struct PlozziOSFirstRunView: View {
         case .libraries:
             if let selection = appModel.pendingLibrarySelection {
                 PlozziOSLibrarySelectionView(
-                    accounts: appModel.accountsProviders.resolvedAccounts(
-                        withIDs: selection.accountIDs
-                    ),
-                    visibility: appModel.settings.homeVisibility,
-                    onContinue: appModel.completeLibrarySelection
+                    appModel: appModel, accountIDs: selection.accountIDs
                 )
             }
         case .confirmProfile:

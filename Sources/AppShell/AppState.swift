@@ -1861,8 +1861,8 @@ public final class AppState {
     /// Enters the "choose your libraries" step. On first run this also seeds the
     /// always-present default profile from the signed-in identity so the later
     /// confirm screen shows who's watching. `applyPlexIdentity` records whether a
-    /// freshly-picked Plex Home user still needs applying once the step completes
-    /// (deferred so the PIN prompt doesn't interrupt onboarding).
+    /// freshly-picked Plex Home user should be reconciled again on completion.
+    /// The library step owns initial authentication before it can discover libraries.
     private func beginLibrarySelection(
         isFirstRun: Bool, seedName: String, seedAvatar: String?, applyPlexIdentity: Bool,
         skipSelectionStep: Bool = false, seedIdentity: Bool = true
@@ -1880,6 +1880,7 @@ public final class AppState {
             confirmLibrarySelection()
         } else {
             apply(.librarySelectionRequired)
+            plexHomeUsers.ensurePlexIdentityForActiveProfile()
         }
     }
 
@@ -1887,6 +1888,7 @@ public final class AppState {
     /// first-ever account detours through the profile confirm step, a later add
     /// drops straight into the app (applying any freshly-picked Plex identity).
     public func confirmLibrarySelection() {
+        guard plexHomeUsers.pendingPlexPINRequest == nil else { return }
         let continuation = pendingOnboardingContinuation
         pendingOnboardingContinuation = nil
         pendingLibrarySelectionAccountIDs = []
@@ -1936,9 +1938,7 @@ public final class AppState {
             profileFlow.resumeSetupIfNeeded()
             return
         }
-        // Continue to the "choose your libraries" step. First run seeds the
-        // profile identity from the picked user; a later add applies the Plex
-        // identity once the library step completes.
+        // The library step authenticates the selected viewer before discovery.
         beginLibrarySelection(
             isFirstRun: pending.isFirstRun,
             seedName: user?.name ?? "",
@@ -1973,7 +1973,7 @@ public final class AppState {
         apply(.navigationSelected)
     }
 
-    /// Defers Plex PIN presentation until all appearance choices are complete.
+    /// Reconciles the selected identity after appearance setup.
     public func finishHomeLayoutSelection() {
         profileFlow.completeAppearanceSetup(for: profilesModel.activeProfileID)
         apply(.homeLayoutSelected)

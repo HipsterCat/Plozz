@@ -2,6 +2,43 @@ import XCTest
 
 @MainActor
 final class PlexHomeOnboardingInteractionTests: XCTestCase {
+    func testLongImportedListStartsWithVisibleFocusAndScrollsToTheLastUser() {
+        let app = app
+        app.launchArguments = ["--plex-home-onboarding-fixture", "--plex-home-long-list"]
+        app.launch()
+        defer { app.terminate() }
+        activate(app.buttons["plex-home-add-all"])
+        let parent = app.buttons["plex-home-user-parent"]
+        XCTAssertTrue(parent.waitForExistence(timeout: 5))
+        #if os(tvOS)
+        waitForFocus(parent)
+        #endif
+        XCTAssertTrue(app.frame.contains(parent.frame), "Initial focus must be fully inside the viewport.")
+        XCTAssertTrue(parent.isHittable)
+        capture(app, name: "Long Plex Home list entry")
+        let last = app.buttons["plex-home-user-viewer-13"]
+        #if os(tvOS)
+        for _ in 0..<15 { XCUIRemote.shared.press(.down) }
+        waitForFocus(last)
+        #else
+        for _ in 0..<10 {
+            if last.isHittable { break }
+            app.scrollViews.firstMatch.swipeUp()
+        }
+        #endif
+        XCTAssertTrue(last.isHittable)
+        XCTAssertTrue(app.frame.contains(last.frame))
+        capture(app, name: "Long Plex Home list last user")
+        #if os(tvOS)
+        XCUIRemote.shared.press(.select)
+        #else
+        last.tap()
+        #endif
+        let result = app.staticTexts["plex-home-result"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertEqual(result.label, "viewer-13:all")
+    }
+
     private var app: XCUIApplication {
         #if os(tvOS)
         XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")

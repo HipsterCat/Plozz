@@ -380,11 +380,16 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   configured. Completion belongs to the current curation inputs and profile;
   cancelled work cannot settle a replacement request. This never changes saved
   preferences or treats a failed fetch as authority to erase cached candidates.
-  New profiles include Discovery in the carousel only while Seerr is configured.
+  New profiles enable Continue Watching, Recently Added, Random from Library,
+  and Watchlist; Collections is opt-in. They include Discovery in the carousel
+  only while Seerr is configured.
   Explicitly toggling Discovery saves that profile's choice, independent of later
   connections or disconnections. Other Hero edits retain the automatic default,
   and temporary Seerr reachability failures do not change it. Existing saved
   source lists retain their selection; Kids restrictions still take precedence.
+  The developer first-run reset preserves saved Hero preferences, including the
+  default profile's unsuffixed settings. Repeating onboarding through that reset
+  is not a fresh-settings test; use a new profile namespace to verify defaults.
   Showcase's separate Discovery row remains opt-in.
   On iPhone and iPad, tapping the Home hero artwork, logo or metadata opens its
   item/provider detail page instead of a separate More Info button. The artwork

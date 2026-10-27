@@ -88,7 +88,8 @@ struct PlexHomeOnboardingContent: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 40)
         }
-        .defaultScrollAnchor(.center)
+        .defaultScrollAnchor(.top)
+        .defaultScrollAnchor(.center, for: .alignment)
         .animation(
             reduceMotion ? .easeInOut(duration: 0.14) : .smooth(duration: 0.38, extraBounce: 0),
             value: stage

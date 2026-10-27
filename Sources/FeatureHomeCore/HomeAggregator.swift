@@ -107,13 +107,19 @@ public struct HomeAggregator: Sendable {
     /// Like ``libraries(from:)`` but also reports which accounts were unreachable,
     /// so callers can surface a "server offline" state rather than folding a
     /// connection failure into an empty library list.
-    public func libraryDiscovery(from accounts: [ResolvedAccount]) async -> LibraryDiscovery {
+    public func libraryDiscovery(
+        from accounts: [ResolvedAccount], expectedAccountIDs: Set<String> = []
+    ) async -> LibraryDiscovery {
         let outcomes = await Self.loadPerAccount(accounts) { resolved in
             await Self.libraryOutcome(from: resolved)
         }
         var libraries: [AggregatedLibrary] = []
-        var unreachable: Set<String> = []
-        var failures: [String: AppError] = [:]
+        let unresolved = expectedAccountIDs.subtracting(accounts.map(\.account.id))
+        var unreachable = unresolved
+        var failures = Dictionary(uniqueKeysWithValues: unresolved.map { ($0, AppError.unauthorized) })
+        if !unresolved.isEmpty {
+            PlozzLog.app.error("Library discovery is missing \(unresolved.count) authorized account providers")
+        }
         for outcome in outcomes {
             switch outcome {
             case let .libraries(libs): libraries.append(contentsOf: libs)

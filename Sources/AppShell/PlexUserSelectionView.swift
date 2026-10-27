@@ -4,8 +4,8 @@ import AppRuntime
 import CoreModels
 import CoreUI
 
-/// Shared Plex Home import/identity page. The selected user's PIN is deferred
-/// until onboarding completes; other imported users are never authenticated here.
+/// Shared Plex Home import/identity page. The selected user authenticates in the
+/// next library step; other imported users are never authenticated here.
 struct PlexUserSelectionView: View {
     let selection: PlexHomeUsersModel.PendingPlexUserSelection
     let onImportAll: () -> PlexHomeProfileImportResult

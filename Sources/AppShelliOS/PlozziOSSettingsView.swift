@@ -137,11 +137,7 @@ struct PlozziOSSettingsView: View {
         }
         .plozzSheet(item: librarySelectionBinding) { selection in
             PlozziOSLibrarySelectionView(
-                accounts: appModel.accountsProviders.resolvedAccounts(
-                    withIDs: selection.accountIDs
-                ),
-                visibility: appModel.settings.homeVisibility,
-                onContinue: appModel.completeLibrarySelection
+                appModel: appModel, accountIDs: selection.accountIDs
             )
         }
     }

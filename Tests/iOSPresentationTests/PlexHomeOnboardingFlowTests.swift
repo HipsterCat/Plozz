@@ -51,7 +51,11 @@ final class PlexHomeOnboardingFlowTests: XCTestCase {
         ]
         app.plexHomeUsers.plexHomeUsersFetch = { _, _ in users }
         let authentication = AuthenticationGate()
-        app.plexHomeUsers.plexHomeUserSwitch = { _, _, _, _ in await authentication.token() }
+        app.plexHomeUsers.plexHomeUserSwitch = { user, pin, _, _ in
+            XCTAssertEqual(user, users[selectedIndex].id)
+            XCTAssertEqual(pin, selectedIndex == 0 ? "2468" : nil)
+            return await authentication.token()
+        }
         app.plexHomeUsers.plexServerTokenResolve = { _, _, _ in "fixture-server" }
         let sessions = ["a", "b"].map {
             UserSession(
@@ -67,8 +71,10 @@ final class PlexHomeOnboardingFlowTests: XCTestCase {
         }
         XCTAssertNotNil(app.plexHomeUsers.pendingPlexUserSelection)
         XCTAssertEqual(app.importPlexHomeProfilesDuringOnboarding(), .added)
+        XCTAssertEqual(authentication.calls, 0, "Import must not authenticate other Home users.")
         XCTAssertEqual(app.profiles.profiles.count, 2, "Import precedes the viewer's choice.")
         let selectedID = try XCTUnwrap(app.plexHomeUsers.importedOnboardingProfileID(for: users[selectedIndex]))
+        authentication.permits = true
         app.selectPlexUserDuringOnboarding(users[selectedIndex], addAllProfiles: true)
         XCTAssertEqual(app.profiles.activeProfileID, selectedID)
         XCTAssertEqual(app.profiles.profiles.first?.name, "Parent")
@@ -77,6 +83,22 @@ final class PlexHomeOnboardingFlowTests: XCTestCase {
             await Task.yield()
         }
         XCTAssertNotNil(app.pendingLibrarySelection)
+        XCTAssertNil(app.plexPINRequestForAppPresentation, "The library-selection surface owns its PIN prompt.")
+        await app.plexHomeUsers.waitForPlexPINRequirementCheck()
+        if selectedIndex == 0 {
+            XCTAssertEqual(app.plexHomeUsers.plexPINEntryAvailability, .available)
+            XCTAssertEqual(authentication.calls, 0)
+            XCTAssertTrue(app.accountsProviders.resolvedAccounts(withIDs: sessions.map(Account.stableID(for:))).isEmpty)
+            app.completeLibrarySelection()
+            XCTAssertNotNil(app.pendingLibrarySelection, "A pending PIN cannot be bypassed by completing the picker.")
+            app.plexHomeUsers.submitPlexPIN("2468")
+        }
+        await app.plexHomeUsers.waitForPlexPINRequirementCheck()
+        await app.plexHomeUsers.waitForPlexPINRequirementCheck()
+        XCTAssertNil(app.plexHomeUsers.pendingPlexPINRequest)
+        XCTAssertEqual(app.accountsProviders.resolvedAccounts(withIDs: sessions.map(Account.stableID(for:))).count, 2)
+        XCTAssertGreaterThan(authentication.calls, 0, "Authenticate the selected viewer before choosing libraries.")
+        let callsBeforeAppearance = authentication.calls
         XCTAssertEqual(app.profiles.profiles.count, 2)
         XCTAssertFalse(app.profiles.firstRunProfileSetupComplete)
         app.completeLibrarySelection()
@@ -85,8 +107,6 @@ final class PlexHomeOnboardingFlowTests: XCTestCase {
         XCTAssertEqual(app.pendingFirstRunStep, .seerr)
         app.completeFirstRunSeerrSetup()
         XCTAssertEqual(app.pendingFirstRunStep, .theme)
-        XCTAssertEqual(authentication.calls, 0, "Import and selection must not authenticate every Home user.")
-        authentication.permits = true
         app.finishFirstRunThemeSelection()
         XCTAssertNil(app.pendingFirstRunStep)
         XCTAssertTrue(app.profiles.firstRunProfileSetupComplete)
@@ -94,16 +114,13 @@ final class PlexHomeOnboardingFlowTests: XCTestCase {
         if selectedIndex == 1 {
             XCTAssertEqual(app.profiles.activeNamespace, selectedID)
             XCTAssertTrue(try XCTUnwrap(app.profiles.profiles.first).needsSetup)
+            XCTAssertEqual(app.settings.hero.effectiveSettings.sources,
+                           [.continueWatching, .recentlyAdded, .randomFromLibrary, .watchlist])
         }
         await app.plexHomeUsers.waitForPlexPINRequirementCheck()
         await app.plexHomeUsers.waitForPlexPINRequirementCheck()
-        if selectedIndex == 0 {
-            XCTAssertEqual(app.plexHomeUsers.plexPINEntryAvailability, .available)
-            XCTAssertEqual(app.plexHomeUsers.pendingPlexPINRequest?.homeUserID, "parent")
-        } else {
-            XCTAssertNil(app.plexHomeUsers.pendingPlexPINRequest)
-            XCTAssertGreaterThan(authentication.calls, 0)
-        }
+        XCTAssertNil(app.plexHomeUsers.pendingPlexPINRequest)
+        XCTAssertEqual(authentication.calls, callsBeforeAppearance)
     }
 }
 
@@ -112,7 +129,7 @@ private final class AuthenticationGate {
     var permits = false
     var calls = 0
     func token() -> String {
-        XCTAssertTrue(permits, "Only the chosen viewer authenticates after setup.")
+        XCTAssertTrue(permits, "Only the chosen viewer authenticates before library selection.")
         calls += 1
         return "fixture-cloud"
     }

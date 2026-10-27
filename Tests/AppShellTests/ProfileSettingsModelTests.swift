@@ -10,6 +10,27 @@ import CoreModels
 /// as immutable and never rebuilt.
 @MainActor
 final class ProfileSettingsModelTests: XCTestCase {
+    func testNewProfileKeepsLibraryHeroDefaultsAfterLeavingCollectionsOnlyProfile() {
+        let first = "HeroDefaults.first.\(UUID())"
+        let second = "HeroDefaults.second.\(UUID())"
+        defer {
+            for namespace in [first, second] {
+                UserDefaults.standard.removeObject(forKey: SettingsKey.scoped("com.plozz.heroSettings", namespace: namespace))
+            }
+        }
+        let model = ProfileSettingsModel(namespace: first, isSeerrConfigured: { false })
+        model.heroSettingsModel.settings.sources = [.collection]
+        model.rebuild(namespace: second)
+        XCTAssertEqual(model.heroSettingsModel.effectiveSettings.sources,
+                       [.continueWatching, .recentlyAdded, .randomFromLibrary, .watchlist])
+        model.heroSettingsModel.settings.style = .followsFocus
+        model.rebuild(namespace: first)
+        XCTAssertEqual(model.heroSettingsModel.effectiveSettings.sources, [.collection])
+        model.rebuild(namespace: second)
+        XCTAssertEqual(model.heroSettingsModel.effectiveSettings.sources,
+                       [.continueWatching, .recentlyAdded, .randomFromLibrary, .watchlist])
+    }
+
     func testContentRatingVisibilityChangesWithTheActiveProfile() {
         let first = "ContentRatings.first.\(UUID())"
         let second = "ContentRatings.second.\(UUID())"

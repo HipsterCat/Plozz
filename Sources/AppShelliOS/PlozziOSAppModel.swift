@@ -1237,7 +1237,7 @@ final class PlozziOSAppModel {
     }
 
     var plexPINRequestForAppPresentation: PlexHomeUsersModel.PlexPINRequest? {
-        guard plexHomeUsers.pendingPlexUserSelection == nil else { return nil }
+        guard plexHomeUsers.pendingPlexUserSelection == nil, pendingLibrarySelection == nil else { return nil }
         let request = plexHomeUsers.pendingPlexPINRequest
         return request == inlinePlexPINRequest ? nil : request
     }
@@ -2815,6 +2815,7 @@ final class PlozziOSAppModel {
     }
 
     func completeLibrarySelection() {
+        guard plexHomeUsers.pendingPlexPINRequest == nil else { return }
         pendingLibrarySelection = nil
         if beginsFirstRunAfterLibrarySelection {
             beginsFirstRunAfterLibrarySelection = false
@@ -3089,6 +3090,7 @@ final class PlozziOSAppModel {
         }
         pendingLibrarySelection = PendingLibrarySelection(accountIDs: available)
         if beginsFirstRunAfterLibrarySelection { pendingFirstRunStep = .libraries }
+        plexHomeUsers.ensurePlexIdentityForActiveProfile()
     }
 
     private func preparePostShareOnboarding(

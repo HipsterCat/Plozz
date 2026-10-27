@@ -249,12 +249,18 @@ public struct RootView: View {
         pendingFeatureIntroduction = nil
     }
 
+    private var librarySelectionOwnsPlexPIN: Bool {
+        guard case .onboarding(.selectLibraries, _) = appState.state else { return false }
+        return true
+    }
+
     private var presentationRequests: [RootPresentationCoordinator.Destination] {
         guard !showsStartupLogo else { return [] }
         var requests: [RootPresentationCoordinator.Destination] = []
         let flow = appState.profileFlow
         if flow.pendingLockedProfile != nil || flow.pendingParentalSwitch != nil
-            || (flow.pendingSetupProfile == nil && appState.plexHomeUsers.pendingPlexPINRequest != nil) {
+            || (flow.pendingSetupProfile == nil && !librarySelectionOwnsPlexPIN
+                && appState.plexHomeUsers.pendingPlexPINRequest != nil) {
             requests.append(.accessGate)
         }
         if flow.pendingIdentityAccountID != nil { requests.append(.serverIdentity) }
@@ -1672,7 +1678,7 @@ private struct RootDisplaySettleObserver: ViewModifier {
 /// small lock badge) and name at the top, an "PIN" pill that fills as digits
 /// are entered, and a single horizontal strip of digit keys + delete below.
 /// One axis of focus is what the Siri remote handles best.
-private struct PlexPINEntryView: View {
+struct PlexPINEntryView: View {
     let appState: AppState
     let userName: String
     let avatarURLString: String?

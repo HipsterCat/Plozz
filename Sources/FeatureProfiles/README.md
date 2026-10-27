@@ -61,7 +61,11 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   each user's current Plex protection is checked when they enter their profile.
   Choosing an imported profile uses the normal parental/local-lock gates before
   changing persona, then scopes settings and library choices to that profile.
-  First-run Plex prompts remain deferred until appearance setup completes. A
+  The selected viewer authenticates before library selection, including during
+  first run. The library-selection surface owns verification and any required
+  Plex PIN, then loads libraries using the resolved viewer credentials. Missing
+  providers are failures, not an empty inventory, and credential/profile changes
+  restart discovery. Other imported users remain unauthenticated. A
   just-entered linked local PIN is spent immediately rather than held across setup;
   only the selected viewer's setup gate is cleared. The default owner's identity
   and other imported profiles remain intact when a different viewer is selected.
@@ -71,6 +75,8 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   and parental PIN surface, including when it sits above Settings.
   Extra imported profiles cannot skip the remaining onboarding pages; once the
   viewer finishes, a synced household still avoids repeating first-run elsewhere.
+  Short choice pages center vertically; overflowing viewer lists start at the
+  top so initial native focus stays visible and remote navigation scrolls normally.
 - **Photo fallback.** Borrowed photos fall back to the profile's emoji or
   symbol if loading fails; preserve symbol-only profiles on both platforms.
 - **Profile-aware everywhere.** Any feature reading per-user state

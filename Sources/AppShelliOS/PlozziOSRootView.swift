@@ -392,11 +392,7 @@ public struct PlozziOSRootView: View {
             item: librarySelectionBinding
         ) { selection in
             PlozziOSLibrarySelectionView(
-                accounts: appModel.accountsProviders.resolvedAccounts(
-                    withIDs: selection.accountIDs
-                ),
-                visibility: appModel.settings.homeVisibility,
-                onContinue: appModel.completeLibrarySelection
+                appModel: appModel, accountIDs: selection.accountIDs
             )
         }
         // Presented ONCE for the whole first-run flow, not per step. Keyed by
