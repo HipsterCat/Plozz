@@ -2,6 +2,48 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/065",
+      "version": "2026.10.26",
+      "marketingVersion": "2026.10.24",
+      "build": 65,
+      "releasedAt": "2026-10-26",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Choose Auto, Posters or Landscape for collection covers in Settings.",
+            "Broader support for server-provided ratings on Jellyfin."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Improved VP9 playback and Dolby Vision support for compatible AV1 videos.",
+            {
+              "text": "Improved spatial audio compatibility with experimental Dolby Vision FEL on tvOS 26 and later.",
+              "platforms": ["tvOS"]
+            },
+            "Playback pauses when headphones disconnect, including during FEL playback.",
+            "Home collection rows refresh after successful Watchlist changes on Plex, Jellyfin and Emby. Slower server automation may still need a later refresh.",
+            "Theme music fades out when you leave a title or switch away from Plozz.",
+            "Empty and unavailable Home sections use a more compact layout with clearer recovery actions.",
+            "Version pickers use standard filename information and fall back to server details when a filename isn't available.",
+            "Updated Attributions for the current libraries, services and fonts."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Closing or cancelling playback clears the previous session more reliably.",
+            "More reliable seeking and resuming for affected video files.",
+            "Improved HDR recovery after switching audio tracks or reloading a video.",
+            "Reduced startup delays for videos with PGS subtitles.",
+            "Fixed early endings when a compatible audio track finishes before the video."
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/064",
       "version": "2026.10.26",
       "marketingVersion": "2026.10.24",
