@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/065.1",
+      "version": "2026.10.27",
+      "marketingVersion": "2026.10.24",
+      "build": "65.1",
+      "releasedAt": "2026-10-27",
+      "sections": [
+        {
+          "category": "Updated",
+          "items": [
+            "Plex setup now previews every profile before import.",
+            "Account-owner and PIN labels now appear beneath profile names."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Fixed Plex libraries appearing empty during setup.",
+            {
+              "text": "Long Plex profile lists now open with the selected profile visible.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/065",
       "version": "2026.10.26",
       "marketingVersion": "2026.10.24",
