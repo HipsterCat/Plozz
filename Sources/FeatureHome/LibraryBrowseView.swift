@@ -214,6 +214,7 @@ public struct LibraryBrowseView: View {
                     swiftUIGrid(total: total, generation: generation, columns: columns)
                     #endif
                 }
+                .topNavigationForegroundClip()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -230,6 +231,7 @@ public struct LibraryBrowseView: View {
                     .padding(.vertical, PlozzTheme.Spacing.large)
             )
             .padding(.top, headerTopClearance)
+            .topNavigationForegroundClip()
             .onGeometryChange(for: CGFloat.self) { geometry in
                 geometry.frame(in: .global).maxY
             } action: { headerBottom in

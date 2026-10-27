@@ -3,6 +3,57 @@ import XCTest
 
 final class NavigationStyleSettingsStoreTests: XCTestCase {
     @MainActor
+    func testHorizontalSettingsMoveHideResetAndProfileIsolation() throws {
+        let defaults = makeDefaults()
+        let layoutStore = NavigationLibraryLayoutStore(defaults: defaults, namespace: "viewer")
+        let model = NavigationStyleSettingsModel(
+            store: NavigationStyleSettingsStore(defaults: defaults, namespace: "viewer"),
+            layoutStore: layoutStore
+        )
+        model.style = .tabBar
+        let home = NavigationLibraryLayout.homeKey
+        let settings = NavigationLibraryLayout.settingsKey
+        let available = [home, settings]
+        XCTAssertTrue(model.requiredNavigationKeys.isEmpty)
+        XCTAssertTrue(model.libraryLayout.pinsSettingsInTopBar)
+        model.recordNavigationMove(of: home)
+        XCTAssertTrue(model.libraryLayout.pinsSettingsInTopBar)
+        model.recordNavigationMove(of: settings)
+        XCTAssertFalse(layoutStore.load().pinsSettingsInTopBar)
+        model.applyLibrarySections(.init(enabled: [home], disabled: [settings]), available: available)
+        XCTAssertEqual(model.librarySections(available: available).disabled, [settings])
+        model.style = .sidebar
+        #if os(iOS)
+        XCTAssertEqual(model.librarySections(available: available).enabled, [home])
+        #else
+        XCTAssertEqual(model.librarySections(available: available).enabled, available)
+        #endif
+        XCTAssertTrue(model.libraryLayout.hiddenKeys.contains(settings), "Vertical safety must preserve horizontal intent.")
+        model.style = .tabBar
+        XCTAssertEqual(model.librarySections(available: available).enabled, [home])
+        XCTAssertTrue(NavigationLibraryLayoutStore(defaults: defaults, namespace: "other").load().pinsSettingsInTopBar)
+        model.resetLibraryLayout()
+        XCTAssertTrue(layoutStore.load().pinsSettingsInTopBar)
+        XCTAssertEqual(model.librarySections(available: available).enabled, available)
+        model.applyLibrarySections(.init(enabled: [home], disabled: [settings]), available: available)
+        model.applyLibrarySections(.init(enabled: available, disabled: []), available: available)
+        XCTAssertTrue(model.libraryLayout.pinsSettingsInTopBar, "Hide then Show is not a move.")
+        model.recordNavigationMove(of: settings)
+        model.applyLibrarySections(.init(enabled: [settings, home], disabled: []), available: available)
+        model.applyLibrarySections(.init(enabled: available, disabled: []), available: available)
+        XCTAssertFalse(model.libraryLayout.pinsSettingsInTopBar, "Moving back to the end is still an explicit placement.")
+        let legacy = Data("""
+        {"order":["\(settings)","\(home)"],"hiddenKeys":[]}
+        """.utf8)
+        XCTAssertFalse(try JSONDecoder().decode(NavigationLibraryLayout.self, from: legacy).pinsSettingsInTopBar)
+        let hidden = NavigationLibraryLayout(hiddenKeys: Set(available))
+        let destinations = NavigationRailPlan.destinations(
+            visibleLibraries: [], layout: hidden, availableKeys: available
+        )
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: destinations, layout: hidden), [.settings])
+    }
+
+    @MainActor
     func testOfflineStatusIsTransientAndDoesNotMislabelAuthenticationOrCancellation() {
         let model = NavigationStyleSettingsModel(
             store: NavigationStyleSettingsStore(defaults: makeDefaults()),

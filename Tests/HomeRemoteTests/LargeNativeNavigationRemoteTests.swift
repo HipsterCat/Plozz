@@ -2,6 +2,42 @@ import XCTest
 
 @MainActor
 final class LargeNativeNavigationRemoteTests: XCTestCase {
+    func testProfileRapidHorizontalNavigation() throws {
+        #if targetEnvironment(simulator)
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        let attach = ProcessInfo.processInfo.environment["PLOZZ_PERFORMANCE_ATTACH"] == "1"
+        if attach {
+            XCTAssertEqual(app.state, .runningForeground)
+        } else {
+            app.launchArguments = [
+                "--large-native-navigation-fixture", "--real-library-pages", "--trace-tab-transitions"
+            ]
+            app.launch()
+        }
+        defer { if !attach { app.terminate() } }
+        XCTAssertTrue(app.buttons["top-navigation-home"].waitForExistence(timeout: 15))
+        assertFocused(app.buttons["top-navigation-home"], in: app)
+        var durations: [TimeInterval] = []
+        for _ in 0..<3 {
+            let start = ProcessInfo.processInfo.systemUptime
+            for _ in 0..<15 { XCUIRemote.shared.press(.right) }
+            assertFocused(app.buttons["top-navigation-library:plex:10"], in: app)
+            for _ in 0..<15 { XCUIRemote.shared.press(.left) }
+            assertFocused(app.buttons["top-navigation-home"], in: app)
+            durations.append(ProcessInfo.processInfo.systemUptime - start)
+        }
+        let journal = app.staticTexts["native-tab-transition-journal"].label
+        let evidence = XCTAttachment(string: "Remote round-trip seconds: \(durations)\n" + journal)
+        evidence.name = "Rapid horizontal navigation"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        capture("Rapid navigation returns to Home", in: app)
+        #else
+        throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
+        #endif
+    }
+
     func testHorizontalFocusPresentsEachDestinationOnce() throws {
         try exerciseTransitions(sceneStorage: false)
     }
@@ -107,12 +143,12 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         )
         let bar = app.descendants(matching: .any)["top-navigation"]
         let modes = app.descendants(matching: .any)["library-content-mode"]
-        XCTAssertEqual(bar.frame.minX, modes.frame.minX, accuracy: 1,
-                       "The bar and library controls must share the leading content keyline.")
+        XCTAssertEqual(bar.frame.midX, app.frame.midX, accuracy: 1)
+        XCTAssertEqual(bar.frame.height, 68, accuracy: 1, "Use compact native-like proportions.")
         let sort = app.buttons["library-sort-menu"]
         if sort.exists {
-            XCTAssertEqual(bar.frame.maxX, sort.frame.maxX, accuracy: 1,
-                           "The bar and library controls must share the trailing content keyline.")
+            XCTAssertEqual(bar.frame.width, (sort.frame.maxX - modes.frame.minX) * 0.75, accuracy: 1,
+                           "The maximum bar must be exactly 25% narrower than the page keylines.")
         }
         capture("Library navigation remains reachable", in: app)
         #else
@@ -158,7 +194,7 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
                     : "Library 20") { lastLibraryReached = true }
                 if label == "Settings" {
                     settingsReached = true
-                    XCUIRemote.shared.press(.select)
+                    if sidebar { XCUIRemote.shared.press(.select) }
                     break
                 }
                 XCTAssertTrue(
@@ -178,9 +214,9 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
             XCTAssertTrue(settingsReached, "Settings must be reachable after the libraries. Visited: \(focusedLabels)")
             XCTAssertTrue(app.staticTexts["large-navigation-settings"].waitForExistence(timeout: 5))
         } else {
-            XCTAssertEqual(Set(focusedLabels).count, 26, "Every content destination must remain reachable.")
-            XCTAssertFalse(settingsReached)
-            for _ in 0..<26 { XCUIRemote.shared.press(.left) }
+            XCTAssertEqual(Set(focusedLabels).count, 27, "Every content destination and Settings must remain reachable.")
+            XCTAssertTrue(settingsReached)
+            for _ in 0..<27 { XCUIRemote.shared.press(.left) }
             assertFocused(app.buttons["top-navigation-profile"], in: app)
             XCTAssertFalse(app.buttons["profile-picker-settings"].exists, "Focusing the profile must not open it.")
             capture("Concentric profile end of navigation", in: app)
@@ -227,11 +263,12 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         XCTAssertTrue(library.waitForExistence(timeout: 15))
         assertFocused(library, in: app)
         let bar = app.descendants(matching: .any)["top-navigation"]
+        let settings = app.buttons["top-navigation-settings"]
         XCTAssertEqual(bar.frame.midY, library.frame.midY, accuracy: 1)
         XCTAssertEqual(
-            bar.frame.maxX - library.frame.maxX,
-            (bar.frame.height - library.frame.height) / 2, accuracy: 1,
-            "The final focus capsule must have equal end and vertical insets."
+            bar.frame.maxX - settings.frame.maxX,
+            (bar.frame.height - settings.frame.height) / 2, accuracy: 1,
+            "The fixed Settings capsule must have equal end and vertical insets."
         )
         capture("Concentric horizontal navigation end", in: app)
         XCUIRemote.shared.press(.down)

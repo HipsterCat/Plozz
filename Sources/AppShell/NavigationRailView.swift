@@ -718,6 +718,8 @@ struct NavigationRailItemStyle: ButtonStyle {
     let expansionProgress: CGFloat
     let isSelected: Bool
     let accent: Color
+    var horizontalPadding: CGFloat = NavigationRailMetrics.rowHorizontalPadding
+    var verticalPadding: CGFloat = NavigationRailMetrics.rowInnerPadding
     @Environment(\.isFocused) private var isFocused
     @Environment(\.colorScheme) private var colorScheme
 
@@ -737,9 +739,8 @@ struct NavigationRailItemStyle: ButtonStyle {
         return configuration.label
             // Fixed content geometry keeps the icon perfectly still while the rail
             // expands. Matching insets around the square icon slot makes a circle.
-            .padding(.leading, NavigationRailMetrics.rowHorizontalPadding)
-            .padding(.trailing, NavigationRailMetrics.rowHorizontalPadding)
-            .padding(.vertical, NavigationRailMetrics.rowInnerPadding)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
             .foregroundStyle(foreground)
             .background(
                 Capsule(style: .continuous)

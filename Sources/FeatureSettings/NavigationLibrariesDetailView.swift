@@ -79,7 +79,8 @@ public struct NavigationLibrariesDetailView: View {
         #if os(iOS)
         let requiredEnabled = sections.enabled.count == 1 ? Set(sections.enabled) : navigation.requiredNavigationKeys
         #else
-        let requiredEnabled = navigation.requiredNavigationKeys
+        let requiredEnabled = navigation.style == .tabBar && sections.enabled.count == 1
+            ? Set(sections.enabled) : navigation.requiredNavigationKeys
         #endif
 
         VStack(alignment: .leading, spacing: sectionSpacing) {
@@ -89,6 +90,7 @@ public struct NavigationLibrariesDetailView: View {
                 disabledPlaceholder: Self.hiddenPlaceholder,
                 isLifting: $isReordering,
                 requiredEnabled: requiredEnabled,
+                onMove: { navigation.recordNavigationMove(of: $0) },
                 row: { key in
                     titles[key] ?? LiftableReorderList.Row(title: Text(verbatim: key))
                 },
@@ -176,7 +178,7 @@ public struct NavigationLibrariesDetailView: View {
     }
     private static let topBarFootnote = LocalizedStringResource(
         "navigationArrangement.footnote.horizontal",
-        defaultValue: "Press and hold an item to hide, show, or move it. Open Settings from the profile picker.",
+        defaultValue: "Press and hold to hide, show, or move. Settings stays fixed until moved. Settings is also in the profile picker.",
         comment: "Instructions for arranging the scrolling horizontal navigation."
     )
     private static let sidebarFootnote = LocalizedStringResource(

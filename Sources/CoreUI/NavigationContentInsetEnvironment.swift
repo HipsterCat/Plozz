@@ -95,4 +95,35 @@ public extension EnvironmentValues {
     }
 }
 
+public extension View {
+    /// Clips scrolling foreground above the top navigation's content boundary.
+    /// Apply before full-bleed artwork backgrounds, never to the complete page.
+    func topNavigationForegroundClip() -> some View {
+        modifier(TopNavigationForegroundClip())
+    }
+}
+
+private struct TopNavigationForegroundClip: ViewModifier {
+    @Environment(\.plozzTopNavigationContentInsets) private var insets
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if insets.top > 0 || insets.leading > 0 || insets.trailing > 0 {
+            content.mask(alignment: .topLeading) {
+                GeometryReader { geometry in
+                    let top = insets.top > 0
+                        ? insets.top + 16 - geometry.frame(in: .global).minY
+                        : -geometry.size.height
+                    Path(CGRect(
+                        x: -geometry.size.width, y: top,
+                        width: geometry.size.width * 3,
+                        height: geometry.size.height * 2 + abs(top)
+                    ))
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+
 #endif

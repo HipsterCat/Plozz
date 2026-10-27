@@ -4,6 +4,7 @@ import AVFoundation
 import notify
 import FeatureHome
 import FeatureHomeCore
+import FeatureSearch
 import MetadataKit
 import Observation
 import SwiftUI
@@ -125,6 +126,17 @@ struct ProductionHomeFixture: View {
                                         fixture: fixture, path: $path, libraryPath: $libraryPath,
                                         isPinned: false, isActive: active
                                     ))
+                                } else if ProcessInfo.processInfo.arguments.contains("--real-root-pages") {
+                                    AnyView(NavigationStack {
+                                        if destination == .watchlist {
+                                            WatchlistBrowseView(
+                                                viewModel: fixture.model, visibility: fixture.visibility.visibility,
+                                                onSelect: { _ in }
+                                            )
+                                        } else {
+                                            SearchView(viewModel: fixture.search, onSelect: { _ in })
+                                        }
+                                    })
                                 } else {
                                     AnyView(Button("Fixture destination") {})
                                 }
@@ -373,6 +385,7 @@ private actor ProductionHomeReadCounter {
 @MainActor
 private final class ProductionHomeState {
     let model: HomeViewModel
+    let search: SearchViewModel
     let library: LibraryBrowseViewModel
     let detailDepth = DetailStackDepth()
     let trailerURL: URL?
@@ -439,6 +452,7 @@ private final class ProductionHomeState {
             }
         }
         let reads = ProductionHomeReadCounter()
+        search = SearchViewModel(accounts: accounts)
         let resumePublication = self.resumePublication
         model = HomeViewModel(
             accounts: accounts,
@@ -639,7 +653,7 @@ private final class ProductionHomeState {
     }
 }
 
-private struct ProductionHomeProvider: MediaProvider {
+private struct ProductionHomeProvider: MediaProvider, WatchlistProviding {
     let poster: URL
     let backdrop: URL
     let logo: URL
@@ -653,6 +667,14 @@ private struct ProductionHomeProvider: MediaProvider {
         ProcessInfo.processInfo.arguments.contains("--home-performance-fixture") ? 75 : 24
     }
     var heroSeed: MediaItem { movie(rowCount + 10) }
+
+    func watchlist() async throws -> [MediaItem] {
+        ProcessInfo.processInfo.arguments.contains("--real-root-pages") ? (0..<48).map(movie) : []
+    }
+
+    func setWatchlisted(_ on: Bool, item: MediaItem) async throws {
+        throw AppError.unknown("Read-only navigation fixture")
+    }
 
     func waitForResumePublication() async { await resumePublicationGate.wait() }
 

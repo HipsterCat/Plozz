@@ -424,11 +424,13 @@ struct FocusHeroHomeView<RowContent: View>: View {
                 rows: rows,
                 minimumDetailsTop: minimumDetailsTop
             )
+            .topNavigationForegroundClip()
             .environment(\.plozzArtworkArea, artworkPolicy.heroPolicy.area)
             FocusHeroScrollingRows(rows: rows, model: model, rowContent: rowContent)
                 .ignoresSafeArea(.container, edges: .trailing)
                 .environment(\.plozzRowTitleTightening, FocusHeroLayout.rowTitleTightening)
                 .environment(\.plozzCardCaptionIsShowcase, true)
+                .topNavigationForegroundClip()
             FocusHeroArtworkPrefetch(rows: rows, model: model, metadata: metadata, isFrontmost: isFrontmost)
                 .environment(\.plozzArtworkArea, artworkPolicy.heroPolicy.area)
         }

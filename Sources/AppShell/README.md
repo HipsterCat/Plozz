@@ -205,18 +205,26 @@ profile-scoped arranger as the sidebars. Newly discovered libraries appear
 automatically; explicit Hide choices and saved order remain unchanged.
 Top Bar is one glass surface using the pinned navigation's shared row style:
 idle items have no background, and focus and selection use the same treatment.
+Labels keep eight points between the icon and title, plus four points after the
+title to balance the compact focus capsule.
 Its scrolling list has no item cap and fades before the fixed profile area.
-The panel fits its contents and stays centered, growing only to the page's
-title-safe content keylines before scrolling. The Live TV guide and its loading
+The 68-point-high panel fits its contents and stays centered, growing only to
+75% of the page's title-safe width before scrolling. The Live TV guide and its loading
 skeleton retain those page keylines even when the bar is narrow. A single shared
 inner inset keeps the end focus capsule concentric with the panel instead of
 doubling its end margin.
 The profile icon sits inside the bar and is a button, not a destination: focus never opens the
-picker, and Select opens the existing profile flow. Settings remains reachable
-through the picker's upper-right cog. Both vertical styles are unchanged.
+picker, and Select opens the existing profile flow. Settings is fixed at the
+right unless explicitly moved or hidden in the profile's arranger. Moving other
+items does not unpin it; Reset restores its default position. Settings also remains
+reachable through the picker's upper-right cog. Both vertical styles are unchanged.
 
-Horizontal focus previews the selected page without native tab transitions or
-automatic content entry. Only the selected page and the visited Live TV guide
+Horizontal focus moves immediately, independently of page construction. A
+180 ms settled focus previews the page without native tab transitions or
+automatic content entry. Down/Select cancels that delay and enters the focused
+destination, never a stale preview. Profile/Settings focus, profile changes,
+destination pruning, and shell deactivation cancel pending previews.
+Only the selected page and the visited Live TV guide
 are mounted; walking twenty libraries must not retain twenty inactive grids.
 The guide retains its filters while inactive playback is stopped. Account-qualified
 destination IDs keep same-named libraries distinct. Down or Select enters the
@@ -231,6 +239,14 @@ before allowing neighboring controls. Live TV's first-use preview choice waits
 for explicit content entry; its presentation owns focus until the choice finishes.
 Full-bleed Live TV surfaces read the shared top-content inset for guide controls
 and loading placeholders without shrinking expanded playback.
+The common UIKit host propagates a real top safe area through nested stacks.
+Foreground begins below the bar with a 16-point gap. Scrolling foreground uses
+CoreUI's shared top-navigation clip so old rows cannot reappear behind the bar
+when returning from deeper content. Hero artwork remains outside that clip.
+The host's safe area stays stable across detail transitions so returning content
+does not relayout under incoming remote input. Full-bleed detail surfaces ignore
+that safe area; hidden chrome releases the foreground clip without replacing its
+view subtree.
 
 The profile-picker Settings request is a one-shot `ProfileFlowModel` intent,
 scoped to the active profile. A cancellable picker returns to its already-admitted

@@ -86,7 +86,6 @@ final class NavigationRailPlanTests: XCTestCase {
         XCTAssertEqual(
             NavigationRailPlan.customizableKeys(visibleLibraries: [], style: .tabBar),
             NavigationDestinationDefaults.sidebar(visibleLibraries: [], hasMusic: true)
-                .filter { $0 != NavigationLibraryLayout.settingsKey }
         )
         XCTAssertTrue(
             NavigationRailPlan.customizableKeys(visibleLibraries: [], style: .tabBar)
@@ -109,9 +108,9 @@ final class NavigationRailPlanTests: XCTestCase {
         }
         let sidebar = resolved()
         let horizontal = NavigationDestinationDefaults.topBar(destinations: sidebar)
-        XCTAssertEqual(horizontal, sidebar.filter { $0 != .settings })
+        XCTAssertEqual(horizontal, sidebar)
         XCTAssertEqual(horizontal.first, .library("plex:20"))
-        XCTAssertFalse(horizontal.contains(.settings))
+        XCTAssertTrue(horizontal.contains(.settings))
         XCTAssertFalse(horizontal.contains(.music))
         XCTAssertFalse(horizontal.contains(.library("plex:1")))
         XCTAssertEqual(layout, saved)
@@ -121,7 +120,34 @@ final class NavigationRailPlanTests: XCTestCase {
         let next = NavigationDestinationDefaults.topBar(destinations: resolved())
         XCTAssertEqual(next.count, horizontal.count - 1, "Hiding an item removes only that destination.")
         XCTAssertEqual(next.first, .home)
-        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.settings]), [])
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.settings]), [.settings])
+    }
+
+    func testHorizontalSettingsRespectsExplicitMoveAndHideWithoutChangingVerticalSafety() throws {
+        let keys = [NavigationLibraryLayout.homeKey, "plex:1", NavigationLibraryLayout.settingsKey]
+        var layout = NavigationLibraryLayout()
+        XCTAssertTrue(layout.pinsSettingsInTopBar)
+        layout.apply(.init(enabled: [NavigationLibraryLayout.homeKey, NavigationLibraryLayout.settingsKey, "plex:1"],
+                           disabled: []), available: keys)
+        XCTAssertTrue(layout.pinsSettingsInTopBar, "Moving another destination must not unpin Settings.")
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.home, .settings, .library("plex:1")],
+                                                            layout: layout),
+                       [.home, .library("plex:1"), .settings])
+        layout.recordMove(of: NavigationLibraryLayout.settingsKey)
+        XCTAssertFalse(layout.pinsSettingsInTopBar)
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.home, .settings, .library("plex:1")],
+                                                            layout: layout),
+                       [.home, .settings, .library("plex:1")])
+        layout.apply(.init(enabled: [NavigationLibraryLayout.homeKey, "plex:1"],
+                           disabled: [NavigationLibraryLayout.settingsKey]), available: keys, requiredEnabled: [])
+        let restored = try JSONDecoder().decode(NavigationLibraryLayout.self, from: JSONEncoder().encode(layout))
+        XCTAssertEqual(restored, layout)
+        XCTAssertFalse(restored.pinsSettingsInTopBar)
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.home, .settings, .library("plex:1")],
+                                                            layout: restored),
+                       [.home, .library("plex:1")])
+        XCTAssertTrue(restored.sections(available: keys).enabled.contains(NavigationLibraryLayout.settingsKey))
+        XCTAssertTrue(NavigationLibraryLayout.default.pinsSettingsInTopBar)
     }
 
     func testHorizontalLibrariesAppearByDefaultAndKeepTheirDistinctDestinationIdentities() {

@@ -448,8 +448,8 @@ final class LiveTVPreviewIntroductionRemoteTests: XCTestCase {
                            "A short bar must be centered on the page.")
             XCTAssertEqual(
                 bar.frame.maxX - lastItem.frame.maxX,
-                (bar.frame.height - lastItem.frame.height) / 2, accuracy: 1,
-                "A short bar must end at its content, with the same concentric inset."
+                lastItem.hasFocus ? 8 : 20, accuracy: 1,
+                "The trailing item has eight points of panel inset plus its unfocused label padding."
             )
             XCTAssertEqual(app.buttons["live-tv-search"].frame.minX, 80, accuracy: 1,
                            "Centering a short bar must not move the guide's title-safe content keyline.")

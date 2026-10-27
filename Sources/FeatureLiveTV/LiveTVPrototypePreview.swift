@@ -148,7 +148,7 @@ struct PrototypePreviewLayout {
         // can change during mounting and must not move or resize the pinned guide.
         let leading = (topNavigationInsets.top > 0 ? topNavigationInsets.leading : 32)
             + (navigationInset > 0 ? PrototypeLayout.inset : 0)
-        let top = max(32, safeAreaInsets.top, topNavigationInsets.top)
+        let top = max(32, topNavigationInsets.top > 0 ? topNavigationInsets.top : safeAreaInsets.top)
             + (nativeNavigation || topNavigationInsets.top > 0 ? 16 : 0)
         let bottom: CGFloat = 20
         guideSideBleed = 0

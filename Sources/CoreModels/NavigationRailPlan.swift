@@ -75,9 +75,13 @@ public struct NavigationRailLibraryEntry: Hashable, Sendable, Identifiable {
 /// unit-testable without a running view hierarchy.
 public enum NavigationDestinationDefaults {
     public static func topBar(
-        destinations: [NavigationRailDestination]
+        destinations: [NavigationRailDestination],
+        layout: NavigationLibraryLayout = .default
     ) -> [NavigationRailDestination] {
-        destinations.filter { $0 != .settings }
+        let visible = destinations.filter { $0 != .settings || !layout.hiddenKeys.contains(NavigationLibraryLayout.settingsKey) }
+        if visible.isEmpty, destinations.contains(.settings) { return [.settings] }
+        guard layout.pinsSettingsInTopBar, visible.contains(.settings) else { return visible }
+        return visible.filter { $0 != .settings } + [.settings]
     }
 
     public static func iPhoneOverflowKeys(visible: [String]) -> Set<String> {
@@ -137,7 +141,6 @@ public enum NavigationRailPlan {
         switch style {
         case .tabBar:
             keys = NavigationDestinationDefaults.sidebar(visibleLibraries: visibleLibraries, hasMusic: true)
-                .filter { $0 != NavigationLibraryLayout.settingsKey }
         case .sidebar:
             keys = NavigationDestinationDefaults.sidebar(visibleLibraries: visibleLibraries, hasMusic: true)
         case .rail: keys = NavigationDestinationDefaults.rail(visibleLibraries: visibleLibraries, hasMusic: true)
@@ -189,8 +192,8 @@ public enum NavigationRailPlan {
     /// Resolves the complete ordered destination list for one navigation style.
     ///
     /// `availableKeys` is both the style's supported set and its historical
-    /// default order. All styles include libraries by default; the top bar applies
-    /// its native capacity after resolution. A saved arrangement wins in every style.
+    /// default order. All styles include libraries by default. A saved arrangement
+    /// wins in every style.
     public static func destinations(
         visibleLibraries: [AggregatedLibrary],
         layout: NavigationLibraryLayout,

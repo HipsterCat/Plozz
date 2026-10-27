@@ -4,6 +4,19 @@ import CoreUI
 import FeatureProfiles
 import SwiftUI
 
+enum TopBarNavigationMetrics {
+    static let maximumWidthFraction: CGFloat = 0.75
+    static let topMargin: CGFloat = 40
+    static let contentHeight: CGFloat = 36
+    static let itemPadding: CGFloat = 8
+    static let panelInset: CGFloat = 8
+    static let itemSpacing: CGFloat = 8
+    static let itemHeight = contentHeight + 2 * itemPadding
+    static let panelHeight = itemHeight + 2 * panelInset
+    static let panelRadius = panelHeight / 2
+    static let foregroundTop = topMargin + panelHeight + 16
+}
+
 struct TopBarNavigation: View {
     let destinations: [NavigationRailDestination]
     @Binding var selection: NavigationRailDestination
@@ -13,18 +26,24 @@ struct TopBarNavigation: View {
     var profile: Profile?
     var onOpenProfileSwitcher: (() -> Void)?
     var chrome: NavigationChromeModel?
+    var pinsSettings = true
     @State private var fallbackChrome = NavigationChromeModel()
 
     var body: some View {
         let chrome = chrome ?? fallbackChrome
         return GeometryReader { geometry in
-            NavigationRailFocusHost(contentExitHeading: .down) { owner in
+            NavigationRailFocusHost(
+                contentExitHeading: .down,
+                contentTopInset: TopBarNavigationMetrics.foregroundTop
+            ) { owner in
                 TopBarNavigationContent(
                     destinations: destinations, selection: $selection,
                     preventsAccidentalExit: preventsAccidentalExit,
                     content: content, label: label,
                     profile: profile, onOpenProfileSwitcher: onOpenProfileSwitcher,
                     chrome: chrome, safeAreaInsets: geometry.safeAreaInsets,
+                    maximumBarWidth: geometry.size.width * TopBarNavigationMetrics.maximumWidthFraction,
+                    pinsSettings: pinsSettings,
                     onNavigationFocusChanged: { [weak owner] in owner?.isNavigationFocused = $0 }
                 )
             }
@@ -45,35 +64,24 @@ private struct TopBarNavigationContent: View {
     let onOpenProfileSwitcher: (() -> Void)?
     let chrome: NavigationChromeModel
     let safeAreaInsets: EdgeInsets
+    let maximumBarWidth: CGFloat
+    let pinsSettings: Bool
     let onNavigationFocusChanged: (Bool) -> Void
 
-    private enum Target: Hashable {
-        case profile
-        case destination(NavigationRailDestination)
-    }
-
     @Namespace private var focusScope
-    @FocusState private var focused: Target?
     @State private var isNavigating = true
+    @State private var navigationHasFocus = false
     @State private var navigationRequest: Int? = 0
     @State private var navigationGeneration = 0
     @State private var contentRequest: UInt64?
     @State private var contentGeneration: UInt64 = 0
     @State private var returnFocus = NavigationContentFocusRequester.ReturnFocus()
     @State private var destinationFocus = NavigationDestinationFocusHandoff()
-    @State private var overflow = HorizontalOverflow()
-    @State private var destinationContentWidth: CGFloat?
-    @Environment(\.themePalette) private var palette
+    @State private var preview = TopBarNavigationPreview()
     @Environment(\.isEnabled) private var isEnabled
-    private var panelHeight: CGFloat {
-        NavigationRailMetrics.expandedRowHeight + 2 * NavigationRailMetrics.expandedPanelContentInset
-    }
-    private var contentTopInset: CGFloat {
-        NavigationRailMetrics.expandedPanelOuterMargin + panelHeight
-    }
     private var contentInsets: EdgeInsets {
         EdgeInsets(
-            top: contentTopInset,
+            top: chrome.isChromeHidden ? 0 : TopBarNavigationMetrics.topMargin + TopBarNavigationMetrics.panelHeight,
             leading: safeAreaInsets.leading + PlozzTheme.Metrics.screenPadding,
             bottom: 0,
             trailing: safeAreaInsets.trailing + PlozzTheme.Metrics.screenPadding
@@ -81,11 +89,11 @@ private struct TopBarNavigationContent: View {
     }
 
     private var current: NavigationRailDestination {
-        NavigationRailPlan.resolvedSelection(selection, destinations: destinations)
+        NavigationRailPlan.resolvedSelection(selection, destinations: destinations.filter { $0 != .settings })
     }
 
     private var isShellActive: Bool {
-        isEnabled && destinations.contains(selection)
+        isEnabled && selection != .settings && destinations.contains(selection)
     }
 
     var body: some View {
@@ -96,6 +104,7 @@ private struct TopBarNavigationContent: View {
                         request: contentRequest, onCompleted: contentFocused,
                         returnFocus: returnFocus, restoresPreviousFocus: true
                     )
+                    .padding(.top, TopBarNavigationMetrics.foregroundTop)
                 }
                 .background {
                     NavigationDestinationPresentationAnchor(
@@ -105,14 +114,24 @@ private struct TopBarNavigationContent: View {
                 }
                 .disabled(isNavigating && contentRequest == nil)
                 .environment(\.plozzTopNavigationContentInsets, contentInsets)
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    Color.clear.frame(height: contentTopInset)
-                }
-
-            navigation
+            TopBarNavigationBar(
+                destinations: destinations, current: current,
+                profile: profile, onOpenProfileSwitcher: onOpenProfileSwitcher,
+                pinsSettings: pinsSettings,
+                isNavigating: isNavigating, isShellActive: isShellActive,
+                focusScope: focusScope,
+                navigationRequest: navigationRequest,
+                onFocus: previewDestination, onEnter: enterContent,
+                onFocusPresenceChanged: { navigationHasFocus = $0 },
+                onNavigationFocused: { request in
+                    if navigationRequest == request { navigationRequest = nil }
+                },
+                label: label
+            )
+                .frame(maxWidth: maximumBarWidth)
                 .padding(.leading, contentInsets.leading)
                 .padding(.trailing, contentInsets.trailing)
-                .padding(.top, NavigationRailMetrics.expandedPanelOuterMargin)
+                .padding(.top, TopBarNavigationMetrics.topMargin)
                 .opacity(chrome.isChromeHidden ? 0 : 1)
                 .disabled(!isShellActive || chrome.isChromeHidden || chrome.transitionSuppressesFocus)
                 .accessibilityHidden(chrome.isChromeHidden)
@@ -126,17 +145,7 @@ private struct TopBarNavigationContent: View {
             navigationHasFocus: isNavigating && !chrome.isChromeHidden
         )
         .onExitCommand(perform: !isNavigating && !chrome.isChromeHidden ? openNavigation : nil)
-        .onAppear { openNavigation() }
-        .onChange(of: focused) { _, target in
-            guard isShellActive, let target else { return }
-            isNavigating = true
-            contentRequest = nil
-            destinationFocus.cancel()
-            if case let .destination(destination) = target, destination != selection {
-                returnFocus.clear()
-                selection = destination
-            }
-        }
+        .onAppear { if isNavigating { openNavigation() } }
         .onChange(of: isNavigating && isShellActive, initial: true) { _, value in
             onNavigationFocusChanged(value)
         }
@@ -144,19 +153,29 @@ private struct TopBarNavigationContent: View {
             if active {
                 openNavigation()
             } else {
+                cancelPreview()
                 navigationRequest = nil
                 contentRequest = nil
                 destinationFocus.cancel()
             }
         }
         .onChange(of: current) { _, _ in
+            cancelPreview()
             chrome.resetForDestinationChange()
             if destinationFocus.request?.destination != current { destinationFocus.cancel() }
             contentRequest = nil
             returnFocus.clear()
         }
+        .onChange(of: destinations) { _, _ in cancelPreview() }
+        .onChange(of: profile?.id) { _, _ in
+            cancelPreview()
+            returnFocus.clear()
+            destinationFocus.cancel()
+            contentRequest = nil
+        }
         .onChange(of: chrome.isChromeHidden) { _, hidden in
             if hidden {
+                cancelPreview()
                 navigationRequest = nil
                 contentRequest = nil
                 destinationFocus.cancel()
@@ -164,6 +183,7 @@ private struct TopBarNavigationContent: View {
             }
         }
         .onDisappear {
+            cancelPreview()
             navigationRequest = nil
             contentRequest = nil
             destinationFocus.cancel()
@@ -191,16 +211,113 @@ private struct TopBarNavigationContent: View {
         }
     }
 
-    private var navigation: some View {
-        HStack(spacing: NavigationRailMetrics.itemSpacing) {
+    private func cancelPreview() {
+        preview.task?.cancel()
+        preview.task = nil
+    }
+
+    private func previewDestination(_ destination: NavigationRailDestination?) {
+        guard isShellActive else { return }
+        cancelPreview()
+        isNavigating = true
+        contentRequest = nil
+        destinationFocus.cancel()
+        guard let destination, destination != .settings, destination != selection else { return }
+        // Focus moves immediately. Only settled destinations construct their page.
+        preview.task = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, isShellActive, !chrome.isChromeHidden,
+                  destinations.contains(destination) else { return }
+            selection = destination
+        }
+    }
+
+    private func openNavigation() {
+        guard isShellActive, !chrome.isChromeHidden, !chrome.transitionSuppressesFocus else { return }
+        cancelPreview()
+        returnFocus.capture()
+        contentRequest = nil
+        destinationFocus.cancel()
+        isNavigating = true
+        navigationGeneration &+= 1
+        navigationRequest = navigationGeneration
+    }
+
+    private func enterContent(_ destination: NavigationRailDestination?) {
+        guard isShellActive, isNavigating, !chrome.transitionSuppressesFocus else { return }
+        cancelPreview()
+        let destination = destination ?? current
+        if destination == .settings {
+            selection = .settings
+            return
+        }
+        if destination != current { selection = destination }
+        destinationFocus.begin(destination)
+    }
+
+    private func destinationPresented(_ request: NavigationDestinationFocusHandoff.Request) {
+        guard isShellActive, destinationFocus.complete(request), request.destination == current,
+              isNavigating, !chrome.isChromeHidden else { return }
+        isNavigating = false
+        contentGeneration &+= 1
+        contentRequest = contentGeneration
+    }
+
+    private func contentFocused(_ request: UInt64, didFocus: Bool) {
+        guard isShellActive, contentRequest == request else { return }
+        contentRequest = nil
+        if !didFocus, navigationHasFocus { openNavigation() }
+    }
+}
+
+// Scheduling is not presentation state: changing it must not rebuild page content.
+private final class TopBarNavigationPreview {
+    var task: Task<Void, Never>?
+    deinit { task?.cancel() }
+}
+
+private struct TopBarNavigationBar: View {
+    let destinations: [NavigationRailDestination]
+    let current: NavigationRailDestination
+    let profile: Profile?
+    let onOpenProfileSwitcher: (() -> Void)?
+    let pinsSettings: Bool
+    let isNavigating: Bool
+    let isShellActive: Bool
+    let focusScope: Namespace.ID
+    let navigationRequest: Int?
+    let onFocus: (NavigationRailDestination?) -> Void
+    let onEnter: (NavigationRailDestination?) -> Void
+    let onFocusPresenceChanged: (Bool) -> Void
+    let onNavigationFocused: (Int) -> Void
+    let label: (NavigationRailDestination) -> AnyView
+
+    private enum Target: Hashable {
+        case profile
+        case destination(NavigationRailDestination)
+    }
+
+    @FocusState private var focused: Target?
+    @State private var overflow = HorizontalOverflow()
+    @State private var destinationContentWidth: CGFloat?
+    @Environment(\.themePalette) private var palette
+
+    private var fixesSettings: Bool { pinsSettings && destinations.contains(.settings) }
+    private var scrollingDestinations: [NavigationRailDestination] {
+        destinations.filter { !fixesSettings || $0 != .settings }
+    }
+
+    var body: some View {
+        HStack(spacing: TopBarNavigationMetrics.itemSpacing) {
             if let profile, let onOpenProfileSwitcher {
                 Button(action: onOpenProfileSwitcher) {
-                    ProfileAvatarView(profile: profile, size: NavigationRailMetrics.avatarSize)
-                        .frame(height: NavigationRailMetrics.profileRowHeight)
+                    ProfileAvatarView(profile: profile, size: 32)
+                        .frame(width: TopBarNavigationMetrics.contentHeight, height: TopBarNavigationMetrics.contentHeight)
                         .background { focusMarker(for: .profile) }
                 }
                 .buttonStyle(NavigationRailItemStyle(
-                    expansionProgress: 0, isSelected: false, accent: palette.accent
+                    expansionProgress: 0, isSelected: false, accent: palette.accent,
+                    horizontalPadding: 8, verticalPadding: TopBarNavigationMetrics.itemPadding
                 ))
                 .focused($focused, equals: .profile)
                 .disabled(!canFocus(.profile))
@@ -211,12 +328,12 @@ private struct TopBarNavigationContent: View {
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    HStack(spacing: NavigationRailMetrics.itemSpacing) {
-                        ForEach(destinations, id: \.storageValue) { destination in
+                    HStack(spacing: TopBarNavigationMetrics.itemSpacing) {
+                        ForEach(scrollingDestinations, id: \.storageValue) { destination in
                             destinationButton(destination).id(destination)
                         }
                     }
-                    .padding(.vertical, NavigationRailMetrics.expandedPanelContentInset)
+                    .padding(.vertical, TopBarNavigationMetrics.panelInset)
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
                         destinationContentWidth = width
                     }
@@ -250,37 +367,65 @@ private struct TopBarNavigationContent: View {
                 }
             }
             .frame(maxWidth: destinationContentWidth)
+            if fixesSettings {
+                destinationButton(.settings, iconOnly: true)
+            }
         }
-        .padding(.horizontal, NavigationRailMetrics.expandedPanelContentInset)
-        .frame(height: panelHeight)
+        .padding(.horizontal, TopBarNavigationMetrics.panelInset)
+        .frame(height: TopBarNavigationMetrics.panelHeight)
         .plozzGlassPanel(
-            cornerRadius: NavigationRailMetrics.expandedPanelCornerRadius,
+            cornerRadius: TopBarNavigationMetrics.panelRadius,
             scrimOpacity: 0.08
         )
         .focusSection()
         .onMoveCommand { direction in
-            if direction == .down, focused != nil { enterContent() }
+            if direction == .down, let focused {
+                switch focused {
+                case .profile: onEnter(current)
+                case let .destination(destination): onEnter(destination)
+                }
+            }
+        }
+        .onChange(of: focused) { _, target in
+            guard isShellActive, let target else { return }
+            switch target {
+            case .profile: onFocus(nil)
+            case let .destination(destination): onFocus(destination)
+            }
+        }
+        .onChange(of: focused != nil, initial: true) { _, value in
+            onFocusPresenceChanged(value)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("top-navigation")
     }
 
-    private func destinationButton(_ destination: NavigationRailDestination) -> some View {
-        Button { enterContent(destination) } label: {
-            label(destination)
-                .font(NavigationRailMetrics.labelFont)
+    private func destinationButton(_ destination: NavigationRailDestination, iconOnly: Bool = false) -> some View {
+        Button { onEnter(destination) } label: {
+            Group {
+                if iconOnly {
+                    Image(systemName: "gearshape")
+                        .frame(width: TopBarNavigationMetrics.contentHeight)
+                        .accessibilityLabel(Text("Settings"))
+                } else {
+                    label(destination)
+                }
+            }
+                .font(.system(size: 24, weight: .semibold))
+                .labelStyle(TopBarNavigationLabelStyle())
                 .lineLimit(1)
-                .frame(maxWidth: 340)
-                .frame(height: NavigationRailMetrics.rowContentHeight)
+                .frame(maxWidth: iconOnly ? TopBarNavigationMetrics.contentHeight : 280)
+                .frame(height: TopBarNavigationMetrics.contentHeight)
                 .background { focusMarker(for: .destination(destination)) }
         }
         .buttonStyle(NavigationRailItemStyle(
-            expansionProgress: 0, isSelected: selection == destination, accent: palette.accent
+            expansionProgress: 0, isSelected: current == destination, accent: palette.accent,
+            horizontalPadding: iconOnly ? 8 : 12, verticalPadding: TopBarNavigationMetrics.itemPadding
         ))
         .focused($focused, equals: .destination(destination))
         .prefersDefaultFocus(destination == current, in: focusScope)
         .disabled(!canFocus(.destination(destination)))
-        .accessibilityAddTraits(selection == destination ? [.isSelected] : [])
+        .accessibilityAddTraits(current == destination ? [.isSelected] : [])
         .accessibilityIdentifier("top-navigation-\(destination.storageValue)")
     }
 
@@ -296,44 +441,23 @@ private struct TopBarNavigationContent: View {
         ) { request, didFocus in
             guard isShellActive, navigationRequest == request else { return }
             if !didFocus { focused = .destination(current) }
-            navigationRequest = nil
+            onNavigationFocused(request)
         }
-    }
-
-    private func openNavigation() {
-        guard isShellActive, !chrome.isChromeHidden, !chrome.transitionSuppressesFocus else { return }
-        returnFocus.capture()
-        contentRequest = nil
-        destinationFocus.cancel()
-        isNavigating = true
-        navigationGeneration &+= 1
-        navigationRequest = navigationGeneration
-    }
-
-    private func enterContent(_ destination: NavigationRailDestination? = nil) {
-        guard isShellActive, isNavigating, !chrome.transitionSuppressesFocus else { return }
-        let destination = destination ?? current
-        if destination != current { selection = destination }
-        destinationFocus.begin(destination)
-    }
-
-    private func destinationPresented(_ request: NavigationDestinationFocusHandoff.Request) {
-        guard isShellActive, destinationFocus.complete(request), request.destination == current,
-              isNavigating, !chrome.isChromeHidden else { return }
-        isNavigating = false
-        contentGeneration &+= 1
-        contentRequest = contentGeneration
-    }
-
-    private func contentFocused(_ request: UInt64, didFocus: Bool) {
-        guard isShellActive, contentRequest == request else { return }
-        contentRequest = nil
-        if !didFocus, focused != nil { openNavigation() }
     }
 
     private struct HorizontalOverflow: Equatable {
         var leading: CGFloat = 0
         var trailing: CGFloat = 0
+    }
+}
+
+private struct TopBarNavigationLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon
+            configuration.title
+                .padding(.trailing, 4)
+        }
     }
 }
 #endif

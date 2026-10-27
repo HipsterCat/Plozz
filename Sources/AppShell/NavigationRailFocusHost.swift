@@ -11,13 +11,16 @@ struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
     @Environment(\.self) private var environment
     @Environment(\.isEnabled) private var isEnabled
     var contentExitHeading: UIFocusHeading = .right
+    var contentTopInset: CGFloat = 0
     let content: (NavigationRailFocusHostController) -> Content
 
     init(
         contentExitHeading: UIFocusHeading = .right,
+        contentTopInset: CGFloat = 0,
         @ViewBuilder content: @escaping (NavigationRailFocusHostController) -> Content
     ) {
         self.contentExitHeading = contentExitHeading
+        self.contentTopInset = contentTopInset
         self.content = content
     }
 
@@ -30,6 +33,7 @@ struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: NavigationRailFocusHostController, context: Context) {
         let source = environment
         controller.contentExitHeading = contentExitHeading
+        controller.contentTopInset = contentTopInset
         #if DEBUG
         controller.rootUpdateCount += 1
         #endif
@@ -86,6 +90,9 @@ struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
 final class NavigationRailFocusHostController: UIHostingController<AnyView> {
     var isNavigationFocused = false
     var contentExitHeading: UIFocusHeading = .right
+    var contentTopInset: CGFloat = 0 {
+        didSet { if oldValue != contentTopInset { updateContentSafeArea() } }
+    }
     #if DEBUG
     var rootUpdateCount = 0
     #endif
@@ -115,6 +122,20 @@ final class NavigationRailFocusHostController: UIHostingController<AnyView> {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateContentSafeArea()
+    }
+
+    private func updateContentSafeArea() {
+        guard let view = viewIfLoaded else { return }
+        let inheritedTop = view.safeAreaInsets.top - additionalSafeAreaInsets.top
+        let additionalTop = max(0, contentTopInset - inheritedTop)
+        if abs(additionalSafeAreaInsets.top - additionalTop) > 0.5 {
+            additionalSafeAreaInsets.top = additionalTop
+        }
     }
 
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {

@@ -947,7 +947,7 @@ struct MainTabView: View {
             visibleLibraries: availableRailLibraries,
             layout: effectiveNavigationLayout,
             availableKeys: sidebarDestinationKeys
-        )))
+        )), layout: effectiveNavigationLayout)
     }
 
     private var sidebarDestinations: [NavigationRailDestination] {
@@ -1478,7 +1478,8 @@ struct MainTabView: View {
             },
             profile: activeProfile,
             onOpenProfileSwitcher: openProfileSwitcher,
-            chrome: navigationChrome
+            chrome: navigationChrome,
+            pinsSettings: navigationStyleModel.libraryLayout.pinsSettingsInTopBar
         )
     }
 

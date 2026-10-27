@@ -146,6 +146,7 @@ public struct WatchlistBrowseView: View {
                 .padding(.top, PlozzTheme.Spacing.large)
             }
             .scrollClipDisabled()
+            .topNavigationForegroundClip()
         }
     }
 
@@ -167,6 +168,7 @@ private struct WatchlistBrowseHeader: View {
     var body: some View {
         Text("Watchlist")
             .font(.largeTitle.bold())
+            .accessibilityIdentifier("watchlist-title")
     }
 }
 #endif

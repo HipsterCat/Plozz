@@ -195,6 +195,7 @@ fixture with real `XCUIRemote` directional input:
 ```sh
 python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID"
 python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID" --workload detail-return
+python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID" --workload horizontal-navigation
 python3 tools/performance.py report .build/performance/runs/RUN_ID
 ```
 
@@ -211,6 +212,16 @@ for three visits, preserving the profiled app process. The native focus journal
 is retained with the sample; return-stage `at` values use the main-thread
 monotonic clock rather than the journal writer's asynchronous timestamps.
 Animation callbacks do not establish exact presented-frame timing.
+
+The `horizontal-navigation` workload traverses the custom top bar through real
+library pages: fifteen Right presses to library ten and fifteen Left presses
+back to Home, repeated three times without per-key accessibility polling.
+Each endpoint must have actual native focus. It retains the transition journal
+and three round-trip durations, which include UI-driver overhead and are not
+input latency or FPS. The fixture creates isolated library models/settings;
+it does not measure connected-server latency. Keep this exact input cadence for
+before/after attribution. Hosted focus checks separately verify that fast focus
+changes do not construct intermediate pages or publish pruned destinations.
 
 `Process Sample` is the default backend and uses macOS's installed `sample`
 tool. The report separates main-thread frames, app-owned main-thread frames and
