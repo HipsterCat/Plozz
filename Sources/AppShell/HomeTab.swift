@@ -218,7 +218,7 @@ struct HomeTab: View {
         case .watchlist:
             watchlistRoot
         case let .library(library):
-            libraryBrowse(for: library)
+            libraryBrowse(for: library, isNavigationRoot: true)
         case let .allLibraries(libraries):
             allLibrariesBrowse(libraries)
         }
@@ -399,10 +399,10 @@ struct HomeTab: View {
     }
 
     /// One library's paged grid. Shared by the pushed `MediaLibrary` destination
-    /// and — under the rail — by the stack root, so a library looks and behaves the
+    /// and by the stack root, so a library looks and behaves the
     /// same however it was opened.
     @ViewBuilder
-    private func libraryBrowse(for library: MediaLibrary) -> some View {
+    private func libraryBrowse(for library: MediaLibrary, isNavigationRoot: Bool = false) -> some View {
         if let browse = try? resolveLibraryBrowse(
             for: library,
             in: accounts,
@@ -419,6 +419,7 @@ struct HomeTab: View {
                     presentation: libraryPresentation
                 ),
                 title: library.displayName,
+                isNavigationRoot: isNavigationRoot,
                 spoilerSettings: spoilerSettings,
                 continueWatchingShowsSeriesArtwork: homeVisibility.continueWatchingUsesSeriesArtwork,
                 continueWatchingLayout: homeVisibility.continueWatchingLayout,
@@ -459,6 +460,7 @@ struct HomeTab: View {
                     presentation: libraryPresentation
                 ),
                 title: Text(AllLibrariesBrowse.title),
+                isNavigationRoot: true,
                 spoilerSettings: spoilerSettings,
                 onSelect: { navigate($0) }
             )

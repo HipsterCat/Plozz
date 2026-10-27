@@ -9,6 +9,10 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   household's profile tiles (avatar + name), focusable, with an "add
   profile" tile that opens the editor. `AppShell.ProfileSelectionView`
   hosts this for both the launch flow and Settings → Switch Profile.
+  Its upper-right Settings cog uses the shared native glass button, including
+  the reduced-transparency fallback. A full-width focus section lets Up from
+  the profile tiles reach it. The shell owns authentication and profile-scoped
+  routing; the picker never bypasses a PIN or activates another profile itself.
   Mobile uses `AppShelliOS.PlozziOSProfileSelectionView` and its touch picker.
 - `ProfileEditorView` — create / rename / restyle a profile (name,
   `avatarSymbol` SF Symbol, color from `ProfileTileColor` palette,

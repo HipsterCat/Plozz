@@ -74,6 +74,16 @@ public struct NavigationRailLibraryEntry: Hashable, Sendable, Identifiable {
 /// profile's saved arrangement. SwiftUI-free so the ordering/visibility rules are
 /// unit-testable without a running view hierarchy.
 public enum NavigationDestinationDefaults {
+    /// Keep the native top bar within ten slots, including the profile action.
+    public static let topBarItemLimit = 10
+    public static let topBarDestinationLimit = topBarItemLimit - 1
+
+    public static func topBar(
+        destinations: [NavigationRailDestination]
+    ) -> [NavigationRailDestination] {
+        Array(destinations.filter { $0 != .settings }.prefix(topBarDestinationLimit))
+    }
+
     public static func iPhoneOverflowKeys(visible: [String]) -> Set<String> {
         visible.count > 5 ? Set(visible.dropFirst(4)) : []
     }
@@ -129,7 +139,10 @@ public enum NavigationRailPlan {
     ) -> [String] {
         let keys: [String]
         switch style {
-        case .tabBar, .sidebar:
+        case .tabBar:
+            keys = NavigationDestinationDefaults.sidebar(visibleLibraries: visibleLibraries, hasMusic: true)
+                .filter { $0 != NavigationLibraryLayout.settingsKey }
+        case .sidebar:
             keys = NavigationDestinationDefaults.sidebar(visibleLibraries: visibleLibraries, hasMusic: true)
         case .rail: keys = NavigationDestinationDefaults.rail(visibleLibraries: visibleLibraries, hasMusic: true)
         }
@@ -180,9 +193,8 @@ public enum NavigationRailPlan {
     /// Resolves the complete ordered destination list for one navigation style.
     ///
     /// `availableKeys` is both the style's supported set and its historical
-    /// default order. The horizontal bar resolves library visibility as opt-in;
-    /// the sidebars include libraries by default. Once a profile has explicitly
-    /// arranged built-ins, that saved order wins in every style.
+    /// default order. All styles include libraries by default; the top bar applies
+    /// its native capacity after resolution. A saved arrangement wins in every style.
     public static func destinations(
         visibleLibraries: [AggregatedLibrary],
         layout: NavigationLibraryLayout,

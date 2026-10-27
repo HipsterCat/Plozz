@@ -86,11 +86,42 @@ final class NavigationRailPlanTests: XCTestCase {
         XCTAssertEqual(
             NavigationRailPlan.customizableKeys(visibleLibraries: [], style: .tabBar),
             NavigationDestinationDefaults.sidebar(visibleLibraries: [], hasMusic: true)
+                .filter { $0 != NavigationLibraryLayout.settingsKey }
         )
         XCTAssertTrue(
             NavigationRailPlan.customizableKeys(visibleLibraries: [], style: .tabBar)
                 .contains(NavigationLibraryLayout.allLibrariesKey)
         )
+    }
+
+    func testTopBarReservesProfileSlotAndCapsAfterResolvedVisibilityWithoutChangingSidebarLayout() {
+        let libraries = (1...20).map { library("\($0)", title: "Library \($0)", account: "plex") }
+        var layout = NavigationLibraryLayout(
+            order: ["plex:20", NavigationLibraryLayout.homeKey],
+            hiddenKeys: ["plex:1", NavigationLibraryLayout.musicKey]
+        )
+        let saved = layout
+        func resolved() -> [NavigationRailDestination] {
+            NavigationRailPlan.destinations(
+                visibleLibraries: libraries, layout: layout,
+                availableKeys: NavigationDestinationDefaults.sidebar(visibleLibraries: libraries, hasMusic: true)
+            )
+        }
+        let sidebar = resolved()
+        let horizontal = NavigationDestinationDefaults.topBar(destinations: sidebar)
+        XCTAssertEqual(horizontal.count + 1, 10)
+        XCTAssertEqual(horizontal.first, .library("plex:20"))
+        XCTAssertFalse(horizontal.contains(.settings))
+        XCTAssertFalse(horizontal.contains(.music))
+        XCTAssertFalse(horizontal.contains(.library("plex:1")))
+        XCTAssertEqual(layout, saved)
+        XCTAssertTrue(sidebar.contains(.settings))
+        XCTAssertEqual(sidebar.filter { if case .library = $0 { return true }; return false }.count, 19)
+        layout.setVisible(false, for: "plex:20")
+        let next = NavigationDestinationDefaults.topBar(destinations: resolved())
+        XCTAssertEqual(next.count, 9, "Hiding an item promotes the next ordered destination into the available slot.")
+        XCTAssertEqual(next.first, .home)
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.settings]), [])
     }
 
     func testHorizontalLibrariesAppearByDefaultAndKeepTheirDistinctDestinationIdentities() {

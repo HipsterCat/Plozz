@@ -202,10 +202,25 @@ updates, rather than retaining a cache that could expose removed libraries.
 
 Horizontal navigation offers individual libraries and All Libraries in the same
 profile-scoped arranger as the sidebars. Newly discovered libraries appear
-automatically in every TV navigation style; explicit Hide choices and saved
-order remain unchanged. Each tab
+automatically within the style's capacity; explicit Hide choices and saved
+order remain unchanged. Top Bar has ten total slots: the fixed profile action
+followed by the first nine available content destinations. It omits Settings,
+which remains reachable through the profile picker's upper-right cog. Overflow
+does not rewrite saved visibility or order; the native sidebar and pinned
+sidebar keep the full destination list and their Settings entry. Each tab
 retains its account-qualified destination and library root, so same-named
 libraries remain distinct and only the visible stack consumes pending routes.
+Root library pages leave native tab-bar visibility automatic; pushed library
+pages hide it. Focusing a horizontal library tab must not hide navigation or
+move focus into content, including when asynchronous rows or grids appear.
+Down enters content and Back returns to the native bar.
+
+The profile-picker Settings request is a one-shot `ProfileFlowModel` intent,
+scoped to the active profile. A cancellable picker returns to its already-admitted
+profile; startup entry passes through the existing local, parental, and Plex
+identity gates. Cancellation and ordinary profile switches clear the request.
+`RootView` delivers it to `MainTabView`, which opens the existing Settings shell
+before settling ordinary startup selection.
 
 Home, Search, and Watchlist use shared, profile-scoped automatic visibility.
 Live-only IPTV opens Live TV; IPTV movies and series expose Home and Search.

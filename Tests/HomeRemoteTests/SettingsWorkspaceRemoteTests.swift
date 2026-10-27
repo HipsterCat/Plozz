@@ -330,6 +330,40 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         try exerciseSidebarSwitch(from: "tabBar")
     }
 
+    func testTopBarProfilePickerCogReturnsToActiveProfileSettings() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        let profile = app.buttons["settings-profile-switch"]
+        XCTAssertEqual(profile.value as? String, "Alex")
+        try focus(profile, in: app)
+        XCUIRemote.shared.press(.select)
+        try openProfilePickerSettings(in: app)
+        XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 10))
+        XCTAssertEqual(profile.value as? String, "Alex")
+        capture("profile-picker-opened-active-settings", in: app)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(section("playback", in: app).waitForNonExistence(timeout: 5))
+        try openSettingsIfNeeded(in: app)
+        XCTAssertEqual(profile.value as? String, "Alex")
+        #else
+        throw XCTSkip("Never changes profile selection on a physical device.")
+        #endif
+    }
+
+    func testStartupPickerCogOpensActiveProfileSettings() throws {
+        #if targetEnvironment(simulator)
+        let seeded = try launchSettings(style: "tabBar")
+        seeded.terminate()
+        let app = try launchSettings(style: "tabBar", settingsFromStartupPicker: true)
+        defer { app.terminate() }
+        XCTAssertEqual(app.buttons["settings-profile-switch"].value as? String, "Alex")
+        try enterAndReturn("playback", in: app)
+        #else
+        throw XCTSkip("Never changes profile selection on a physical device.")
+        #endif
+    }
+
     private func exerciseSidebarSwitch(from style: String) throws {
         #if targetEnvironment(simulator)
         let app = try launchSettings(style: style)
@@ -2377,7 +2411,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
 
     private func launchSettings(
         style: String = "rail", profile: String = "Alex", kids: String = "off",
-        diagnostics: Bool = false, sources: Bool = false
+        diagnostics: Bool = false, sources: Bool = false, settingsFromStartupPicker: Bool = false
     ) throws -> XCUIApplication {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["PLOZZ_SETTINGS_REVIEW"] == "1",
@@ -2407,6 +2441,12 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             XCUIRemote.shared.press(.select)
         }
         try completeAppearanceChoices(in: app)
+        if settingsFromStartupPicker {
+            try openProfilePickerSettings(in: app)
+            XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 20), app.debugDescription)
+            try focus(section("playback", in: app), in: app)
+            return app
+        }
         let alex = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", profile)).firstMatch
         if alex.waitForExistence(timeout: 2) {
             try focus(alex, in: app)
@@ -2440,10 +2480,36 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         let playback = section("playback", in: app)
         if !playback.waitForExistence(timeout: 3) {
             XCTAssertEqual(app.state, .runningForeground, "Settings navigation requires the actual foreground app.")
-            let settings = app.buttons.matching(NSPredicate(
+            if app.buttons["profile-picker-settings"].exists {
+                try openProfilePickerSettings(in: app)
+                XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
+                try focus(playback, in: app)
+                return
+            }
+            var settings = app.buttons.matching(NSPredicate(
                 format: "label IN %@", ["Settings", "Réglages"]
             )).firstMatch
+            if !settings.exists, app.tabBars.firstMatch.exists {
+                let focusedTab = app.tabBars.descendants(matching: .any)
+                    .matching(NSPredicate(format: "hasFocus == true")).firstMatch
+                if !focusedTab.exists { XCUIRemote.shared.press(.menu) }
+                let navigationFocused = XCTNSPredicateExpectation(
+                    predicate: NSPredicate { _, _ in focusedTab.exists }, object: nil
+                )
+                XCTAssertEqual(XCTWaiter.wait(for: [navigationFocused], timeout: 5), .completed, app.debugDescription)
+                for _ in 0..<10 {
+                    if app.buttons["profile-picker-settings"].exists { break }
+                    XCUIRemote.shared.press(.left)
+                }
+                try openProfilePickerSettings(in: app)
+                XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
+                try focus(playback, in: app)
+                return
+            }
             XCTAssertTrue(settings.waitForExistence(timeout: 5), app.debugDescription)
+            let sidebarCell = app.collectionViews["Sidebar"].cells
+                .containing(.button, identifier: settings.identifier).firstMatch
+            if sidebarCell.exists { settings = sidebarCell }
             if !settings.isEnabled {
                 XCUIRemote.shared.press(.menu)
                 waitForEnabled(settings)
@@ -2453,6 +2519,16 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         }
         XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
         try focus(playback, in: app)
+    }
+
+    private func openProfilePickerSettings(in app: XCUIApplication) throws {
+        let cog = app.buttons["profile-picker-settings"]
+        XCTAssertTrue(cog.waitForExistence(timeout: 5), app.debugDescription)
+        XCUIRemote.shared.press(.up)
+        let focused = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.hasFocus(cog) }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
+        capture("production-profile-picker-settings-cog", in: app)
+        XCUIRemote.shared.press(.select)
     }
 
     private func section(_ route: String, in app: XCUIApplication) -> XCUIElement {

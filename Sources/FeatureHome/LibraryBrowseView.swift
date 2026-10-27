@@ -100,6 +100,7 @@ public struct LibraryBrowseView: View {
     /// Pre-built so a synthesized library name ("Movies" on a file share) is
     /// our translated copy while a server's own name stays verbatim.
     private let title: Text
+    private let isNavigationRoot: Bool
     private let spoilerSettings: SpoilerSettings
     private let continueWatchingShowsSeriesArtwork: Bool
     private let continueWatchingLayout: ContinueWatchingCardLayout
@@ -142,6 +143,7 @@ public struct LibraryBrowseView: View {
     public init(
         viewModel: LibraryBrowseViewModel,
         title: Text,
+        isNavigationRoot: Bool = false,
         spoilerSettings: SpoilerSettings = .default,
         continueWatchingShowsSeriesArtwork: Bool = true,
         continueWatchingLayout: ContinueWatchingCardLayout = .landscape,
@@ -150,6 +152,7 @@ public struct LibraryBrowseView: View {
     ) {
         _viewModel = State(initialValue: viewModel)
         self.title = title
+        self.isNavigationRoot = isNavigationRoot
         self.spoilerSettings = spoilerSettings
         self.continueWatchingShowsSeriesArtwork = continueWatchingShowsSeriesArtwork
         self.continueWatchingLayout = continueWatchingLayout
@@ -161,7 +164,7 @@ public struct LibraryBrowseView: View {
         #if os(tvOS)
         NativeLibraryFocusHost(scrollTarget: nativeScrollTarget, content: libraryContent)
             .ignoresSafeArea(.container, edges: [.vertical, .trailing])
-            .toolbar(.hidden, for: .tabBar)
+            .toolbar(isNavigationRoot ? .automatic : .hidden, for: .tabBar)
         #else
         libraryContent
         #endif
@@ -215,11 +218,10 @@ public struct LibraryBrowseView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationEntryFocus(isEntryContentPending ? .pending : nil)
-        // Browse is a full-screen sub-page: hide the top tab bar so it reads as a
-        // dedicated destination with no navigation chrome pinned at the top.
         .environment(\.plozzCardCaptionView, viewModel.browseScope.cardCaptionView(for: viewModel.contentMode))
         .environment(\.plozzArtworkArea, nil)
-        .toolbar(.hidden, for: .tabBar)
+        // Root libraries must not remove the focused tab during native navigation.
+        .toolbar(isNavigationRoot ? .automatic : .hidden, for: .tabBar)
         .safeAreaInset(edge: .top, spacing: 0) {
             #if os(tvOS)
             NativeLibraryScrollingHeader(
@@ -363,9 +365,9 @@ public struct LibraryBrowseView: View {
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first(where: \.isKeyWindow)?.safeAreaInsets.top ?? 60
-        // The native sidebar's compact page button remains visible above content.
-        let pageButtonHeight: CGFloat = navigationStyle == .sidebar ? 60 : 0
-        return overscan + pageButtonHeight
+        // Keep the scrolling header below native root navigation, not behind its controls.
+        let hasNativeHeader = navigationStyle == .sidebar || (isNavigationRoot && navigationStyle == .tabBar)
+        return overscan + (hasNativeHeader ? 60 : 0)
     }
     #endif
 

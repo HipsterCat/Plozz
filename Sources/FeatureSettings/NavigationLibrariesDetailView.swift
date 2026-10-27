@@ -99,7 +99,7 @@ public struct NavigationLibrariesDetailView: View {
                 }
             )
 
-            Text(Self.footnote)
+            Text(footnote)
                 .font(.caption)
                 .plozzForeground(.secondary)
 
@@ -164,13 +164,22 @@ public struct NavigationLibrariesDetailView: View {
         comment: "Empty-state drop target under the Hidden divider."
     )
     #if os(iOS)
-    private static let footnote = LocalizedStringResource(
+    private var footnote: LocalizedStringResource { Self.mobileFootnote }
+    private static let mobileFootnote = LocalizedStringResource(
         "navigationArrangement.footnote.iOS",
         defaultValue: "Drag to reorder. Hold to hide or show. Unused pages hide automatically unless you show them.",
         comment: "Instructions for arranging iPhone and iPad navigation tabs."
     )
     #else
-    private static let footnote = LocalizedStringResource(
+    private var footnote: LocalizedStringResource {
+        navigation.style == .tabBar ? Self.topBarFootnote : Self.sidebarFootnote
+    }
+    private static let topBarFootnote = LocalizedStringResource(
+        "navigationArrangement.footnote.topBar",
+        defaultValue: "Top Bar shows the first 9 items plus your profile. Open Settings from the profile picker.",
+        comment: "The native tvOS top bar has ten slots including its fixed profile action. Additional ordered items remain available in the library browser."
+    )
+    private static let sidebarFootnote = LocalizedStringResource(
         "navigationArrangement.footnote",
         defaultValue: "Press and hold an item to hide, show, or move it. Unused pages hide automatically unless you show them. Settings always stays visible.",
         comment: "Instructions and the always-visible Settings safety rule for navigation customization."

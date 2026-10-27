@@ -106,12 +106,38 @@ struct NativeTopBarNavigation: View {
     let preventsAccidentalExit: Bool
     let content: (NavigationRailDestination, Bool) -> AnyView
     let label: (NavigationRailDestination) -> AnyView
+    var profile: Profile?
+    var onOpenProfileSwitcher: (() -> Void)?
+
+    private enum Selection: Hashable {
+        case profile
+        case content(NavigationRailDestination)
+    }
 
     var body: some View {
         let current = selection
-        TabView(selection: $selection) {
+        TabView(selection: Binding(
+            get: { Selection.content(NavigationRailPlan.resolvedSelection(selection, destinations: destinations)) },
+            set: { value in
+                switch value {
+                case .profile: onOpenProfileSwitcher?()
+                case let .content(destination): selection = destination
+                }
+            }
+        )) {
+            if let profile, onOpenProfileSwitcher != nil {
+                Tab(value: Selection.profile) {
+                    AnyView(Color.clear.tvNavigationExitProtectionContent())
+                } label: {
+                    AnyView(Label {
+                        Text(verbatim: profile.name)
+                    } icon: {
+                        ProfileAvatarView(profile: profile, size: 44, rendersAsImage: true)
+                    })
+                }
+            }
             ForEach(destinations, id: \.storageValue) { destination in
-                Tab(value: destination) {
+                Tab(value: Selection.content(destination)) {
                     AnyView(content(destination, current == destination)
                         .tvNavigationExitProtectionContent())
                 } label: {
@@ -513,6 +539,8 @@ struct MainTabView: View {
     var pendingStandaloneLiveTVEntry = false
     var onConsumeStandaloneLiveTVEntry: (() -> Void)?
     var onConfiguredIPTVPlaylist: () -> Void = {}
+    var settingsEntryRequested = false
+    var onConsumeSettingsEntry: () -> Void = {}
 
     @State private var hasResolvedStandaloneStartup = false
     @State private var retainsExplicitLiveTVEntry = false
@@ -615,6 +643,7 @@ struct MainTabView: View {
     }
 
     private var resolvedSelectedTab: NavigationRailDestination {
+        if settingsEntryRequested { return .settings }
         let stored = Self.launchDestination(
             stored: NavigationRailDestination(storageValue: selectedTabRaw) ?? .home,
             recordedProcess: recordedProcessLaunch, currentProcess: Self.processLaunch
@@ -629,7 +658,8 @@ struct MainTabView: View {
     }
 
     private func resolvedTopBarTab(_ tab: NavigationRailDestination) -> NavigationRailDestination {
-        NavigationRailPlan.resolvedSelection(
+        if tab == .settings { return .settings }
+        return NavigationRailPlan.resolvedSelection(
             tab, destinations: topBarDestinations
         )
     }
@@ -650,6 +680,7 @@ struct MainTabView: View {
     private func activeLibraryNavigationDestination(
         in destinations: [NavigationRailDestination]
     ) -> NavigationRailDestination {
+        if settingsEntryRequested { return .settings }
         let current = libraryNavigationEntryOverride ?? NavigationRailPlan.resolvedSelection(
             storedRailSelection,
             destinations: destinations
@@ -696,10 +727,10 @@ struct MainTabView: View {
     }
 
     private var shouldResolveStartup: Bool {
-        (admissionContext.explicitStandaloneChoice && pendingStandaloneLiveTVEntry)
+        !settingsEntryRequested && ((admissionContext.explicitStandaloneChoice && pendingStandaloneLiveTVEntry)
             || (!hasResolvedStandaloneStartup
                 && (navigationAvailability.prefersLiveTV
-                    || (admissionContext.explicitStandaloneChoice && !admissionContext.hasMediaAccounts)))
+                    || (admissionContext.explicitStandaloneChoice && !admissionContext.hasMediaAccounts))))
     }
 
     static func launchDestination(
@@ -962,11 +993,11 @@ struct MainTabView: View {
     }
 
     private var topBarDestinations: [NavigationRailDestination] {
-        includingExplicitLiveTVEntry(NavigationRailPlan.destinations(
+        NavigationDestinationDefaults.topBar(destinations: includingExplicitLiveTVEntry(NavigationRailPlan.destinations(
             visibleLibraries: availableRailLibraries,
             layout: effectiveNavigationLayout,
             availableKeys: sidebarDestinationKeys
-        ))
+        )))
     }
 
     private var sidebarDestinations: [NavigationRailDestination] {
@@ -1468,7 +1499,7 @@ struct MainTabView: View {
     }
 
     /// Capture the same library plan used by the sidebar before lazy tab content
-    /// is evaluated. Horizontal library shortcuts are explicitly opted in.
+    /// is evaluated. The top bar reserves its first native slot for the profile.
     private var nativeTopBarShell: some View {
         let libraries = availableRailLibraries
         let entries = NavigationRailPlan.entries(
@@ -1495,7 +1526,9 @@ struct MainTabView: View {
                 rootNavigationLabel(
                     for: destination, libraryEntry: entriesByDestination[destination]
                 )
-            }
+            },
+            profile: activeProfile,
+            onOpenProfileSwitcher: openProfileSwitcher
         )
     }
 
@@ -1777,6 +1810,15 @@ struct MainTabView: View {
         .onChange(of: pendingStandaloneLiveTVEntry, initial: true) { _, _ in
             settleFreshLaunch()
             settleStandaloneStartup()
+        }
+        .onChange(of: settingsEntryRequested, initial: true) { _, requested in
+            guard requested else { return }
+            hasChosenNavigationDestination = true
+            recordedProcessLaunch = Self.processLaunch
+            selectedTabRaw = NavigationRailDestination.settings.storageValue
+            railSelectionRaw = NavigationRailDestination.settings.storageValue
+            libraryNavigationEntryOverride = .settings
+            onConsumeSettingsEntry()
         }
         #if os(tvOS)
         .onContinueUserActivity(LiveTVGuideButton.activityType) { _ in openLiveTVGuide() }

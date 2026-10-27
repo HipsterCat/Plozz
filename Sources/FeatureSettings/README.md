@@ -326,7 +326,11 @@ watch history and planning-list behavior are documented in
   pages each have one Card labels control. TV focus and mobile value changes
   highlight the affected captions on that page, without a duplicate status table.
 - **App navigation** automatically includes enabled, discovered library shortcuts
-  in every TV navigation style, including Top Bar. Manual hides and ordering stay
+  within each TV style's capacity. Top Bar reserves one of its ten slots for the
+  profile and shows the first nine content items; Settings opens from the profile
+  picker instead. Its arranger keeps overflow items editable without changing
+  saved visibility, while both sidebars retain all items and Settings.
+  Manual hides and ordering stay
   profile-scoped. Refreshing Libraries also updates the main navigation inventory;
   unchanged results must not invalidate the navigation chrome during Settings entry.
   Mobile retains its existing built-in destinations rather than adding library tabs.

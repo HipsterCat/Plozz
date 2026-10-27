@@ -588,6 +588,10 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   The sidebar's mask changes without replacing the scroll view, preserving
   browse position and restoring the normal feather when navigation returns.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
+  distinguish navigation roots from pushed pages with `isNavigationRoot`.
+  Individual library and All Libraries roots preserve automatic native
+  navigation visibility, so loading content cannot remove a focused top-bar
+  tab. Pushed library/collection pages retain their hidden tab bar. They
   own a bounded, directional `ArtworkPrefetchWindow`. Its URL/variant requests
   preserve overlapping work across reversals and cancel obsolete queued work.
   Admission rechecks decoded residency; content, density, lifecycle and background
