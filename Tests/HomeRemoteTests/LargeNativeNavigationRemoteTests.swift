@@ -105,6 +105,15 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
             app.buttons["top-navigation-library:plex:3"].frame.maxY,
             "Root library controls must remain below horizontal navigation."
         )
+        let bar = app.descendants(matching: .any)["top-navigation"]
+        let modes = app.descendants(matching: .any)["library-content-mode"]
+        XCTAssertEqual(bar.frame.minX, modes.frame.minX, accuracy: 1,
+                       "The bar and library controls must share the leading content keyline.")
+        let sort = app.buttons["library-sort-menu"]
+        if sort.exists {
+            XCTAssertEqual(bar.frame.maxX, sort.frame.maxX, accuracy: 1,
+                           "The bar and library controls must share the trailing content keyline.")
+        }
         capture("Library navigation remains reachable", in: app)
         #else
         throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
@@ -174,6 +183,7 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
             for _ in 0..<26 { XCUIRemote.shared.press(.left) }
             assertFocused(app.buttons["top-navigation-profile"], in: app)
             XCTAssertFalse(app.buttons["profile-picker-settings"].exists, "Focusing the profile must not open it.")
+            capture("Concentric profile end of navigation", in: app)
             XCUIRemote.shared.press(.select)
             try openPickerSettings(in: app)
         }
@@ -216,6 +226,14 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         let library = app.buttons["top-navigation-library:plex:20"]
         XCTAssertTrue(library.waitForExistence(timeout: 15))
         assertFocused(library, in: app)
+        let bar = app.descendants(matching: .any)["top-navigation"]
+        XCTAssertEqual(bar.frame.midY, library.frame.midY, accuracy: 1)
+        XCTAssertEqual(
+            bar.frame.maxX - library.frame.maxX,
+            (bar.frame.height - library.frame.height) / 2, accuracy: 1,
+            "The final focus capsule must have equal end and vertical insets."
+        )
+        capture("Concentric horizontal navigation end", in: app)
         XCUIRemote.shared.press(.down)
         assertFocused(app.buttons["large-navigation-content"], in: app)
         XCUIRemote.shared.press(.menu)
@@ -282,6 +300,8 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
     }
 
     private func capture(_ name: String, in app: XCUIApplication) {
+        // Behavior is asserted separately; capture settled native transitions.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways

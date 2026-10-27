@@ -7,7 +7,7 @@ import SwiftUI
 public struct LiveTVLoadingSkeleton: View {
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzNavigationContentInset) private var navigationInset
-    @Environment(\.plozzTopNavigationContentInset) private var topNavigationInset
+    @Environment(\.plozzTopNavigationContentInsets) private var topNavigationInsets
     @Environment(\.dynamicTypeSize) private var typeSize
 
     public init() {}
@@ -16,7 +16,7 @@ public struct LiveTVLoadingSkeleton: View {
         GeometryReader { geometry in
             let layout = PrototypePreviewLayout(
                 size: geometry.size, safeAreaInsets: geometry.safeAreaInsets,
-                navigationInset: navigationInset, topNavigationInset: topNavigationInset,
+                navigationInset: navigationInset, topNavigationInsets: topNavigationInsets,
                 largeText: typeSize.isAccessibilitySize
             )
             ZStack {

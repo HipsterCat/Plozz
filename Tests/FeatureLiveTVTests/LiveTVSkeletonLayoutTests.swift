@@ -8,19 +8,29 @@ import XCTest
 final class LiveTVSkeletonLayoutTests: XCTestCase {
     #if os(tvOS)
     func testHorizontalNavigationInsetsBrowsingWithoutShrinkingFullscreenBounds() {
-        for titleSafeTop: CGFloat in [0, 60, 90] {
-            let layout = PrototypePreviewLayout(
-                size: CGSize(width: 1920, height: 1080 - titleSafeTop),
-                safeAreaInsets: EdgeInsets(top: titleSafeTop, leading: 0, bottom: 0, trailing: 0),
-                nativeNavigation: true, topNavigationInset: 128
+        let keylines = EdgeInsets(top: 124, leading: 96, bottom: 0, trailing: 80)
+        for safeArea in [
+            EdgeInsets(),
+            EdgeInsets(top: 60, leading: 80, bottom: 0, trailing: 80),
+            EdgeInsets(top: 90, leading: 90, bottom: 0, trailing: 70)
+        ] {
+            let size = CGSize(
+                width: 1920 - safeArea.leading - safeArea.trailing,
+                height: 1080 - safeArea.top
             )
-            XCTAssertEqual(layout.contentFrame.minY + titleSafeTop, 144)
-            XCTAssertEqual(layout.bounds.offsetBy(dx: 0, dy: titleSafeTop),
+            let layout = PrototypePreviewLayout(
+                size: size, safeAreaInsets: safeArea,
+                nativeNavigation: true, topNavigationInsets: keylines
+            )
+            let frame = layout.contentFrame.offsetBy(dx: safeArea.leading, dy: safeArea.top)
+            XCTAssertEqual(frame.minY, 140)
+            XCTAssertEqual(frame.minX, 96)
+            XCTAssertEqual(frame.maxX, 1840)
+            XCTAssertEqual(layout.bounds.offsetBy(dx: safeArea.leading, dy: safeArea.top),
                            CGRect(x: 0, y: 0, width: 1920, height: 1080))
             let skeleton = PrototypePreviewLayout(
-                size: CGSize(width: 1920, height: 1080 - titleSafeTop),
-                safeAreaInsets: EdgeInsets(top: titleSafeTop, leading: 0, bottom: 0, trailing: 0),
-                topNavigationInset: 128
+                size: size, safeAreaInsets: safeArea,
+                topNavigationInsets: keylines
             )
             XCTAssertEqual(skeleton.contentFrame, layout.contentFrame)
         }

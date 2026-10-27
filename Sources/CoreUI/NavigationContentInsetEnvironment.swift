@@ -22,8 +22,8 @@ private struct PlozzNavigationContentInsetKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
 
-private struct PlozzTopNavigationContentInsetKey: EnvironmentKey {
-    static let defaultValue: CGFloat = 0
+private struct PlozzTopNavigationContentInsetsKey: EnvironmentKey {
+    static let defaultValue = EdgeInsets()
 }
 
 private struct PlozzPinnedSidebarActiveKey: EnvironmentKey {
@@ -70,11 +70,12 @@ public extension EnvironmentValues {
         set { self[PlozzNavigationContentInsetKey.self] = newValue }
     }
 
-    /// Bottom edge of the custom horizontal chrome in physical-screen coordinates.
+    /// Bottom edge and horizontal content keylines of the custom top navigation,
+    /// measured from the physical screen edges.
     /// Full-bleed surfaces inset browsing controls, not their artwork or player.
-    var plozzTopNavigationContentInset: CGFloat {
-        get { self[PlozzTopNavigationContentInsetKey.self] }
-        set { self[PlozzTopNavigationContentInsetKey.self] = newValue }
+    var plozzTopNavigationContentInsets: EdgeInsets {
+        get { self[PlozzTopNavigationContentInsetsKey.self] }
+        set { self[PlozzTopNavigationContentInsetsKey.self] = newValue }
     }
 
     /// Whether Plozz's custom pinned sidebar owns the surrounding shell.

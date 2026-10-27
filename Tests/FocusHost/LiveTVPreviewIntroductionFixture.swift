@@ -84,6 +84,8 @@ struct LiveTVPreviewIntroductionFixture: View {
                     default: AnyView(Label("Search", systemImage: "magnifyingglass"))
                     }
                 },
+                profile: Profile(id: profileID, name: "Fixture"),
+                onOpenProfileSwitcher: {},
                 chrome: chrome
             )
         } else {

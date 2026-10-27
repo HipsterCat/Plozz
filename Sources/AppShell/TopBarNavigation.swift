@@ -17,19 +17,21 @@ struct TopBarNavigation: View {
 
     var body: some View {
         let chrome = chrome ?? fallbackChrome
-        return NavigationRailFocusHost(contentExitHeading: .down) { owner in
-            TopBarNavigationContent(
-                destinations: destinations, selection: $selection,
-                preventsAccidentalExit: preventsAccidentalExit,
-                content: content, label: label,
-                profile: profile, onOpenProfileSwitcher: onOpenProfileSwitcher,
-                chrome: chrome,
-                onNavigationFocusChanged: { [weak owner] in owner?.isNavigationFocused = $0 }
-            )
+        return GeometryReader { geometry in
+            NavigationRailFocusHost(contentExitHeading: .down) { owner in
+                TopBarNavigationContent(
+                    destinations: destinations, selection: $selection,
+                    preventsAccidentalExit: preventsAccidentalExit,
+                    content: content, label: label,
+                    profile: profile, onOpenProfileSwitcher: onOpenProfileSwitcher,
+                    chrome: chrome, safeAreaInsets: geometry.safeAreaInsets,
+                    onNavigationFocusChanged: { [weak owner] in owner?.isNavigationFocused = $0 }
+                )
+            }
+            .ignoresSafeArea()
         }
         .accessibilityElement(children: .contain)
         .environment(chrome)
-        .ignoresSafeArea()
     }
 }
 
@@ -42,6 +44,7 @@ private struct TopBarNavigationContent: View {
     let profile: Profile?
     let onOpenProfileSwitcher: (() -> Void)?
     let chrome: NavigationChromeModel
+    let safeAreaInsets: EdgeInsets
     let onNavigationFocusChanged: (Bool) -> Void
 
     private enum Target: Hashable {
@@ -59,6 +62,7 @@ private struct TopBarNavigationContent: View {
     @State private var returnFocus = NavigationContentFocusRequester.ReturnFocus()
     @State private var destinationFocus = NavigationDestinationFocusHandoff()
     @State private var overflow = HorizontalOverflow()
+    @State private var destinationContentWidth: CGFloat?
     @Environment(\.themePalette) private var palette
     @Environment(\.isEnabled) private var isEnabled
     private var panelHeight: CGFloat {
@@ -66,6 +70,14 @@ private struct TopBarNavigationContent: View {
     }
     private var contentTopInset: CGFloat {
         NavigationRailMetrics.expandedPanelOuterMargin + panelHeight
+    }
+    private var contentInsets: EdgeInsets {
+        EdgeInsets(
+            top: contentTopInset,
+            leading: safeAreaInsets.leading + PlozzTheme.Metrics.screenPadding,
+            bottom: 0,
+            trailing: safeAreaInsets.trailing + PlozzTheme.Metrics.screenPadding
+        )
     }
 
     private var current: NavigationRailDestination {
@@ -92,13 +104,14 @@ private struct TopBarNavigationContent: View {
                     )
                 }
                 .disabled(isNavigating && contentRequest == nil)
-                .environment(\.plozzTopNavigationContentInset, contentTopInset)
+                .environment(\.plozzTopNavigationContentInsets, contentInsets)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     Color.clear.frame(height: contentTopInset)
                 }
 
             navigation
-                .padding(.horizontal, NavigationRailMetrics.expandedPanelOuterMargin)
+                .padding(.leading, contentInsets.leading)
+                .padding(.trailing, contentInsets.trailing)
                 .padding(.top, NavigationRailMetrics.expandedPanelOuterMargin)
                 .opacity(chrome.isChromeHidden ? 0 : 1)
                 .disabled(!isShellActive || chrome.isChromeHidden || chrome.transitionSuppressesFocus)
@@ -179,7 +192,7 @@ private struct TopBarNavigationContent: View {
     }
 
     private var navigation: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: NavigationRailMetrics.itemSpacing) {
             if let profile, let onOpenProfileSwitcher {
                 Button(action: onOpenProfileSwitcher) {
                     ProfileAvatarView(profile: profile, size: NavigationRailMetrics.avatarSize)
@@ -203,8 +216,10 @@ private struct TopBarNavigationContent: View {
                             destinationButton(destination).id(destination)
                         }
                     }
-                    .padding(.horizontal, NavigationRailMetrics.expandedPanelContentInset)
                     .padding(.vertical, NavigationRailMetrics.expandedPanelContentInset)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                        destinationContentWidth = width
+                    }
                 }
                 .scrollIndicators(.hidden)
                 .scrollClipDisabled()
@@ -234,6 +249,7 @@ private struct TopBarNavigationContent: View {
                     withTransaction(transaction) { proxy.scrollTo(current) }
                 }
             }
+            .frame(maxWidth: destinationContentWidth)
         }
         .padding(.horizontal, NavigationRailMetrics.expandedPanelContentInset)
         .frame(height: panelHeight)

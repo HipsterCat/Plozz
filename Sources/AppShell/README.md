@@ -206,6 +206,11 @@ automatically; explicit Hide choices and saved order remain unchanged.
 Top Bar is one glass surface using the pinned navigation's shared row style:
 idle items have no background, and focus and selection use the same treatment.
 Its scrolling list has no item cap and fades before the fixed profile area.
+The panel fits its contents and stays centered, growing only to the page's
+title-safe content keylines before scrolling. The Live TV guide and its loading
+skeleton retain those page keylines even when the bar is narrow. A single shared
+inner inset keeps the end focus capsule concentric with the panel instead of
+doubling its end margin.
 The profile icon sits inside the bar and is a button, not a destination: focus never opens the
 picker, and Select opens the existing profile flow. Settings remains reachable
 through the picker's upper-right cog. Both vertical styles are unchanged.

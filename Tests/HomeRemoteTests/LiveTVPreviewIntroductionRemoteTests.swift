@@ -442,6 +442,17 @@ final class LiveTVPreviewIntroductionRemoteTests: XCTestCase {
         } else if app.buttons["top-navigation-liveTV"].exists {
             XCTAssertGreaterThanOrEqual(values[1], app.buttons["top-navigation-liveTV"].frame.maxY + 16,
                                         "Guide controls must clear the horizontal navigation strip.")
+            let bar = app.descendants(matching: .any)["top-navigation"]
+            let lastItem = app.buttons["top-navigation-search"]
+            XCTAssertEqual(bar.frame.midX, app.frame.midX, accuracy: 1,
+                           "A short bar must be centered on the page.")
+            XCTAssertEqual(
+                bar.frame.maxX - lastItem.frame.maxX,
+                (bar.frame.height - lastItem.frame.height) / 2, accuracy: 1,
+                "A short bar must end at its content, with the same concentric inset."
+            )
+            XCTAssertEqual(app.buttons["live-tv-search"].frame.minX, 80, accuracy: 1,
+                           "Centering a short bar must not move the guide's title-safe content keyline.")
         } else {
             XCTAssertEqual(values[1] - values[2], 16, accuracy: 1,
                            "Keep sixteen points below the actual native content inset")
