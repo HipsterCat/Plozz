@@ -115,21 +115,30 @@ struct ProductionHomeFixture: View {
                             }
                             .allowsHitTesting(false)
                         }
-                    } else if ProcessInfo.processInfo.arguments.contains("--native-top-home") {
-                        TabView(selection: $selection) {
-                            Tab("Search", systemImage: "magnifyingglass", value: NavigationRailDestination.search) {
-                                Button("Search content") {}
-                            }
-                            Tab("Home", systemImage: "house.fill", value: NavigationRailDestination.home) {
-                                ProductionHomeContent(
-                                    fixture: fixture, path: $path, libraryPath: $libraryPath,
-                                    isPinned: false, isActive: selection == .home
-                                )
-                            }
-                            Tab("Settings", systemImage: "gearshape", value: NavigationRailDestination.settings) {
-                                Button("Settings content") {}
-                            }
-                        }
+                    } else if ProcessInfo.processInfo.arguments.contains("--top-bar-home") {
+                        TopBarNavigation(
+                            destinations: [.home, .watchlist, .search],
+                            selection: $selection, preventsAccidentalExit: true,
+                            content: { destination, active in
+                                if destination == .home {
+                                    AnyView(ProductionHomeContent(
+                                        fixture: fixture, path: $path, libraryPath: $libraryPath,
+                                        isPinned: false, isActive: active
+                                    ))
+                                } else {
+                                    AnyView(Button("Fixture destination") {})
+                                }
+                            },
+                            label: { destination in
+                                switch destination {
+                                case .home: AnyView(Label("Home", systemImage: "house"))
+                                case .watchlist: AnyView(Label("Watchlist", systemImage: "bookmark"))
+                                default: AnyView(Label("Search", systemImage: "magnifyingglass"))
+                                }
+                            },
+                            profile: profile, onOpenProfileSwitcher: {},
+                            chrome: fixture.chrome
+                        )
                     } else {
                         ProductionHomeContent(fixture: fixture, path: $path, libraryPath: $libraryPath, isPinned: false)
                     }
@@ -261,7 +270,8 @@ private struct ProductionHomeContent: View {
                         navigationStyle: isPinned
                             ? .rail
                             : (ProcessInfo.processInfo.arguments.contains("--native-sidebar-home")
-                                ? .sidebar : .default),
+                                ? .sidebar : (ProcessInfo.processInfo.arguments.contains("--top-bar-home")
+                                    ? .tabBar : .default)),
                         onSelectItem: { item in withCinematicDetailNavigation(for: item) { path.append(item) } },
                         onPlayItem: { item in
                             playbackCount += 1
@@ -277,7 +287,10 @@ private struct ProductionHomeContent: View {
                 .cinematicDetailNavigation(path: $path)
             }
         }
-        .reportsNavigationDepth(isLibrarySequence ? libraryPath.count : path.count, to: isPinned ? fixture.chrome : nil)
+        .reportsNavigationDepth(
+            isLibrarySequence ? libraryPath.count : path.count,
+            to: isPinned || ProcessInfo.processInfo.arguments.contains("--top-bar-home") ? fixture.chrome : nil
+        )
         .mediaItemActionHandler(
             ProcessInfo.processInfo.arguments.contains("--home-menu-control") ? fixture.actions : nil
         )

@@ -100,56 +100,6 @@ private struct RootNavigationTabLabel: View {
     }
 }
 
-struct NativeTopBarNavigation: View {
-    let destinations: [NavigationRailDestination]
-    @Binding var selection: NavigationRailDestination
-    let preventsAccidentalExit: Bool
-    let content: (NavigationRailDestination, Bool) -> AnyView
-    let label: (NavigationRailDestination) -> AnyView
-    var profile: Profile?
-    var onOpenProfileSwitcher: (() -> Void)?
-
-    private enum Selection: Hashable {
-        case profile
-        case content(NavigationRailDestination)
-    }
-
-    var body: some View {
-        let current = selection
-        TabView(selection: Binding(
-            get: { Selection.content(NavigationRailPlan.resolvedSelection(selection, destinations: destinations)) },
-            set: { value in
-                switch value {
-                case .profile: onOpenProfileSwitcher?()
-                case let .content(destination): selection = destination
-                }
-            }
-        )) {
-            if let profile, onOpenProfileSwitcher != nil {
-                Tab(value: Selection.profile) {
-                    AnyView(Color.clear.tvNavigationExitProtectionContent())
-                } label: {
-                    AnyView(Label {
-                        Text(verbatim: profile.name)
-                    } icon: {
-                        ProfileAvatarView(profile: profile, size: 44, rendersAsImage: true)
-                    })
-                }
-            }
-            ForEach(destinations, id: \.storageValue) { destination in
-                Tab(value: Selection.content(destination)) {
-                    AnyView(content(destination, current == destination)
-                        .tvNavigationExitProtectionContent())
-                } label: {
-                    label(destination)
-                }
-            }
-        }
-        .tabViewStyle(.tabBarOnly)
-        .tvNavigationExitProtection(isEnabled: preventsAccidentalExit)
-    }
-}
-
 /// Retain visited navigation while Settings is open, but mount a newly selected
 /// chrome only when it becomes visible. A hidden native sidebar still resets focus.
 struct SettingsNavigationShell<Navigation: View, Settings: View>: View {
@@ -1379,7 +1329,7 @@ struct MainTabView: View {
         case .sidebar:
             nativeSidebarShell
         case .tabBar:
-            nativeTopBarShell
+            topBarShell
         }
     }
 
@@ -1419,8 +1369,7 @@ struct MainTabView: View {
     /// already installed its own depth, so only the currently selected Live TV
     /// destination may write it.
     private func updateLiveTVChrome(_ expanded: Bool) {
-        guard navigationStyle == .rail,
-              activeLibraryNavigationDestination == .liveTV else {
+        guard navigationStyle != .sidebar, isLiveTVDestinationActive else {
             return
         }
         navigationChrome.setStackDepth(expanded ? 1 : 0)
@@ -1453,6 +1402,7 @@ struct MainTabView: View {
                 completeLibraryChannelPlayback: completeLibraryChannelPlayback,
                 isProfileAuthorized: isLiveTVProfileAuthorized,
                 usesNativeNavigation: true,
+                onExpandedChange: updateLiveTVChrome,
                 onOpenTitle: openTitleFromLiveTV
             ))
         case .search:
@@ -1498,9 +1448,8 @@ struct MainTabView: View {
         }
     }
 
-    /// Capture the same library plan used by the sidebar before lazy tab content
-    /// is evaluated. The top bar reserves its first native slot for the profile.
-    private var nativeTopBarShell: some View {
+    /// Both custom navigation layouts use the same profile-scoped library plan.
+    private var topBarShell: some View {
         let libraries = availableRailLibraries
         let entries = NavigationRailPlan.entries(
             visibleLibraries: libraries, layout: effectiveNavigationLayout,
@@ -1511,7 +1460,7 @@ struct MainTabView: View {
             uniqueKeysWithValues: entries.map { ($0.destination, $0) }
         )
         let browsableLibraries = NavigationRailPlan.browsableLibraries(libraries)
-        return NativeTopBarNavigation(
+        return TopBarNavigation(
             destinations: topBarDestinations,
             selection: selectedTab,
             preventsAccidentalExit: navigationStyleModel.preventsAccidentalExit,
@@ -1528,7 +1477,8 @@ struct MainTabView: View {
                 )
             },
             profile: activeProfile,
-            onOpenProfileSwitcher: openProfileSwitcher
+            onOpenProfileSwitcher: openProfileSwitcher,
+            chrome: navigationChrome
         )
     }
 

@@ -364,6 +364,44 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         #endif
     }
 
+    func testTopBarProfileCancellationKeepsProductionNavigationResponsive() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        XCUIRemote.shared.press(.menu)
+        let profile = app.buttons["top-navigation-profile"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 10))
+        let focusedNavigation = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND hasFocus == true", "top-navigation-"
+        )).firstMatch
+        for _ in 0..<3 {
+            if !focusedNavigation.exists { XCUIRemote.shared.press(.menu) }
+            let count = app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "top-navigation-"
+            )).count
+            for _ in 0..<count {
+                if profile.hasFocus { break }
+                XCUIRemote.shared.press(.left)
+            }
+            XCTAssertTrue(profile.hasFocus, app.debugDescription)
+            XCTAssertFalse(app.buttons["profile-picker-settings"].exists)
+            XCUIRemote.shared.press(.select)
+            XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+            XCUIRemote.shared.press(.menu)
+            let returned = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in focusedNavigation.exists }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed, app.debugDescription)
+            XCUIRemote.shared.press(.right)
+            XCTAssertTrue(focusedNavigation.exists, app.debugDescription)
+            XCUIRemote.shared.press(.left)
+        }
+        capture("horizontal-profile-cancel-return", in: app)
+        #else
+        throw XCTSkip("Never changes profile selection on a physical device.")
+        #endif
+    }
+
     private func exerciseSidebarSwitch(from style: String) throws {
         #if targetEnvironment(simulator)
         let app = try launchSettings(style: style)
@@ -2489,18 +2527,25 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             var settings = app.buttons.matching(NSPredicate(
                 format: "label IN %@", ["Settings", "Réglages"]
             )).firstMatch
-            if !settings.exists, app.tabBars.firstMatch.exists {
-                let focusedTab = app.tabBars.descendants(matching: .any)
-                    .matching(NSPredicate(format: "hasFocus == true")).firstMatch
+            let profileAction = app.buttons["top-navigation-profile"]
+            if !settings.exists, profileAction.exists {
+                let focusedTab = app.buttons.matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@ AND hasFocus == true", "top-navigation-"
+                )).firstMatch
                 if !focusedTab.exists { XCUIRemote.shared.press(.menu) }
                 let navigationFocused = XCTNSPredicateExpectation(
                     predicate: NSPredicate { _, _ in focusedTab.exists }, object: nil
                 )
                 XCTAssertEqual(XCTWaiter.wait(for: [navigationFocused], timeout: 5), .completed, app.debugDescription)
-                for _ in 0..<10 {
-                    if app.buttons["profile-picker-settings"].exists { break }
+                let itemCount = app.buttons.matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@", "top-navigation-"
+                )).count
+                for _ in 0..<itemCount {
+                    if profileAction.hasFocus { break }
                     XCUIRemote.shared.press(.left)
                 }
+                XCTAssertTrue(profileAction.hasFocus, app.debugDescription)
+                XCUIRemote.shared.press(.select)
                 try openProfilePickerSettings(in: app)
                 XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
                 try focus(playback, in: app)

@@ -4,19 +4,38 @@ import FeatureHome
 import FeatureHomeCore
 import FeatureProfiles
 import SwiftUI
+import UIKit
 @testable import AppShell
 
 struct LargeNativeNavigationFixture: View {
     @State private var selection = NavigationRailDestination.home
+    @SceneStorage("large-navigation.selection") private var storedSelection = "home"
     @State private var showsProfilePicker = false
+    @State private var transitions = NativeNavigationTransitionJournal()
+    @State private var chrome = NavigationChromeModel()
+    @State private var showsDetail = false
 
     private let libraries: [AggregatedLibrary]
     private let destinations: [NavigationRailDestination]
     private let profile = Profile(id: "navigation-viewer", name: "Alex", colorIndex: 2)
     private var isSidebar: Bool { ProcessInfo.processInfo.arguments.contains("--native-vertical-navigation") }
     private var realLibraries: Bool { ProcessInfo.processInfo.arguments.contains("--real-library-pages") }
+    private var tracesTransitions: Bool { ProcessInfo.processInfo.arguments.contains("--trace-tab-transitions") }
+    private var selectionBinding: Binding<NavigationRailDestination> {
+        if ProcessInfo.processInfo.arguments.contains("--scene-stored-navigation") {
+            Binding(
+                get: { NavigationRailDestination(storageValue: storedSelection) ?? .home },
+                set: { storedSelection = $0.storageValue }
+            )
+        } else {
+            $selection
+        }
+    }
 
     init() {
+        if ProcessInfo.processInfo.arguments.contains("--initial-last-library") {
+            _selection = State(initialValue: .library("plex:20"))
+        }
         let longNames = ProcessInfo.processInfo.arguments.contains("--long-library-names")
         libraries = (1...20).map { index in
             AggregatedLibrary(
@@ -42,8 +61,9 @@ struct LargeNativeNavigationFixture: View {
                     profiles: [profile, Profile(id: "other-viewer", name: "Sam", colorIndex: 4)],
                     activeProfileID: profile.id, onSelect: { _ in showsProfilePicker = false },
                     onCancel: { showsProfilePicker = false },
-                    onOpenSettings: { selection = .settings; showsProfilePicker = false }
+                    onOpenSettings: { selectionBinding.wrappedValue = .settings; showsProfilePicker = false }
                 )
+                .onExitCommand { showsProfilePicker = false }
             } else {
                 shell
             }
@@ -53,33 +73,41 @@ struct LargeNativeNavigationFixture: View {
         .environment(\.plozzNavigationStyle, isSidebar ? .sidebar : .tabBar)
         .environment(\.plozzReduceTransparency,
                      ProcessInfo.processInfo.arguments.contains("--opaque-controls"))
+        .overlay(alignment: .bottom) {
+            if tracesTransitions {
+                NativeNavigationTransitionStatus(journal: transitions)
+                    .frame(height: 30)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private var shell: some View {
-        SettingsNavigationShell(style: isSidebar ? .sidebar : .tabBar, showsSettings: selection == .settings) { _ in
+        SettingsNavigationShell(style: isSidebar ? .sidebar : .tabBar, showsSettings: selectionBinding.wrappedValue == .settings) { _ in
             if isSidebar {
                 sidebar
             } else {
-                NativeTopBarNavigation(
+                TopBarNavigation(
                     destinations: NavigationDestinationDefaults.topBar(destinations: destinations),
-                    selection: $selection,
+                    selection: selectionBinding,
                     preventsAccidentalExit: true,
                     content: { destination, _ in AnyView(page(destination)) },
                     label: label,
                     profile: profile,
-                    onOpenProfileSwitcher: { showsProfilePicker = true }
+                    onOpenProfileSwitcher: { showsProfilePicker = true },
+                    chrome: chrome
                 )
             }
         } settings: {
             VStack {
                 Text("Settings").accessibilityIdentifier("large-navigation-settings")
-                Button("Back") { selection = .home }
+                Button("Back") { selectionBinding.wrappedValue = .home }
             }
         }
     }
 
     private var sidebar: some View {
-        TabView(selection: $selection) {
+        TabView(selection: selectionBinding) {
             Tab("Alex", systemImage: "person.crop.circle", value: NavigationRailDestination.library("profile")) {
                 Color.clear.onAppear { showsProfilePicker = true }
             }
@@ -121,14 +149,106 @@ struct LargeNativeNavigationFixture: View {
                     onSelect: { _ in }
                 )
             } else {
-                Button("Page content") {}
+                Button("Page content") {
+                    if ProcessInfo.processInfo.arguments.contains("--navigation-detail-pages") {
+                        showsDetail = true
+                    }
+                }
                     .accessibilityIdentifier("large-navigation-content")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            Color.clear
+                .frame(width: 0, height: 0)
+                .navigationDestination(isPresented: $showsDetail) {
+                    Button("Detail") { showsDetail = false }
+                        .accessibilityIdentifier("large-navigation-detail")
+                }
         }
+        .reportsNavigationDepth(showsDetail ? 1 : 0, to: chrome)
         .overlay(alignment: .bottom) {
             Text(verbatim: destination.storageValue)
                 .accessibilityIdentifier("large-navigation-selection")
+        }
+        .background {
+            if tracesTransitions {
+                NativeNavigationTransitionProbe(destination: destination.storageValue, journal: transitions)
+                    .frame(width: 0, height: 0)
+            }
+        }
+    }
+
+    @MainActor
+    private final class NativeNavigationTransitionJournal {
+        private var events: [String] = []
+        weak var label: UILabel?
+
+        func record(_ event: String) {
+            events.append(event)
+            if events.count > 256 { events.removeFirst(events.count - 256) }
+            label?.text = events.joined(separator: "\n")
+        }
+
+        func attach(_ label: UILabel) {
+            self.label = label
+            label.text = events.joined(separator: "\n")
+        }
+    }
+
+    private struct NativeNavigationTransitionStatus: UIViewRepresentable {
+        let journal: NativeNavigationTransitionJournal
+
+        func makeUIView(context: Context) -> UILabel {
+            let label = UILabel()
+            label.accessibilityIdentifier = "native-tab-transition-journal"
+            label.font = .systemFont(ofSize: 10)
+            journal.attach(label)
+            return label
+        }
+
+        func updateUIView(_ view: UILabel, context: Context) {}
+    }
+
+    private struct NativeNavigationTransitionProbe: UIViewControllerRepresentable {
+        let destination: String
+        let journal: NativeNavigationTransitionJournal
+
+        func makeUIViewController(context: Context) -> Controller {
+            Controller(destination: destination, journal: journal)
+        }
+
+        func updateUIViewController(_ controller: Controller, context: Context) {}
+
+        final class Controller: UIViewController {
+            let destination: String
+            let journal: NativeNavigationTransitionJournal
+
+            init(destination: String, journal: NativeNavigationTransitionJournal) {
+                self.destination = destination
+                self.journal = journal
+                super.init(nibName: nil, bundle: nil)
+            }
+
+            required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+            override func viewWillAppear(_ animated: Bool) {
+                super.viewWillAppear(animated)
+                journal.record("\(destination):willAppear")
+            }
+
+            override func viewDidAppear(_ animated: Bool) {
+                super.viewDidAppear(animated)
+                journal.record("\(destination):didAppear")
+            }
+
+            override func viewWillDisappear(_ animated: Bool) {
+                super.viewWillDisappear(animated)
+                journal.record("\(destination):willDisappear")
+            }
+
+            override func viewDidDisappear(_ animated: Bool) {
+                super.viewDidDisappear(animated)
+                journal.record("\(destination):didDisappear")
+            }
         }
     }
 

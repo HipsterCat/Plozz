@@ -94,7 +94,7 @@ final class NavigationRailPlanTests: XCTestCase {
         )
     }
 
-    func testTopBarReservesProfileSlotAndCapsAfterResolvedVisibilityWithoutChangingSidebarLayout() {
+    func testTopBarIncludesEveryResolvedDestinationWithoutChangingSidebarLayout() {
         let libraries = (1...20).map { library("\($0)", title: "Library \($0)", account: "plex") }
         var layout = NavigationLibraryLayout(
             order: ["plex:20", NavigationLibraryLayout.homeKey],
@@ -109,7 +109,7 @@ final class NavigationRailPlanTests: XCTestCase {
         }
         let sidebar = resolved()
         let horizontal = NavigationDestinationDefaults.topBar(destinations: sidebar)
-        XCTAssertEqual(horizontal.count + 1, 10)
+        XCTAssertEqual(horizontal, sidebar.filter { $0 != .settings })
         XCTAssertEqual(horizontal.first, .library("plex:20"))
         XCTAssertFalse(horizontal.contains(.settings))
         XCTAssertFalse(horizontal.contains(.music))
@@ -119,7 +119,7 @@ final class NavigationRailPlanTests: XCTestCase {
         XCTAssertEqual(sidebar.filter { if case .library = $0 { return true }; return false }.count, 19)
         layout.setVisible(false, for: "plex:20")
         let next = NavigationDestinationDefaults.topBar(destinations: resolved())
-        XCTAssertEqual(next.count, 9, "Hiding an item promotes the next ordered destination into the available slot.")
+        XCTAssertEqual(next.count, horizontal.count - 1, "Hiding an item removes only that destination.")
         XCTAssertEqual(next.first, .home)
         XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.settings]), [])
     }

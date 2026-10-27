@@ -2,11 +2,53 @@ import XCTest
 
 @MainActor
 final class LargeNativeNavigationRemoteTests: XCTestCase {
-    func testTwentyLibrariesLimitHorizontalTabsAndKeepProfileSettingsReachable() throws {
+    func testHorizontalFocusPresentsEachDestinationOnce() throws {
+        try exerciseTransitions(sceneStorage: false)
+    }
+
+    func testSceneStoredHorizontalFocusPresentsEachDestinationOnce() throws {
+        try exerciseTransitions(sceneStorage: true)
+    }
+
+    private func exerciseTransitions(sceneStorage: Bool) throws {
+        #if targetEnvironment(simulator)
+        let app = launch(arguments: ["--trace-tab-transitions"] + (sceneStorage ? ["--scene-stored-navigation"] : []))
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["large-navigation-content"].waitForExistence(timeout: 15))
+        XCUIRemote.shared.press(.menu)
+        let journal = app.staticTexts["native-tab-transition-journal"]
+        XCTAssertTrue(journal.waitForExistence(timeout: 5))
+        for (title, key) in [("Watchlist", "watchlist"), ("Live TV", "liveTV"), ("Search", "search")] {
+            let before = journal.label.components(separatedBy: "\n").filter { $0 == "\(key):willAppear" }.count
+            XCUIRemote.shared.press(.right)
+            let tab = app.buttons.matching(NSPredicate(format: "label == %@", title)).firstMatch
+            assertFocused(tab, in: app)
+            let appeared = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                journal.label.components(separatedBy: "\n").filter { $0 == "\(key):didAppear" }.count > before
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [appeared], timeout: 5), .completed, journal.label)
+            let repeated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                journal.label.components(separatedBy: "\n").filter { $0 == "\(key):willAppear" }.count > before + 1
+                    || !tab.hasFocus
+            }, object: nil)
+            repeated.isInverted = true
+            let result = XCTWaiter.wait(for: [repeated], timeout: 1)
+            let evidence = XCTAttachment(string: journal.label + "\n\n" + app.debugDescription)
+            evidence.name = "\(sceneStorage ? "Scene" : "State") transition to \(title)"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            XCTAssertEqual(result, .completed, "One directional input must present \(title) once and retain tab focus.\n\(journal.label)")
+        }
+        #else
+        throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
+        #endif
+    }
+
+    func testHorizontalNavigationReachesTwentyLibrariesAndProfileSettings() throws {
         try exerciseNavigation(longNames: false)
     }
 
-    func testTwentyLongLibraryNamesLimitHorizontalTabsAndKeepProfileSettingsReachable() throws {
+    func testHorizontalNavigationReachesTwentyLongLibrariesAndProfileSettings() throws {
         try exerciseNavigation(longNames: true)
     }
 
@@ -59,8 +101,9 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         XCUIRemote.shared.press(.left)
         assertFocused(app.buttons.matching(NSPredicate(format: "label == %@", "Library 2")).firstMatch, in: app)
         XCTAssertGreaterThan(
-            app.buttons["library-content-mode-recommended"].frame.minY, app.tabBars.firstMatch.frame.maxY,
-            "Root library controls must remain below native top navigation."
+            app.buttons["library-content-mode-recommended"].frame.minY,
+            app.buttons["top-navigation-library:plex:3"].frame.maxY,
+            "Root library controls must remain below horizontal navigation."
         )
         capture("Library navigation remains reachable", in: app)
         #else
@@ -75,6 +118,9 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         XCTAssertTrue(app.buttons["large-navigation-content"].waitForExistence(timeout: 15))
         XCUIRemote.shared.press(.menu)
         XCUIRemote.shared.press(.left)
+        assertFocused(app.buttons["top-navigation-profile"], in: app)
+        XCTAssertFalse(app.buttons["profile-picker-settings"].exists)
+        XCUIRemote.shared.press(.select)
         try openPickerSettings(in: app)
         #else
         throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
@@ -92,15 +138,15 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         var focusedLabels: [String] = []
         var lastLibraryReached = false
         var settingsReached = false
-        for _ in 0..<(sidebar ? 35 : 14) {
+        for _ in 0..<35 {
             let focused = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "hasFocus == true")).firstMatch
             if focused.exists {
                 // Native sidebar focus belongs to its cell, not the labeled button inside it.
                 let label = focused.elementType == .cell ? focused.buttons.firstMatch.label : focused.label
                 focusedLabels.append(label)
-                if label == (longNames ? "Library \(sidebar ? 20 : 3) - Movies and Television Collection"
-                    : "Library \(sidebar ? 20 : 3)") { lastLibraryReached = true }
+                if label == (longNames ? "Library 20 - Movies and Television Collection"
+                    : "Library 20") { lastLibraryReached = true }
                 if label == "Settings" {
                     settingsReached = true
                     XCUIRemote.shared.press(.select)
@@ -117,17 +163,88 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         evidence.name = longNames ? "Long library navigation traversal" : "Library navigation traversal"
         evidence.lifetime = .keepAlways
         add(evidence)
-        capture(sidebar ? "Native sidebar after twenty libraries" : "Native top bar capped at ten items", in: app)
+        capture(sidebar ? "Native sidebar after twenty libraries" : "Horizontal navigation after twenty libraries", in: app)
         XCTAssertTrue(lastLibraryReached, "The final library must be reachable. Visited: \(focusedLabels)")
         if sidebar {
             XCTAssertTrue(settingsReached, "Settings must be reachable after the libraries. Visited: \(focusedLabels)")
             XCTAssertTrue(app.staticTexts["large-navigation-settings"].waitForExistence(timeout: 5))
         } else {
-            XCTAssertEqual(Set(focusedLabels).count, 9, "Nine destinations plus Profile fill the ten native slots.")
+            XCTAssertEqual(Set(focusedLabels).count, 26, "Every content destination must remain reachable.")
             XCTAssertFalse(settingsReached)
-            for _ in 0..<9 { XCUIRemote.shared.press(.left) }
+            for _ in 0..<26 { XCUIRemote.shared.press(.left) }
+            assertFocused(app.buttons["top-navigation-profile"], in: app)
+            XCTAssertFalse(app.buttons["profile-picker-settings"].exists, "Focusing the profile must not open it.")
+            XCUIRemote.shared.press(.select)
             try openPickerSettings(in: app)
         }
+
+        #else
+        throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
+        #endif
+    }
+
+    func testProfileCancelKeepsHorizontalNavigationResponsive() throws {
+        #if targetEnvironment(simulator)
+        let app = launch(arguments: ["--trace-tab-transitions"])
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["top-navigation-home"].waitForExistence(timeout: 15))
+        for _ in 0..<3 {
+            assertFocused(app.buttons["top-navigation-home"], in: app)
+            XCUIRemote.shared.press(.left)
+            assertFocused(app.buttons["top-navigation-profile"], in: app)
+            XCTAssertFalse(app.buttons["profile-picker-settings"].exists)
+            XCUIRemote.shared.press(.select)
+            XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+            XCUIRemote.shared.press(.menu)
+            assertFocused(app.buttons["top-navigation-home"], in: app)
+            for key in ["watchlist", "liveTV", "search"] {
+                XCUIRemote.shared.press(.right)
+                assertFocused(app.buttons["top-navigation-\(key)"], in: app)
+            }
+            for _ in 0..<3 { XCUIRemote.shared.press(.left) }
+        }
+        capture("Profile return preserves horizontal navigation", in: app)
+        #else
+        throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
+        #endif
+    }
+
+    func testHorizontalStartsOnTheSelectedOffscreenLibrary() throws {
+        #if targetEnvironment(simulator)
+        let app = launch(arguments: ["--initial-last-library", "--long-library-names"])
+        defer { app.terminate() }
+        let library = app.buttons["top-navigation-library:plex:20"]
+        XCTAssertTrue(library.waitForExistence(timeout: 15))
+        assertFocused(library, in: app)
+        XCUIRemote.shared.press(.down)
+        assertFocused(app.buttons["large-navigation-content"], in: app)
+        XCUIRemote.shared.press(.menu)
+        assertFocused(library, in: app)
+        XCUIRemote.shared.press(.left)
+        assertFocused(app.buttons["top-navigation-library:plex:19"], in: app)
+        #else
+        throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
+        #endif
+    }
+
+    func testHorizontalContentAndDetailReturnKeepNavigationReachable() throws {
+        #if targetEnvironment(simulator)
+        let app = launch(arguments: ["--navigation-detail-pages"])
+        defer { app.terminate() }
+        let home = app.buttons["top-navigation-home"]
+        XCTAssertTrue(home.waitForExistence(timeout: 15))
+        assertFocused(home, in: app)
+        XCUIRemote.shared.press(.down)
+        assertFocused(app.buttons["large-navigation-content"], in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.buttons["large-navigation-detail"].waitForExistence(timeout: 5))
+        XCTAssertFalse(home.exists, "Detail pages must hide the navigation strip.")
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(app.buttons["large-navigation-content"].waitForExistence(timeout: 5))
+        XCUIRemote.shared.press(.menu)
+        assertFocused(home, in: app)
+        XCUIRemote.shared.press(.right)
+        assertFocused(app.buttons["top-navigation-watchlist"], in: app)
         #else
         throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
         #endif

@@ -814,7 +814,7 @@ class Lane:
                          "--home-artwork-cache-namespace=" + self.output.name]
             if workload == "detail-return":
                 arguments = [
-                    "--production-home-fixture", "--native-top-home", "--return-focus-trace",
+                    "--production-home-fixture", "--top-bar-home", "--return-focus-trace",
                     "--immersive-home", "--progressive-library-rows", "--populated-home-return",
                     "--distinct-home-artwork", "--home-artwork-cache-namespace=" + self.output.name,
                 ]

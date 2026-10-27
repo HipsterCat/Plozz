@@ -175,9 +175,9 @@ public struct NavigationLibrariesDetailView: View {
         navigation.style == .tabBar ? Self.topBarFootnote : Self.sidebarFootnote
     }
     private static let topBarFootnote = LocalizedStringResource(
-        "navigationArrangement.footnote.topBar",
-        defaultValue: "Top Bar shows the first 9 items plus your profile. Open Settings from the profile picker.",
-        comment: "The native tvOS top bar has ten slots including its fixed profile action. Additional ordered items remain available in the library browser."
+        "navigationArrangement.footnote.horizontal",
+        defaultValue: "Press and hold an item to hide, show, or move it. Open Settings from the profile picker.",
+        comment: "Instructions for arranging the scrolling horizontal navigation."
     )
     private static let sidebarFootnote = LocalizedStringResource(
         "navigationArrangement.footnote",

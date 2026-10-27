@@ -126,6 +126,7 @@ struct PrototypePreviewLayout {
     init(
         size: CGSize, safeAreaInsets: EdgeInsets = EdgeInsets(),
         navigationInset: CGFloat = 0, nativeNavigation: Bool = false,
+        topNavigationInset: CGFloat = 0,
         largeText: Bool = false, isSearching: Bool = false,
         hidesSidebar: Bool = false, showsCategories: Bool = false,
         showsVideoPreview: Bool = false, toolbarControlsBottom: CGFloat? = nil
@@ -146,7 +147,8 @@ struct PrototypePreviewLayout {
         // The rail and guide share physical-screen coordinates. Title-safe insets
         // can change during mounting and must not move or resize the pinned guide.
         let leading = side + (navigationInset > 0 ? PrototypeLayout.inset : 0)
-        let top = max(32, safeAreaInsets.top) + (nativeNavigation ? 16 : 0)
+        let top = max(32, safeAreaInsets.top, topNavigationInset)
+            + (nativeNavigation || topNavigationInset > 0 ? 16 : 0)
         let bottom: CGFloat = 20
         guideSideBleed = 0
         #else

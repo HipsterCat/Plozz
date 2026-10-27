@@ -2,8 +2,8 @@
 import SwiftUI
 
 /// How far the page's content has been pushed in from the leading edge to make
-/// room for the custom navigation rail, in points. `0` under the two native tab
-/// styles, which draw their own chrome and need no inset.
+/// room for the custom navigation rail, in points. `0` under horizontal navigation
+/// and the native sidebar, which need no leading content inset.
 ///
 /// ### Why this exists
 /// The rail insets **content** — a hero's title/overview/buttons, a row header,
@@ -19,6 +19,10 @@ import SwiftUI
 /// letting each surface apply REAL padding to its own content is what actually
 /// works, and it keeps artwork out of it by construction.
 private struct PlozzNavigationContentInsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+private struct PlozzTopNavigationContentInsetKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
 
@@ -64,6 +68,13 @@ public extension EnvironmentValues {
     var plozzNavigationContentInset: CGFloat {
         get { self[PlozzNavigationContentInsetKey.self] }
         set { self[PlozzNavigationContentInsetKey.self] = newValue }
+    }
+
+    /// Bottom edge of the custom horizontal chrome in physical-screen coordinates.
+    /// Full-bleed surfaces inset browsing controls, not their artwork or player.
+    var plozzTopNavigationContentInset: CGFloat {
+        get { self[PlozzTopNavigationContentInsetKey.self] }
+        set { self[PlozzTopNavigationContentInsetKey.self] = newValue }
     }
 
     /// Whether Plozz's custom pinned sidebar owns the surrounding shell.

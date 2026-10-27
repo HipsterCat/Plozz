@@ -23,8 +23,7 @@ private enum NavigationPreviewColors {
 /// `NavigationStyle`:
 /// - `.rail` ("Library Rail"): Plozz's own full-height leading rail of collapsed
 ///   icon dots, with Settings pinned to the bottom.
-/// - `.tabBar` ("Top Bar"): a centred pill of tabs across the top, page content
-///   beneath.
+/// - `.tabBar` ("Top Bar"): a fixed profile and scrolling destinations in one bar.
 /// - `.sidebar` ("Sidebar"): the collapsed native sidebar trigger above content.
 ///
 /// The page content uses the same neutral posters in every variant, so the
@@ -88,10 +87,14 @@ private struct NavigationStyleMini: View {
         let chromePadV = thick * 0.75
         let chromePadH = thick * 1.3
         return VStack(spacing: availH * 0.09) {
-            // Centred pill of tabs (active in the middle).
             HStack(spacing: tabGap(availH)) {
-                ForEach(0..<4, id: \.self) { i in
-                    tabPill(availH: availH, active: i == 1)
+                Circle()
+                    .fill(NavigationPreviewColors.itemIdle)
+                    .frame(width: thick * 2, height: thick * 2)
+                HStack(spacing: tabGap(availH)) {
+                    ForEach(0..<4, id: \.self) { i in
+                        tabPill(availH: availH, active: i == 1)
+                    }
                 }
             }
             .padding(.vertical, chromePadV)

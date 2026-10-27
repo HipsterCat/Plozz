@@ -7,6 +7,25 @@ import XCTest
 @MainActor
 final class LiveTVSkeletonLayoutTests: XCTestCase {
     #if os(tvOS)
+    func testHorizontalNavigationInsetsBrowsingWithoutShrinkingFullscreenBounds() {
+        for titleSafeTop: CGFloat in [0, 60, 90] {
+            let layout = PrototypePreviewLayout(
+                size: CGSize(width: 1920, height: 1080 - titleSafeTop),
+                safeAreaInsets: EdgeInsets(top: titleSafeTop, leading: 0, bottom: 0, trailing: 0),
+                nativeNavigation: true, topNavigationInset: 128
+            )
+            XCTAssertEqual(layout.contentFrame.minY + titleSafeTop, 144)
+            XCTAssertEqual(layout.bounds.offsetBy(dx: 0, dy: titleSafeTop),
+                           CGRect(x: 0, y: 0, width: 1920, height: 1080))
+            let skeleton = PrototypePreviewLayout(
+                size: CGSize(width: 1920, height: 1080 - titleSafeTop),
+                safeAreaInsets: EdgeInsets(top: titleSafeTop, leading: 0, bottom: 0, trailing: 0),
+                topNavigationInset: 128
+            )
+            XCTAssertEqual(skeleton.contentFrame, layout.contentFrame)
+        }
+    }
+
     func testPinnedGuideHorizontalGeometryIgnoresTransientTitleSafeInsets() {
         let screen = CGSize(width: 1920, height: 1080)
         for navigationInset: CGFloat in [0, 64] {

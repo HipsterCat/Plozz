@@ -10,9 +10,14 @@ import UIKit
 struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
     @Environment(\.self) private var environment
     @Environment(\.isEnabled) private var isEnabled
+    var contentExitHeading: UIFocusHeading = .right
     let content: (NavigationRailFocusHostController) -> Content
 
-    init(@ViewBuilder content: @escaping (NavigationRailFocusHostController) -> Content) {
+    init(
+        contentExitHeading: UIFocusHeading = .right,
+        @ViewBuilder content: @escaping (NavigationRailFocusHostController) -> Content
+    ) {
+        self.contentExitHeading = contentExitHeading
         self.content = content
     }
 
@@ -24,6 +29,7 @@ struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: NavigationRailFocusHostController, context: Context) {
         let source = environment
+        controller.contentExitHeading = contentExitHeading
         #if DEBUG
         controller.rootUpdateCount += 1
         #endif
@@ -79,6 +85,7 @@ struct NavigationRailFocusHost<Content: View>: UIViewControllerRepresentable {
 
 final class NavigationRailFocusHostController: UIHostingController<AnyView> {
     var isNavigationFocused = false
+    var contentExitHeading: UIFocusHeading = .right
     #if DEBUG
     var rootUpdateCount = 0
     #endif
@@ -111,13 +118,13 @@ final class NavigationRailFocusHostController: UIHostingController<AnyView> {
     }
 
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
-        // Leave Right unresolved so the existing boundary observer requests the
-        // captured source, rather than letting geometry choose a different control.
+        // Leave content entry unresolved so the navigation handoff requests the
+        // intended source, rather than letting geometry choose a different control.
         allowsFocusUpdate(heading: context.focusHeading) && super.shouldUpdateFocus(in: context)
     }
 
     func allowsFocusUpdate(heading: UIFocusHeading) -> Bool {
-        !(isNavigationFocused && heading.contains(.right))
+        !(isNavigationFocused && !heading.intersection(contentExitHeading).isEmpty)
     }
 
     @discardableResult

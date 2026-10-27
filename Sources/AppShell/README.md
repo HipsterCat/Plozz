@@ -184,13 +184,13 @@ prompt on first entry. iPhone and iPad retain their existing carousel layout.
 and Settings. Its illustrations omit navigation chrome, since Home layout and
 navigation style are independent choices.
 
-## Native navigation planning
+## Navigation planning
 
 Settings retains the last visible navigation shell while its style picker saves
 the profile's new preference immediately. Construct the replacement chrome only
 when leaving Settings: mounting a hidden, disabled native sidebar resets the
 picker's focus. Opening and closing Settings without changing style keeps the
-visited tabs and their state; a Settings-first launch does not mount hidden chrome.
+mounted shell; a Settings-first launch does not mount hidden chrome.
 Top-bar selection also prepares its nonpersistent library-navigation handoff
 before a style change, so the first render cannot temporarily dismiss Settings.
 
@@ -202,18 +202,30 @@ updates, rather than retaining a cache that could expose removed libraries.
 
 Horizontal navigation offers individual libraries and All Libraries in the same
 profile-scoped arranger as the sidebars. Newly discovered libraries appear
-automatically within the style's capacity; explicit Hide choices and saved
-order remain unchanged. Top Bar has ten total slots: the fixed profile action
-followed by the first nine available content destinations. It omits Settings,
-which remains reachable through the profile picker's upper-right cog. Overflow
-does not rewrite saved visibility or order; the native sidebar and pinned
-sidebar keep the full destination list and their Settings entry. Each tab
-retains its account-qualified destination and library root, so same-named
-libraries remain distinct and only the visible stack consumes pending routes.
-Root library pages leave native tab-bar visibility automatic; pushed library
-pages hide it. Focusing a horizontal library tab must not hide navigation or
-move focus into content, including when asynchronous rows or grids appear.
-Down enters content and Back returns to the native bar.
+automatically; explicit Hide choices and saved order remain unchanged.
+Top Bar is one glass surface using the pinned navigation's shared row style:
+idle items have no background, and focus and selection use the same treatment.
+Its scrolling list has no item cap and fades before the fixed profile area.
+The profile icon sits inside the bar and is a button, not a destination: focus never opens the
+picker, and Select opens the existing profile flow. Settings remains reachable
+through the picker's upper-right cog. Both vertical styles are unchanged.
+
+Horizontal focus previews the selected page without native tab transitions or
+automatic content entry. Only the selected page and the visited Live TV guide
+are mounted; walking twenty libraries must not retain twenty inactive grids.
+The guide retains its filters while inactive playback is stopped. Account-qualified
+destination IDs keep same-named libraries distinct. Down or Select enters the
+presented content through the existing shared focus owner; Back returns to the
+selected navigation item. Detail pages hide the strip through `NavigationChromeModel`.
+While Settings owns the shell, hidden navigation cancels focus handoffs and
+cannot overwrite the selected Settings destination.
+The focus owner's exit direction defaults to Right for pinned navigation and
+is Down for the horizontal strip; Left/Right never trigger a page handoff there.
+Initial focus resolves the selected destination, including a scrolled-off library,
+before allowing neighboring controls. Live TV's first-use preview choice waits
+for explicit content entry; its presentation owns focus until the choice finishes.
+Full-bleed Live TV surfaces read the shared top-content inset for guide controls
+and loading placeholders without shrinking expanded playback.
 
 The profile-picker Settings request is a one-shot `ProfileFlowModel` intent,
 scoped to the active profile. A cancellable picker returns to its already-admitted

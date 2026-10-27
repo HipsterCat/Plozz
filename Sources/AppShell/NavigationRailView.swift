@@ -711,10 +711,10 @@ private enum RailFocusTarget: Hashable {
     case destination(NavigationRailDestination)
 }
 
-/// Rail row chrome. Focus is the standard tvOS inverted card; the *selected*
+/// Shared pinned and horizontal row chrome. Focus is the tvOS inverted card; the *selected*
 /// destination keeps a quieter accent wash so you can still see where you are
 /// while focus is out in the content.
-private struct NavigationRailItemStyle: ButtonStyle {
+struct NavigationRailItemStyle: ButtonStyle {
     let expansionProgress: CGFloat
     let isSelected: Bool
     let accent: Color

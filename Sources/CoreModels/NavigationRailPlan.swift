@@ -74,14 +74,10 @@ public struct NavigationRailLibraryEntry: Hashable, Sendable, Identifiable {
 /// profile's saved arrangement. SwiftUI-free so the ordering/visibility rules are
 /// unit-testable without a running view hierarchy.
 public enum NavigationDestinationDefaults {
-    /// Keep the native top bar within ten slots, including the profile action.
-    public static let topBarItemLimit = 10
-    public static let topBarDestinationLimit = topBarItemLimit - 1
-
     public static func topBar(
         destinations: [NavigationRailDestination]
     ) -> [NavigationRailDestination] {
-        Array(destinations.filter { $0 != .settings }.prefix(topBarDestinationLimit))
+        destinations.filter { $0 != .settings }
     }
 
     public static func iPhoneOverflowKeys(visible: [String]) -> Set<String> {

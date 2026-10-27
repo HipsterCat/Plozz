@@ -138,6 +138,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @State private var previewAfterWatching = true
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzNavigationContentInset) private var navigationInset
+    @Environment(\.plozzTopNavigationContentInset) private var topNavigationInset
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -366,6 +367,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             let layout = PrototypePreviewLayout(
                 size: geometry.size, safeAreaInsets: geometry.safeAreaInsets,
                 navigationInset: navigationInset, nativeNavigation: usesNativeFullscreen,
+                topNavigationInset: topNavigationInset,
                 largeText: typeSize.isAccessibilitySize,
                 isSearching: isSearching, showsCategories: showsCategoryDirectory,
                 showsVideoPreview: playback.preparation.current != nil || playback.pendingWatchChannelID != nil,
