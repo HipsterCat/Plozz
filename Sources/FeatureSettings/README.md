@@ -189,28 +189,35 @@ specific audio track or format. Its label needs no explanatory footer.
 On TV, related control groups can share one section heading through
 `SettingsConnectedControlGroups`: an 8pt gap and tighter 8pt facing corners keep
 them connected, while the section's outer corners retain the standard radius.
-Audio language controls share the first group and spatial audio the second.
+Audio language controls share the first group; Prefer lossless audio and Spatial
+audio share the second, retaining their independent preferences and helpers.
 Autoplay switches share a group, separate from the Up Next card and its
 conditional timing control. These use the existing surfaces and native controls,
 without an enclosing card or changing the independent settings.
 
 **Skip markers** uses one profile-scoped master switch on the Playback page on
 both platforms. Enabling it reveals **Skip marker settings**, which opens a
-dedicated page for content selections, each marker's behavior and timing, and
-community markers. There is no separate opt-in for per-marker controls.
+dedicated page for content selections, marker pages, and community markers.
+Each marker page always shows Movies, TV Shows, and Anime, with independent
+behavior and timing for each. There is no separate opt-in for per-marker or
+per-content controls.
 Turning skipping off hides the link without clearing any saved choices.
-Each marker chooses Off, a manual skip button or automatic skipping; only
+Each content type chooses Off, a manual skip button or automatic skipping; only
 automatic behavior reveals **Skip after**, from Immediately through 30 seconds
 in one-second steps.
 The default delayed skip remains five seconds. Movies, TV Shows, and Anime can
 be enabled independently, using the existing audio/subtitle content classifier.
-Disabling a category suppresses skip prompts and automatic skips, not the
-independent Up Next or autoplay preferences. Advanced per-marker choices retain
+Disabling a category disables its controls on every marker page with a short
+explanation, preserving all of its choices. It suppresses skip prompts and
+automatic skips, not the independent Up Next or autoplay preferences.
+Advanced per-marker choices retain
 independent Off/manual/automatic behavior and timing. Existing saved modes,
-including mixed immediate/delayed marker overrides, migrate without changing
-their playback behavior. Community-marker attribution and identifier sharing
-appear as a short caption attached to its switch, without a separate section
-footer.
+including mixed immediate/delayed marker overrides, remain the fallback for each
+content type until that specific rule is edited. Movies and episodes classified
+as anime use the anime rules on either server provider. The new rules remain
+profile-scoped and travel through settings transfer. Community-marker attribution
+and identifier sharing appear as a short caption attached to its switch, without
+a separate section footer.
 
 The **Spatial audio (height channel support)** switch is available on tvOS 26 and later. Its
 profile-scoped `trueHDAtmosEnabled` preference defaults on, preserves saved Off
@@ -616,7 +623,8 @@ watch history and planning-list behavior are documented in
   Playback groups
   audio, autoplay/Up Next, marker skipping, seeking and display fades.
   Marker skipping has one inline toggle and a conditional **Skip marker settings**
-  link. Its per-kind controls and community-marker switch live on that child page.
+  link. That page contains community markers and one page per marker with
+  independent Movies, TV Shows, and Anime behavior and timing.
   Subtitles is its own profile category for mode, the shared/Live TV style
   editors, language, downloading and per-series memory; downloading still
   follows the active profile's provider capabilities.

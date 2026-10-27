@@ -398,6 +398,8 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   stepper, not placed outside its focus target. Left/Right adjusts,
   Select increments, and Up/Down remains native focus navigation. Bounds clamp
   unless a caller explicitly requests wrapping. Width reserves the longest value.
+  Numeric labels update immediately on every adjustment rather than rolling
+  through an animation that can hide changing digits during repeated presses.
   `SettingsAdjustmentFocusScope` shares the player's horizontal input ownership,
   held-press cancellation, and navigation-rail protection. VoiceOver adjustment
   uses the same stepping operation. Mobile retains separate buttons.

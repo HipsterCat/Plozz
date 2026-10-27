@@ -799,8 +799,8 @@ struct PlaybackDetailView: View {
         ]
     }
 
-    private var audioRows: [SettingsSplitRow] {
-        var rows = [
+    var audioRows: [SettingsSplitRow] {
+        [
             SettingsSplitRow(
                 id: "audio-defaults",
                 title: "Audio defaults"
@@ -833,22 +833,22 @@ struct PlaybackDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             },
             SettingsSplitRow(id: "lossless-surround", title: "Audio") {
-                LosslessAudioControl()
+                SettingsControlRows {
+                    LosslessAudioControl()
+                    #if os(tvOS)
+                    if #available(tvOS 26.0, *) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
+                                .accessibilityIdentifier("spatial-audio-toggle")
+                            Text("Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy).")
+                                .settingsHelperText()
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    #endif
+                }
             }
         ]
-        #if os(tvOS)
-        if #available(tvOS 26.0, *) {
-            rows.append(SettingsSplitRow(
-                id: "truehd-atmos",
-                title: "Spatial audio (height channel support)",
-                description: "Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy)."
-            ) {
-                Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
-                    .accessibilityIdentifier("spatial-audio-toggle")
-            })
-        }
-        #endif
-        return rows
     }
 
     private var skipIntroRows: [SettingsSplitRow] {

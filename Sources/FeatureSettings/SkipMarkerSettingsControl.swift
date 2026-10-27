@@ -61,6 +61,7 @@ private struct SkipMarkerEnableControl: View {
 
 public struct SkipMarkerSettingsView: View {
     @Bindable private var model: PlaybackSettingsModel
+    @State private var selectedKind: MediaSegment.Kind?
 
     public init(model: PlaybackSettingsModel) {
         self.model = model
@@ -74,9 +75,12 @@ public struct SkipMarkerSettingsView: View {
             SettingsSectionGroup("Enable for") {
                 SkipMarkerContentControls(model: model)
             }
-            ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
-                SettingsSectionGroup {
-                    SkipMarkerRuleControls(model: model, kind: kind)
+            SettingsSectionGroup {
+                ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
+                    Button { selectedKind = kind } label: {
+                        SettingsDisclosureLabel { Text(kind.settingsTitle) }
+                    }
+                    .accessibilityIdentifier("skip-marker-\(kind.rawValue)")
                 }
             }
             SettingsSectionGroup {
@@ -85,6 +89,9 @@ public struct SkipMarkerSettingsView: View {
         }
         .settingsPageSurface()
         .navigationTitle("Skip marker settings")
+        .navigationDestination(item: $selectedKind) { kind in
+            SkipMarkerContentSettingsView(model: model, kind: kind)
+        }
         #endif
     }
 
@@ -95,18 +102,74 @@ public struct SkipMarkerSettingsView: View {
                 SettingsControlRows {
                     SkipMarkerContentControls(model: model)
                 }
-            }
-        ] + MediaSegment.Kind.skippable.map { kind in
-            SettingsSplitRow(id: "skip-\(kind.rawValue)", title: kind.settingsTitle) {
-                SkipMarkerRuleControls(model: model, kind: kind)
-            }.labeledControl()
-        } + [
+            },
+            SettingsSplitRow(id: "skip-kinds", title: "Markers") {
+                SettingsControlRows {
+                    ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
+                        SettingsPageLink {
+                            SkipMarkerContentSettingsView(model: model, kind: kind)
+                        } label: {
+                            SettingsDisclosureLabel { Text(kind.settingsTitle) }
+                                .settingsFormRowLayout()
+                        }
+                        .buttonStyle(SettingsFormButtonStyle())
+                        .accessibilityIdentifier("skip-marker-\(kind.rawValue)")
+                    }
+                }
+            }.labeledControl(),
             SettingsSplitRow(id: "skip-community", title: "Use community markers") {
                 SkipMarkerCommunityControl(model: model)
             }.labeledControl()
         ]
     }
     #endif
+}
+
+public struct SkipMarkerContentSettingsView: View {
+    @Bindable private var model: PlaybackSettingsModel
+    private let kind: MediaSegment.Kind
+    private let categories: [ContentCategory] = [.movie, .tvShow, .anime]
+
+    public init(model: PlaybackSettingsModel, kind: MediaSegment.Kind) {
+        self.model = model
+        self.kind = kind
+    }
+
+    public var body: some View {
+        #if os(tvOS)
+        SettingsFormLayout(
+            title: Text(kind.settingsTitle),
+            rows: categories.map { category in
+                SettingsSplitRow(id: "skip-\(category.rawValue)", title: category.displayName) {
+                    controls(for: category)
+                }.labeledControl()
+            },
+            showsBack: true
+        )
+        #else
+        List {
+            ForEach(categories, id: \.self) { category in
+                SettingsSectionGroup {
+                    controls(for: category)
+                }
+            }
+        }
+        .settingsPageSurface()
+        .navigationTitle(Text(kind.settingsTitle))
+        #endif
+    }
+
+    private func controls(for category: ContentCategory) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SkipMarkerRuleControls(model: model, kind: kind, category: category)
+                .disabled(!model.settings.skipContentCategories.contains(category))
+            if !model.settings.skipContentCategories.contains(category) {
+                Text("Disabled in Skip marker settings.")
+                    .settingsHelperText()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 }
 
 private struct SkipMarkerContentControls: View {
@@ -157,30 +220,31 @@ private enum SkipBehavior: CaseIterable, Hashable {
 private struct SkipMarkerRuleControls: View {
     @Bindable var model: PlaybackSettingsModel
     let kind: MediaSegment.Kind
+    let category: ContentCategory
     @Environment(\.locale) private var locale
 
-    private var title: LocalizedStringResource { kind.settingsTitle }
-    private var identifier: String { kind.rawValue }
+    private var title: LocalizedStringResource { category.displayName }
+    private var identifier: String { "\(kind.rawValue)-\(category.rawValue)" }
     private var behavior: Binding<SkipBehavior> {
         Binding(
             get: {
-                let mode = model.settings.configuredSkipMode(for: kind)
+                let mode = model.settings.configuredSkipMode(for: kind, category: category)
                 return mode == .off ? .off : mode.isAutomatic ? .automatic : .manual
             },
             set: { value in
                 let mode: SkipIntrosMode = switch value {
                 case .off: .off
                 case .manual: .on
-                case .automatic: model.settings.configuredSkipDelay(for: kind) == 0 ? .autoInstant : .autoDelay
+                case .automatic: model.settings.configuredSkipDelay(for: kind, category: category) == 0 ? .autoInstant : .autoDelay
                 }
-                model.settings.setConfiguredSkipMode(mode, for: kind)
+                model.settings.setConfiguredSkipMode(mode, for: kind, category: category)
             }
         )
     }
     private var delay: Binding<Int> {
         Binding(
-            get: { model.settings.configuredSkipDelay(for: kind) },
-            set: { model.settings.setSkipAutomaticDelay($0, for: kind) }
+            get: { model.settings.configuredSkipDelay(for: kind, category: category) },
+            set: { model.settings.setSkipAutomaticDelay($0, for: kind, category: category) }
         )
     }
 
