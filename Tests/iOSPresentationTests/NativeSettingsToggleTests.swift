@@ -236,7 +236,9 @@ final class NativeSettingsToggleTests: XCTestCase {
             let shared = SkipMarkerRuleControls(model: model, scope: .defaultBehavior)
             let anime = SkipMarkerRuleControls(model: model, scope: .content(.intro, .anime))
             XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed])
-            XCTAssertEqual(anime.behaviors, [.useDefault, .off, .manual, .instant, .delayed])
+            XCTAssertEqual(anime.behaviors, [.useDefault, .manual, .instant, .delayed, .off])
+            shared.behavior.wrappedValue = .off
+            XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed, .off])
             window.frame = CGRect(x: 0, y: 0, width: width, height: 1000)
             window.rootViewController = UIHostingController(rootView:
                 NavigationStack { SkipMarkerSettingsView(model: model) }

@@ -27,14 +27,40 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         capture("compact-skip-TV-closed", in: app)
         try focus(movie, in: app)
         XCUIRemote.shared.press(.select)
-        for title in ["Use default", "Off", "Show skip button", "Skip instantly", "Skip after"] {
+        let choices = ["Use default", "Show skip button", "Skip instantly", "Skip after", "Off"]
+        for title in choices {
             XCTAssertTrue(app.cells.containing(.any, identifier: title).firstMatch.waitForExistence(timeout: 5), app.debugDescription)
         }
+        for (previous, next) in zip(choices, choices.dropFirst()) {
+            XCTAssertLessThan(
+                app.cells.containing(.any, identifier: previous).firstMatch.frame.midY,
+                app.cells.containing(.any, identifier: next).firstMatch.frame.midY
+            )
+        }
+        XCTAssertGreaterThan(
+            app.cells.containing(.any, identifier: "Off").firstMatch.frame.minY
+                - app.cells.containing(.any, identifier: "Skip after").firstMatch.frame.maxY,
+            app.cells.containing(.any, identifier: "Skip after").firstMatch.frame.minY
+                - app.cells.containing(.any, identifier: "Skip instantly").firstMatch.frame.maxY
+        )
         capture("compact-skip-TV-menu-open", in: app)
         try focus(app.cells.containing(.any, identifier: "Show skip button").firstMatch, in: app)
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(app.cells.containing(.any, identifier: "Use default").firstMatch.waitForNonExistence(timeout: 5))
         XCTAssertEqual(movie.value as? String, "Show skip button")
+        XCTAssertEqual(anime.value as? String, "Show skip button")
+        try focus(movie, in: app)
+        XCUIRemote.shared.press(.select)
+        try focus(app.cells.containing(.any, identifier: "Use default").firstMatch, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.cells.containing(.any, identifier: "Use default").firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(movie.value as? String, "Skip instantly (default)")
+        try focus(movie, in: app)
+        XCUIRemote.shared.press(.select)
+        try focus(app.cells.containing(.any, identifier: "Off").firstMatch, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.cells.containing(.any, identifier: "Use default").firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(movie.value as? String, "Off")
         XCTAssertEqual(anime.value as? String, "Show skip button")
         try focus(movie, in: app)
         XCUIRemote.shared.press(.select)

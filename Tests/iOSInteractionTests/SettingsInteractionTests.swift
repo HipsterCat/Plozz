@@ -1360,6 +1360,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(shared.waitForExistence(timeout: 5), app.debugDescription)
         shared.tap()
         app.buttons["Skip instantly"].tap()
+        XCTAssertEqual(shared.value as? String, "Skip instantly")
         app.buttons["skip-marker-intro"].tap()
         let movie = app.buttons["skip-behavior-intro-movie"]
         let anime = app.buttons["skip-behavior-intro-anime"]
@@ -1371,9 +1372,17 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Default:")).firstMatch.exists)
         capture("compact-skip-default-closed")
         movie.tap()
-        for title in ["Use default", "Off", "Show skip button", "Skip instantly", "Skip after"] {
+        let choices = ["Use default", "Show skip button", "Skip instantly", "Skip after", "Off"]
+        for title in choices {
             XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5), app.debugDescription)
         }
+        for (previous, next) in zip(choices, choices.dropFirst()) {
+            XCTAssertLessThan(app.buttons[previous].frame.midY, app.buttons[next].frame.midY)
+        }
+        XCTAssertGreaterThan(
+            app.buttons["Off"].frame.minY - app.buttons["Skip after"].frame.maxY,
+            app.buttons["Skip after"].frame.minY - app.buttons["Skip instantly"].frame.maxY
+        )
         capture("compact-skip-default-menu-open")
         app.buttons["Show skip button"].tap()
         XCTAssertEqual(movie.value as? String, "Show skip button")
@@ -1382,6 +1391,13 @@ final class SettingsInteractionTests: XCTestCase {
         app.buttons["Use default"].tap()
         XCTAssertEqual(movie.value as? String, "Skip instantly (default)")
         XCTAssertEqual(anime.value as? String, "Show skip button")
+        movie.tap()
+        app.buttons["Off"].tap()
+        XCTAssertEqual(movie.value as? String, "Off")
+        XCTAssertEqual(anime.value as? String, "Show skip button")
+        movie.tap()
+        app.buttons["Use default"].tap()
+        XCTAssertEqual(movie.value as? String, "Skip instantly (default)")
     }
 
     func testSpoilerSwitchesAndMenuRemainIndependent() {

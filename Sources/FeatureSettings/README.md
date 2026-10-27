@@ -203,6 +203,8 @@ instantly, or Skip after. Existing Off defaults remain visible until changed.
 Each marker page always shows Movies, TV Shows, and Anime. Inherited choices show
 the effective behavior with **(default)** in the picker value, without a helper
 line. The native menu offers **Use default** to follow the shared behavior and timing.
+It lists Use default, Show skip button, Skip instantly, and Skip after together,
+then **Off** below a native divider on both platforms. Off uses normal styling.
 An explicit Off, Show skip button, Skip instantly, or Skip after choice overrides
 only that marker/content pair. There is no separate opt-in for exceptions.
 Turning skipping off hides the link without clearing any saved choices.

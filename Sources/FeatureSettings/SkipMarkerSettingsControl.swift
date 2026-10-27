@@ -212,7 +212,7 @@ private struct SkipMarkerCommunityControl: View {
 }
 
 enum SkipBehavior: CaseIterable, Hashable {
-    case useDefault, off, manual, instant, delayed
+    case useDefault, manual, instant, delayed, off
 
     var title: LocalizedStringResource {
         switch self {
@@ -259,7 +259,7 @@ struct SkipMarkerRuleControls: View {
     var behaviors: [SkipBehavior] {
         switch scope {
         case .defaultBehavior:
-            model.settings.skipIntros == .off ? [.off, .manual, .instant, .delayed] : [.manual, .instant, .delayed]
+            model.settings.skipIntros == .off ? [.manual, .instant, .delayed, .off] : [.manual, .instant, .delayed]
         case .content: SkipBehavior.allCases
         }
     }
@@ -335,13 +335,12 @@ struct SkipMarkerRuleControls: View {
         SettingsControlRows(nonTVSpacing: 12) {
             #if os(tvOS)
             SettingsMenuRow(title: title, value: selectionSummary) {
-                SkipBehaviorPicker(title: title, behaviors: behaviors, selection: behavior)
+                SkipBehaviorMenuContent(behaviors: behaviors, selection: behavior)
             }
             .accessibilityIdentifier("skip-behavior-\(identifier)")
             #else
             Menu {
-                SkipBehaviorPicker(title: title, behaviors: behaviors, selection: behavior)
-                    .pickerStyle(.inline)
+                SkipBehaviorMenuContent(behaviors: behaviors, selection: behavior)
             } label: {
                 SettingsMenuLabel(title, value: selectionSummary)
             }
@@ -390,18 +389,24 @@ struct SkipMarkerRuleControls: View {
     }
 }
 
-private struct SkipBehaviorPicker: View {
-    let title: LocalizedStringResource
+private struct SkipBehaviorMenuContent: View {
     let behaviors: [SkipBehavior]
     @Binding var selection: SkipBehavior
 
     var body: some View {
-        Picker(selection: $selection) {
-            ForEach(behaviors, id: \.self) { behavior in
-                Text(behavior.title).tag(behavior)
+        ForEach(behaviors, id: \.self) { behavior in
+            if behavior == .off {
+                Divider()
             }
-        } label: {
-            Text(title)
+            // Native checked actions retain one selection without flattening the divider.
+            Toggle(isOn: Binding(
+                get: { selection == behavior },
+                set: { _ in selection = behavior }
+            )) {
+                Text(behavior.title)
+            }
+            .toggleStyle(.automatic)
+            .menuActionDismissBehavior(.enabled)
         }
     }
 }

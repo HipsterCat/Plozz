@@ -135,7 +135,9 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         let shared = SkipMarkerRuleControls(model: playback, scope: .defaultBehavior)
         let anime = SkipMarkerRuleControls(model: playback, scope: .content(.intro, .anime))
         XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed])
-        XCTAssertEqual(anime.behaviors, [.useDefault, .off, .manual, .instant, .delayed])
+        XCTAssertEqual(anime.behaviors, [.useDefault, .manual, .instant, .delayed, .off])
+        shared.behavior.wrappedValue = .off
+        XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed, .off])
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         window.rootViewController = UIHostingController(rootView:
