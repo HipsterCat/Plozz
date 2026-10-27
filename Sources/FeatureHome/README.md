@@ -520,6 +520,10 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   `DetailHeroView` / `DetailExtrasView` render the cinematic full-bleed
   backdrop, logo, overview, ratings, cast, and Play/Resume button. Works
   for movies, episodes, and people.
+  Explicit episode entries retain that episode as the hero's watched-action
+  target. The opening card selects identity, not ongoing watch state: TV and
+  mobile resolve the loaded episode with live resume data, never reapplying the
+  original card's watched flag after a toggle.
   An episode's show breadcrumb is a single native button showing only the show
   title and chevron, without a background or border in either focus state.
   Play takes initial focus when available; Up then reaches
