@@ -889,6 +889,8 @@ public extension PlaybackDiagnostics {
             return "Lossy encoding"
         case let output where output.hasPrefix("APAC "):
             return "Lossy encoding"
+        case "renderer (compressed)" where parts[0] == "EAC3 Atmos":
+            return "No re-encoding"
         case "CoreAudio" where parts[0].hasPrefix("libavcodec "):
             return "Decoded to PCM"
         default:

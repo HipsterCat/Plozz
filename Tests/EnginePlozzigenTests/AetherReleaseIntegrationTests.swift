@@ -1,4 +1,4 @@
-import AetherEngine
+@testable import AetherEngine
 import CoreModels
 import FeaturePlayback
 import XCTest
@@ -22,7 +22,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
     }
 
     func testResolvedEngineAndSourceCreditIdentifyPinnedReleaseIntegration() throws {
-        XCTAssertEqual(AetherEngine.version, "7.47.0")
+        XCTAssertEqual(AetherEngine.version, "7.48.0")
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "AetherEngine" })
         // The metadata guard compares the exact revision with Package.resolved.
         XCTAssertNotNil(credit.detail.range(
@@ -64,6 +64,38 @@ final class AetherReleaseIntegrationTests: XCTestCase {
         XCTAssertFalse(options.progressiveSegmentDelivery)
         XCTAssertFalse(options.preferDualLayerDolbyVision)
         XCTAssertFalse(PlozzigenVideoEngine.onDemandLoadOptions().preferDualLayerDolbyVision)
+    }
+
+    @MainActor
+    func testReleasedHostControlsPreserveExistingDefaults() throws {
+        let engine = try AetherEngine()
+        defer { engine.stop() }
+        XCTAssertTrue(engine.rendererAudioSessionActivationEnabled)
+        XCTAssertFalse(engine.retainsVideoPipelineWhenBackgrounded)
+        XCTAssertFalse(engine.ownsSoftwareNowPlaying)
+    }
+
+    func testRetainedSubtitleCorrectionDoesNotInventAnASSCueDuration() {
+        XCTAssertNil(SubtitleCueEndOffset.resolve(
+            decodedMilliseconds: 0, packetDuration: nil, timeBaseSeconds: 0.001,
+            isASS: true, fallback: 5
+        ))
+        XCTAssertEqual(SubtitleCueEndOffset.resolve(
+            decodedMilliseconds: 0, packetDuration: nil, timeBaseSeconds: 0.001,
+            isASS: false, fallback: 5
+        ), 5)
+    }
+
+    func testSoftwareSpatialStreamCopyUsesTheReleasedEncodingLabel() {
+        let track = TrackInfo(
+            id: 0, name: "English", codec: "eac3", language: "en",
+            channels: 6, isDefault: true
+        )
+        let pipeline = AetherEngine.softwareAudioDecoderLabel(
+            audioTracks: [track], activeIndex: 0, route: .compressedEAC3JOC
+        )
+        let diagnostics = PlaybackDiagnostics(audioPipelineDescription: pipeline, mode: .plozzigen)
+        XCTAssertEqual(diagnostics.audioEncodingDescription, "No re-encoding")
     }
 
     func testFELPreferenceReachesOnDemandOptionsWithoutDisablingAudioForOtherSources() {
@@ -158,7 +190,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "LibTrueHD" })
         XCTAssertFalse(credit.detail.contains("not linked in this build"))
         XCTAssertTrue(credit.detail.contains(
-            "https://github.com/superuser404notfound/LibTrueHD/tree/3.0.0"
+            "https://github.com/superuser404notfound/LibTrueHD/tree/3.1.0"
         ))
         XCTAssertTrue(credit.detail.contains("Quick104"))
         XCTAssertTrue(credit.detail.contains("Rainbaby"))

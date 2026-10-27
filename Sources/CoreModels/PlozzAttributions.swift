@@ -78,7 +78,7 @@ public enum PlozzAttributions {
                 "Playback is powered by AetherEngine by Vincent Herbst, under "
                 + "LGPL-3.0 with an Apple Store exception. "
                 + "Upstream: https://github.com/superuser404notfound/AetherEngine. "
-                + "Source: https://github.com/brandomoore/AetherEngine/tree/3cde25855b30b3c8998685872ecf97f133edccbd",
+                + "Source: https://github.com/brandomoore/AetherEngine/tree/c5eeb230b9cd78a64f57448aee5d553bd3368ad3",
             licenses: [.init("LGPL-3.0", family: .lgpl)]
         ),
         PlozzAttribution(
@@ -86,9 +86,9 @@ public enum PlozzAttributions {
             detail:
                 "FFmpeg n8.1.3 provides libavcodec, libavformat, libavutil, "
                 + "libswresample, libswscale and libavfilter for media decoding "
-                + "and the playback bridge. Packaged by FFmpegBuild 3.9.0. "
+                + "and the playback bridge. Packaged by FFmpegBuild 3.10.1. "
                 + "Source and component notices: "
-                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.9.0. "
+                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.10.1. "
                 + "Upstream: https://ffmpeg.org.",
             licenses: [.init("LGPL-2.1+", family: .lgpl)]
         ),
@@ -102,10 +102,10 @@ public enum PlozzAttributions {
         PlozzAttribution(
             title: "LibTrueHD",
             detail:
-                "TrueHD decoding and optional spatial audio rendering use LibTrueHD 3.0.0. "
+                "TrueHD decoding and optional spatial audio rendering use LibTrueHD 3.1.0. "
                 + "By Quick104 and "
                 + "Vincent Herbst, using truehdd and oamd by Rainbaby and contributors. "
-                + "Source: https://github.com/superuser404notfound/LibTrueHD/tree/3.0.0. "
+                + "Source: https://github.com/superuser404notfound/LibTrueHD/tree/3.1.0. "
                 + "Complete notices and license texts are bundled in LibTrueHDNotices.txt, "
                 + "LibTrueHDLicense.txt and LibTrueHDApacheLicense.txt.",
             licenses: [
@@ -133,7 +133,7 @@ public enum PlozzAttributions {
             detail:
                 "AV1 video decoding uses dav1d 1.5.4 by VideoLAN and contributors. "
                 + "Source and notices are included in FFmpegBuild: "
-                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.9.0.",
+                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.10.1.",
             licenses: [.init("BSD-2-Clause", family: .bsd)]
         ),
         PlozzAttribution(
@@ -141,16 +141,16 @@ public enum PlozzAttributions {
             detail:
                 "Image scaling and color conversion use zimg 3.0.6 under the WTFPL. "
                 + "Source: https://github.com/sekrit-twc/zimg. "
-                + "License: https://github.com/superuser404notfound/FFmpegBuild/blob/3.9.0/LICENSES/zimg.WTFPL.txt."
+                + "License: https://github.com/superuser404notfound/FFmpegBuild/blob/3.10.1/LICENSES/zimg.WTFPL.txt."
         ),
         PlozzAttribution(
             title: "libzvbi",
             detail:
-                "Teletext decoding uses libzvbi 0.2.45, as packaged by FFmpegBuild. "
+                "Teletext decoding uses libzvbi 0.2.46, as packaged by FFmpegBuild. "
                 + "The library is LGPL-2.0-or-later, distributed under LGPL-2.1; "
                 + "ure.c uses the MIT license. "
                 + "Source, build modifications and notices: "
-                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.9.0/LICENSES.",
+                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.10.1/LICENSES.",
             licenses: [
                 .init("LGPL-2.1", family: .lgpl),
                 .init("MIT", family: .mit),

@@ -175,10 +175,10 @@ tvOS's swipe-up expansion and retains the same two item limits.
 Playback > Advanced also contains **Dolby Vision FEL (experimental)** on TV,
 iPhone and iPad. This is a profile-scoped, default-off preference, unlike the
 device-wide external-player choice. It applies to new built-in on-demand sessions
-and travels through profile settings transfer. The helper explains the memory
-cost, possible stuttering and loss of overhead sound on the FEL route.
-Audio still plays, including TrueHD and DTS. FEL also decodes otherwise directly
-compatible E-AC-3/JOC spatial audio to channel-based PCM.
+and travels through profile settings transfer. Its short helper warns that it
+may impact performance. On iPhone/iPad and tvOS before 26 it also warns that
+FEL disables spatial audio; ordinary channel audio still plays. On tvOS 26+,
+eligible FEL tracks can retain spatial audio when the Spatial audio setting is on.
 Live playback, shared players and muted previews do not opt in.
 See [playback engines](../../docs/playback-engines.md#dolby-vision-fel) for eligibility
 and output limits.
@@ -216,7 +216,8 @@ on-demand sessions, not live streams, shared players or muted previews. The
 helper identifies TrueHD Atmos and DTS:X as inputs and discloses lossy conversion
 to Apple spatial audio. Format names describe compatibility, not certification,
 lossless passthrough, or patent clearance.
-FEL retains channel PCM even when Spatial audio is on. Unsupported platforms
+FEL can use the same spatial conversion on tvOS 26+; source eligibility and
+fallback remain engine-owned. Unsupported platforms
 keep ordinary channel playback; directly compatible spatial audio is unaffected.
 Feature descriptions use neutral spatial-audio wording; track
 metadata, diagnostics and legal notices retain accurate format and dependency names.
