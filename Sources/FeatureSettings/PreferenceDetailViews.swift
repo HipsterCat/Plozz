@@ -855,7 +855,7 @@ struct PlaybackDetailView: View {
         [
             SettingsSplitRow(
                 id: "skip-intros-mode",
-                title: "Skip markers"
+                title: "Skip intros, credits & more"
             ) {
                 #if os(tvOS)
                 SkipMarkerSettingsControl(model: playback)

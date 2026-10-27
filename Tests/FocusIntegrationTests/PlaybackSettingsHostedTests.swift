@@ -85,7 +85,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         let manual = try visibleText(in: window, attachment: "skip-settings-TV-manual")
         XCTAssertFalse(manual.contains("Show skip button"), manual)
         XCTAssertFalse(manual.contains("Skip after"), manual)
-        for label in ["Skip marker settings", "Intros", "Movies", "TV Shows", "Anime"] {
+        for label in ["Intros, credits & more", "Intros", "Movies", "TV Shows", "Anime"] {
             XCTAssertTrue(manual.contains(label), manual)
         }
         XCTAssertFalse(manual.contains("Set each marker separately"), manual)
@@ -284,7 +284,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
                 let page = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
                 visible += " " + page
-                if page.contains("Skip markers")
+                if page.contains("Skip intros, credits")
                     || page.contains("Version selection") || page.contains("Video buffer")
                     || page.contains("Live TV buffer") || page.contains("Autoplay")
                     || page.contains("Preferred audio language") {
@@ -301,7 +301,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 "Remember audio language per series",
                 "Autoplay next episode", "Autoplay next playlist item",
                 "Show Up Next card", "Time before the end",
-                "Skip markers",
+                "Skip intros, credits & more",
                 "Video buffer", "Live TV buffer", "Automatic", "temporary storage",
                 "adds live delay", "Spatial audio", "height channel support",
                 "TrueHD Atmos", "DTS:X", "Apple spatial audio", "lossy"
@@ -319,7 +319,8 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             XCTAssertFalse(visible.contains("Show a Skip button, or skip automatically"), visible)
             XCTAssertFalse(visible.contains("When your server has no intro or credits marker"), visible)
             XCTAssertTrue(playback.settings.trueHDAtmosEnabled)
-            XCTAssertEqual(visible.contains("Skip marker settings"), enabled, visible)
+            XCTAssertEqual(visible.contains("Customize"), enabled, visible)
+            XCTAssertFalse(visible.contains("Skip markers"), visible)
             for label in ["Set each marker separately", "Use community markers", "Show skip button",
                           "Skip after", "Intros", "Credits", "Recaps", "Previews", "Commercials"] {
                 XCTAssertFalse(visible.contains(label), "Customization belongs on the child page: \(visible)")

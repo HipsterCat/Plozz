@@ -26,7 +26,7 @@ public struct SkipMarkerSettingsControl: View {
                 SettingsPageLink {
                     SkipMarkerSettingsView(model: model)
                 } label: {
-                    SettingsDisclosureLabel { Text("Skip marker settings") }
+                    SettingsDisclosureLabel { Text("Customize") }
                         .settingsFormRowLayout()
                 }
                 .buttonStyle(SettingsFormButtonStyle())
@@ -38,7 +38,7 @@ public struct SkipMarkerSettingsControl: View {
             SkipMarkerEnableControl(model: model)
             if model.settings.skipMarkersEnabled {
                 Button(action: onOpenSettings) {
-                    SettingsDisclosureLabel { Text("Skip marker settings") }
+                    SettingsDisclosureLabel { Text("Customize") }
                 }
                 .accessibilityIdentifier("skip-marker-settings")
             }
@@ -51,7 +51,7 @@ private struct SkipMarkerEnableControl: View {
     @Bindable var model: PlaybackSettingsModel
 
     var body: some View {
-        Toggle("Skip markers", isOn: Binding(
+        Toggle("Skip intros, credits & more", isOn: Binding(
             get: { model.settings.skipMarkersEnabled },
             set: { model.settings.setSkipMarkersEnabled($0) }
         ))
@@ -69,7 +69,7 @@ public struct SkipMarkerSettingsView: View {
 
     public var body: some View {
         #if os(tvOS)
-        SettingsFormLayout(title: Text("Skip marker settings"), rows: rows, showsBack: true)
+        SettingsFormLayout(title: Text("Intros, credits & more"), rows: rows, showsBack: true)
         #else
         List {
             SettingsSectionGroup("Enable for") {
@@ -88,7 +88,7 @@ public struct SkipMarkerSettingsView: View {
             }
         }
         .settingsPageSurface()
-        .navigationTitle("Skip marker settings")
+        .navigationTitle("Intros, credits & more")
         .navigationDestination(item: $selectedKind) { kind in
             SkipMarkerContentSettingsView(model: model, kind: kind)
         }
@@ -164,7 +164,7 @@ public struct SkipMarkerContentSettingsView: View {
             SkipMarkerRuleControls(model: model, kind: kind, category: category)
                 .disabled(!model.settings.skipContentCategories.contains(category))
             if !model.settings.skipContentCategories.contains(category) {
-                Text("Disabled in Skip marker settings.")
+                Text("Disabled on the previous page.")
                     .settingsHelperText()
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -89,8 +89,9 @@ final class NativeSettingsToggleTests: XCTestCase {
                 XCTAssertEqual(model.settings.skipMarkersEnabled, enabled)
                 XCTAssertEqual(listedSwitches(in: window).count, 1)
                 let text = try captureText(window, name: "skip-marker-link-\(Int(width))-\(enabled)")
-                XCTAssertTrue(text.contains("Skip markers"), text)
-                XCTAssertEqual(text.contains("Skip marker settings"), enabled, text)
+                XCTAssertTrue(text.contains("Skip intros, credits & more"), text)
+                XCTAssertEqual(text.contains("Customize"), enabled, text)
+                XCTAssertFalse(text.contains("Skip markers"), text)
                 for label in ["Behavior", "Show skip button", "Skip after", "Set each marker separately",
                               "Intros", "Credits", "Use community markers"] {
                     XCTAssertFalse(text.contains(label), text)
@@ -190,7 +191,7 @@ final class NativeSettingsToggleTests: XCTestCase {
             model.settings.skipContentCategories.remove(.anime)
             try await settle(window)
             XCTAssertTrue(try captureText(window, name: "skip-anime-disabled-\(Int(width))")
-                .contains("Disabled in Skip marker settings."))
+                .contains("Disabled on the previous page."))
             window.rootViewController = UIHostingController(rootView:
                 NavigationStack { SkipMarkerSettingsView(model: model) }
                     .environment(\.themePalette, .dark)

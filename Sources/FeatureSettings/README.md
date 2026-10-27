@@ -195,9 +195,9 @@ Autoplay switches share a group, separate from the Up Next card and its
 conditional timing control. These use the existing surfaces and native controls,
 without an enclosing card or changing the independent settings.
 
-**Skip markers** uses one profile-scoped master switch on the Playback page on
-both platforms. Enabling it reveals **Skip marker settings**, which opens a
-dedicated page for content selections, marker pages, and community markers.
+**Skip intros, credits & more** uses one profile-scoped master switch on the
+Playback page on both platforms. Enabling it reveals **Customize**, which opens
+**Intros, credits & more** for content selections, marker pages, and community markers.
 Each marker page always shows Movies, TV Shows, and Anime, with independent
 behavior and timing for each. There is no separate opt-in for per-marker or
 per-content controls.
@@ -622,7 +622,7 @@ watch history and planning-list behavior are documented in
   Music Player. Moving these controls does not change their profile-scoped stores.
   Playback groups
   audio, autoplay/Up Next, marker skipping, seeking and display fades.
-  Marker skipping has one inline toggle and a conditional **Skip marker settings**
+  **Skip intros, credits & more** has one inline toggle and a conditional **Customize**
   link. That page contains community markers and one page per marker with
   independent Movies, TV Shows, and Anime behavior and timing.
   Subtitles is its own profile category for mode, the shared/Live TV style
