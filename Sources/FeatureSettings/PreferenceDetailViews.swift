@@ -417,6 +417,8 @@ struct PlaybackDetailView: View {
     @Environment(\.locale) private var locale
     #if os(tvOS)
     @Environment(\.settingsInWorkspace) private var inWorkspace
+    #else
+    @State private var showsSkipMarkerSettings = false
     #endif
     @Bindable var playback: PlaybackSettingsModel
     /// The profile base subtitle mode/language now lives in `SubtitleBehavior`
@@ -568,6 +570,11 @@ struct PlaybackDetailView: View {
 
     var body: some View {
         SettingsSplitLayout(title: section == .subtitles ? "Subtitles" : "Playback", rows: rows)
+            #if !os(tvOS)
+            .navigationDestination(isPresented: $showsSkipMarkerSettings) {
+                SkipMarkerSettingsView(model: playback)
+            }
+            #endif
     }
 
     // MARK: - Split sections
@@ -848,10 +855,14 @@ struct PlaybackDetailView: View {
         [
             SettingsSplitRow(
                 id: "skip-intros-mode",
-                title: "Skip intros, credits & more"
+                title: "Skip markers"
             ) {
+                #if os(tvOS)
                 SkipMarkerSettingsControl(model: playback)
-            }
+                #else
+                SkipMarkerSettingsControl(model: playback, onOpenSettings: { showsSkipMarkerSettings = true })
+                #endif
+            }.labeledControl()
         ]
     }
 

@@ -2058,6 +2058,7 @@ struct PlozziOSPlaybackSettingsView: View {
     let streamingSupport: StreamingQualitySupport
     @State private var showsAdvancedStreaming = false
     @State private var showsAdvancedPlayback = false
+    @State private var showsSkipMarkerSettings = false
 
     private static let policyCategories: [ContentCategory] = [.movie, .tvShow, .anime]
     private static let audioOptions: [AudioLanguagePreference] =
@@ -2084,7 +2085,7 @@ struct PlozziOSPlaybackSettingsView: View {
                     .accessibilityIdentifier("playback-orientation")
                 }
             }
-            SkipMarkerSettingsControl(model: model)
+            SkipMarkerSettingsControl(model: model, onOpenSettings: { showsSkipMarkerSettings = true })
 
             SettingsSectionGroup("Skipping") {
                 Picker("Skip backward", selection: $model.settings.skipBackwardInterval) {
@@ -2187,6 +2188,9 @@ struct PlozziOSPlaybackSettingsView: View {
         }
         .settingsPageSurface()
         .navigationTitle("Playback")
+        .navigationDestination(isPresented: $showsSkipMarkerSettings) {
+            SkipMarkerSettingsView(model: model)
+        }
         .navigationDestination(isPresented: $showsAdvancedStreaming) {
             PlozziOSAdvancedStreamingSettings(settings: $model.settings.streaming, support: streamingSupport)
         }

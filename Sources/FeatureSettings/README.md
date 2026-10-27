@@ -194,11 +194,14 @@ Autoplay switches share a group, separate from the Up Next card and its
 conditional timing control. These use the existing surfaces and native controls,
 without an enclosing card or changing the independent settings.
 
-**Skip intros, credits & more** uses one profile-scoped master switch on both
-platforms. Turning it off hides configuration without clearing behavior, timing,
-content selections, per-marker overrides, or community-marker consent. Behavior
-chooses a manual skip button or automatic skipping; only automatic behavior
-reveals **Skip after**, from Immediately through 30 seconds in one-second steps.
+**Skip markers** uses one profile-scoped master switch on the Playback page on
+both platforms. Enabling it reveals **Skip marker settings**, which opens a
+dedicated page for content selections, each marker's behavior and timing, and
+community markers. There is no separate opt-in for per-marker controls.
+Turning skipping off hides the link without clearing any saved choices.
+Each marker chooses Off, a manual skip button or automatic skipping; only
+automatic behavior reveals **Skip after**, from Immediately through 30 seconds
+in one-second steps.
 The default delayed skip remains five seconds. Movies, TV Shows, and Anime can
 be enabled independently, using the existing audio/subtitle content classifier.
 Disabling a category suppresses skip prompts and automatic skips, not the
@@ -612,8 +615,8 @@ watch history and planning-list behavior are documented in
   Music Player. Moving these controls does not change their profile-scoped stores.
   Playback groups
   audio, autoplay/Up Next, marker skipping, seeking and display fades.
-  Marker skipping is inline on the Playback page: the shared mode, per-kind
-  overrides and community-marker switch do not require opening another page.
+  Marker skipping has one inline toggle and a conditional **Skip marker settings**
+  link. Its per-kind controls and community-marker switch live on that child page.
   Subtitles is its own profile category for mode, the shared/Live TV style
   editors, language, downloading and per-series memory; downloading still
   follows the active profile's provider capabilities.

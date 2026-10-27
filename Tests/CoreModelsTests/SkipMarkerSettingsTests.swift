@@ -100,6 +100,25 @@ final class SkipMarkerSettingsTests: XCTestCase {
         XCTAssertEqual(settings.skipMarkerModes.delay(for: .intro), 12)
     }
 
+    func testMarkerEditsDoNotRequireSeparateModeOrResetInheritedChoices() throws {
+        var settings = PlaybackSettings(skipIntros: .autoDelay, skipAutomaticDelaySeconds: 12)
+        settings.setSkipAutomaticDelay(0, for: .intro)
+        settings.setConfiguredSkipMode(.off, for: .credits)
+        settings.setSkipAutomaticDelay(30, for: .recap)
+        XCTAssertEqual(settings.skipMarkerModes.mode(for: .intro), .autoInstant)
+        XCTAssertEqual(settings.skipMarkerModes.mode(for: .credits), .off)
+        XCTAssertEqual(settings.skipMarkerModes.delay(for: .recap), 30)
+        for kind in [MediaSegment.Kind.preview, .commercial] {
+            XCTAssertEqual(settings.configuredSkipMode(for: kind), .autoDelay)
+            XCTAssertEqual(settings.configuredSkipDelay(for: kind), 12)
+        }
+        let configured = settings
+        settings.setSkipMarkersEnabled(false)
+        settings = try JSONDecoder().decode(PlaybackSettings.self, from: JSONEncoder().encode(settings))
+        settings.setSkipMarkersEnabled(true)
+        XCTAssertEqual(settings, configured)
+    }
+
     func testDelayBoundsAndZeroAreConsistentForImportedPreferences() throws {
         var settings = try JSONDecoder().decode(PlaybackSettings.self, from: Data(
             #"{"skipIntros":"autoDelay","skipAutomaticDelaySeconds":-10,"skipModeOverrides":{"credits":"autoDelay"},"skipAutomaticDelayOverrides":{"credits":99}}"#.utf8

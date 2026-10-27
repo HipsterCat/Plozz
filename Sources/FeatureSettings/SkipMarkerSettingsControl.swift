@@ -5,24 +5,42 @@ import SwiftUI
 
 public struct SkipMarkerSettingsControl: View {
     @Bindable private var model: PlaybackSettingsModel
-
+    #if os(tvOS)
     public init(model: PlaybackSettingsModel) {
         self.model = model
     }
+    #else
+    private let onOpenSettings: () -> Void
+
+    public init(model: PlaybackSettingsModel, onOpenSettings: @escaping () -> Void) {
+        self.model = model
+        self.onOpenSettings = onOpenSettings
+    }
+    #endif
 
     public var body: some View {
         #if os(tvOS)
         SettingsControlRows {
             SkipMarkerEnableControl(model: model)
             if model.settings.skipMarkersEnabled {
-                SkipMarkerConfiguration(model: model)
+                SettingsPageLink {
+                    SkipMarkerSettingsView(model: model)
+                } label: {
+                    SettingsDisclosureLabel { Text("Skip marker settings") }
+                        .settingsFormRowLayout()
+                }
+                .buttonStyle(SettingsFormButtonStyle())
+                .accessibilityIdentifier("skip-marker-settings")
             }
         }
         #else
-        SettingsSectionGroup("Skip intros, credits & more") {
+        SettingsSectionGroup {
             SkipMarkerEnableControl(model: model)
             if model.settings.skipMarkersEnabled {
-                SkipMarkerConfiguration(model: model)
+                Button(action: onOpenSettings) {
+                    SettingsDisclosureLabel { Text("Skip marker settings") }
+                }
+                .accessibilityIdentifier("skip-marker-settings")
             }
         }
         #endif
@@ -33,7 +51,7 @@ private struct SkipMarkerEnableControl: View {
     @Bindable var model: PlaybackSettingsModel
 
     var body: some View {
-        Toggle("Enable skipping", isOn: Binding(
+        Toggle("Skip markers", isOn: Binding(
             get: { model.settings.skipMarkersEnabled },
             set: { model.settings.setSkipMarkersEnabled($0) }
         ))
@@ -41,45 +59,85 @@ private struct SkipMarkerEnableControl: View {
     }
 }
 
-private struct SkipMarkerConfiguration: View {
-    @Bindable var model: PlaybackSettingsModel
+public struct SkipMarkerSettingsView: View {
+    @Bindable private var model: PlaybackSettingsModel
 
-    var body: some View {
-        SettingsControlRows(nonTVSpacing: 20) {
-            if model.settings.skipModeOverrides.isEmpty {
-                SkipMarkerRuleControls(model: model, kind: nil)
+    public init(model: PlaybackSettingsModel) {
+        self.model = model
+    }
+
+    public var body: some View {
+        #if os(tvOS)
+        SettingsFormLayout(title: Text("Skip marker settings"), rows: rows, showsBack: true)
+        #else
+        List {
+            SettingsSectionGroup("Enable for") {
+                SkipMarkerContentControls(model: model)
             }
-            SettingsDetailGroup(title: "Enable for") {
-                ForEach([ContentCategory.movie, .tvShow, .anime], id: \.self) { category in
-                    Toggle(isOn: Binding(
-                        get: { model.settings.skipContentCategories.contains(category) },
-                        set: { enabled in
-                            if enabled { model.settings.skipContentCategories.insert(category) }
-                            else { model.settings.skipContentCategories.remove(category) }
-                        }
-                    )) {
-                        Text(category.displayName)
-                    }
-                    .accessibilityIdentifier("skip-content-\(category.rawValue)")
-                }
-            }
-            Toggle("Set each marker separately", isOn: Binding(
-                get: { !model.settings.skipModeOverrides.isEmpty },
-                set: { model.settings.setSkipMarkersSeparately($0) }
-            ))
-            .accessibilityIdentifier("skip-markers-separately")
-            if !model.settings.skipModeOverrides.isEmpty {
-                ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
+            ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
+                SettingsSectionGroup {
                     SkipMarkerRuleControls(model: model, kind: kind)
                 }
             }
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Use community markers", isOn: $model.settings.useCommunityMarkers)
-                    .accessibilityIdentifier("skip-community-markers")
-                Text("From IntroDB and TheIntroDB when your server has none. Shares IMDb/TMDB IDs.")
-                    .settingsHelperText()
-                    .fixedSize(horizontal: false, vertical: true)
+            SettingsSectionGroup {
+                SkipMarkerCommunityControl(model: model)
             }
+        }
+        .settingsPageSurface()
+        .navigationTitle("Skip marker settings")
+        #endif
+    }
+
+    #if os(tvOS)
+    private var rows: [SettingsSplitRow] {
+        [
+            SettingsSplitRow(id: "skip-content", title: "Enable for") {
+                SettingsControlRows {
+                    SkipMarkerContentControls(model: model)
+                }
+            }
+        ] + MediaSegment.Kind.skippable.map { kind in
+            SettingsSplitRow(id: "skip-\(kind.rawValue)", title: kind.settingsTitle) {
+                SkipMarkerRuleControls(model: model, kind: kind)
+            }.labeledControl()
+        } + [
+            SettingsSplitRow(id: "skip-community", title: "Use community markers") {
+                SkipMarkerCommunityControl(model: model)
+            }.labeledControl()
+        ]
+    }
+    #endif
+}
+
+private struct SkipMarkerContentControls: View {
+    @Bindable var model: PlaybackSettingsModel
+
+    var body: some View {
+        ForEach([ContentCategory.movie, .tvShow, .anime], id: \.self) { category in
+            Toggle(isOn: Binding(
+                get: { model.settings.skipContentCategories.contains(category) },
+                set: { enabled in
+                    if enabled { model.settings.skipContentCategories.insert(category) }
+                    else { model.settings.skipContentCategories.remove(category) }
+                }
+            )) {
+                Text(category.displayName)
+            }
+            .accessibilityIdentifier("skip-content-\(category.rawValue)")
+        }
+    }
+}
+
+private struct SkipMarkerCommunityControl: View {
+    @Bindable var model: PlaybackSettingsModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Use community markers", isOn: $model.settings.useCommunityMarkers)
+                .accessibilityIdentifier("skip-community-markers")
+            Text("From IntroDB and TheIntroDB when your server has none. Shares IMDb/TMDB IDs.")
+                .settingsHelperText()
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -98,11 +156,11 @@ private enum SkipBehavior: CaseIterable, Hashable {
 
 private struct SkipMarkerRuleControls: View {
     @Bindable var model: PlaybackSettingsModel
-    let kind: MediaSegment.Kind?
+    let kind: MediaSegment.Kind
     @Environment(\.locale) private var locale
 
-    private var title: LocalizedStringResource { kind?.settingsTitle ?? "Behavior" }
-    private var identifier: String { kind?.rawValue ?? "all" }
+    private var title: LocalizedStringResource { kind.settingsTitle }
+    private var identifier: String { kind.rawValue }
     private var behavior: Binding<SkipBehavior> {
         Binding(
             get: {
@@ -130,11 +188,11 @@ private struct SkipMarkerRuleControls: View {
         SettingsControlRows(nonTVSpacing: 12) {
             #if os(tvOS)
             SettingsMenuRow(title: title, value: Text(behavior.wrappedValue.title)) {
-                SkipBehaviorPicker(title: title, allowsOff: kind != nil, selection: behavior)
+                SkipBehaviorPicker(title: title, selection: behavior)
             }
             .accessibilityIdentifier("skip-behavior-\(identifier)")
             #else
-            SkipBehaviorPicker(title: title, allowsOff: kind != nil, selection: behavior)
+            SkipBehaviorPicker(title: title, selection: behavior)
                 .accessibilityIdentifier("skip-behavior-\(identifier)")
             #endif
             if behavior.wrappedValue == .automatic {
@@ -170,12 +228,11 @@ private struct SkipMarkerRuleControls: View {
 
 private struct SkipBehaviorPicker: View {
     let title: LocalizedStringResource
-    let allowsOff: Bool
     @Binding var selection: SkipBehavior
 
     var body: some View {
         Picker(selection: $selection) {
-            ForEach(SkipBehavior.allCases.filter { allowsOff || $0 != .off }, id: \.self) { behavior in
+            ForEach(SkipBehavior.allCases, id: \.self) { behavior in
                 Text(behavior.title).tag(behavior)
             }
         } label: {
