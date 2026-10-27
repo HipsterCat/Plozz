@@ -9,7 +9,7 @@ import XCTest
 
 @MainActor
 final class TopBarPresentationHostedTests: XCTestCase {
-    func testRapidNativeFocusCoalescesPagesAndCancelsPrunedDestinations() async throws {
+    func testRapidAndSettledNativeFocusNeverChangesTheOpenPage() async throws {
         let (window, previous) = try await makeWindow()
         let model = Model()
         model.destinations = [.home, .watchlist, .liveTV, .search]
@@ -43,15 +43,18 @@ final class TopBarPresentationHostedTests: XCTestCase {
             XCTAssertEqual(model.selection, .home, "Rapid movement must not construct intermediate pages.")
         }
         XCTAssertEqual(model.contentBuilds, builds, "Bar-only focus updates must not rebuild page closures.")
-        try await waitForPage(.search, model: model, window: window)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(model.selection, .home, "Settled focus must not open the highlighted page.")
+        XCTAssertEqual(model.contentBuilds, builds)
+        XCTAssertNil(model.buttons[.search])
         XCTAssertNil(model.buttons[.watchlist])
         XCTAssertNil(model.buttons[.liveTV])
         try focus(1)
         try await Task.sleep(for: .milliseconds(20))
         model.destinations.removeAll { $0 == .watchlist }
         try await Task.sleep(for: .milliseconds(250))
-        XCTAssertTrue(model.destinations.contains(model.selection), "Native focus may settle on another remaining item.")
-        XCTAssertNil(model.buttons[.watchlist], "A removed destination must never construct its delayed preview.")
+        XCTAssertEqual(model.selection, .home, "Removing a highlighted item must not change the open page.")
+        XCTAssertNil(model.buttons[.watchlist])
     }
 
     func testLiftedSettingsMovementPersistsOnlyAfterAnActualStep() async throws {

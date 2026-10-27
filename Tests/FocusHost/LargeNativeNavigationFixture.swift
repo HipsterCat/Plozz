@@ -155,6 +155,7 @@ struct LargeNativeNavigationFixture: View {
                     }
                 }
                     .accessibilityIdentifier("large-navigation-content")
+                    .accessibilityValue(Text(verbatim: destination.storageValue))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Color.clear
@@ -166,8 +167,10 @@ struct LargeNativeNavigationFixture: View {
         }
         .reportsNavigationDepth(showsDetail ? 1 : 0, to: chrome)
         .overlay(alignment: .bottom) {
-            Text(verbatim: destination.storageValue)
-                .accessibilityIdentifier("large-navigation-selection")
+            if selectionBinding.wrappedValue == destination {
+                Text(verbatim: destination.storageValue)
+                    .accessibilityIdentifier("large-navigation-selection")
+            }
         }
         .background {
             if tracesTransitions {

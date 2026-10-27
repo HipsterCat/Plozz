@@ -17,11 +17,17 @@ final class ProductionHomeNavigationTests: XCTestCase {
         captureNavigation("Compact navigation over Home", app: app)
         XCUIRemote.shared.press(.right)
         let title = app.staticTexts["watchlist-title"]
+        XCTAssertFalse(title.exists, "Highlighting Watchlist must leave Home open.")
+        XCUIRemote.shared.press(.select)
         XCTAssertTrue(title.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertGreaterThanOrEqual(title.frame.minY, bar.frame.maxY + 16)
         let first = app.buttons["Fixture movie 0"]
         XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertGreaterThanOrEqual(first.frame.minY, bar.frame.maxY + 16)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in first.hasFocus }, object: nil
+        )], timeout: 5), .completed, app.debugDescription)
+        XCUIRemote.shared.press(.menu)
         XCTAssertTrue(app.buttons["top-navigation-watchlist"].hasFocus)
         captureNavigation("Watchlist foreground clears navigation", app: app)
         XCUIRemote.shared.press(.down)
@@ -35,9 +41,13 @@ final class ProductionHomeNavigationTests: XCTestCase {
         captureNavigation("Watchlist navigation after scrolling", app: app)
         XCUIRemote.shared.press(.right)
         let search = app.searchFields.firstMatch
+        XCTAssertFalse(search.exists, "Highlighting Search must leave Watchlist open.")
+        XCUIRemote.shared.press(.select)
         XCTAssertTrue(search.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertGreaterThanOrEqual(search.frame.minY.rounded(), bar.frame.maxY + 16)
-        XCTAssertTrue(app.buttons["top-navigation-search"].hasFocus)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in !app.buttons["top-navigation-search"].hasFocus }, object: nil
+        )], timeout: 5), .completed, app.debugDescription)
         captureNavigation("Search foreground clears navigation", app: app)
         #else
         throw XCTSkip("Uses an owned simulator with local fixture data.")

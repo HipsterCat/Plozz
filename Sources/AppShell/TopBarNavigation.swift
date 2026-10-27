@@ -77,7 +77,6 @@ private struct TopBarNavigationContent: View {
     @State private var contentGeneration: UInt64 = 0
     @State private var returnFocus = NavigationContentFocusRequester.ReturnFocus()
     @State private var destinationFocus = NavigationDestinationFocusHandoff()
-    @State private var preview = TopBarNavigationPreview()
     @Environment(\.isEnabled) private var isEnabled
     private var contentInsets: EdgeInsets {
         EdgeInsets(
@@ -121,8 +120,8 @@ private struct TopBarNavigationContent: View {
                 isNavigating: isNavigating, isShellActive: isShellActive,
                 focusScope: focusScope,
                 navigationRequest: navigationRequest,
-                onFocus: previewDestination, onEnter: enterContent,
-                onFocusPresenceChanged: { navigationHasFocus = $0 },
+                onEnter: enterContent,
+                onFocusPresenceChanged: navigationFocusChanged,
                 onNavigationFocused: { request in
                     if navigationRequest == request { navigationRequest = nil }
                 },
@@ -153,29 +152,24 @@ private struct TopBarNavigationContent: View {
             if active {
                 openNavigation()
             } else {
-                cancelPreview()
                 navigationRequest = nil
                 contentRequest = nil
                 destinationFocus.cancel()
             }
         }
         .onChange(of: current) { _, _ in
-            cancelPreview()
             chrome.resetForDestinationChange()
             if destinationFocus.request?.destination != current { destinationFocus.cancel() }
             contentRequest = nil
             returnFocus.clear()
         }
-        .onChange(of: destinations) { _, _ in cancelPreview() }
         .onChange(of: profile?.id) { _, _ in
-            cancelPreview()
             returnFocus.clear()
             destinationFocus.cancel()
             contentRequest = nil
         }
         .onChange(of: chrome.isChromeHidden) { _, hidden in
             if hidden {
-                cancelPreview()
                 navigationRequest = nil
                 contentRequest = nil
                 destinationFocus.cancel()
@@ -183,7 +177,6 @@ private struct TopBarNavigationContent: View {
             }
         }
         .onDisappear {
-            cancelPreview()
             navigationRequest = nil
             contentRequest = nil
             destinationFocus.cancel()
@@ -211,30 +204,16 @@ private struct TopBarNavigationContent: View {
         }
     }
 
-    private func cancelPreview() {
-        preview.task?.cancel()
-        preview.task = nil
-    }
-
-    private func previewDestination(_ destination: NavigationRailDestination?) {
-        guard isShellActive else { return }
-        cancelPreview()
+    private func navigationFocusChanged(_ hasFocus: Bool) {
+        navigationHasFocus = hasFocus
+        guard hasFocus, isShellActive else { return }
         isNavigating = true
         contentRequest = nil
         destinationFocus.cancel()
-        guard let destination, destination != .settings, destination != selection else { return }
-        // Focus moves immediately. Only settled destinations construct their page.
-        preview.task = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled, isShellActive, !chrome.isChromeHidden,
-                  destinations.contains(destination) else { return }
-            selection = destination
-        }
     }
 
     private func openNavigation() {
         guard isShellActive, !chrome.isChromeHidden, !chrome.transitionSuppressesFocus else { return }
-        cancelPreview()
         returnFocus.capture()
         contentRequest = nil
         destinationFocus.cancel()
@@ -243,10 +222,8 @@ private struct TopBarNavigationContent: View {
         navigationRequest = navigationGeneration
     }
 
-    private func enterContent(_ destination: NavigationRailDestination?) {
+    private func enterContent(_ destination: NavigationRailDestination) {
         guard isShellActive, isNavigating, !chrome.transitionSuppressesFocus else { return }
-        cancelPreview()
-        let destination = destination ?? current
         if destination == .settings {
             selection = .settings
             return
@@ -270,12 +247,6 @@ private struct TopBarNavigationContent: View {
     }
 }
 
-// Scheduling is not presentation state: changing it must not rebuild page content.
-private final class TopBarNavigationPreview {
-    var task: Task<Void, Never>?
-    deinit { task?.cancel() }
-}
-
 private struct TopBarNavigationBar: View {
     let destinations: [NavigationRailDestination]
     let current: NavigationRailDestination
@@ -286,8 +257,7 @@ private struct TopBarNavigationBar: View {
     let isShellActive: Bool
     let focusScope: Namespace.ID
     let navigationRequest: Int?
-    let onFocus: (NavigationRailDestination?) -> Void
-    let onEnter: (NavigationRailDestination?) -> Void
+    let onEnter: (NavigationRailDestination) -> Void
     let onFocusPresenceChanged: (Bool) -> Void
     let onNavigationFocused: (Int) -> Void
     let label: (NavigationRailDestination) -> AnyView
@@ -379,18 +349,8 @@ private struct TopBarNavigationBar: View {
         )
         .focusSection()
         .onMoveCommand { direction in
-            if direction == .down, let focused {
-                switch focused {
-                case .profile: onEnter(current)
-                case let .destination(destination): onEnter(destination)
-                }
-            }
-        }
-        .onChange(of: focused) { _, target in
-            guard isShellActive, let target else { return }
-            switch target {
-            case .profile: onFocus(nil)
-            case let .destination(destination): onFocus(destination)
+            if direction == .down, focused != nil {
+                onEnter(current)
             }
         }
         .onChange(of: focused != nil, initial: true) { _, value in

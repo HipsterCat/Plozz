@@ -219,16 +219,15 @@ right unless explicitly moved or hidden in the profile's arranger. Moving other
 items does not unpin it; Reset restores its default position. Settings also remains
 reachable through the picker's upper-right cog. Both vertical styles are unchanged.
 
-Horizontal focus moves immediately, independently of page construction. A
-180 ms settled focus previews the page without native tab transitions or
-automatic content entry. Down/Select cancels that delay and enters the focused
-destination, never a stale preview. Profile/Settings focus, profile changes,
-destination pruning, and shell deactivation cancel pending previews.
+Horizontal focus moves immediately without changing or constructing pages,
+including after resting on a destination. Select opens the highlighted page and
+enters its content. Down enters the already-open page, not an unselected
+highlighted destination. There are no delayed page previews or native tab transitions.
 Only the selected page and the visited Live TV guide
 are mounted; walking twenty libraries must not retain twenty inactive grids.
 The guide retains its filters while inactive playback is stopped. Account-qualified
-destination IDs keep same-named libraries distinct. Down or Select enters the
-presented content through the existing shared focus owner; Back returns to the
+destination IDs keep same-named libraries distinct. Content entry waits for
+presentation through the existing shared focus owner; Back returns to the
 selected navigation item. Detail pages hide the strip through `NavigationChromeModel`.
 While Settings owns the shell, hidden navigation cancels focus handoffs and
 cannot overwrite the selected Settings destination.
