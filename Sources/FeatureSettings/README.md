@@ -197,14 +197,16 @@ without an enclosing card or changing the independent settings.
 
 **Skip intros, credits & more** uses one profile-scoped master switch on the
 Playback page on both platforms. Enabling it reveals **Customize**, which opens
-**Intros, credits & more** for content selections, marker pages, and community markers.
-Each marker page always shows Movies, TV Shows, and Anime, with independent
-behavior and timing for each. There is no separate opt-in for per-marker or
-per-content controls.
+**Intros, credits & more**. Its first control, **Default behavior**, applies to
+every marker and content type without an exception: Show skip button, Skip
+instantly, or Skip after. Existing Off defaults remain visible until changed.
+Each marker page always shows Movies, TV Shows, and Anime. **Use default** follows
+the shared behavior and timing, with a short summary of the effective default.
+An explicit Off, Show skip button, Skip instantly, or Skip after choice overrides
+only that marker/content pair. There is no separate opt-in for exceptions.
 Turning skipping off hides the link without clearing any saved choices.
-Each content type chooses Off, a manual skip button or automatic skipping; only
-automatic behavior reveals **Skip after**, from Immediately through 30 seconds
-in one-second steps.
+Only an explicit **Skip after** choice reveals a timer, from 1 through 30 seconds
+in one-second steps. Instant skipping is a direct choice, not a zero-second timer.
 The default delayed skip remains five seconds. Movies, TV Shows, and Anime can
 be enabled independently, using the existing audio/subtitle content classifier.
 Disabling a category disables its controls on every marker page with a short
@@ -212,8 +214,11 @@ explanation, preserving all of its choices. It suppresses skip prompts and
 automatic skips, not the independent Up Next or autoplay preferences.
 Advanced per-marker choices retain
 independent Off/manual/automatic behavior and timing. Existing saved modes,
-including mixed immediate/delayed marker overrides, remain the fallback for each
-content type until that specific rule is edited. Movies and episodes classified
+including mixed immediate/delayed marker overrides, remain explicit exceptions.
+Choosing **Use default** removes only the selected content rule; legacy per-marker
+exceptions are preserved for the other categories. Changing the shared default
+never overwrites exceptions, even if an exception currently matches the default.
+Movies and episodes classified
 as anime use the anime rules on either server provider. The new rules remain
 profile-scoped and travel through settings transfer. Community-marker attribution
 and identifier sharing appear as a short caption attached to its switch, without
@@ -623,8 +628,8 @@ watch history and planning-list behavior are documented in
   Playback groups
   audio, autoplay/Up Next, marker skipping, seeking and display fades.
   **Skip intros, credits & more** has one inline toggle and a conditional **Customize**
-  link. That page contains community markers and one page per marker with
-  independent Movies, TV Shows, and Anime behavior and timing.
+  link. That page contains the shared default, community markers, and one page
+  per marker with Movies, TV Shows, and Anime exceptions or **Use default**.
   Subtitles is its own profile category for mode, the shared/Live TV style
   editors, language, downloading and per-series memory; downloading still
   follows the active profile's provider capabilities.

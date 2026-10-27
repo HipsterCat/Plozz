@@ -364,7 +364,9 @@ Skip behavior resolves the profile's master enablement and Movies/TV Shows/Anime
 selection through the same content classifier used for audio and subtitles.
 Each marker can override behavior and timing independently for those three
 content types; anime films and episodes both use the anime rules. Unedited
-content rules inherit the profile's existing per-marker or base choices.
+content rules inherit the profile's shared default; saved legacy per-marker
+choices remain exceptions. **Use default** removes a selected exception without
+changing other content rules, so subsequent shared-default edits reach it again.
 Disabled categories do not present skip buttons, skip automatically, or request
 community markers. Server markers can still load for the independently enabled
 Up Next card. Each automatic marker uses its configured immediate or 1–30-second

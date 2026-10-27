@@ -72,6 +72,9 @@ public struct SkipMarkerSettingsView: View {
         SettingsFormLayout(title: Text("Intros, credits & more"), rows: rows, showsBack: true)
         #else
         List {
+            SettingsSectionGroup {
+                SkipMarkerRuleControls(model: model, scope: .defaultBehavior)
+            }
             SettingsSectionGroup("Enable for") {
                 SkipMarkerContentControls(model: model)
             }
@@ -98,6 +101,9 @@ public struct SkipMarkerSettingsView: View {
     #if os(tvOS)
     private var rows: [SettingsSplitRow] {
         [
+            SettingsSplitRow(id: "skip-default", title: "Default behavior") {
+                SkipMarkerRuleControls(model: model, scope: .defaultBehavior)
+            }.labeledControl(),
             SettingsSplitRow(id: "skip-content", title: "Enable for") {
                 SettingsControlRows {
                     SkipMarkerContentControls(model: model)
@@ -161,7 +167,7 @@ public struct SkipMarkerContentSettingsView: View {
 
     private func controls(for category: ContentCategory) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            SkipMarkerRuleControls(model: model, kind: kind, category: category)
+            SkipMarkerRuleControls(model: model, scope: .content(kind, category))
                 .disabled(!model.settings.skipContentCategories.contains(category))
             if !model.settings.skipContentCategories.contains(category) {
                 Text("Disabled on the previous page.")
@@ -205,46 +211,123 @@ private struct SkipMarkerCommunityControl: View {
     }
 }
 
-private enum SkipBehavior: CaseIterable, Hashable {
-    case off, manual, automatic
+enum SkipBehavior: CaseIterable, Hashable {
+    case useDefault, off, manual, instant, delayed
 
     var title: LocalizedStringResource {
         switch self {
+        case .useDefault: "Use default"
         case .off: "Off"
         case .manual: "Show skip button"
-        case .automatic: "Skip automatically"
+        case .instant: "Skip instantly"
+        case .delayed: "Skip after"
+        }
+    }
+
+    init(mode: SkipIntrosMode, delay: Int) {
+        switch mode {
+        case .off: self = .off
+        case .on: self = .manual
+        case .autoInstant: self = .instant
+        case .autoDelay: self = delay == 0 ? .instant : .delayed
         }
     }
 }
 
-private struct SkipMarkerRuleControls: View {
+struct SkipMarkerRuleControls: View {
+    enum Scope {
+        case defaultBehavior
+        case content(MediaSegment.Kind, ContentCategory)
+    }
+
     @Bindable var model: PlaybackSettingsModel
-    let kind: MediaSegment.Kind
-    let category: ContentCategory
+    let scope: Scope
     @Environment(\.locale) private var locale
 
-    private var title: LocalizedStringResource { category.displayName }
-    private var identifier: String { "\(kind.rawValue)-\(category.rawValue)" }
-    private var behavior: Binding<SkipBehavior> {
+    private var title: LocalizedStringResource {
+        switch scope {
+        case .defaultBehavior: "Default behavior"
+        case .content(_, let category): category.displayName
+        }
+    }
+    private var identifier: String {
+        switch scope {
+        case .defaultBehavior: "default"
+        case .content(let kind, let category): "\(kind.rawValue)-\(category.rawValue)"
+        }
+    }
+    var behaviors: [SkipBehavior] {
+        switch scope {
+        case .defaultBehavior:
+            model.settings.skipIntros == .off ? [.off, .manual, .instant, .delayed] : [.manual, .instant, .delayed]
+        case .content: SkipBehavior.allCases
+        }
+    }
+    var behavior: Binding<SkipBehavior> {
         Binding(
             get: {
-                let mode = model.settings.configuredSkipMode(for: kind, category: category)
-                return mode == .off ? .off : mode.isAutomatic ? .automatic : .manual
+                switch scope {
+                case .defaultBehavior:
+                    return SkipBehavior(mode: model.settings.skipIntros, delay: model.settings.configuredSkipDelay())
+                case .content(let kind, let category):
+                    if model.settings.usesDefaultSkipRule(for: kind, category: category) { return .useDefault }
+                    return SkipBehavior(
+                        mode: model.settings.configuredSkipMode(for: kind, category: category),
+                        delay: model.settings.configuredSkipDelay(for: kind, category: category)
+                    )
+                }
             },
             set: { value in
+                var settings = model.settings
+                if value == .useDefault {
+                    if case .content(let kind, let category) = scope {
+                        settings.useDefaultSkipRule(for: kind, category: category)
+                    } else {
+                        preconditionFailure("Only content rules can use the shared default")
+                    }
+                    model.settings = settings
+                    return
+                }
                 let mode: SkipIntrosMode = switch value {
                 case .off: .off
                 case .manual: .on
-                case .automatic: model.settings.configuredSkipDelay(for: kind, category: category) == 0 ? .autoInstant : .autoDelay
+                case .instant: .autoInstant
+                case .delayed: .autoDelay
+                case .useDefault: preconditionFailure("Handled above")
                 }
-                model.settings.setConfiguredSkipMode(mode, for: kind, category: category)
+                switch scope {
+                case .defaultBehavior:
+                    if value == .delayed, settings.configuredSkipDelay() == 0 {
+                        settings.setSkipAutomaticDelay(PlaybackSettings.default.skipAutomaticDelaySeconds)
+                    }
+                    settings.setConfiguredSkipMode(mode)
+                case .content(let kind, let category):
+                    if value == .delayed, settings.configuredSkipDelay(for: kind, category: category) == 0 {
+                        settings.setSkipAutomaticDelay(
+                            PlaybackSettings.default.skipAutomaticDelaySeconds, for: kind, category: category
+                        )
+                    }
+                    settings.setConfiguredSkipMode(mode, for: kind, category: category)
+                }
+                model.settings = settings
             }
         )
     }
     private var delay: Binding<Int> {
         Binding(
-            get: { model.settings.configuredSkipDelay(for: kind, category: category) },
-            set: { model.settings.setSkipAutomaticDelay($0, for: kind, category: category) }
+            get: {
+                switch scope {
+                case .defaultBehavior: model.settings.configuredSkipDelay()
+                case .content(let kind, let category): model.settings.configuredSkipDelay(for: kind, category: category)
+                }
+            },
+            set: { seconds in
+                switch scope {
+                case .defaultBehavior: model.settings.setSkipAutomaticDelay(seconds)
+                case .content(let kind, let category):
+                    model.settings.setSkipAutomaticDelay(seconds, for: kind, category: category)
+                }
+            }
         )
     }
 
@@ -252,33 +335,32 @@ private struct SkipMarkerRuleControls: View {
         SettingsControlRows(nonTVSpacing: 12) {
             #if os(tvOS)
             SettingsMenuRow(title: title, value: Text(behavior.wrappedValue.title)) {
-                SkipBehaviorPicker(title: title, selection: behavior)
+                SkipBehaviorPicker(title: title, behaviors: behaviors, selection: behavior)
             }
             .accessibilityIdentifier("skip-behavior-\(identifier)")
             #else
-            SkipBehaviorPicker(title: title, selection: behavior)
+            SkipBehaviorPicker(title: title, behaviors: behaviors, selection: behavior)
                 .accessibilityIdentifier("skip-behavior-\(identifier)")
             #endif
-            if behavior.wrappedValue == .automatic {
+            if behavior.wrappedValue == .useDefault {
+                Text("Default: \(defaultSummary)")
+                    .settingsHelperText()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if behavior.wrappedValue == .delayed {
                 #if os(tvOS)
                 SettingsStepper(
-                    options: PlaybackSettings.skipAutomaticDelayOptions,
+                    options: PlaybackSettings.skipAutomaticDelayOptions.filter { $0 > 0 },
                     selection: delay, label: "Skip after",
                     textTitle: { seconds in
-                        seconds == 0
-                            ? Text("Immediately")
-                            : Text(Duration.seconds(seconds), format: .units(allowed: [.seconds], width: .wide).locale(locale))
+                        Text(Duration.seconds(seconds), format: .units(allowed: [.seconds], width: .wide).locale(locale))
                     }
                 )
                 .accessibilityIdentifier("skip-delay-\(identifier)")
                 #else
-                Stepper(value: delay, in: 0...30) {
+                Stepper(value: delay, in: 1...30) {
                     LabeledContent {
-                        if delay.wrappedValue == 0 {
-                            Text("Immediately")
-                        } else {
-                            Text(Duration.seconds(delay.wrappedValue), format: .units(allowed: [.seconds], width: .wide))
-                        }
+                        Text(Duration.seconds(delay.wrappedValue), format: .units(allowed: [.seconds], width: .wide))
                     } label: {
                         Text("Skip after")
                     }
@@ -288,15 +370,25 @@ private struct SkipMarkerRuleControls: View {
             }
         }
     }
+
+    private var defaultSummary: Text {
+        let seconds = model.settings.configuredSkipDelay()
+        let behavior = SkipBehavior(mode: model.settings.skipIntros, delay: seconds)
+        if behavior == .delayed {
+            return Text("Skip after \(Text(Duration.seconds(seconds), format: .units(allowed: [.seconds], width: .wide).locale(locale)))")
+        }
+        return Text(behavior.title)
+    }
 }
 
 private struct SkipBehaviorPicker: View {
     let title: LocalizedStringResource
+    let behaviors: [SkipBehavior]
     @Binding var selection: SkipBehavior
 
     var body: some View {
         Picker(selection: $selection) {
-            ForEach(SkipBehavior.allCases, id: \.self) { behavior in
+            ForEach(behaviors, id: \.self) { behavior in
                 Text(behavior.title).tag(behavior)
             }
         } label: {

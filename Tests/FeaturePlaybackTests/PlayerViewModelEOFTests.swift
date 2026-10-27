@@ -199,6 +199,46 @@ final class PlayerViewModelEOFTests: XCTestCase {
         await viewModel.stop()
     }
 
+    func testSharedInstantDefaultAndAnimeExceptionReachPlaybackOnBothProviders() async {
+        let fixtures: [(MediaItem, Bool)] = [
+            (.init(id: "movie", title: "Movie", kind: .movie), false),
+            (.init(id: "episode", title: "Episode", kind: .episode), false),
+            (.init(id: "anime", title: "Anime", kind: .episode, providerIDs: ["AniList": "100"]), true),
+            (.init(id: "anime-film", title: "Anime film", kind: .movie, genres: ["Anime"]), true)
+        ]
+        var settings = PlaybackSettings(useCommunityMarkers: false, showUpNextCard: false)
+        settings.setConfiguredSkipMode(.autoInstant)
+        settings.setConfiguredSkipMode(.on, for: .intro, category: .anime)
+        for inherits in [false, true] {
+            if inherits { settings.useDefaultSkipRule(for: .intro, category: .anime) }
+            for providerKind in [ProviderKind.jellyfin, .plex] {
+                for (item, anime) in fixtures {
+                    let provider = RecordingPlaybackProvider(
+                        request: .init(item: item, streamURL: URL(string: "https://fixture.invalid/video.mp4")!),
+                        kind: providerKind, segments: [
+                            .init(id: "intro", kind: .intro, start: 10, end: 70),
+                            .init(id: "credits", kind: .credits, start: 100, end: 170)
+                        ]
+                    )
+                    let engine = SpyVideoEngine()
+                    let model = PlayerViewModel(
+                        provider: provider, itemID: item.id, playbackSettings: settings,
+                        engineFactory: .init(makeNative: { _ in engine })
+                    )
+                    await model.load()
+                    for _ in 0..<1_000 where model.controls.skipSegments.segments.isEmpty { await Task.yield() }
+                    XCTAssertEqual(model.controls.skipSegments.segments.count, 2)
+                    model.controls.currentSeconds = 20
+                    XCTAssertEqual(model.controls.skipMode, anime && !inherits ? .on : .autoInstant)
+                    XCTAssertEqual(model.controls.automaticSkipDelay, 0)
+                    model.controls.currentSeconds = 120
+                    XCTAssertEqual(model.controls.skipMode, .autoInstant)
+                    await model.stop()
+                }
+            }
+        }
+    }
+
     func testAutomaticSkipAndCreditsCountdownUseTheirOwnConfiguredDurations() {
         let controls = PlayerControlsModel()
         controls.skipModes = SkipMarkerModes(

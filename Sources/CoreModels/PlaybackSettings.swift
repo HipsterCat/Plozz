@@ -320,6 +320,31 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         return skipMarkerRules[category]?[kind]?.automaticDelaySeconds ?? configuredSkipDelay(for: kind)
     }
 
+    public func usesDefaultSkipRule(for kind: MediaSegment.Kind, category: ContentCategory) -> Bool {
+        skipMarkerRules[category]?[kind] == nil
+            && skipModeOverrides[kind] == nil
+            && skipAutomaticDelayOverrides[kind] == nil
+    }
+
+    public mutating func useDefaultSkipRule(for kind: MediaSegment.Kind, category: ContentCategory) {
+        // A legacy per-kind exception covers every category. Preserve its siblings
+        // as content rules before removing it for just this category.
+        if skipModeOverrides[kind] != nil || skipAutomaticDelayOverrides[kind] != nil {
+            for other in ContentCategory.allCases where other != category && skipMarkerRules[other]?[kind] == nil {
+                skipMarkerRules[other, default: [:]][kind] = SkipMarkerRule(
+                    mode: configuredSkipMode(for: kind),
+                    automaticDelaySeconds: configuredSkipDelay(for: kind)
+                )
+            }
+            skipModeOverrides.removeValue(forKey: kind)
+            skipAutomaticDelayOverrides.removeValue(forKey: kind)
+        }
+        skipMarkerRules[category]?.removeValue(forKey: kind)
+        if skipMarkerRules[category]?.isEmpty == true {
+            skipMarkerRules.removeValue(forKey: category)
+        }
+    }
+
     public mutating func setConfiguredSkipMode(
         _ mode: SkipIntrosMode, for kind: MediaSegment.Kind, category: ContentCategory
     ) {

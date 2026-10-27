@@ -185,6 +185,106 @@ final class SkipMarkerSettingsTests: XCTestCase {
         XCTAssertEqual(settings, original)
     }
 
+    func testSharedDefaultReachesEveryMarkerExceptExplicitContentChoices() throws {
+        var settings = PlaybackSettings()
+        settings.setConfiguredSkipMode(.autoInstant)
+        settings.setConfiguredSkipMode(.on, for: .intro, category: .anime)
+        for category in ContentCategory.allCases {
+            for kind in MediaSegment.Kind.skippable {
+                let exception = category == .anime && kind == .intro
+                XCTAssertEqual(settings.usesDefaultSkipRule(for: kind, category: category), !exception)
+                XCTAssertEqual(settings.skipMarkerModes(for: category).mode(for: kind), exception ? .on : .autoInstant)
+                XCTAssertEqual(settings.skipMarkerModes(for: category).delay(for: kind), 0)
+            }
+        }
+        settings.setSkipAutomaticDelay(13)
+        settings = try JSONDecoder().decode(PlaybackSettings.self, from: JSONEncoder().encode(settings))
+        for category in ContentCategory.allCases {
+            for kind in MediaSegment.Kind.skippable {
+                let exception = category == .anime && kind == .intro
+                XCTAssertEqual(settings.skipMarkerModes(for: category).mode(for: kind), exception ? .on : .autoDelay)
+                XCTAssertEqual(settings.skipMarkerModes(for: category).delay(for: kind), exception ? 0 : 13)
+            }
+        }
+        settings.useDefaultSkipRule(for: .intro, category: .anime)
+        XCTAssertTrue(settings.skipMarkerRules.isEmpty)
+        XCTAssertTrue(settings.usesDefaultSkipRule(for: .intro, category: .anime))
+        XCTAssertEqual(settings.skipMarkerModes(for: .anime).delay(for: .intro), 13)
+        settings.setConfiguredSkipMode(.autoInstant)
+        XCTAssertEqual(settings.skipMarkerModes(for: .anime).mode(for: .intro), .autoInstant)
+    }
+
+    func testChoosingTheSameValueStillPinsAnExceptionUntilUseDefault() throws {
+        var settings = PlaybackSettings()
+        settings.setConfiguredSkipMode(.on, for: .intro, category: .anime)
+        settings.setConfiguredSkipMode(.autoInstant)
+        XCTAssertEqual(settings.skipMarkerModes(for: .anime).mode(for: .intro), .on)
+        XCTAssertFalse(settings.usesDefaultSkipRule(for: .intro, category: .anime))
+        settings.useDefaultSkipRule(for: .intro, category: .anime)
+        settings = try JSONDecoder().decode(PlaybackSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertTrue(settings.usesDefaultSkipRule(for: .intro, category: .anime))
+        XCTAssertEqual(settings.skipMarkerModes(for: .anime).mode(for: .intro), .autoInstant)
+    }
+
+    func testUseDefaultRemovesOnlyTheSelectedLegacyExceptionAndPreservesAllSiblings() throws {
+        for mode in SkipIntrosMode.allCases {
+            for category in ContentCategory.allCases {
+                var settings = PlaybackSettings(
+                    skipIntros: .autoDelay, skipModeOverrides: [.intro: mode, .credits: .off],
+                    skipContentCategories: [.movie], skipAutomaticDelaySeconds: 12,
+                    skipAutomaticDelayOverrides: [.intro: 21],
+                    skipMarkerRules: [.tvShow: [.intro: .init(mode: .autoDelay, automaticDelaySeconds: 9)]],
+                    useCommunityMarkers: false
+                )
+                let original = settings
+                settings.useDefaultSkipRule(for: .intro, category: category)
+                settings = try JSONDecoder().decode(PlaybackSettings.self, from: JSONEncoder().encode(settings))
+                XCTAssertTrue(settings.usesDefaultSkipRule(for: .intro, category: category))
+                XCTAssertEqual(settings.configuredSkipMode(for: .intro, category: category), .autoDelay)
+                XCTAssertEqual(settings.configuredSkipDelay(for: .intro, category: category), 12)
+                XCTAssertEqual(settings.skipContentCategories, original.skipContentCategories)
+                XCTAssertFalse(settings.useCommunityMarkers)
+                for other in ContentCategory.allCases where other != category {
+                    XCTAssertEqual(
+                        settings.skipMarkerModes(for: other).mode(for: .intro),
+                        original.skipMarkerModes(for: other).mode(for: .intro)
+                    )
+                    XCTAssertEqual(
+                        settings.configuredSkipMode(for: .intro, category: other),
+                        original.configuredSkipMode(for: .intro, category: other)
+                    )
+                    XCTAssertEqual(
+                        settings.configuredSkipDelay(for: .intro, category: other),
+                        original.configuredSkipDelay(for: .intro, category: other)
+                    )
+                }
+                for other in ContentCategory.allCases {
+                    XCTAssertEqual(settings.configuredSkipMode(for: .credits, category: other), .off)
+                }
+                let restored = settings
+                settings.useDefaultSkipRule(for: .intro, category: category)
+                XCTAssertEqual(settings, restored, "Use default is idempotent")
+            }
+        }
+    }
+
+    func testUseDefaultClearsLegacyTimingOnlyExceptionsWithoutChangingDisabledMaster() throws {
+        var settings = PlaybackSettings(
+            skipIntros: .autoDelay, skipMarkersEnabled: false, skipAutomaticDelaySeconds: 7,
+            skipAutomaticDelayOverrides: [.intro: 23]
+        )
+        XCTAssertFalse(settings.usesDefaultSkipRule(for: .intro, category: .movie))
+        settings.useDefaultSkipRule(for: .intro, category: .movie)
+        settings = try JSONDecoder().decode(PlaybackSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertFalse(settings.skipMarkersEnabled)
+        settings.setSkipMarkersEnabled(true)
+        XCTAssertTrue(settings.usesDefaultSkipRule(for: .intro, category: .movie))
+        XCTAssertEqual(settings.skipMarkerModes(for: .movie).delay(for: .intro), 7)
+        for category in [ContentCategory.tvShow, .anime, .other] {
+            XCTAssertEqual(settings.skipMarkerModes(for: category).delay(for: .intro), 23)
+        }
+    }
+
     func testContentRuleDecodingBoundsTimingAndIgnoresUnknownCategoriesAndMarkers() throws {
         let settings = try JSONDecoder().decode(PlaybackSettings.self, from: Data(
             #"{"skipMarkerRules":{"movie":{"intro":{"mode":"autoDelay","automaticDelaySeconds":99},"credits":{"mode":"autoDelay","automaticDelaySeconds":-1},"unknown":{"mode":"off","automaticDelaySeconds":5}},"future":{"intro":{"mode":"off","automaticDelaySeconds":5}}}}"#.utf8
@@ -214,7 +314,7 @@ final class SkipMarkerSettingsTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let first = PlaybackSettingsStore(defaults: defaults, namespace: "first")
         let second = PlaybackSettingsStore(defaults: defaults, namespace: "second")
-        let settings = PlaybackSettings(
+        var settings = PlaybackSettings(
             skipIntros: .autoDelay, skipModeOverrides: [.credits: .autoDelay],
             skipMarkersEnabled: false, skipContentCategories: [.anime],
             skipAutomaticDelaySeconds: 8, skipAutomaticDelayOverrides: [.credits: 21],
@@ -226,6 +326,16 @@ final class SkipMarkerSettingsTests: XCTestCase {
         let snapshot = ProfileSettingsTransfer.capture(namespace: "first", defaults: defaults)
         ProfileSettingsTransfer.apply(snapshot, namespace: "second", defaults: defaults)
         XCTAssertEqual(second.load(), settings)
+        XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
+        settings.useDefaultSkipRule(for: .intro, category: .anime)
+        settings.setConfiguredSkipMode(.autoInstant)
+        first.save(settings)
+        XCTAssertEqual(first.load(), settings)
+        XCTAssertTrue(first.load().usesDefaultSkipRule(for: .intro, category: .anime))
+        let inherited = ProfileSettingsTransfer.capture(namespace: "first", defaults: defaults)
+        ProfileSettingsTransfer.apply(inherited, namespace: "second", defaults: defaults)
+        XCTAssertEqual(second.load(), settings)
+        XCTAssertTrue(second.load().usesDefaultSkipRule(for: .intro, category: .anime))
         XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
     }
 }
