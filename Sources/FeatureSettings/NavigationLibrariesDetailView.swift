@@ -69,9 +69,7 @@ public struct NavigationLibrariesDetailView: View {
         let keys = NavigationRailPlan.customizableKeys(
             visibleLibraries: includesIndividualLibraries ? visible : [], style: navigation.style
         )
-        let automaticallyHiddenDestinations = NavigationRailPlan.automaticallyHiddenLibraryKeys(
-            visibleLibraries: visible, style: navigation.style
-        )
+        let automaticallyHiddenDestinations: Set<String> = []
         #endif
         let available = keys.filter { !excludedKeys.contains($0) }
         let titles = Self.rowsByKey(visible: visible)

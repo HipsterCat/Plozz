@@ -142,14 +142,6 @@ public enum NavigationRailPlan {
         [NavigationLibraryLayout.allLibrariesKey] + browsableLibraries(visibleLibraries).map(\.key)
     }
 
-    /// Keep the horizontal bar compact until the profile explicitly shows a
-    /// library. This is resolved presentation, not a persisted Hide choice.
-    public static func automaticallyHiddenLibraryKeys(
-        visibleLibraries: [AggregatedLibrary], style: NavigationStyle
-    ) -> Set<String> {
-        style == .tabBar ? Set(availableKeys(visibleLibraries: visibleLibraries)) : []
-    }
-
     /// The libraries the rail can offer: everything that is not a music library.
     public static func browsableLibraries(_ libraries: [AggregatedLibrary]) -> [AggregatedLibrary] {
         libraries.filter { !$0.library.isMusic }

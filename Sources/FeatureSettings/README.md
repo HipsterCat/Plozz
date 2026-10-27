@@ -325,6 +325,11 @@ watch history and planning-list behavior are documented in
   Recommended has Default and a separate Continue Watching override; the other
   pages each have one Card labels control. TV focus and mobile value changes
   highlight the affected captions on that page, without a duplicate status table.
+- **App navigation** automatically includes enabled, discovered library shortcuts
+  in every TV navigation style, including Top Bar. Manual hides and ordering stay
+  profile-scoped. Refreshing Libraries also updates the main navigation inventory;
+  unchanged results must not invalidate the navigation chrome during Settings entry.
+  Mobile retains its existing built-in destinations rather than adding library tabs.
   VoiceOver retains the equivalent state description.
   Use default retains the existing inheritance; On/Off remains
   one shared override, explicitly noted as also affecting Home.

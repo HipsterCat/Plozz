@@ -2,6 +2,33 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/065.2",
+      "version": "2026.10.27",
+      "marketingVersion": "2026.10.24",
+      "build": "65.2",
+      "releasedAt": "2026-10-27",
+      "sections": [
+        {
+          "category": "Updated",
+          "items": [
+            {
+              "text": "Libraries now appear automatically in the top navigation bar on Apple TV.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Fixed libraries appearing in Settings but missing from app navigation.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/065.1",
       "version": "2026.10.27",
       "marketingVersion": "2026.10.24",

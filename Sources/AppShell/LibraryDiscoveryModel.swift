@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import CoreModels
 import FeatureHome
+import FeatureSettings
 
 /// Loads the full set of libraries across every active account for the Settings
 /// "Home Libraries" checklist. Lives in the composition root because it drives
@@ -16,6 +17,37 @@ final class LibraryDiscoveryModel {
 
     private let aggregator = HomeAggregator()
     private var loadGeneration = UUID()
+    private var navigationRefreshGeneration = UUID()
+
+    /// Settings and navigation consume the same current-scope answer, without
+    /// making the Settings root observe the detail pages' loading state.
+    func refreshNavigationLibraries(
+        from accounts: [ResolvedAccount],
+        navigation: NavigationStyleSettingsModel,
+        settings: DiscoveredLibrariesStore,
+        changedAccountID: String? = nil,
+        isCurrent: () -> Bool
+    ) async -> Bool {
+        let generation = UUID()
+        navigationRefreshGeneration = generation
+        let accountIDs = Set(accounts.map(\.account.id))
+        settings.beginRefresh(accountIDs: changedAccountID.map { Set([$0]) } ?? accountIDs)
+        await Task.yield()
+        guard !Task.isCancelled, generation == navigationRefreshGeneration, isCurrent() else { return false }
+        let discovered = await aggregator.libraryDiscovery(from: accounts)
+        guard !Task.isCancelled, generation == navigationRefreshGeneration, isCurrent() else { return false }
+        navigation.updateContentLibraries(
+            discovered.libraries, accountIDs: accountIDs,
+            unreachableAccountIDs: discovered.unreachableAccountIDs,
+            failures: discovered.failures
+        )
+        settings.finishRefresh(
+            with: discovered.libraries,
+            unreachableAccountIDs: discovered.unreachableAccountIDs,
+            failures: discovered.failures
+        )
+        return !navigation.contentLibraries.isEmpty || discovered.unreachableAccountIDs.isEmpty
+    }
 
     /// Discovers libraries across `accounts`, resiliently, WITHOUT publishing any
     /// state, reporting which accounts were unreachable. The Settings path uses

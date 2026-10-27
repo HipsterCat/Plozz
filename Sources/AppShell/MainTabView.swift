@@ -525,7 +525,6 @@ struct MainTabView: View {
     /// ROOT list. Threading the raw `LoadState` value through `SettingsView`
     /// instead rebuilt the root rows mid-flip → `setToViewXFlippedScreenShot:` UAF.
     @State private var librariesStore = DiscoveredLibrariesStore()
-    @State private var libraryReloadRevision = 0
     @State private var musicAvailability = MusicAvailabilityModel()
     @State private var themeMusicController = ThemeMusicController()
     /// One app-level trailer player shared by the Home and detail heroes so
@@ -934,14 +933,6 @@ struct MainTabView: View {
         )
     }
 
-    private var topBarNavigationLayout: NavigationLibraryLayout {
-        effectiveNavigationLayout.resolvingAutomaticVisibility(
-            hidden: NavigationRailPlan.automaticallyHiddenLibraryKeys(
-                visibleLibraries: availableRailLibraries, style: .tabBar
-            )
-        )
-    }
-
     private func refreshWatchlistNavigation() {
         if let hasItems = watchlistHasItems() {
             navigationStyleModel.hasWatchlistItems = hasItems
@@ -973,7 +964,7 @@ struct MainTabView: View {
     private var topBarDestinations: [NavigationRailDestination] {
         includingExplicitLiveTVEntry(NavigationRailPlan.destinations(
             visibleLibraries: availableRailLibraries,
-            layout: topBarNavigationLayout,
+            layout: effectiveNavigationLayout,
             availableKeys: sidebarDestinationKeys
         ))
     }
@@ -1481,7 +1472,7 @@ struct MainTabView: View {
     private var nativeTopBarShell: some View {
         let libraries = availableRailLibraries
         let entries = NavigationRailPlan.entries(
-            visibleLibraries: libraries, layout: topBarNavigationLayout,
+            visibleLibraries: libraries, layout: effectiveNavigationLayout,
             offlineAccountIDs: navigationStyleModel.offlineAccountIDs
                 .union(shareScanStatusModel.offlineShareIDs)
         )
@@ -1746,7 +1737,7 @@ struct MainTabView: View {
             settleInitialCatalogue(previous: previous, current: current)
         }
         .task(id: railLibrariesKey, priority: .utility) {
-            await refreshNavigationLibraries()
+            await reloadLibrariesFromCurrentScope()
         }
     }
 
@@ -1765,22 +1756,6 @@ struct MainTabView: View {
         selectedTabRaw = initial.storageValue
         railSelectionRaw = initial.storageValue
         libraryNavigationEntryOverride = nil
-    }
-
-    private func refreshNavigationLibraries() async {
-        let navigation = navigationStyleModel
-        if !railLibraries.isEmpty { railLibrariesLoaded = true }
-        let accounts = currentAccounts()
-        let discovered = await discovery.libraryDiscovery(from: accounts)
-        guard !Task.isCancelled, navigationStyleModel === navigation else { return }
-        navigation.updateContentLibraries(
-            discovered.libraries,
-            accountIDs: Set(accounts.map(\.account.id)),
-            unreachableAccountIDs: discovered.unreachableAccountIDs,
-            failures: discovered.failures
-        )
-        guard !railLibraries.isEmpty || discovered.unreachableAccountIDs.isEmpty else { return }
-        railLibrariesLoaded = true
     }
 
     private var routedShell: some View {
@@ -2047,37 +2022,26 @@ struct MainTabView: View {
     }
 
     @MainActor
-    private func reloadLibrariesFromCurrentScope() async {
-        libraryReloadRevision += 1
-        let revision = libraryReloadRevision
+    private func reloadLibrariesFromCurrentScope(changedAccountID: String? = nil) async {
+        let navigation = navigationStyleModel
+        let authorizationID = accountsProviders.liveTVAuthorizationID
         let scopedAccounts = currentAccounts()
-        librariesStore.beginRefresh(
-            accountIDs: Set(scopedAccounts.map(\.account.id))
+        if !railLibraries.isEmpty { railLibrariesLoaded = true }
+        let loaded = await discovery.refreshNavigationLibraries(
+            from: scopedAccounts, navigation: navigation, settings: librariesStore,
+            changedAccountID: changedAccountID,
+            isCurrent: {
+                navigationStyleModel === navigation
+                    && accountsProviders.liveTVAuthorizationID == authorizationID
+            }
         )
-        await Task.yield()
-        let discovered = await discovery.libraryDiscovery(from: scopedAccounts)
-        guard revision == libraryReloadRevision else { return }
-        librariesStore.finishRefresh(
-            with: discovered.libraries,
-            unreachableAccountIDs: discovered.unreachableAccountIDs,
-            failures: discovered.failures
-        )
+        if loaded { railLibrariesLoaded = true }
     }
 
     @MainActor
     private func scheduleLibraryReloadFromCurrentScope(changedAccountID: String) {
-        libraryReloadRevision += 1
-        let revision = libraryReloadRevision
-        librariesStore.beginRefresh(accountIDs: [changedAccountID])
         Task { @MainActor in
-            await Task.yield()
-            let discovered = await discovery.libraryDiscovery(from: currentAccounts())
-            guard revision == libraryReloadRevision else { return }
-            librariesStore.finishRefresh(
-                with: discovered.libraries,
-                unreachableAccountIDs: discovered.unreachableAccountIDs,
-                failures: discovered.failures
-            )
+            await reloadLibrariesFromCurrentScope(changedAccountID: changedAccountID)
         }
     }
 

@@ -201,9 +201,9 @@ Recompute from current account visibility and profile layout when the shell
 updates, rather than retaining a cache that could expose removed libraries.
 
 Horizontal navigation offers individual libraries and All Libraries in the same
-profile-scoped arranger as the sidebars. These shortcuts start in Hidden to keep
-the top bar compact; Show opts them in using the existing saved visibility and
-order. Automatic hiding is never persisted as a manual Hide choice. Each tab
+profile-scoped arranger as the sidebars. Newly discovered libraries appear
+automatically in every TV navigation style; explicit Hide choices and saved
+order remain unchanged. Each tab
 retains its account-qualified destination and library root, so same-named
 libraries remain distinct and only the visible stack consumes pending routes.
 
@@ -213,6 +213,10 @@ Search also remains available for configured Seerr discovery, and Plex keeps its
 Home discovery surface. Library metadata comes from the existing bounded
 navigation snapshot and library discovery, not a channel/title scan. Failed
 accounts retain their last-known libraries; removed accounts cannot contribute.
+Initial navigation discovery, Settings library refreshes, and account-selection
+refreshes publish through one `LibraryDiscoveryModel` path to both navigation
+and Settings. Superseded, cancelled, or changed-profile/credential results cannot
+publish. Settings loading state stays observed only by its library detail pages.
 
 An untouched Watchlist appears when the profile's hydrated local/native union
 has items. Removing its last item does not evict its open page: it hides after
