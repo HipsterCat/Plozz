@@ -150,7 +150,7 @@ final class NativeSettingsToggleTests: XCTestCase {
             window.makeKeyAndVisible()
             try await settle(window)
             let automatic = try captureText(window, name: "skip-settings-automatic-\(Int(width))")
-            for label in ["Intros", "Skip after", "12 seconds", "Use default",
+            for label in ["Intros", "Skip after", "12 seconds", "Show skip button (default)",
                           "Movies", "TV Shows", "Anime"] {
                 XCTAssertTrue(automatic.contains(label), "Missing \(label): \(automatic)")
             }
@@ -278,9 +278,11 @@ final class NativeSettingsToggleTests: XCTestCase {
             )
             try await settle(window)
             let exception = try captureText(window, name: "skip-default-anime-exception-\(Int(width))")
-            for label in ["Movies", "TV Shows", "Anime", "Use default", "Default:", "Skip instantly", "Show skip button"] {
+            for label in ["Movies", "TV Shows", "Anime", "Skip instantly (default)", "Show skip button"] {
                 XCTAssertTrue(exception.contains(label), exception)
             }
+            XCTAssertFalse(exception.contains("Default:"), exception)
+            XCTAssertFalse(exception.contains("Use default"), exception)
             XCTAssertNil(firstStepper(in: window))
             shared.behavior.wrappedValue = .delayed
             try await settle(window)
@@ -291,7 +293,7 @@ final class NativeSettingsToggleTests: XCTestCase {
             anime.behavior.wrappedValue = .useDefault
             try await settle(window)
             let inherited = try captureText(window, name: "skip-default-inherited-\(Int(width))")
-            XCTAssertTrue(inherited.contains("Skip after 5 seconds"), inherited)
+            XCTAssertTrue(inherited.contains("Skip after 5 seconds (default)"), inherited)
             XCTAssertFalse(inherited.contains("Show skip button"), inherited)
             XCTAssertTrue(store.load().skipMarkerRules.isEmpty)
             XCTAssertEqual(store.load().skipMarkerModes(for: .anime).delay(for: .intro), 5)

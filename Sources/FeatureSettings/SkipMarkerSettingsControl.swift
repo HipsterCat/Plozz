@@ -334,19 +334,22 @@ struct SkipMarkerRuleControls: View {
     var body: some View {
         SettingsControlRows(nonTVSpacing: 12) {
             #if os(tvOS)
-            SettingsMenuRow(title: title, value: Text(behavior.wrappedValue.title)) {
+            SettingsMenuRow(title: title, value: selectionSummary) {
                 SkipBehaviorPicker(title: title, behaviors: behaviors, selection: behavior)
             }
             .accessibilityIdentifier("skip-behavior-\(identifier)")
             #else
-            SkipBehaviorPicker(title: title, behaviors: behaviors, selection: behavior)
-                .accessibilityIdentifier("skip-behavior-\(identifier)")
-            #endif
-            if behavior.wrappedValue == .useDefault {
-                Text("Default: \(defaultSummary)")
-                    .settingsHelperText()
-                    .fixedSize(horizontal: false, vertical: true)
+            Menu {
+                SkipBehaviorPicker(title: title, behaviors: behaviors, selection: behavior)
+                    .pickerStyle(.inline)
+            } label: {
+                SettingsMenuLabel(title, value: selectionSummary)
             }
+            .menuStyle(.button)
+            .accessibilityLabel(Text(title))
+            .accessibilityValue(selectionSummary)
+            .accessibilityIdentifier("skip-behavior-\(identifier)")
+            #endif
             if behavior.wrappedValue == .delayed {
                 #if os(tvOS)
                 SettingsStepper(
@@ -369,6 +372,12 @@ struct SkipMarkerRuleControls: View {
                 #endif
             }
         }
+    }
+
+    private var selectionSummary: Text {
+        behavior.wrappedValue == .useDefault
+            ? Text("\(defaultSummary) (default)")
+            : Text(behavior.wrappedValue.title)
     }
 
     private var defaultSummary: Text {

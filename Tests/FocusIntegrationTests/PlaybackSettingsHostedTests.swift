@@ -108,7 +108,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             )
             try await Task.sleep(for: .milliseconds(200))
             let automatic = try visibleText(in: window, attachment: "skip-\(kind.rawValue)-TV-content")
-            for label in ["Movies", "TV Shows", "Anime", "Use default", "Show skip button",
+            for label in ["Movies", "TV Shows", "Anime", "Show skip button (default)",
                           "Skip after", "30 seconds", "Off"] {
                 XCTAssertTrue(automatic.localizedCaseInsensitiveContains(label), automatic)
             }
@@ -173,9 +173,11 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         )
         try await Task.sleep(for: .milliseconds(300))
         let exception = try visibleText(in: window, attachment: "skip-default-TV-anime-exception")
-        for label in ["Movies", "TV Shows", "Anime", "Use default", "Default:", "Skip instantly", "Show skip button"] {
+        for label in ["Movies", "TV Shows", "Anime", "Skip instantly (default)", "Show skip button"] {
             XCTAssertTrue(exception.contains(label), exception)
         }
+        XCTAssertFalse(exception.contains("Default:"), exception)
+        XCTAssertFalse(exception.contains("Use default"), exception)
         shared.behavior.wrappedValue = .delayed
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(store.load().skipMarkerModes(for: .movie).delay(for: .intro), 5)
@@ -183,7 +185,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         anime.behavior.wrappedValue = .useDefault
         try await Task.sleep(for: .milliseconds(200))
         let inherited = try visibleText(in: window, attachment: "skip-default-TV-inherited")
-        XCTAssertTrue(inherited.contains("Skip after 5 seconds"), inherited)
+        XCTAssertTrue(inherited.contains("Skip after 5 seconds (default)"), inherited)
         XCTAssertFalse(inherited.contains("Show skip button"), inherited)
         XCTAssertTrue(store.load().skipMarkerRules.isEmpty)
         shared.behavior.wrappedValue = .instant
