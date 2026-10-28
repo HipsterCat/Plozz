@@ -5,6 +5,127 @@ import XCTest
 @testable import ProviderSilo
 
 extension SiloProviderTests {
+    func testSearchJournalRecordsLibrariesAndCursorPagesWithoutContent() async throws {
+        let raw = try credential(profileToken: "private-profile-token").encoded()
+        let http = SiloSearchHTTP(catalogs: ["private-library": searchCards(count: 6), "disabled": []], pageCapacity: 2)
+        let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+        let journal = SearchDiagnosticJournal()
+        journal.start()
+        let source = try XCTUnwrap(journal.beginSearch()?.source(index: 0, provider: .silo, limit: 3, disabledLibraries: 1))
+        let items = try await SearchDiagnosticJournal.$currentSource.withValue(source) {
+            try await provider.search(query: "private-query", limit: 3, excludingLibraries: ["disabled"])
+        }
+        source.finish(resultCount: items.count)
+        let report = journal.export(scope: DiagnosticExportScope())
+        let facts = try XCTUnwrap(report.entries.first?.facts)
+        XCTAssertEqual(facts.availableLibraryCount, 2)
+        XCTAssertEqual(facts.excludedLibraryCount, 1)
+        XCTAssertEqual(facts.librariesStarted, 1)
+        XCTAssertEqual(facts.pageCount, 2)
+        XCTAssertEqual(facts.pages.map(\.limit), [3, 3])
+        XCTAssertEqual(facts.pages.map(\.usedCursor), [false, true])
+        XCTAssertEqual(facts.pages.map(\.rows), [2, 2])
+        XCTAssertEqual(facts.resultCount, 3)
+        let text = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+        for value in ["private", "movie-tmdb", "Movie", "account1", "profile1", raw] {
+            XCTAssertFalse(text.contains(value), value)
+        }
+    }
+
+    func testSearchJournalDistinguishesNoLibrariesDisabledAndNoMatches() async throws {
+        for (catalogs, disabled, available, excluded, searched): ([String: [String]], [String], Int, Int, Int) in [
+            ([:], [], 0, 0, 0), (["1": []], ["1"], 1, 1, 0), (["1": []], [], 1, 0, 1)
+        ] {
+            let raw = try credential().encoded()
+            let provider = try SiloProvider(
+                context: context(raw), credentials: SiloCredentialStub(raw), http: SiloSearchHTTP(catalogs: catalogs)
+            )
+            let journal = SearchDiagnosticJournal()
+            journal.start()
+            let source = try XCTUnwrap(journal.beginSearch()?.source(
+                index: 0, provider: .silo, limit: 40, disabledLibraries: disabled.count
+            ))
+            let items = try await SearchDiagnosticJournal.$currentSource.withValue(source) {
+                try await provider.search(query: "missing", limit: 40, excludingLibraries: disabled)
+            }
+            source.finish(resultCount: items.count)
+            let facts = try XCTUnwrap(journal.export(scope: DiagnosticExportScope()).entries.first?.facts)
+            XCTAssertEqual(facts.outcome, .empty)
+            XCTAssertEqual(facts.availableLibraryCount, available)
+            XCTAssertEqual(facts.excludedLibraryCount, excluded)
+            XCTAssertEqual(facts.librariesStarted, searched)
+        }
+    }
+
+    func testSearchJournalKeepsHTTPAndDecodingFailureStages() async throws {
+        let cases: [(String, String, Int, AppError, ResponseDecodingDiagnostic.Route)] = [
+            (#"{"items":[{"id":"1","name":"Movies","type":"movie"}]}"#, "{}", 503, .invalidResponse, .searchCatalog),
+            (#"{"items":[{"id":"1","name":"Movies","type":"movie"}]}"#, #"{"items":"private-secret"}"#, 200, .decoding, .searchCatalog),
+            (#"{"items":"private-secret"}"#, "{}", 200, .decoding, .searchLibraries)
+        ]
+        for (libraries, catalog, status, expected, route) in cases {
+            let raw = try credential().encoded()
+            let http = SiloSearchFailureHTTP(libraries: libraries, catalog: catalog, catalogStatus: status)
+            let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+            let journal = SearchDiagnosticJournal()
+            journal.start()
+            let source = try XCTUnwrap(journal.beginSearch()?.source(index: 0, provider: .silo, limit: 40, disabledLibraries: 0))
+            do {
+                _ = try await SearchDiagnosticJournal.$currentSource.withValue(source) {
+                    try await provider.search(query: "private-query", limit: 40)
+                }
+                XCTFail("Expected a provider failure")
+            } catch {
+                XCTAssertEqual(error as? AppError, expected)
+                source.finish(error: expected)
+            }
+            let report = journal.export(scope: DiagnosticExportScope())
+            let facts = try XCTUnwrap(report.entries.first?.facts)
+            XCTAssertEqual(facts.outcome, .failed)
+            if status == 503 {
+                XCTAssertEqual(facts.http.last?.httpStatus, 503)
+                XCTAssertEqual(facts.http.last?.route, route)
+            } else {
+                XCTAssertEqual(facts.responses.last?.reason, .wrongType)
+                XCTAssertEqual(facts.responses.last?.path, "items")
+                XCTAssertEqual(facts.responses.last?.route, route)
+            }
+            XCTAssertFalse(String(decoding: try JSONEncoder().encode(report), as: UTF8.self).contains("private"))
+        }
+    }
+
+    func testSearchJournalIdentifiesMissingAndRepeatedCursors() async throws {
+        for (page, reason): (String, SearchDiagnosticJournal.PagingFailure) in [
+            (#"{"has_more":true}"#, .missingCursor),
+            (#"{"has_more":true,"next_cursor":"private-cursor"}"#, .repeatedCursor)
+        ] {
+            let raw = try credential().encoded()
+            let http = SiloHTTPStub([
+                "/api/v2/user/libraries": #"{"items":[{"id":"1","name":"Movies","type":"movie"}]}"#,
+                "/api/v2/catalog": """
+                {"items":[{"content_id":"movie-tmdb-1","type":"movie","title":"Movie"}],
+                 "total":100,"total_exact":true,"window_cursor":"private-window","page":\(page)}
+                """
+            ])
+            let provider = try SiloProvider(context: context(raw), credentials: SiloCredentialStub(raw), http: http)
+            let journal = SearchDiagnosticJournal()
+            journal.start()
+            let source = try XCTUnwrap(journal.beginSearch()?.source(index: 0, provider: .silo, limit: 40, disabledLibraries: 0))
+            do {
+                _ = try await SearchDiagnosticJournal.$currentSource.withValue(source) {
+                    try await provider.search(query: "private-query", limit: 40)
+                }
+                XCTFail("Expected invalid continuation")
+            } catch {
+                XCTAssertEqual(error as? AppError, .invalidResponse)
+                source.finish(error: .invalidResponse)
+            }
+            let report = journal.export(scope: DiagnosticExportScope())
+            XCTAssertEqual(report.entries.first?.facts.pages.last?.failure, reason)
+            XCTAssertFalse(String(decoding: try JSONEncoder().encode(report), as: UTF8.self).contains("private"))
+        }
+    }
+
     func testSearchUsesNativeCatalogWithProfileAndLibraryScope() async throws {
         let raw = try credential(profileToken: "profile-proof").encoded()
         let http = SiloSearchHTTP(catalogs: [
@@ -173,6 +294,19 @@ extension SiloProviderTests {
 private extension Endpoint {
     func value(for name: String) -> String? {
         queryItems.first { $0.name == name }?.value
+    }
+}
+
+private struct SiloSearchFailureHTTP: HTTPClient {
+    let libraries: String
+    let catalog: String
+    let catalogStatus: Int
+
+    func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+        let isCatalog = endpoint.path == "/api/v2/catalog"
+        return (Data((isCatalog ? catalog : libraries).utf8), try XCTUnwrap(HTTPURLResponse(
+            url: baseURL, statusCode: isCatalog ? catalogStatus : 200, httpVersion: nil, headerFields: nil
+        )))
     }
 }
 

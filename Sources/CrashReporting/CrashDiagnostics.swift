@@ -43,6 +43,7 @@ public enum CrashDiagnostics {
             sourceDiagnostics: { LiveTVSourceDiagnostics.captureExport(scope: scope) },
             preparationDiagnostics: { PlaybackPreparationDiagnostics.export(scope: scope) },
             libraryDiagnostics: { LibraryDiagnosticJournal.shared.export(scope: scope) },
+            searchDiagnostics: { SearchDiagnosticJournal.shared.export(scope: scope) },
             playbackDiagnostics: playbackJournal,
             captureEvent: { event, attachment in
                 SentrySDK.capture(event: event) { scope in
@@ -71,6 +72,9 @@ public enum CrashDiagnostics {
         libraryDiagnostics: @MainActor () -> LibraryDiagnosticJournal.Export = {
             LibraryDiagnosticJournal.shared.export(scope: DiagnosticExportScope())
         },
+        searchDiagnostics: @MainActor () -> SearchDiagnosticJournal.Export = {
+            SearchDiagnosticJournal.shared.export(scope: DiagnosticExportScope())
+        },
         playbackDiagnostics: PlaybackDiagnosticJournal.Export? = nil,
         operations: PerformanceDiagnostics = .shared,
         captureEvent: (Event, Attachment) -> SentryId,
@@ -86,6 +90,7 @@ public enum CrashDiagnostics {
             activity: activity(), sources: sourceDiagnostics(), preparation: preparationDiagnostics(),
             library: libraryDiagnostics(),
             playback: playbackDiagnostics,
+            search: searchDiagnostics(),
             operations: operations.snapshot()
         )
         let body: Data
@@ -135,6 +140,7 @@ public enum CrashDiagnostics {
         let preparation: PlaybackPreparationDiagnostics.Export
         let library: LibraryDiagnosticJournal.Export
         let playback: PlaybackDiagnosticJournal.Export?
+        let search: SearchDiagnosticJournal.Export
         let operations: PerformanceDiagnostics.Snapshot?
     }
     #endif

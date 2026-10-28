@@ -222,6 +222,15 @@ This contract was checked against the
 [native catalog handler](https://github.com/Silo-Server/silo-server/blob/9b77105e5870b0cdea8148b26194f026d275167d/internal/apiv2/catalog_items.go)
 and is covered by `SiloSearchTests.swift` in `ProviderSiloTests`.
 
+Opted-in manual search diagnostics distinguish library-listing, catalog and token
+refresh HTTP/decode failures. The bounded source record includes available,
+excluded and attempted library counts, page sizes, returned row counts,
+continuation presence and missing/repeated/empty-page failures. Library references
+are request-local ordinals, never server IDs; cursor values and queries are
+excluded. HTTP status, transport errors and allowlisted decoding fields survive
+in the report even if another provider makes the overall search appear successful.
+See [search diagnostic retention and consent](../FeatureSearch/README.md#diagnostic-submissions).
+
 ## Collections
 
 Library collections and personal collections have separate native contracts.

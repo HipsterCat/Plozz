@@ -217,7 +217,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         defer {
             if let started {
                 HTTPResponseDiagnostics.recordRequest(ResponseRequestDiagnostic(
-                    route: HTTPResponseDiagnostics.route, method: endpoint.method.rawValue,
+                    route: HTTPResponseDiagnostics.effectiveRoute, method: endpoint.method.rawValue,
                     elapsedMilliseconds: Int((ProcessInfo.processInfo.systemUptime - started) * 1_000),
                     httpStatus: capturedStatus, urlErrorCode: capturedNetworkCode,
                     bytes: capturedBytes, format: capturedFormat,

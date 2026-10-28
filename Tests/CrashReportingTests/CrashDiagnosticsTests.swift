@@ -53,6 +53,10 @@ final class CrashDiagnosticsTests: XCTestCase {
                 XCTFail("No library collection without consent")
                 return LibraryDiagnosticJournal().export(scope: DiagnosticExportScope())
             },
+            searchDiagnostics: {
+                XCTFail("No search collection without consent")
+                return SearchDiagnosticJournal().export(scope: DiagnosticExportScope())
+            },
             captureEvent: { _, _ in XCTFail("No consent"); return .empty },
             captureFeedback: { _ in XCTFail("No consent"); return .empty }
         ))
@@ -341,12 +345,22 @@ final class CrashDiagnosticsTests: XCTestCase {
         operations.start()
         operations.begin(.serverRequest, provider: .jellyfin)?
             .finish(.failed, metrics: .init(bytes: 128, requests: 1), httpStatus: 401)
+        let searches = SearchDiagnosticJournal()
+        searches.start()
+        let search = try XCTUnwrap(searches.beginSearch())
+        let siloSearch = try XCTUnwrap(search.source(index: 0, provider: .silo, limit: 40, disabledLibraries: 1))
+        siloSearch.libraries(available: 3, excluded: 1)
+        siloSearch.beginLibrary(index: 0)
+        siloSearch.beginPage(limit: 40, usedCursor: false)
+        siloSearch.http(.init(route: .searchCatalog, httpStatus: 503))
+        siloSearch.finish(error: .unknown(privateValues.joined(separator: " ")))
         XCTAssertTrue(CrashDiagnostics.send(
             note: "My report message", isEnabled: true,
             activity: { PlozzLog.activityExport(scope: scope) },
             sourceDiagnostics: { sources.export(scope: scope) },
             preparationDiagnostics: { PlaybackPreparationDiagnostics.export(scope: scope) },
             libraryDiagnostics: { library.export(scope: scope) },
+            searchDiagnostics: { searches.export(scope: scope) },
             playbackDiagnostics: journal, operations: operations,
             captureEvent: { _, attachment in
                 let body = self.payload(attachment)
@@ -362,6 +376,13 @@ final class CrashDiagnosticsTests: XCTestCase {
                 XCTAssertEqual(records?.first?["attempt"] as? String, records?.last?["attempt"] as? String)
                 XCTAssertEqual((records?.first?["facts"] as? [String: Any])?["sourceVideo"] as? String, "hevc")
                 XCTAssertNotNil(body["operations"])
+                let searchEntries = (body["search"] as? [String: Any])?["entries"] as? [[String: Any]]
+                let searchFacts = searchEntries?.first?["facts"] as? [String: Any]
+                XCTAssertEqual(searchFacts?["provider"] as? String, "silo")
+                XCTAssertEqual(searchFacts?["outcome"] as? String, "failed")
+                XCTAssertEqual(searchFacts?["reason"] as? String, "unknown")
+                XCTAssertEqual(searchFacts?["availableLibraryCount"] as? Int, 3)
+                XCTAssertEqual((searchFacts?["http"] as? [[String: Any]])?.first?["httpStatus"] as? Int, 503)
                 let libraryEntry = (body["library"] as? [String: Any])?["entries"] as? [[String: Any]]
                 let libraryFacts = libraryEntry?.first?["facts"] as? [String: Any]
                 let libraryFailure = (libraryFacts?["failures"] as? [[String: Any]])?.first
