@@ -716,6 +716,13 @@ public struct RootView: View {
                             ),
                             error: appState.plexHomeUsers.automaticSignInError
                         ),
+                        profileReturnSettings: ProfileReturnSettings(
+                            selection: Binding(
+                                get: { appState.profileFlow.profileReturnPolicy },
+                                set: { appState.profileFlow.profileReturnPolicy = $0 }
+                            ),
+                            automaticPolicy: .automaticPolicy(for: appState.profilesModel.profiles)
+                        ),
                         homeRuntime: HomeTabRuntime(
                             homeViewModel: homeViewModelBox,
                             // The key that governs the Home VIEW MODEL, which
@@ -1008,7 +1015,12 @@ public struct RootView: View {
                     let externalDeparture = ExternalPlaybackRuntime.shared.consumeForegroundDeparture(
                         forProfile: appState.profilesModel.activeProfileID
                     )
-                    if foregroundProtection.shouldLock(after: phase, leavingForExternalPlayer: externalDeparture) {
+                    let shouldLock = foregroundProtection.shouldLock(
+                        after: phase,
+                        leavingForExternalPlayer: externalDeparture,
+                        delay: appState.profileFlow.foregroundReturnDelay
+                    )
+                    if shouldLock || (phase == .background && appState.profileFlow.isForegroundLocked) {
                         appState.lockBrowsingForForegroundIfNeeded()
                     }
                     #endif

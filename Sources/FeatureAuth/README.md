@@ -275,8 +275,10 @@ profiles mapped to the same Plex user. Local Profile Locks and Kids Profile exit
 gates remain in force for manual switching. Local unlock proof expires on every
 active-profile change, not just process exit; async verification must still match
 the original request, selection generation and lock before granting entry.
-On tvOS, backgrounding a protected profile while browsing also expires startup
-unlock credit and live PIN proof. Foreground reauthorization retains the same
+On tvOS, Automatically Sign In also takes precedence over the return-picker
+timeout. With automatic sign-in off, the device-local Show Profiles on Return
+policy determines when browsing requires selection again, including households
+without PINs. Expiry revokes live PIN proof. Foreground reauthorization retains the same
 viewer's credentials behind an opaque input-blocking gate so unchanged tokens do
 not reset browsing identity. It still checks current Plex protection, never
 replays old PIN proof, and retains the gate on cancellation or network failure.

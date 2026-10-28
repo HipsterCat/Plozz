@@ -63,6 +63,12 @@ struct ProfileDetailView: View {
                 AutomaticSignInErrorMessage(settings: context.automaticSignIn)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if let settings = context.profileReturnSettings {
+                    ProfileReturnSettingsControl(
+                        settings: settings,
+                        automaticallySignIn: context.automaticSignIn.isEnabled.wrappedValue
+                    )
+                }
                 PlozzDivider()
                 ForEach(orderedProfiles) { profile in
                     profileRow(profile)

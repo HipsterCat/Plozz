@@ -9,28 +9,50 @@ final class TVProfileForegroundState {
     private var hasBeenActive = false
     private var previousPhase: ScenePhase?
     private var playbackWhenResigning: Bool?
+    private var backgroundedAt: ContinuousClock.Instant?
+    private var requestedLock = false
 
     func setPlayback(_ active: Bool, id: UUID) {
         if active { players.insert(id) } else { players.remove(id) }
     }
 
-    func shouldLock(after phase: ScenePhase, leavingForExternalPlayer: Bool = false) -> Bool {
+    func shouldLock(
+        after phase: ScenePhase,
+        leavingForExternalPlayer: Bool = false,
+        delay: TimeInterval? = 0,
+        now: ContinuousClock.Instant = .now
+    ) -> Bool {
         defer { previousPhase = phase }
         switch phase {
         case .active:
+            let shouldLock = returnDelayExpired(delay, now: now)
             hasBeenActive = true
             playbackWhenResigning = nil
+            backgroundedAt = nil
+            requestedLock = false
+            return shouldLock
         case .inactive:
             if previousPhase == .active {
                 playbackWhenResigning = !players.isEmpty || leavingForExternalPlayer
+            } else if previousPhase == .background {
+                return returnDelayExpired(delay, now: now)
             }
         case .background:
             guard hasBeenActive, previousPhase != .background else { return false }
-            return !(playbackWhenResigning ?? (!players.isEmpty || leavingForExternalPlayer))
+            guard !(playbackWhenResigning ?? (!players.isEmpty || leavingForExternalPlayer)) else { return false }
+            if backgroundedAt == nil { backgroundedAt = now }
+            return delay == 0 && returnDelayExpired(delay, now: now)
         @unknown default:
             break
         }
         return false
+    }
+
+    private func returnDelayExpired(_ delay: TimeInterval?, now: ContinuousClock.Instant) -> Bool {
+        guard !requestedLock, let delay, let backgroundedAt,
+              now - backgroundedAt >= .seconds(delay) else { return false }
+        requestedLock = true
+        return true
     }
 }
 

@@ -26,6 +26,7 @@ struct SettingsContext {
     let profiles: [Profile]
     let activeProfile: Profile
     let automaticSignIn: AutomaticSignInSettings
+    var profileReturnSettings: ProfileReturnSettings? = nil
     let isAccountIncludedInActiveProfile: (String) -> Bool
     let onSetAccountIncluded: (String, Bool) -> Void
     let onSwitchProfile: () -> Void

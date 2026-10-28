@@ -9,6 +9,49 @@ import XCTest
 
 @MainActor
 final class PlaybackSettingsHostedTests: XCTestCase {
+    func testProfileReturnControlKeepsItsChoiceWhenAutomaticSignInDisablesIt() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = ProfileReturnControlModel()
+        let window = UIWindow(windowScene: scene)
+        let settings = ProfileReturnSettings(
+            selection: Binding(get: { model.selection }, set: { model.selection = $0 }),
+            automaticPolicy: .fiveMinutes
+        )
+        window.rootViewController = UIHostingController(rootView:
+            ProfileReturnControlFixture(settings: settings, model: model)
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(350))
+        let automatic = try visibleText(in: window, attachment: "profile-return-automatic")
+        XCTAssertTrue(automatic.contains("Show Profiles on Return"), automatic)
+        XCTAssertTrue(automatic.contains("Automatic (5 minutes)"), automatic)
+        XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+        settings.selection.wrappedValue = .never
+        model.automaticallySignIn = true
+        try await Task.sleep(for: .milliseconds(200))
+        let disabled = try visibleText(in: window, attachment: "profile-return-disabled")
+        XCTAssertTrue(disabled.contains("Turn off Automatically Sign In"), disabled)
+        XCTAssertEqual(model.selection, .never)
+        model.automaticallySignIn = false
+        try await Task.sleep(for: .milliseconds(200))
+        let enabled = try visibleText(in: window, attachment: "profile-return-never")
+        XCTAssertFalse(enabled.contains("Turn off Automatically Sign In"), enabled)
+        XCTAssertTrue(enabled.contains("Never"), enabled)
+        XCTAssertEqual(model.selection, .never)
+    }
+
     func testAudioOutputSettingsShareOneGroup() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -447,6 +490,24 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         request.recognitionLanguages = ["en-US"]
         try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+    }
+}
+
+@MainActor @Observable
+final class ProfileReturnControlModel {
+    var selection: ProfileReturnPolicy = .automatic
+    var automaticallySignIn = false
+}
+
+private struct ProfileReturnControlFixture: View {
+    let settings: ProfileReturnSettings
+    var model: ProfileReturnControlModel
+
+    var body: some View {
+        VStack(spacing: 20) {
+            ProfileReturnSettingsControl(settings: settings, automaticallySignIn: model.automaticallySignIn)
+            Button("Done") {}
+        }
     }
 }
 

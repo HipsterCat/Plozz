@@ -42,8 +42,19 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
 
 ## Invariants
 
-- **tvOS foreground protection.** Leaving the app while browsing a PIN-protected
-  profile requires profile selection and fresh local/Plex authorization on return.
+- **tvOS profile selection on return.** Everyone > Profiles has a device-local
+  Show Profiles on Return choice: Automatic, Immediately, 1/5/15/30 minutes, or
+  Never. Automatically Sign In takes precedence and disables this control.
+  Automatic is immediate when any profile has a configured local or Plex PIN,
+  five minutes for an otherwise unprotected multi-profile household, and Never
+  for one unprotected profile. Explicit choices override these defaults; adding
+  profiles or PINs updates Automatic without overwriting an explicit choice.
+  Elapsed time is measured only while away, using a continuous clock (including
+  sleep), not a background timer or browsing inactivity. Returning before the
+  threshold starts a new grace period for the next departure. Expiry requires
+  profile selection and fresh authorization for whichever profile is selected.
+  Never retains the current authorization on return, but never skips manual
+  switching gates. Cold launches keep the existing Automatically Sign In policy.
   Control Center and other inactive-only interruptions do not lock. Open video
   players (including paused/buffering sessions), visible Live TV players, Now
   Playing, actively playing music, and the current external-player handoff are
@@ -55,7 +66,9 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   stays at the mandatory picker, including when leaving from a previously
   cancelable profile picker or in-app account setup. Top Shelf links wait for
   authorization, and a late async result cannot start a new player behind the
-  gate. This policy does not change iOS.
+  gate. Pending PIN attempts are revoked on another departure even within the
+  selected delay. Configured Plex PINs affect the Automatic default, but disabled
+  sources still do not ask for PINs. This policy does not change iOS.
 - **Non-secret only.** Profiles are non-secret metadata; tokens belong
   to `FeatureAuth.AccountStore`.
 - **Default profile is special.** Stable id
