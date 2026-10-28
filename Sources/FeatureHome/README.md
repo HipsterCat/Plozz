@@ -158,9 +158,11 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   family succeeds, including an authoritative empty result. Cancellation never
   publishes a partial success or replaces the last completed diagnostic.
 
-- **Explicit version inventory** — providers that advertise lazy file discovery
-  expose Version regardless of the cached source count, but load it only after
-  that action is opened. Home, detail dwell, returning to a page and passive
+- **Explicit version inventory** — Version is offered only with at least two
+  known choices on both platforms. A provider's ability to discover more files
+  is not itself another choice. Lazy file discovery still runs only after an
+  available version action is opened or Play requests its own inventory.
+  Home, detail dwell, returning to a page and passive
   episode badge enrichment use presentation metadata, never playback inventory.
   Publication is fenced by the current source and the picker task's cancellation;
   later sparse metadata cannot erase authoritative file choices. Same-account

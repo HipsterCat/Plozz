@@ -1392,7 +1392,7 @@ private struct PlozziOSSourceVersionControls: View {
                 .buttonStyle(.bordered)
             }
 
-            if versions.count > 1 || loadVersions != nil {
+            if versions.count > 1 {
                 Button {
                     isVersionPickerPresented = true
                 } label: {
