@@ -42,6 +42,12 @@ in `ProviderPlex`, not LAN UDP.
   Only the verified server address is passed to password/Quick Connect sign-in
   and remembered. UDP announcements, saved-account routing, Plex and Silo
   retain their existing address rules; this does not add background polling.
+- **Setup evidence is explicit-submission only.** Jellyfin/Emby validation records
+  each attempted candidate and outcome in `ServerConnectionDiagnostics`, including
+  successful fallback. Reports retain HTTP/HTTPS, port/prefix presence, timing,
+  response format/status, and numeric transport errors, never addresses or payloads.
+  Background reachability checks do not fill the journal. Connection policy,
+  TLS checks, retry limits, and timeouts are unchanged by instrumentation.
 - **Compiles without UI.** The parser + abstraction live in plain Swift;
   views are guarded by `#if canImport(SwiftUI)`.
 

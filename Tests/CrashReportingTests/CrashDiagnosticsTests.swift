@@ -9,6 +9,47 @@ import XCTest
 
 final class CrashDiagnosticsTests: XCTestCase {
     @MainActor
+    func testConnectionEvidenceIsIncludedOnlyAfterSubmissionConsent() async throws {
+        let diagnostics = ServerConnectionDiagnostics()
+        do {
+            try await diagnostics.capture(
+                provider: .jellyfin, stage: .addressValidation,
+                baseURL: URL(string: "https://private-server.invalid")
+            ) {
+                HTTPResponseDiagnostics.recordTransportFailure(URLError(.cannotFindHost))
+                throw AppError.serverUnreachable
+            }
+        } catch {
+            XCTAssertEqual(error as? AppError, .serverUnreachable)
+        }
+        for enabled in [false, true] {
+            var exports = 0
+            var captures = 0
+            XCTAssertEqual(CrashDiagnostics.send(
+                note: "Cannot connect", isEnabled: enabled,
+                sourceDiagnostics: { self.sourceExport() },
+                connectionDiagnostics: {
+                    exports += 1
+                    return diagnostics.export(scope: DiagnosticExportScope())
+                },
+                captureEvent: { _, attachment in
+                    captures += 1
+                    let connections = self.payload(attachment)["connections"] as? [String: Any]
+                    let entries = connections?["entries"] as? [[String: Any]]
+                    let facts = entries?.first?["facts"] as? [String: Any]
+                    XCTAssertEqual(facts?["stage"] as? String, "addressValidation")
+                    XCTAssertEqual((facts?["transport"] as? [[String: Any]])?.first?["urlErrorCode"] as? Int, -1003)
+                    XCTAssertFalse(String(decoding: attachment.data ?? Data(), as: UTF8.self).contains("private-server"))
+                    return SentryId()
+                },
+                captureFeedback: { _ in SentryId() }
+            ), enabled)
+            XCTAssertEqual(exports, enabled ? 1 : 0)
+            XCTAssertEqual(captures, enabled ? 1 : 0)
+        }
+    }
+
+    @MainActor
     func testPlaybackEvidenceSharesTheConsentedAttachment() async {
         let journal = PlaybackDiagnosticJournal(url: nil)
         let scope = DiagnosticExportScope()
@@ -178,6 +219,10 @@ final class CrashDiagnosticsTests: XCTestCase {
                 libraryDiagnostics: {
                     XCTFail("No library collection without a message")
                     return LibraryDiagnosticJournal().export(scope: DiagnosticExportScope())
+                },
+                connectionDiagnostics: {
+                    XCTFail("No connection collection without a message")
+                    return ServerConnectionDiagnostics().export(scope: DiagnosticExportScope())
                 },
                 captureEvent: { _, _ in
                     XCTFail("No diagnostic event without a message")
