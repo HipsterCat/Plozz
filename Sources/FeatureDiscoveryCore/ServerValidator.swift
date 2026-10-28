@@ -7,14 +7,16 @@ import CoreNetworking
 /// `CoreNetworking` so the discovery feature doesn't pull in a provider.
 public struct ServerValidator: Sendable {
     private let http: HTTPClient
+    private let manualHTTP: HTTPClient
     private let provider: ProviderKind
 
     public init(
         provider: ProviderKind = .jellyfin,
-        http: HTTPClient = URLSessionHTTPClient()
+        http: HTTPClient? = nil
     ) {
         self.provider = provider
-        self.http = http
+        self.http = http ?? URLSessionHTTPClient()
+        self.manualHTTP = http ?? URLSessionHTTPClient(session: .plozzDiscovery)
     }
 
     private struct PublicInfo: Decodable {
@@ -41,6 +43,53 @@ public struct ServerValidator: Sendable {
     /// Throws `.serverUnreachable` / `.invalidResponse` on failure so the UI can
     /// show a friendly message.
     public func validate(rawURL: String) async throws -> MediaServer {
+        try await validate(rawURL: rawURL, http: http, reportsServerTrustFailures: false)
+    }
+
+    /// Resolves a new manual entry before credentials are requested. At most
+    /// three public probes use the short discovery timeout; saved routes and
+    /// UDP announcements continue to use exact-address validation.
+    public func resolveManualAddress(_ rawURL: String) async throws -> MediaServer {
+        guard provider == .jellyfin || provider == .emby else {
+            return try await validate(rawURL: rawURL)
+        }
+        let candidates = try ServerURLNormalizer.manualConnectionCandidates(rawURL)
+        var firstFailure: AppError?
+        for (index, candidate) in candidates.enumerated() {
+            try Task.checkCancellation()
+            do {
+                let server = try await validate(
+                    rawURL: candidate.absoluteString, http: manualHTTP, reportsServerTrustFailures: true
+                )
+                try Task.checkCancellation()
+                PlozzLog.discovery.info("Manual server address validated attempt=\(index + 1) scheme=\(server.baseURL.scheme ?? "")")
+                return server
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError || error as? AppError == .cancelled {
+                    throw AppError.cancelled
+                }
+                if error is HTTPServerTrustFailure {
+                    PlozzLog.discovery.error("Manual server discovery stopped after TLS trust rejection")
+                    throw AppError.serverUnreachable
+                }
+                guard let failure = error as? AppError else { throw error }
+                switch failure {
+                case .serverUnreachable, .notFound, .invalidResponse, .decoding:
+                    firstFailure = firstFailure ?? failure
+                    PlozzLog.discovery.debug("Manual server probe failed attempt=\(index + 1) scheme=\(candidate.scheme ?? "")")
+                default:
+                    throw failure
+                }
+            }
+        }
+        PlozzLog.discovery.error("Manual server discovery found no usable address")
+        throw firstFailure ?? AppError.serverUnreachable
+    }
+
+    private func validate(
+        rawURL: String, http: HTTPClient, reportsServerTrustFailures: Bool
+    ) async throws -> MediaServer {
         guard let baseURL = ServerURLNormalizer.normalize(rawURL, defaultPort: provider == .silo ? 8090 : 8096) else {
             throw AppError.invalidResponse
         }
@@ -62,7 +111,8 @@ public struct ServerValidator: Sendable {
             return MediaServer(id: baseURL.absoluteString, name: "Silo", baseURL: baseURL,
                                provider: .silo, version: info.server_version)
         }
-        let endpoint = Endpoint(path: "/System/Info/Public")
+        var endpoint = Endpoint(path: "/System/Info/Public")
+        endpoint.reportsServerTrustFailures = reportsServerTrustFailures
         let (info, response) = try await http.decodeResponse(PublicInfo.self, from: endpoint, baseURL: baseURL)
         let resolvedURL = try ServerURLNormalizer.resolvedBaseURL(
             requested: baseURL, responseURL: response.url, endpointPath: endpoint.path

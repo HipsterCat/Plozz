@@ -37,6 +37,9 @@ language every other module speaks.
   not permission to retry immediately.
 - Subtitle behaviour + appearance model: `SubtitleBehavior`, `SubtitleStyle`,
   plus the neutral `SubtitleColor` / `SubtitleEdgeStyle` / `SubtitleMode` primitives.
+  `SubtitleCue` equality includes timing and presentation payload, so a live
+  revision of an existing cue is not discarded as unchanged. Bitmap equality
+  uses immutable image identity and placement, never a pixel comparison.
 - Profiles persistence contract: `ProfilePersisting`, `ProfileStore`,
   `ProfilesModel`, plus the Plex Home-user mapping (`PlexHomeUser`).
 - Local PIN proof is in-memory and bound to the current verifier and selection.
