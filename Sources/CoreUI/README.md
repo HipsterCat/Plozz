@@ -12,6 +12,11 @@ by Library and Watchlist on TV and mobile. Mobile controls wrap at narrow widths
 and keep their 44-point action targets; TV keeps the existing native menu style.
 `WatchlistBrowseControls` supplies Watchlist's supported choices, not a parallel
 menu design. Callers retain their query behavior and accessibility identifiers.
+Sort and filter buttons show their icon and current choice, without `Sort:` or
+`Filter:` prefixes. An unfiltered button shows `All`; compound filters keep their
+summary and fall back to the active count at narrow widths. Descriptive prefixes
+remain in accessibility labels. `BrowseFilterLabel` also supplies this presentation
+to Recent Activity; native icon-only toolbars and titles inside menus remain intact.
 
 `ServerUserRow` keeps the user's name above its owner/PIN metadata. The metadata
 wraps independently, preserving the avatar, native focus treatment, and trailing

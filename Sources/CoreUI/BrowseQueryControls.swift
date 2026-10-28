@@ -54,11 +54,16 @@ public struct BrowseSortMenu: View {
                 ForEach(SortDirection.allCases, id: \.self) { Text($0.displayName).tag($0) }
             }
         } label: {
-            Label("Sort: \(sort.field.displayName)", systemImage: "arrow.up.arrow.down")
-                #if os(iOS)
-                .frame(minWidth: 44, minHeight: 44)
-                #endif
+            Label {
+                Text(sort.field.displayName)
+            } icon: {
+                Image(systemName: "arrow.up.arrow.down")
+            }
+            #if os(iOS)
+            .frame(minWidth: 44, minHeight: 44)
+            #endif
         }
+        .accessibilityLabel(Text("Sort: \(sort.field.displayName)"))
     }
 }
 
@@ -77,17 +82,45 @@ public struct BrowseFilterMenu<Content: View>: View {
         Menu {
             content
         } label: {
-            if activeCount == 0 {
-                Label("Filter", systemImage: "line.3.horizontal.decrease")
-            } else {
-                ViewThatFits(in: .horizontal) {
-                    Label("Filter: \(summary)", systemImage: "line.3.horizontal.decrease")
-                        .fixedSize()
-                    Label("Filter: \(activeCount)", systemImage: "line.3.horizontal.decrease")
-                        .fixedSize()
+            BrowseFilterLabel(activeCount: activeCount, summary: summary)
+        }
+    }
+}
+
+public struct BrowseFilterLabel: View {
+    @Environment(\.locale) private var locale
+    private let activeCount: Int
+    private let summary: String
+
+    public init(activeCount: Int, summary: String) {
+        self.activeCount = activeCount
+        self.summary = summary
+    }
+
+    public var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Label {
+                Text(verbatim: selection)
+            } icon: {
+                Image(systemName: "line.3.horizontal.decrease")
+            }
+            .fixedSize()
+            if activeCount > 0 {
+                Label {
+                    Text(activeCount, format: .number)
+                } icon: {
+                    Image(systemName: "line.3.horizontal.decrease")
                 }
-                .accessibilityLabel(Text("Filter: \(summary)"))
+                .fixedSize()
             }
         }
+        .accessibilityLabel(Text("Filter: \(selection)"))
+    }
+
+    private var selection: String {
+        if activeCount == 0 {
+            return String(localized: "All", locale: locale) // l10n:content — resolves the shared unfiltered choice
+        }
+        return summary
     }
 }

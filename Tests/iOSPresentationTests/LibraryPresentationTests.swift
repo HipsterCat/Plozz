@@ -16,32 +16,82 @@ final class LibraryPresentationTests: XCTestCase {
 
     func testWatchlistQueryControlsFitPhoneTabletAndAccessibilityLayouts() async throws {
         let appModel = PlozziOSAppModel()
-        let preferences = WatchlistBrowsePreferences(
-            filter: .shows, sort: .init(field: .releaseDate, direction: .descending)
-        )
+        let cases: [(WatchlistMediaFilter, SortField, String, String)] = [
+            (.all, .dateAdded, "All", "Date Added"),
+            (.movies, .name, "Movies", "Name"),
+            (.shows, .releaseDate, "TV Shows", "Release Date")
+        ]
         for (width, textSize) in [(390.0, DynamicTypeSize.large), (320.0, .accessibility3), (1024.0, .large)] {
-            try await withPresentation(
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        WatchlistBrowseControls(preferences: .constant(preferences))
-                            .padding(.horizontal)
-                        WatchlistEmptyStateView(isFiltered: true, clearFilters: {})
+            for (filter, sort, filterLabel, sortLabel) in cases {
+                let preferences = WatchlistBrowsePreferences(
+                    filter: filter, sort: .init(field: sort, direction: sort.defaultDirection)
+                )
+                try await withPresentation(
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            WatchlistBrowseControls(preferences: .constant(preferences))
+                                .padding(.horizontal)
+                            WatchlistEmptyStateView(isFiltered: filter != .all, clearFilters: {})
+                        }
+                        .padding(.vertical)
                     }
-                    .padding(.vertical)
+                    .navigationTitle("Watchlist"),
+                    appModel: appModel, size: CGSize(width: width, height: 1100),
+                    sizeClass: width > 500 ? .regular : .compact, dynamicTypeSize: textSize
+                ) { window in
+                    try await waitForHostedLayout(window)
+                    let text = try self.capture(window, name: "watchlist-\(width)-\(textSize)-\(filter.rawValue)", scale: 2)
+                        .compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                    XCTAssertTrue(text.contains(filterLabel), text)
+                    XCTAssertTrue(text.contains(sortLabel), text)
+                    XCTAssertFalse(text.contains("Filter:"), text)
+                    XCTAssertFalse(text.contains("Sort:"), text)
+                    if filter != .all { XCTAssertTrue(text.contains("Clear Filters"), text) }
+                    let scroll = try XCTUnwrap(self.scrollViews(in: window).first)
+                    XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
                 }
-                .navigationTitle("Watchlist"),
-                appModel: appModel, size: CGSize(width: width, height: 1100),
-                sizeClass: width > 500 ? .regular : .compact, dynamicTypeSize: textSize
+            }
+        }
+    }
+
+    func testSharedFilterLabelsShowSelectionsAndCompactCompoundFilters() async throws {
+        let appModel = PlozziOSAppModel()
+        let compound = LibraryFilters(filter: .unwatched, genre: "Drama", year: 2024)
+        let summary = compound.summary(in: Locale(identifier: "en_US"))
+        let cases: [(CGFloat, Int, String, String)] = [
+            (600, 0, "", "All"),
+            (600, compound.activeCount, summary, "Unwatched"),
+            (120, compound.activeCount, summary, "3"),
+            (600, 1, "Playback", "Playback")
+        ]
+        for (width, count, summary, expected) in cases {
+            try await withPresentation(
+                BrowseFilterMenu(activeCount: count, summary: summary) {
+                    Text("All")
+                }
+                .font(.title2)
+                .frame(width: width)
+                .frame(maxWidth: .infinity, maxHeight: .infinity),
+                appModel: appModel, size: CGSize(width: 768, height: 1024), sizeClass: .regular
             ) { window in
                 try await waitForHostedLayout(window)
-                let text = try self.capture(window, name: "watchlist-\(width)-\(textSize)", scale: 2)
-                    .compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
-                XCTAssertTrue(text.contains("Sort"), text)
-                XCTAssertTrue(text.contains("Release Date"), text)
-                XCTAssertTrue(text.contains("Filter"), text)
-                XCTAssertTrue(text.contains("Clear Filters"), text)
-                let scroll = try XCTUnwrap(self.scrollViews(in: window).first)
-                XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+                let image = try self.captureImage(window, name: "filter-label-\(width)-\(count)-\(expected)", scale: 2)
+                // A lone digit is too small for reliable OCR of the full tablet canvas.
+                let labelRegion = try XCTUnwrap(image.cropping(to: CGRect(
+                    x: 0, y: CGFloat(image.height) / 2 - 120, width: CGFloat(image.width), height: 240
+                )))
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                request.usesLanguageCorrection = false
+                try VNImageRequestHandler(cgImage: labelRegion).perform([request])
+                let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                XCTAssertTrue(text.contains(expected), "Expected \(expected), recognized: \(text)")
+                if width == 600, count == 3 {
+                    XCTAssertTrue(text.contains("Drama"), text)
+                    XCTAssertTrue(text.contains("2024"), text)
+                }
+                XCTAssertFalse(text.contains("Filter"), text)
             }
         }
     }
@@ -265,9 +315,10 @@ final class LibraryPresentationTests: XCTestCase {
                         try self.assertSelectedTab(mode, observations: text, window: window)
                         if mode == .titles {
                             let strings = text.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
-                            XCTAssertTrue(strings.contains("Sort: Name"), strings)
-                            XCTAssertTrue(strings.contains("Filter"), strings)
-                            XCTAssertFalse(strings.contains("Fil-"), strings)
+                            XCTAssertTrue(strings.contains("Name"), strings)
+                            XCTAssertTrue(strings.contains("All"), strings)
+                            XCTAssertFalse(strings.contains("Sort:"), strings)
+                            XCTAssertFalse(strings.contains("Filter:"), strings)
                         }
                     }
                 }
@@ -495,7 +546,7 @@ final class LibraryPresentationTests: XCTestCase {
                     let text = try self.capture(window, name: "\(scope)-\(sizeClass)")
                         .compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
                     XCTAssertFalse(text.contains("Recommended"), text)
-                    XCTAssertFalse(text.contains("Sort:"), text)
+                    XCTAssertFalse(text.contains("Name"), text)
                     try self.assertArtworkKeyline(sizeClass: sizeClass, isGrid: true)
                     if scope == .playlistMembers {
                         XCTAssertEqual(model.playlistOrigin(at: 0)?.index, 0)
