@@ -1973,7 +1973,7 @@ struct PlozziOSDetailHeroForeground: View {
     }
 
     private var hasSourceVersionOptions: Bool {
-        sources.count > 1 || versions.count > 1 || loadVersions != nil
+        sources.count > 1 || versions.count > 1
     }
 
     /// The episode's own 16:9 still, shown above its details on an episode page.
@@ -2459,7 +2459,7 @@ struct PlozziOSDetailHeroForeground: View {
             }
             .pickerStyle(.menu)
         }
-        if versions.count > 1 || loadVersions != nil {
+        if versions.count > 1 {
             Button("Version", systemImage: "film.stack") {
                 isVersionPickerPresented = true
             }

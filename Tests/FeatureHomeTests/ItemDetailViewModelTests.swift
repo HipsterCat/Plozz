@@ -244,7 +244,7 @@ final class ItemDetailViewModelTests: XCTestCase {
             vm.suspendEnrichment()
         }
         await vm.load()
-        XCTAssertNotNil(vm.playbackVersionsLoader(for: item), "Unknown inventory must leave version selection discoverable.")
+        XCTAssertNotNil(vm.playbackVersionsLoader(for: item), "Explicit inventory loading remains available to callers.")
         let lookup = Task { try await vm.loadPlaybackVersions(for: item) }
         await entered.wait()
         XCTAssertEqual(vm.state.value?.item.title, "Movie")

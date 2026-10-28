@@ -10,6 +10,59 @@ import XCTest
 
 @MainActor
 final class PlaybackVersionChoiceHostedTests: XCTestCase {
+    func testSourceMenuOffersVersionsOnlyWithMultipleKnownChoices() async throws {
+        try await waitUntil {
+            UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        #if os(tvOS)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        #else
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        #endif
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let probe = VersionChoiceHostedProbe()
+        let loader = MediaVersionInventoryLoader(id: "known-choices") {
+            probe.inventoryRequests += 1
+            return [.init(id: "hd"), .init(id: "uhd")]
+        }
+        for hasLoader in [false, true] {
+            for count in [0, 1, 2] {
+                let versions = Array([MediaVersion(id: "hd", height: 1080), .init(id: "uhd", height: 2160)].prefix(count))
+                let panel = PlaybackSourceMenuPanel(
+                    page: .constant(.root),
+                    sources: [.init(accountID: "local", itemID: "movie"), .init(accountID: "remote", itemID: "movie")],
+                    selectedSourceID: "local",
+                    versions: versions, selectedVersionID: versions.first?.id,
+                    loadVersions: hasLoader ? loader : nil,
+                    actions: [.init(id: "refresh", title: "Refresh", systemImage: "arrow.clockwise")],
+                    onSelectSource: { _ in }, onSelectVersion: { _ in }, onPerformAction: { _ in }
+                )
+                window.rootViewController = UIHostingController(rootView:
+                    panel
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.black)
+                        .environment(\.themePalette, .dark)
+                        .environment(\.colorScheme, .dark)
+                        .environment(\.locale, Locale(identifier: "en_US"))
+                )
+                window.makeKeyAndVisible()
+                let text = try await visibleText(in: window, name: "version-count-\(count)-loader-\(hasLoader)")
+                XCTAssertEqual(text.localizedCaseInsensitiveContains("version"), count > 1, text)
+                XCTAssertTrue(text.localizedCaseInsensitiveContains("server"), text)
+                XCTAssertTrue(text.localizedCaseInsensitiveContains("refresh"), text)
+                XCTAssertEqual(probe.inventoryRequests, 0, "Menu availability must not start playback inventory discovery.")
+            }
+        }
+    }
+
     func testSourceMenuOnlyDiscoversInventoryAfterOpeningItsVersionPage() async throws {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
@@ -34,7 +87,7 @@ final class PlaybackVersionChoiceHostedTests: XCTestCase {
             Color.black.ignoresSafeArea()
                 .playbackSourceMenu(
                     state: menu, sources: [], selectedSourceID: "account",
-                    versions: [], selectedVersionID: nil, loadVersions: loader,
+                    versions: [.init(id: "hd"), .init(id: "uhd")], selectedVersionID: nil, loadVersions: loader,
                     onSelectSource: { _ in XCTFail("Inventory does not select a server.") },
                     onSelectVersion: { _ in XCTFail("Inventory does not select or play a file.") }
                 )
@@ -52,7 +105,7 @@ final class PlaybackVersionChoiceHostedTests: XCTestCase {
         menu.open(from: CGRect(x: 100, y: 100, width: 80, height: 48))
         try await waitUntil { window.rootViewController?.presentedViewController != nil }
         let root = try await visibleText(in: window, name: "inventory-root")
-        XCTAssertTrue(root.localizedCaseInsensitiveContains("version"), "Lazy sources remain discoverable.")
+        XCTAssertTrue(root.localizedCaseInsensitiveContains("version"), "Two known choices offer version selection.")
         XCTAssertEqual(probe.inventoryRequests, 0, "Opening/focusing overflow must remain metadata-only.")
         menu.page = .versions
         try await waitUntil { probe.inventoryRequests == 1 }
