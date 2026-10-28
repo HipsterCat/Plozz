@@ -156,6 +156,7 @@ struct PlexMetadata: Decodable {
     /// it does not need the full metadata fetch.
     let originallyAvailableAt: String?
     let addedAt: Int?
+    @LenientInt var watchlistedAt: Int?
     let titleSort: String?
     let duration: Int?         // milliseconds
     let viewOffset: Int?       // milliseconds resumed-to

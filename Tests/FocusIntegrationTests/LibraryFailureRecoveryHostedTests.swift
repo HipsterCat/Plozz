@@ -15,6 +15,59 @@ private final class LibraryUpdateHostedFixture {
 
 @MainActor
 final class LibraryFailureRecoveryHostedTests: XCTestCase {
+    func testWatchlistQueryControlsAndFilteredRecoveryRenderTogether() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let preferences = WatchlistBrowsePreferences(
+            filter: .shows, sort: .init(field: .releaseDate, direction: .descending)
+        )
+        window.rootViewController = UIHostingController(rootView:
+            ScrollView {
+                LazyVStack {
+                    HStack {
+                        Text("Watchlist").font(.largeTitle.bold())
+                        Spacer()
+                        WatchlistBrowseControls(preferences: .constant(preferences))
+                    }
+                    .focusSection()
+                    WatchlistEmptyStateView(isFiltered: true, clearFilters: {})
+                }
+                .padding(60)
+            }
+            .environment(\.themePalette, ThemePalette.dark)
+            .environment(\.locale, Locale(identifier: "en_US"))
+            .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(350))
+        window.layoutIfNeeded()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
+        try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+        let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+        XCTAssertTrue(text.contains("Watchlist"), text)
+        XCTAssertTrue(text.contains("Filter: TV Shows"), text)
+        XCTAssertTrue(text.contains("Sort: Release Date"), text)
+        XCTAssertTrue(text.contains("Clear Filters"), text)
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "watchlist-query-controls-tv"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testLibraryUpdateIsCompactAndScopedToItsIncludedServerSection() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),

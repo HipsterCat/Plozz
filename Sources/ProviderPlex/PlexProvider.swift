@@ -2873,6 +2873,7 @@ extension PlexProvider: WatchlistProviding {
         let items =         try await client.watchlist()
             .map { dto -> MediaItem in
                 var copy = mapDiscover(metadata: dto)
+                copy.watchlistAddedAt = dto.watchlistedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
                 copy.isFavorite = true
                 copy.locallyValidatedPlayableSource = false
                 return copy

@@ -14,6 +14,38 @@ import XCTest
 final class LibraryPresentationTests: XCTestCase {
     private var capturedImage: CGImage?
 
+    func testWatchlistQueryControlsFitPhoneTabletAndAccessibilityLayouts() async throws {
+        let appModel = PlozziOSAppModel()
+        let preferences = WatchlistBrowsePreferences(
+            filter: .shows, sort: .init(field: .releaseDate, direction: .descending)
+        )
+        for (width, textSize) in [(390.0, DynamicTypeSize.large), (320.0, .accessibility3), (1024.0, .large)] {
+            try await withPresentation(
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        WatchlistBrowseControls(preferences: .constant(preferences))
+                            .padding(.horizontal)
+                        WatchlistEmptyStateView(isFiltered: true, clearFilters: {})
+                    }
+                    .padding(.vertical)
+                }
+                .navigationTitle("Watchlist"),
+                appModel: appModel, size: CGSize(width: width, height: 1100),
+                sizeClass: width > 500 ? .regular : .compact, dynamicTypeSize: textSize
+            ) { window in
+                try await waitForHostedLayout(window)
+                let text = try self.capture(window, name: "watchlist-\(width)-\(textSize)", scale: 2)
+                    .compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                XCTAssertTrue(text.contains("Sort"), text)
+                XCTAssertTrue(text.contains("Release Date"), text)
+                XCTAssertTrue(text.contains("Filter"), text)
+                XCTAssertTrue(text.contains("Clear Filters"), text)
+                let scroll = try XCTUnwrap(self.scrollViews(in: window).first)
+                XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+            }
+        }
+    }
+
     func testDedicatedCollectionDirectoryOpensTheGridWithoutLibrarySubtabs() async throws {
         let appModel = PlozziOSAppModel()
         let artwork = try await seedArtwork(size: CGSize(width: 400, height: 225))

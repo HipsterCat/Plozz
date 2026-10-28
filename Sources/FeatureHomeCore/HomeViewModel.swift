@@ -458,6 +458,7 @@ public final class HomeViewModel {
     @ObservationIgnored private var collectionRefreshWaitingForDeadline = false
     @ObservationIgnored private var collectionRefreshNeedsSave = false
     private let profileNamespace: String?
+    public let watchlistBrowse: WatchlistBrowseModel
 
     /// Coalesces the burst of `identityIndexDidUpdate` notifications posted while
     /// the index warms: each active account publishes independently, so a fresh
@@ -519,6 +520,9 @@ public final class HomeViewModel {
     ) {
         self.accounts = accounts
         self.profileNamespace = profileNamespace
+        watchlistBrowse = WatchlistBrowseModel(
+            store: WatchlistBrowsePreferencesStore(namespace: profileNamespace)
+        )
         self.aggregator = aggregator
         self.layoutStore = layoutStore
         self.contentStore = contentStore

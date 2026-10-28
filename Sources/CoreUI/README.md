@@ -6,6 +6,13 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
+`BrowseQueryControls`, `BrowseSortMenu`, and `BrowseFilterMenu` own the native
+query-control layout, sort choices/directions, and active-filter labels shared
+by Library and Watchlist on TV and mobile. Mobile controls wrap at narrow widths
+and keep their 44-point action targets; TV keeps the existing native menu style.
+`WatchlistBrowseControls` supplies Watchlist's supported choices, not a parallel
+menu design. Callers retain their query behavior and accessibility identifiers.
+
 `ServerUserRow` keeps the user's name above its owner/PIN metadata. The metadata
 wraps independently, preserving the avatar, native focus treatment, and trailing
 selection indicator without squeezing the name alongside badges.
