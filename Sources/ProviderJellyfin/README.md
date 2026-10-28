@@ -25,6 +25,15 @@ supported capability remains at parity.
   Aether-enabled profiles use `PlozzigenMediaFormats` for linked container,
   video and audio families rather than native hardware-only restrictions.
   Native-only profiles and server conversion limits remain independent.
+  On-demand Original quality sends explicit null bitrate limits in the device
+  profile; omitting those keys would restore Jellyfin's 8 Mbps defaults.
+  User-selected lower qualities retain their exact limits. Server/user policy,
+  codec compatibility, Live TV and music negotiation remain independent.
+  Optional playback diagnostics retain bounded server-decision facts: source
+  bitrate, client limit, direct-play/stream/transcode flags, subtitle burn-in,
+  and allowlisted reasons from the response or its transcode URL. Addresses,
+  tokens, paths, and unknown reason text are never included. These facts explain
+  why conversion was selected; they do not prove why the resulting stream failed.
 - `JellyfinMusicProvider` — music-library queries (artists, albums, tracks)
   surfaced through the shared provider abstraction.
 

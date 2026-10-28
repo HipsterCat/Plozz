@@ -1512,6 +1512,11 @@ final class StreamingPlaybackTests: XCTestCase {
         request.streamingSessionID = "session"
         request.negotiatedStreamingVideoCodec = .hevc
         request.burnedInSubtitleTrackID = 6
+        request.serverDecision = .init(
+            sourceBitrate: 82_000_000, clientMaxBitrate: 2_000_000,
+            supportsDirectPlay: false, supportsDirectStream: false, supportsTranscoding: true,
+            subtitleBurnIn: true, transcodeReasons: ["ContainerBitrateExceedsLimit"]
+        )
         let local = PlayerViewModel.applyingOfflineRewrite(
             to: request, localURL: URL(fileURLWithPath: "/fixture/movie.mp4")
         )
@@ -1519,6 +1524,7 @@ final class StreamingPlaybackTests: XCTestCase {
         XCTAssertNil(local.streamingSessionID)
         XCTAssertNil(local.negotiatedStreamingVideoCodec)
         XCTAssertNil(local.burnedInSubtitleTrackID)
+        XCTAssertNil(local.serverDecision)
         XCTAssertFalse(local.isTranscoding)
         XCTAssertFalse(PlayerViewModel.streamingSelectionMatches(.init(quality: .hd720), .init(quality: .original)))
         XCTAssertFalse(PlayerViewModel.streamingSelectionMatches(.init(quality: .hd720), nil))
