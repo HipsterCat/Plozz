@@ -6,6 +6,13 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
+`NavigationStyleSwatch` preserves the miniature-window illustrations for all
+three navigation choices: a full-height dotted pinned sidebar, a compact sidebar
+of stacked tabs, and a centered top bar. The shared 320-by-180 drawing scales to
+fit both compact Settings cards and onboarding, keeping the top bar centered and
+all three equal-sized posters visible. Preview sizing does not change the shared
+card's focus or selection treatment.
+
 `ServerUserRow` keeps the user's name above its owner/PIN metadata. The metadata
 wraps independently, preserving the avatar, native focus treatment, and trailing
 selection indicator without squeezing the name alongside badges.
