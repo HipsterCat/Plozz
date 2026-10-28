@@ -244,6 +244,12 @@ clearance while details hide the rail; hiding chrome must not resize retained
 rows or grids. Pushed pages still receive the shell's zero inset and remain
 full-bleed. Native navigation roots keep their zero custom inset.
 
+`SearchTab` likewise applies `NavigationRailSearchRootInset` only to its root,
+before registering destinations. The native search field keeps room for the
+page button while the surrounding navigation stack stays full-screen and fixed
+during pushes and pops. Hiding pinned chrome must not change the stack's bounds
+or move the retained search field; pushed details have no search-header padding.
+
 `NavigationRailEdgeCatcher` passively observes arrow presses and indirect-touch
 swipes. Left at an unresolved content edge opens the sidebar; Right at an
 unresolved sidebar edge returns to the page. Both paths wait for native focus to
