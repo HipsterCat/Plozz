@@ -789021,6 +789021,226 @@
         }
       }
     },
+    "Switch profile" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تبديل الملف الشخصي"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Смяна на профил"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Canvia de perfil"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Přepnout profil"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skift profil"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profil wechseln"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αλλαγή προφίλ"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cambiar de perfil"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تعویض نمایه"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vaihda profiilia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Changer de profil"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "החלפת פרופיל"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "प्रोफ़ाइल बदलें"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Promijeni profil"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profilváltás"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ganti profil"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cambia profilo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "プロファイルを切り替える"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "프로필 전환"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tukar profil"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bytt profil"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profiel wisselen"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Przełącz profil"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trocar perfil"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Schimbă profilul"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Сменить профиль"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prepnúť profil"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zamenjaj profil"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Promeni profil"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Byt profil"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "สลับโปรไฟล์"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profil değiştir"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Змінити профіль"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chuyển hồ sơ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "切换个人资料"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "切換個人檔案"
+          }
+        }
+      }
+    },
     "Switch to an adult profile to manage these settings." : {
       "localizations" : {
         "ar" : {
@@ -1013039,6 +1013259,234 @@
         }
       }
     },
+    "navigationArrangement.footnote.horizontal" : {
+      "comment" : "Instructions for arranging the scrolling horizontal navigation.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Press and hold to hide, show, or move. Settings stays fixed until moved. Settings is also in the profile picker."
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "اضغط مطولًا لإخفاء العناصر أو إظهارها أو تغيير ترتيبها. تبقى الإعدادات ثابتة حتى تنقلها. يمكنك أيضًا الوصول إلى الإعدادات من قائمة اختيار الملف الشخصي."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Натиснете и задръжте, за да скриете, покажете или преместите елемент. „Настройки“ остават фиксирани, докато не ги преместите. Достъпни са и от менюто за избор на профил."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mantén premut per amagar, mostrar o reordenar. «Configuració» es manté fixa fins que la moguis. També hi pots accedir des del selector de perfils."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Stisknutím a podržením můžete položky skrýt, zobrazit nebo přesunout. Nastavení zůstává připnuté, dokud ho nepřesunete. Najdete ho také v nabídce pro výběr profilu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tryk og hold nede for at skjule, vise eller flytte. Indstillinger forbliver fastgjort, indtil du flytter dem. Du finder også Indstillinger i profilvælgeren."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zum Ausblenden, Einblenden oder Verschieben gedrückt halten. „Einstellungen“ bleiben angeheftet, bis du sie verschiebst. Du findest sie auch in der Profilauswahl."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Πατήστε παρατεταμένα για απόκρυψη, εμφάνιση ή μετακίνηση. Οι Ρυθμίσεις μένουν σταθερές μέχρι να τις μετακινήσετε. Οι Ρυθμίσεις είναι επίσης διαθέσιμες στην επιλογή προφίλ."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mantén pulsado para ocultar, mostrar o mover. Ajustes permanece fijo hasta que lo muevas. También puedes acceder a Ajustes desde el selector de perfiles."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "برای پنهان کردن، نمایش یا جابه‌جایی، فشار دهید و نگه دارید. تنظیمات تا زمانی که آن را جابه‌جا نکنید، ثابت می‌ماند. تنظیمات در بخش انتخاب نمایه نیز در دسترس است."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Piilota, näytä tai siirrä painamalla pitkään. Asetukset pysyvät paikallaan, kunnes siirrät niitä. Asetukset ovat myös profiilinvalitsimessa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Appuyez longuement pour masquer, afficher ou déplacer. La rubrique Réglages reste fixe jusqu’à ce que vous la déplaciez. Elle est aussi accessible depuis le sélecteur de profil."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "לחצו לחיצה ארוכה כדי להסתיר, להציג או להזיז. ההגדרות נשארות קבועות עד שתזיזו אותן. אפשר לגשת להגדרות גם דרך בורר הפרופילים."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "छिपाने, दिखाने या क्रम बदलने के लिए रिमोट का बटन दबाकर रखें। सेटिंग्स अपनी जगह पर स्थिर रहती हैं, जब तक आप उन्हें दूसरी जगह नहीं ले जाते। सेटिंग्स प्रोफ़ाइल चुनने के मेनू में भी मिलती हैं।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za skrivanje, prikaz ili promjenu redoslijeda pritisnite i držite tipku na daljinskom upravljaču. Postavke ostaju na istom mjestu dok ih ne premjestite. Postavke su dostupne i u izborniku profila."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Elrejtéshez, megjelenítéshez vagy átrendezéshez tartsa lenyomva a távirányító gombját. A Beállítások menü rögzítve marad, amíg át nem helyezi. A profilválasztóból is elérhető."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tekan dan tahan tombol remote untuk menyembunyikan, menampilkan, atau mengubah urutan. Pengaturan tetap di tempatnya sampai Anda memindahkannya. Pengaturan juga tersedia di pemilih profil."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tieni premuto per nascondere, mostrare o riordinare. La voce Impostazioni resta fissa finché non la sposti. Puoi aprire Impostazioni anche dal selettore dei profili."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "リモコンのボタンを長押しすると、非表示・表示・並べ替えができます。「設定」は移動するまで固定されます。「設定」はプロファイル選択メニューからも開けます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "길게 눌러 항목을 숨기거나 표시하거나 이동하세요. 설정은 직접 옮기기 전까지 고정됩니다. 프로필 선택 화면에서도 설정을 열 수 있습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tekan dan tahan untuk menyembunyikan, memaparkan atau mengalihkan item. Tetapan kekal di tempatnya sehingga anda mengalihkannya. Tetapan juga tersedia dalam pemilih profil."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trykk og hold for å skjule, vise eller flytte elementer. Innstillinger er festet til du flytter menypunktet. Du finner også Innstillinger i profilvelgeren."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Houd ingedrukt om items te verbergen, te tonen of te verplaatsen. Het item Instellingen blijft op zijn plek totdat je het verplaatst. Je kunt Instellingen ook openen via de profielkiezer."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Naciśnij i przytrzymaj, aby ukryć, pokazać lub przenieść pozycję. Ustawienia są przypięte, dopóki ich nie przeniesiesz. Ustawienia są też dostępne w menu wyboru profilu."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mantenha pressionado para ocultar, mostrar ou mover itens. O item Ajustes fica fixo até você movê-lo. Você também pode acessar Ajustes pelo seletor de perfis."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Apasă și ține apăsat pentru a ascunde, afișa sau muta. Setările rămân fixe până când le muți. Setările sunt disponibile și în selectorul de profiluri."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Нажмите и удерживайте, чтобы скрыть, показать или переместить. Настройки закреплены, пока вы их не переместите. Настройки также доступны в меню выбора профиля."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Stlačením a podržaním môžete položky skryť, zobraziť alebo presunúť. Nastavenia zostanú pripnuté, kým ich nepresuniete. Nastavenia nájdete aj vo výbere profilu."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pritisnite in pridržite za skrivanje, prikaz ali premikanje. Nastavitve ostanejo pripete, dokler jih ne premaknete. Nastavitve so na voljo tudi v izbirniku profilov."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pritisnite i zadržite da biste sakrili, prikazali ili premestili stavke. Podešavanja ostaju na istom mestu dok ih ne premestite. Podešavanja su dostupna i u meniju za izbor profila."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tryck och håll ned för att dölja, visa eller flytta. Inställningar ligger kvar på samma plats tills du flyttar menyalternativet. Inställningar finns också i profilväljaren."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "กดค้างเพื่อซ่อน แสดง หรือย้ายรายการ การตั้งค่าจะตรึงอยู่กับที่จนกว่าจะย้าย และยังเข้าถึงได้จากเมนูเลือกโปรไฟล์"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gizlemek, göstermek veya taşımak için basılı tutun. Ayarlar, siz taşıyana kadar sabit kalır. Ayarlara profil seçicisinden de erişebilirsiniz."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Натисніть і утримуйте кнопку пульта, щоб приховати, показати або перемістити. Налаштування закріплено, доки ви їх не перемістите. Вони також доступні у вікні вибору профілю."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nhấn và giữ để ẩn, hiện hoặc di chuyển. Cài đặt được ghim cho đến khi bạn di chuyển mục này. Bạn cũng có thể mở Cài đặt từ trình chọn hồ sơ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "长按遥控器按键可隐藏、显示或移动项目。设置会固定在原位，直至手动移动。也可从个人资料选择器打开设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "長按遙控器按鍵即可隱藏、顯示或移動項目。設定會固定在原位，直到手動移動為止。也可從個人檔案選擇器開啟設定。"
+          }
+        }
+      }
+    },
     "navigationArrangement.footnote.iOS" : {
       "comment" : "Instructions for arranging iPhone and iPad navigation tabs.",
       "extractionState" : "extracted_with_value",
@@ -1018283,6 +1018731,234 @@
         }
       }
     },
+    "navigationStyle.detail.horizontal" : {
+      "comment" : "One-line explanation shown under the navigation-style picker.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Navigation scrolls across the top."
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يمكن تمرير شريط التنقل أفقيًا في الأعلى."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Навигационната лента се превърта хоризонтално в горната част."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La barra de navegació es desplaça horitzontalment a la part superior."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigační lišta se posouvá vodorovně v horní části obrazovky."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigationslinjen ruller vandret øverst."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Die Navigationsleiste scrollt horizontal am oberen Bildschirmrand."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η πλοήγηση κυλά οριζόντια στο επάνω μέρος."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La navegación se desplaza horizontalmente en la parte superior."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "نوار ناوبری در بالای صفحه به‌صورت افقی پیمایش می‌شود."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigointipalkki vierii vaakasuunnassa näytön yläreunassa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La barre de navigation défile horizontalement en haut."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "סרגל הניווט נגלל לרוחב בחלק העליון."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "नेविगेशन बार ऊपर दाएँ-बाएँ स्क्रॉल होता है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigacija se vodoravno pomiče pri vrhu zaslona."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A navigációs sáv felül, vízszintesen görgethető."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigasi bergulir secara horizontal di bagian atas."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La navigazione scorre orizzontalmente nella parte superiore dello schermo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ナビゲーションは画面上部で横にスクロールします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "탐색 메뉴가 화면 상단에서 가로로 스크롤됩니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bar navigasi menatal secara mendatar di bahagian atas."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigasjonen ruller vannrett øverst på skjermen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De navigatiebalk scrolt horizontaal boven in beeld."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pasek nawigacji przewija się poziomo u góry ekranu."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A barra de navegação rola horizontalmente no topo da tela."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigarea se derulează orizontal în partea de sus."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Панель навигации прокручивается по горизонтали вверху."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigácia sa posúva vodorovne v hornej časti."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigacija se pomika vodoravno na vrhu."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigacija se pomera vodoravno pri vrhu."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigeringsfältet rullas i sidled längst upp."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "แถบนำทางเลื่อนในแนวนอนที่ด้านบน"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gezinme çubuğu üstte yatay olarak kaydırılır."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Панель навігації прокручується горизонтально вгорі екрана."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Thanh điều hướng cuộn ngang ở phía trên."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "导航栏在顶部横向滚动。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "導覽列在頂端橫向捲動。"
+          }
+        }
+      }
+    },
     "navigationStyle.detail.rail" : {
       "comment" : "One-line explanation shown under the navigation-style picker.",
       "extractionState" : "extracted_with_value",
@@ -1018741,7 +1019417,7 @@
     },
     "navigationStyle.detail.tabBar" : {
       "comment" : "One-line explanation shown under the navigation-style picker.",
-      "extractionState" : "extracted_with_value",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

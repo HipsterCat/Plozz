@@ -2,6 +2,70 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/066",
+      "version": "2026.10.28",
+      "marketingVersion": "2026.10.24",
+      "build": 66,
+      "releasedAt": "2026-10-28",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Filter your Watchlist by movies or TV shows, and sort by date added, release date or name.",
+            "Customize intro, credit and other skipping rules separately for movies, TV shows and anime.",
+            {
+              "text": "Open Settings directly from the profile picker.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            {
+              "text": "A compact, scrolling top bar: highlight a page, then press Select to open it.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "The top bar scrolls with the page; Back returns you to the top.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "App navigation stays available on the main Settings page and hides on subpages.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "The Settings profile button reveals \"Switch profile\" when focused.",
+              "platforms": ["tvOS"]
+            },
+            "Library and Watchlist sort and filter buttons show your current selections.",
+            "Jellyfin and Emby setup checks HTTPS and common server ports before sign-in.",
+            "The Version button appears only when more than one version is listed.",
+            {
+              "text": "Related audio controls are grouped together in Playback settings.",
+              "platforms": ["tvOS"]
+            },
+            "A message is now required when sending diagnostics."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Fixed Settings and library shortcuts becoming unreachable with many enabled libraries.",
+              "platforms": ["tvOS"]
+            },
+            "Fixed watched and unwatched actions for episodes opened from Home.",
+            "Fixed subtitle lines failing to appear or refresh during playback.",
+            {
+              "text": "Fixed a freeze when opening downloaded episodes on iOS 18.",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/065.2",
       "version": "2026.10.27",
       "marketingVersion": "2026.10.24",
