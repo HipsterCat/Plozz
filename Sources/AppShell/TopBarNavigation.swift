@@ -4,6 +4,11 @@ import CoreUI
 import FeatureProfiles
 import SwiftUI
 
+enum NavigationChromeMotion {
+    static let distance: CGFloat = 12
+    static let animation: Animation = .easeInOut(duration: 0.22)
+}
+
 enum TopBarNavigationMetrics {
     static let maximumWidthFraction: CGFloat = 0.75
     static let topMargin: CGFloat = 40
@@ -78,6 +83,7 @@ private struct TopBarNavigationContent: View {
     @State private var returnFocus = NavigationContentFocusRequester.ReturnFocus()
     @State private var destinationFocus = NavigationDestinationFocusHandoff()
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var contentInsets: EdgeInsets {
         EdgeInsets(
             top: chrome.isChromeHidden ? 0 : TopBarNavigationMetrics.topMargin + TopBarNavigationMetrics.panelHeight,
@@ -88,11 +94,11 @@ private struct TopBarNavigationContent: View {
     }
 
     private var current: NavigationRailDestination {
-        NavigationRailPlan.resolvedSelection(selection, destinations: destinations.filter { $0 != .settings })
+        selection == .settings ? .settings : NavigationRailPlan.resolvedSelection(selection, destinations: destinations)
     }
 
     private var isShellActive: Bool {
-        isEnabled && selection != .settings && destinations.contains(selection)
+        isEnabled && (selection == .settings || destinations.contains(selection))
     }
 
     var body: some View {
@@ -132,6 +138,11 @@ private struct TopBarNavigationContent: View {
                 .padding(.trailing, contentInsets.trailing)
                 .padding(.top, TopBarNavigationMetrics.topMargin)
                 .opacity(chrome.isChromeHidden ? 0 : 1)
+                .offset(y: chrome.isChromeHidden && !reduceMotion ? -NavigationChromeMotion.distance : 0)
+                .animation(
+                    chrome.transitionSuppressesFocus ? nil : NavigationChromeMotion.animation,
+                    value: chrome.isChromeHidden
+                )
                 .disabled(!isShellActive || chrome.isChromeHidden || chrome.transitionSuppressesFocus)
                 .accessibilityHidden(chrome.isChromeHidden)
         }
@@ -144,7 +155,13 @@ private struct TopBarNavigationContent: View {
             navigationHasFocus: isNavigating && !chrome.isChromeHidden
         )
         .onExitCommand(perform: !isNavigating && !chrome.isChromeHidden ? openNavigation : nil)
-        .onAppear { if isNavigating { openNavigation() } }
+        .onAppear {
+            if current == .settings {
+                enterContent(.settings)
+            } else if isNavigating {
+                openNavigation()
+            }
+        }
         .onChange(of: isNavigating && isShellActive, initial: true) { _, value in
             onNavigationFocusChanged(value)
         }
@@ -162,6 +179,11 @@ private struct TopBarNavigationContent: View {
             if destinationFocus.request?.destination != current { destinationFocus.cancel() }
             contentRequest = nil
             returnFocus.clear()
+            if current == .settings, destinationFocus.request == nil {
+                navigationRequest = nil
+                isNavigating = true
+                destinationFocus.begin(.settings)
+            }
         }
         .onChange(of: profile?.id) { _, _ in
             returnFocus.clear()
@@ -206,7 +228,7 @@ private struct TopBarNavigationContent: View {
 
     private func navigationFocusChanged(_ hasFocus: Bool) {
         navigationHasFocus = hasFocus
-        guard hasFocus, isShellActive else { return }
+        guard hasFocus, isShellActive, !destinationFocus.isWaiting else { return }
         isNavigating = true
         contentRequest = nil
         destinationFocus.cancel()
@@ -224,10 +246,7 @@ private struct TopBarNavigationContent: View {
 
     private func enterContent(_ destination: NavigationRailDestination) {
         guard isShellActive, isNavigating, !chrome.transitionSuppressesFocus else { return }
-        if destination == .settings {
-            selection = .settings
-            return
-        }
+        navigationRequest = nil
         if destination != current { selection = destination }
         destinationFocus.begin(destination)
     }
@@ -273,6 +292,9 @@ private struct TopBarNavigationBar: View {
     @Environment(\.themePalette) private var palette
 
     private var fixesSettings: Bool { pinsSettings && destinations.contains(.settings) }
+    private var focusDestination: NavigationRailDestination {
+        NavigationRailPlan.resolvedSelection(current, destinations: destinations)
+    }
     private var scrollingDestinations: [NavigationRailDestination] {
         destinations.filter { !fixesSettings || $0 != .settings }
     }
@@ -333,7 +355,7 @@ private struct TopBarNavigationBar: View {
                     guard request != nil else { return }
                     var transaction = Transaction()
                     transaction.disablesAnimations = true
-                    withTransaction(transaction) { proxy.scrollTo(current) }
+                    withTransaction(transaction) { proxy.scrollTo(focusDestination) }
                 }
             }
             .frame(maxWidth: destinationContentWidth)
@@ -383,7 +405,7 @@ private struct TopBarNavigationBar: View {
             horizontalPadding: iconOnly ? 8 : 12, verticalPadding: TopBarNavigationMetrics.itemPadding
         ))
         .focused($focused, equals: .destination(destination))
-        .prefersDefaultFocus(destination == current, in: focusScope)
+        .prefersDefaultFocus(destination == focusDestination, in: focusScope)
         .disabled(!canFocus(.destination(destination)))
         .accessibilityAddTraits(current == destination ? [.isSelected] : [])
         .accessibilityIdentifier("top-navigation-\(destination.storageValue)")
@@ -391,16 +413,16 @@ private struct TopBarNavigationBar: View {
 
     private func canFocus(_ target: Target) -> Bool {
         guard isShellActive else { return false }
-        if navigationRequest != nil { return target == .destination(current) }
-        return isNavigating || target == .destination(current)
+        if navigationRequest != nil { return target == .destination(focusDestination) }
+        return isNavigating || target == .destination(focusDestination)
     }
 
     private func focusMarker(for target: Target) -> some View {
         NavigationRowFocusRequester(
-            request: isShellActive && target == .destination(current) ? navigationRequest : nil
+            request: isShellActive && target == .destination(focusDestination) ? navigationRequest : nil
         ) { request, didFocus in
             guard isShellActive, navigationRequest == request else { return }
-            if !didFocus { focused = .destination(current) }
+            if !didFocus { focused = .destination(focusDestination) }
             onNavigationFocused(request)
         }
     }

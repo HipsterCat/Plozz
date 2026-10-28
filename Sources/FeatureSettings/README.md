@@ -794,12 +794,16 @@ watch history and planning-list behavior are documented in
   fallback. Their native focus behavior stays unchanged.
 - **TV navigation ownership.** Focusing a category selects its row; Select
   or Right opens the equally sized category page.
-  Back pops a child, then returns to categories, then leaves Settings for the
-  previous available app destination. MainTabView presents the workspace outside
-  the navigation-style shell, retaining the hidden shell while excluding it from
-  focus and accessibility. This prevents native sidebar adaptation from resizing
-  the Settings page. Changing navigation style retains
-  the Settings section and typed child path; all three styles restore on exit.
+  Back pops a child, then returns to categories, then focuses app navigation.
+  MainTabView presents the workspace as a normal destination in all three shells.
+  Categories and nested pages report their full page depth, including return
+  transitions, to custom chrome. Native Sidebar uses a full-screen subpage stack
+  because its indicator ignores toolbar visibility; dismissal restores category
+  focus after the native presentation completes. Root categories keep navigation available.
+  Changing navigation style retains the mounted shell, Settings section and typed
+  child path throughout the Settings visit; the new chrome takes effect on exit.
+  Settings columns remain centered and subpage headers keep their full-height
+  layout; only root foreground reserves space below the top bar.
   Focus requests are separate from native focus arrival: competing controls stay
   gated until `NativeFocusRegionObserver` confirms ownership.
 - **Profile and parental scope.** Switching profile or changing Kids/PIN status

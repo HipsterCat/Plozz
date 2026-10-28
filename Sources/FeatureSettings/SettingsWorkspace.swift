@@ -4,25 +4,8 @@ import CoreModels
 import FeatureProfiles
 import SwiftUI
 
-public struct SettingsExitAction {
-    public let perform: () -> Void
-
-    public init(_ perform: @escaping () -> Void) { self.perform = perform }
-}
-
-private struct SettingsExitActionKey: EnvironmentKey {
-    static let defaultValue: SettingsExitAction? = nil
-}
-
 private struct SettingsWorkspaceFocusScopeKey: EnvironmentKey {
     static let defaultValue: Namespace.ID? = nil
-}
-
-public extension EnvironmentValues {
-    var settingsExitAction: SettingsExitAction? {
-        get { self[SettingsExitActionKey.self] }
-        set { self[SettingsExitActionKey.self] = newValue }
-    }
 }
 
 extension EnvironmentValues {
@@ -36,16 +19,22 @@ struct SettingsWorkspace<Sidebar: View, Detail: View>: View {
     @Bindable var navigation: SettingsNavigationModel
     @ViewBuilder var sidebar: () -> Sidebar
     @ViewBuilder var detail: (SettingsRoute) -> Detail
-    @Environment(\.settingsExitAction) private var exit
+    @Environment(\.plozzTopNavigationContentInsets) private var topNavigationInsets
+    @Environment(\.plozzNavigationStyle) private var navigationStyle
+    @Environment(NavigationChromeModel.self) private var chrome: NavigationChromeModel?
     @Namespace private var sidebarScope
 
     var body: some View {
         SettingsPageStack(
             navigation: navigation.pages, pageWidth: SettingsFormMetrics.pageWidth,
-            onRootBack: { exit?.perform() },
-            fullWidthDestination: \.usesFullScreenDetail
+            onRootBack: nil,
+            fullWidthDestination: \.usesFullScreenDetail,
+            presentsSubpagesFullScreen: navigationStyle == .sidebar,
+            onSubpagesDismiss: navigation.returnToSidebar
         ) {
             sidebar()
+                .padding(.top, topNavigationInsets.top)
+                .topNavigationForegroundClip()
                 .focusSection()
                 .focusScope(sidebarScope)
                 .environment(\.settingsWorkspaceFocusScope, sidebarScope)
@@ -70,7 +59,10 @@ struct SettingsWorkspace<Sidebar: View, Detail: View>: View {
                 navigation.returnToSidebar()
             }
         }
-        .toolbar(.hidden, for: .tabBar)
+        .reportsNavigationDepth(
+            max(navigation.pages.pages.count, navigation.pages.isTransitioning ? 1 : 0),
+            to: chrome
+        )
     }
 }
 

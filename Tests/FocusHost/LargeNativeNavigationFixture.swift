@@ -82,27 +82,20 @@ struct LargeNativeNavigationFixture: View {
         }
     }
 
-    private var shell: some View {
-        SettingsNavigationShell(style: isSidebar ? .sidebar : .tabBar, showsSettings: selectionBinding.wrappedValue == .settings) { _ in
-            if isSidebar {
-                sidebar
-            } else {
-                TopBarNavigation(
-                    destinations: NavigationDestinationDefaults.topBar(destinations: destinations),
-                    selection: selectionBinding,
-                    preventsAccidentalExit: true,
-                    content: { destination, _ in AnyView(page(destination)) },
-                    label: label,
-                    profile: profile,
-                    onOpenProfileSwitcher: { showsProfilePicker = true },
-                    chrome: chrome
-                )
-            }
-        } settings: {
-            VStack {
-                Text("Settings").accessibilityIdentifier("large-navigation-settings")
-                Button("Back") { selectionBinding.wrappedValue = .home }
-            }
+    @ViewBuilder private var shell: some View {
+        if isSidebar {
+            sidebar
+        } else {
+            TopBarNavigation(
+                destinations: NavigationDestinationDefaults.topBar(destinations: destinations),
+                selection: selectionBinding,
+                preventsAccidentalExit: true,
+                content: { destination, _ in AnyView(page(destination)) },
+                label: label,
+                profile: profile,
+                onOpenProfileSwitcher: { showsProfilePicker = true },
+                chrome: chrome
+            )
         }
     }
 
@@ -135,7 +128,12 @@ struct LargeNativeNavigationFixture: View {
 
     private func page(_ destination: NavigationRailDestination) -> some View {
         NavigationStack {
-            if realLibraries, destination == .allLibraries || libraries.contains(where: { .library($0.key) == destination }) {
+            if destination == .settings {
+                VStack {
+                    Text("Settings").accessibilityIdentifier("large-navigation-settings")
+                    Button("Back") { selectionBinding.wrappedValue = .home }
+                }
+            } else if realLibraries, destination == .allLibraries || libraries.contains(where: { .library($0.key) == destination }) {
                 LibraryBrowseView(
                     viewModel: LibraryBrowseViewModel(
                         provider: NavigationFixtureProvider(), containerID: destination.storageValue,

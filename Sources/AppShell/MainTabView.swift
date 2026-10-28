@@ -100,34 +100,25 @@ private struct RootNavigationTabLabel: View {
     }
 }
 
-/// Retain visited navigation while Settings is open, but mount a newly selected
-/// chrome only when it becomes visible. A hidden native sidebar still resets focus.
-struct SettingsNavigationShell<Navigation: View, Settings: View>: View {
+/// Keep Settings mounted while its style picker saves a new preference.
+/// Replace the shell only after leaving Settings, without reparenting its pages.
+struct SettingsNavigationShell<Navigation: View>: View {
     let style: NavigationStyle
     let showsSettings: Bool
     @ViewBuilder var navigation: (NavigationStyle) -> Navigation
-    @ViewBuilder var settings: () -> Settings
     @State private var lastVisibleStyle: NavigationStyle?
 
     var body: some View {
-        ZStack {
-            if let mountedStyle = showsSettings ? lastVisibleStyle : style {
-                navigation(mountedStyle)
-                    .environment(\.plozzNavigationStyle, mountedStyle)
-                    .opacity(showsSettings ? 0 : 1)
-                    .disabled(showsSettings)
-                    .accessibilityHidden(showsSettings)
+        let preservesStyle = showsSettings
+        let mountedStyle = preservesStyle ? lastVisibleStyle ?? style : style
+        navigation(mountedStyle)
+            .environment(\.plozzNavigationStyle, mountedStyle)
+            .onChange(of: preservesStyle, initial: true) { _, _ in
+                if lastVisibleStyle == nil || !preservesStyle { lastVisibleStyle = style }
             }
-            if showsSettings {
-                settings()
+            .onChange(of: style) { _, style in
+                if !preservesStyle { lastVisibleStyle = style }
             }
-        }
-        .onChange(of: showsSettings, initial: true) { _, _ in
-            if !showsSettings { lastVisibleStyle = style }
-        }
-        .onChange(of: style) { _, style in
-            if !showsSettings { lastVisibleStyle = style }
-        }
     }
 }
 
@@ -570,7 +561,6 @@ struct MainTabView: View {
     /// MainTabView passes the reference but never reads its path, so Settings
     /// pushes do not invalidate this large shell body.
     @State private var settingsNavigation = SettingsNavigationModel()
-    @State private var settingsReturnDestination: NavigationRailDestination = .home
 
     private var selectedTab: Binding<NavigationRailDestination> {
         Binding(
@@ -585,9 +575,9 @@ struct MainTabView: View {
                 releaseExplicitLiveTVEntry(ifLeavingFor: $0)
                 let destination = resolvedTopBarTab($0)
                 selectedTabRaw = destination.storageValue
-                if navigationStyle == .tabBar {
-                    libraryNavigationEntryOverride = destination
-                }
+                // This binding can still belong to the mounted top bar after
+                // Settings has saved a different style.
+                libraryNavigationEntryOverride = destination
             }
         )
     }
@@ -1158,24 +1148,6 @@ struct MainTabView: View {
             )
             .settingsPageBackground()
             .environment(Self.subtitleStyleDestination)
-            .environment(\.settingsExitAction, SettingsExitAction(closeSettings))
-    }
-
-    private func closeSettings() {
-        let destinations = activeNavigationDestinations.filter { $0 != .settings }
-        guard !destinations.isEmpty else {
-            retainsExplicitHomeEntry = true
-            requireHomeDestination()
-            return
-        }
-        let destination = NavigationRailPlan.resolvedSelection(
-            settingsReturnDestination, destinations: destinations
-        )
-        if navigationStyle == .tabBar {
-            selectedTab.wrappedValue = destination
-        } else {
-            libraryNavigationSelection.wrappedValue = destination
-        }
     }
 
     /// Extracted from `body`: the `HomeTab` initializer takes ~40 arguments and,
@@ -1312,15 +1284,13 @@ struct MainTabView: View {
     /// music probe — is applied to this in `body`, so the two chromes can never
     /// drift in what they provide.
     private var shellContent: some View {
-        SettingsNavigationShell(style: navigationStyle, showsSettings: isActiveTab(.settings)) { style in
+        SettingsNavigationShell(
+            style: navigationStyle, showsSettings: isActiveTab(.settings)
+        ) { style in
             navigationShell(style: style)
-        } settings: {
-            settingsTabContent
         }
     }
 
-    // Keep the Settings stack outside TabView's navigation adaptation. Changing
-    // chrome must not lift its right-hand destination over the category column.
     @ViewBuilder
     private func navigationShell(style: NavigationStyle) -> some View {
         switch style {
@@ -1410,7 +1380,7 @@ struct MainTabView: View {
         case .music:
             return AnyView(musicTabContent)
         case .settings:
-            return AnyView(Color.clear)
+            return AnyView(settingsTabContent)
         case .allLibraries, .library:
             guard let libraryEntry else {
                 return AnyView(homeTabContent(isActive: isActive))
@@ -1628,7 +1598,7 @@ struct MainTabView: View {
         case .music:
             return AnyView(musicTabContent)
         case .settings:
-            return AnyView(Color.clear)
+            return AnyView(settingsTabContent)
         case .allLibraries, .library:
             if let entry = railEntries.first(where: {
                 $0.destination == activeLibraryNavigationDestination
@@ -1835,12 +1805,7 @@ struct MainTabView: View {
                 persistPrunedRailSelection()
             }
         }
-        .onChange(of: activeDestinationKey, initial: true) { previous, destination in
-            if destination == NavigationRailDestination.settings.storageValue,
-               let previous = NavigationRailDestination(storageValue: previous),
-               previous != .settings {
-                settingsReturnDestination = previous
-            }
+        .onChange(of: activeDestinationKey, initial: true) { _, destination in
             if let selected = NavigationRailDestination(storageValue: destination) {
                 retainsActiveWatchlist = selected == .watchlist
                 releaseExplicitLiveTVEntry(ifLeavingFor: selected)

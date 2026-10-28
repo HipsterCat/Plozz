@@ -343,8 +343,14 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertEqual(profile.value as? String, "Alex")
         capture("profile-picker-opened-active-settings", in: app)
         XCUIRemote.shared.press(.menu)
-        XCTAssertTrue(section("playback", in: app).waitForNonExistence(timeout: 5))
-        try openSettingsIfNeeded(in: app)
+        let navigation = settingsNavigationItem(style: "tabBar", in: app)
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.hasFocus(navigation) }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
+        XCTAssertTrue(app.buttons["settings-section-playback"].exists)
+        XCUIRemote.shared.press(.select)
+        waitForCategoryFocus("playback", in: app)
         XCTAssertEqual(profile.value as? String, "Alex")
         #else
         throw XCTSkip("Never changes profile selection on a physical device.")
@@ -860,23 +866,108 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         #endif
     }
 
-    func testNativeSidebarAndTopBarEntryAndExit() throws {
+    func testPinnedSettingsRootKeepsNavigationAndAppliesTopBarAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "rail", nextStyle: "tabBar", choice: "Top Bar")
+    }
+
+    func testTopBarSettingsRootKeepsNavigationAndAppliesSidebarAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "tabBar", nextStyle: "sidebar", choice: "Sidebar")
+    }
+
+    func testSidebarSettingsRootKeepsNavigationAndAppliesPinnedAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "sidebar", nextStyle: "rail", choice: "Pinned Sidebar")
+    }
+
+    private func assertSettingsNavigationLifecycle(style: String, nextStyle: String, choice: String) throws {
         #if targetEnvironment(simulator)
-        for style in ["sidebar", "tabBar"] {
-            let app = try launchSettings(style: style)
-            XCTAssertTrue(section("playback", in: app).isSelected)
-            capture("entry-\(style)", in: app)
-            try enterAndReturn("playback", in: app)
-            XCUIRemote.shared.press(.menu)
-            XCTAssertFalse(section("playback", in: app).exists, app.debugDescription)
-            capture("exit-\(style)", in: app)
-            try openSettingsIfNeeded(in: app)
-            try enterAndReturn("playback", in: app)
-            app.terminate()
+        let app = try launchSettings(style: style)
+        defer { app.terminate() }
+        let navigation = settingsNavigationItem(style: style, in: app)
+        capture("root-navigation-\(style)", in: app)
+        XCTAssertTrue(settingsNavigationIsVisible(style: style, in: app),
+                      "Root Settings keeps its navigation affordance visible.")
+        if style == "tabBar" {
+            XCTAssertGreaterThanOrEqual(
+                app.buttons["settings-profile-switch"].frame.minY, navigation.frame.maxY + 16,
+                "Settings foreground must clear the top navigation."
+            )
         }
+        try focus(section("screensNavigation", in: app), in: app)
+        XCUIRemote.shared.press(.select)
+        let page = app.buttons["settings-page-navigation"]
+        try focus(page, in: app)
+        capture("category-navigation-hidden-\(style)", in: app)
+        XCTAssertFalse(settingsNavigationIsVisible(style: style, in: app), "Categories hide app navigation.")
+        assertCenteredSettingsColumn(in: app)
+        XCUIRemote.shared.press(.select)
+        let option = app.buttons[choice]
+        try focus(option, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(hasFocus(option), "Changing style must not recreate or steal focus from its picker.")
+        XCTAssertFalse(settingsNavigationIsVisible(style: style, in: app), "Nested Settings pages keep navigation hidden.")
+        capture("nested-navigation-hidden-\(style)", in: app)
+        XCUIRemote.shared.press(.menu)
+        waitForEnabled(page)
+        XCTAssertTrue(hasFocus(page), "Back must restore the originating Settings row.")
+        XCTAssertFalse(settingsNavigationIsVisible(style: style, in: app))
+        XCUIRemote.shared.press(.menu)
+        waitForCategoryFocus("screensNavigation", in: app)
+        XCTAssertTrue(settingsNavigationIsVisible(style: style, in: app),
+                      "Root return restores the mounted navigation without reparenting Settings.")
+        capture("root-navigation-return-\(style)", in: app)
+        XCUIRemote.shared.press(.menu)
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.hasFocus(navigation) }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
+        XCTAssertTrue(app.buttons["settings-section-screensNavigation"].exists,
+                      "Root Back focuses app navigation instead of dismissing Settings.")
+        XCUIRemote.shared.press(.select)
+        if style == "sidebar" {
+            // Native same-tab reentry may restore the row or choose the root's
+            // first action. Subpage Back above must still restore its exact row.
+            let entered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                self.hasFocus(self.section("screensNavigation", in: app))
+                    || self.hasFocus(app.buttons["settings-profile-switch"])
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed, app.debugDescription)
+        } else {
+            waitForCategoryFocus("screensNavigation", in: app)
+        }
+        XCUIRemote.shared.press(.menu)
+        XCUIRemote.shared.press(style == "tabBar" ? .left : .up)
+        XCUIRemote.shared.press(.select)
+        let leftSettings = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in !app.buttons["settings-section-screensNavigation"].exists },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [leftSettings], timeout: 5), .completed, app.debugDescription)
+        try openSettingsIfNeeded(in: app)
+        XCTAssertTrue(settingsNavigationIsVisible(style: nextStyle, in: app),
+                      "The saved navigation style takes effect after leaving Settings.")
+        capture("root-navigation-new-\(nextStyle)", in: app)
         #else
         throw XCTSkip("Simulator-only Settings review.")
         #endif
+    }
+
+    private func settingsNavigationItem(style: String, in app: XCUIApplication) -> XCUIElement {
+        if style == "tabBar" { return app.buttons["top-navigation-settings"] }
+        if style == "sidebar" {
+            return app.collectionViews["Sidebar"].cells.containing(.button, identifier: "gearshape.fill").firstMatch
+        }
+        return app.buttons.matching(NSPredicate(format: "label == %@", "Settings")).firstMatch
+    }
+
+    private func settingsNavigationIsVisible(style: String, in app: XCUIApplication) -> Bool {
+        if style == "sidebar" {
+            // The collapsed native sidebar is a noninteractive indicator; Menu
+            // expands its actual controls, which the lifecycle test also exercises.
+            let indicator = app.images["chevron.compact.backward"]
+            return indicator.exists && indicator.isHittable
+        }
+        let item = settingsNavigationItem(style: style, in: app)
+        return item.exists && item.isHittable
     }
 
     func testRootCategoriesOnlyStaySelectedWhileFocused() throws {
@@ -2715,6 +2806,9 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
 
     private func hasFocus(_ target: XCUIElement) -> Bool {
         guard target.exists, target.isEnabled else { return false }
+        // Category selection mirrors native FocusState, not the saved section.
+        // Nested UIKit hosts can omit AX hasFocus while still exposing this trait.
+        if target.identifier.hasPrefix("settings-section-"), target.isSelected { return true }
         return target.hasFocus || target.descendants(matching: .any)
             .matching(NSPredicate(format: "hasFocus == true")).firstMatch.exists
     }

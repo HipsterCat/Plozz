@@ -22,12 +22,16 @@ final class TopBarPresentationHostedTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
         try await waitForPage(.home, model: model, window: window)
-        try await Task.sleep(for: .milliseconds(300))
-        window.layoutIfNeeded()
-        window.setNeedsFocusUpdate()
-        window.updateFocusIfNeeded()
         let owner = try XCTUnwrap(find(NavigationRailFocusHostController.self, in: host))
         let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        let deadline = ContinuousClock.now + .seconds(5)
+        repeat {
+            window.layoutIfNeeded()
+            window.setNeedsFocusUpdate()
+            window.updateFocusIfNeeded()
+            if system.focusedItem != nil, focusItems(in: window).count == model.destinations.count { break }
+            try await Task.sleep(for: .milliseconds(20))
+        } while ContinuousClock.now < deadline
         func focus(_ index: Int) throws {
             let items = focusItems(in: window).sorted {
                 $0.frame.midX < $1.frame.midX
@@ -152,16 +156,73 @@ final class TopBarPresentationHostedTests: XCTestCase {
             for destination in [NavigationRailDestination.settings, .watchlist, .liveTV, .home] {
                 model.selection = destination
                 window.layoutIfNeeded()
-                if destination != .settings {
-                    try await waitForPage(destination, model: model, window: window)
-                } else {
-                    try await Task.sleep(for: .milliseconds(200))
-                    XCTAssertEqual(model.selection, .settings, "Hidden chrome must not overwrite Settings selection.")
+                try await waitForPage(destination, model: model, window: window)
+                if destination == .settings {
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while model.buttons[.settings]?.isFocused != true, ContinuousClock.now < deadline {
+                        try await Task.sleep(for: .milliseconds(20))
+                    }
+                    XCTAssertTrue(model.buttons[.settings]?.isFocused == true)
+                    XCTAssertEqual(model.selection, .settings, "Settings must open even when hidden from navigation.")
                     XCTAssertFalse(owner.isNavigationFocused)
                 }
                 XCTAssertTrue(find(NavigationRailFocusHostController.self, in: host) === owner)
             }
         }
+    }
+
+    func testChromeExitDistanceRespectsReduceMotionAndPreservesContent() async throws {
+        for reduceMotion in [false, true] {
+            let (window, previous) = try await makeWindow()
+            let model = Model()
+            model.selection = .settings
+            model.reduceMotion = reduceMotion
+            window.rootViewController = UIHostingController(rootView: Fixture(model: model))
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKeyAndVisible()
+            }
+            try await waitForPage(.settings, model: model, window: window)
+            try await Task.sleep(for: .milliseconds(350))
+            let marker = try XCTUnwrap(navigationMarkers(in: window).first)
+            let initial = marker.convert(marker.bounds, to: window)
+            let page = try XCTUnwrap(model.buttons[.settings])
+            XCTAssertTrue(page.isFocused)
+
+            model.chrome.setStackDepth(1)
+            try await Task.sleep(for: .milliseconds(90))
+            captureMotion(in: window, name: "Top bar exiting; reduced motion \(reduceMotion)")
+            try await Task.sleep(for: .milliseconds(350))
+            let hidden = marker.convert(marker.bounds, to: window)
+            XCTAssertEqual(hidden.minY, initial.minY - (reduceMotion ? 0 : 12), accuracy: 0.5)
+            XCTAssertNil(NavigationRowFocusRequester.target(for: marker, in: window))
+            XCTAssertTrue(page.isFocused, "Hiding navigation must not interrupt the current page.")
+            XCTAssertTrue(page.window === window)
+
+            model.chrome.setStackDepth(0)
+            try await Task.sleep(for: .milliseconds(90))
+            captureMotion(in: window, name: "Top bar returning; reduced motion \(reduceMotion)")
+            try await Task.sleep(for: .milliseconds(350))
+            XCTAssertEqual(marker.convert(marker.bounds, to: window).minY, initial.minY, accuracy: 0.5)
+            XCTAssertTrue(page.isFocused, "Returning chrome must not steal focus.")
+        }
+    }
+
+    private func navigationMarkers(in view: UIView) -> [NavigationRowFocusRequester.RequestView] {
+        if let marker = view as? NavigationRowFocusRequester.RequestView { return [marker] }
+        return view.subviews.flatMap { navigationMarkers(in: $0) }
+    }
+
+    private func captureMotion(in window: UIWindow, name: String) {
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: false))
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func makeWindow() async throws -> (UIWindow, UIWindow?) {
@@ -222,9 +283,11 @@ final class TopBarPresentationHostedTests: XCTestCase {
         }
     }
 
-    @Observable
+    @MainActor @Observable
     final class Model {
         var selection = NavigationRailDestination.home
+        let chrome = NavigationChromeModel()
+        var reduceMotion = false
         var destinations: [NavigationRailDestination] =
             [.home, .watchlist, .liveTV, .search] + (1...20).map { .library("plex:\($0)") }
         @ObservationIgnored var buttons: [NavigationRailDestination: UIButton] = [:]
@@ -235,20 +298,20 @@ final class TopBarPresentationHostedTests: XCTestCase {
         @Bindable var model: Model
 
         var body: some View {
-            SettingsNavigationShell(style: .tabBar, showsSettings: model.selection == .settings) { _ in
-                TopBarNavigation(
-                    destinations: model.destinations, selection: $model.selection,
-                    preventsAccidentalExit: true,
-                    content: { destination, active in
-                        model.contentBuilds += 1
-                        return AnyView(Probe(destination: destination, active: active, model: model)
-                            .frame(width: 500, height: 100))
-                    },
-                    label: { AnyView(Label($0.storageValue, systemImage: "square")) }
-                )
-            } settings: {
-                Text("Settings")
-            }
+            TopBarNavigation(
+                destinations: model.destinations, selection: $model.selection,
+                preventsAccidentalExit: true,
+                content: { destination, active in
+                    model.contentBuilds += 1
+                    return AnyView(Probe(destination: destination, active: active, model: model)
+                        .frame(width: 500, height: 100)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity))
+                },
+                label: { AnyView(Label($0.storageValue, systemImage: "square")) },
+                chrome: model.chrome
+            )
+            .environment(\.plozzNavigationStyle, .tabBar)
+            .environment(\._accessibilityReduceMotion, model.reduceMotion)
         }
     }
 

@@ -186,11 +186,22 @@ navigation style are independent choices.
 
 ## Navigation planning
 
-Settings retains the last visible navigation shell while its style picker saves
-the profile's new preference immediately. Construct the replacement chrome only
-when leaving Settings: mounting a hidden, disabled native sidebar resets the
-picker's focus. Opening and closing Settings without changing style keeps the
-mounted shell; a Settings-first launch does not mount hidden chrome.
+Settings is a normal destination in all three navigation shells. Its root keeps
+app navigation visible and available; categories and nested pages hide it.
+Root Back restores navigation focus, while child Back restores its Settings row.
+The top-bar root reserves foreground clearance without moving subpage headers.
+Chrome stays unavailable until a returning Settings page can receive focus.
+Custom chrome fades over 220 ms with a 12-point exit toward its screen edge;
+return uses the reverse motion. Reduce Motion keeps the fade without translation.
+Native detail-transition snapshots keep owning their animation without a second
+chrome transition. Pinned navigation moves its glass and controls together.
+The native sidebar does not honor toolbar visibility for this custom page stack,
+so its subpages use a full-screen presentation over the retained root.
+Settings retains the mounted shell while its style picker saves the profile's
+new preference immediately. Construct replacement chrome only after leaving
+Settings: reparenting its pages resets native focus, even during a root return.
+Ordinary Settings visits keep the mounted shell; Settings-first entry also
+constructs usable navigation, including when Settings is hidden from the top bar.
 Top-bar selection also prepares its nonpersistent library-navigation handoff
 before a style change, so the first render cannot temporarily dismiss Settings.
 
