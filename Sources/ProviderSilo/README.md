@@ -204,6 +204,24 @@ cards without those values cannot show an accurate remaining-episode count.
 Supporting `user_data` on Silo's existing card responses would let this mapper
 consume the same rollup without additional client requests.
 
+## Search
+
+TV and mobile use the shared federated search through `MediaProvider.search`.
+Silo searches the native `/catalog` endpoint with `q`, scoped to each enabled
+video library and the authenticated server profile. Results preserve the server's
+order within each library, original content IDs, account/library attribution and
+episode relationships; duplicate content IDs appear once. Disabled Plozz
+libraries are not queried. Authentication and server failures remain errors,
+not empty successful searches.
+
+Catalog cursor sequences keep their initial page size (at most 200), including
+after a short nonterminal page. Silo binds `limit` into the cursor scope, so a
+smaller final request is invalid; the client trims the final results locally.
+Missing or repeated continuation cursors fail rather than looping.
+This contract was checked against the
+[native catalog handler](https://github.com/Silo-Server/silo-server/blob/9b77105e5870b0cdea8148b26194f026d275167d/internal/apiv2/catalog_items.go)
+and is covered by `SiloSearchTests.swift` in `ProviderSiloTests`.
+
 ## Collections
 
 Library collections and personal collections have separate native contracts.

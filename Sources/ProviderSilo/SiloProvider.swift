@@ -292,12 +292,14 @@ public final class SiloProvider: MediaProvider, CapabilityReporting, MediaSortFi
 
     func catalogDTOs(_ query: [URLQueryItem], limit: Int) async throws -> [SiloItem] {
         guard limit > 0 else { return [] }
+        // Silo binds the page size into its cursor scope, including the final page.
+        let pageLimit = min(200, limit)
         var result: [SiloItem] = []
         var cursor: String?
         var seen = Set<String>()
         repeat {
             try Task.checkCancellation()
-            var parameters = query + [URLQueryItem(name: "limit", value: String(min(200, limit - result.count)))]
+            var parameters = query + [URLQueryItem(name: "limit", value: String(pageLimit))]
             if let cursor { parameters.append(URLQueryItem(name: "cursor", value: cursor)) }
             let page: SiloCatalogPage = try await client.request("/catalog", query: parameters)
             result += page.items

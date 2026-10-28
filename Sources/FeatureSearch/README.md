@@ -1,7 +1,7 @@
 # FeatureSearch
 
 The federated search view: one search box that queries every active
-provider (Jellyfin and Plex) in parallel, deduplicates results, and
+provider (including Jellyfin, Plex, and Silo) in parallel, deduplicates results, and
 ranks them with a shared policy.
 
 ## Responsibility
