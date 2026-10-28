@@ -662,6 +662,11 @@ on-demand and Live TV playback, including while Up Next is visible, but yield to
 menus, sheets, VoiceOver, external playback and inactive scenes. Multiview and
 inline Live TV do not adjust shared device outputs.
 
+Timeline scrubbing disables shortcuts and both level recognizers without
+deactivating the foreground playback session. Beginning or ending a seek must
+not restore saved brightness; restoration belongs to leaving foreground playback
+or dismissing the player. This applies to both on-demand and Live TV timelines.
+
 Level feedback is a 32-by-156-point monochrome vertical capsule, inset 8 points
 from the respective safe-area edge. It fills upward with
 the swipe, without revealing the timeline. Only the fill and 16-point native output icon
