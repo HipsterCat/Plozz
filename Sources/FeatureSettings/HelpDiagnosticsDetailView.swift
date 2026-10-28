@@ -111,7 +111,7 @@ struct HelpDiagnosticsDetailView: View {
     // MARK: - Send to Developer (surfaced here so it's discoverable, not buried)
 
     /// The fastest bug-report path for anyone who's turned on crash reporting:
-    /// one tap sends privacy-filtered technical evidence to the developer.
+    /// a required message accompanies privacy-filtered technical evidence.
     /// Placed right under "Report a Problem" so people actually find it instead
     /// of only stumbling on it deep inside the Recent Activity page.
     private var sendDiagnosticsPanel: some View {

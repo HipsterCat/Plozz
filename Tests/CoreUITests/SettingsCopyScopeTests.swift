@@ -22,7 +22,9 @@ final class SettingsCopyScopeTests: XCTestCase {
         let manual = resolve(SettingsCopy.manualDiagnostics)
         XCTAssertTrue(manual.contains("Sentry"), manual)
         XCTAssertTrue(manual.contains("playback and connection"), manual)
-        XCTAssertTrue(manual.contains("optional message"), manual)
+        XCTAssertTrue(manual.contains("your message"), manual)
+        XCTAssertFalse(manual.contains("optional"), manual)
+        XCTAssertEqual(resolve(SettingsCopy.diagnosticsMessage), "Message (required)")
         XCTAssertTrue(manual.contains("Don't include passwords or personal information"), manual)
         XCTAssertFalse(manual.localizedCaseInsensitiveContains("anonymous"), manual)
     }
