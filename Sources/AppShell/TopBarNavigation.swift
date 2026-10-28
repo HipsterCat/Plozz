@@ -82,6 +82,7 @@ private struct TopBarNavigationContent: View {
     @State private var contentGeneration: UInt64 = 0
     @State private var returnFocus = NavigationContentFocusRequester.ReturnFocus()
     @State private var destinationFocus = NavigationDestinationFocusHandoff()
+    @State private var scroll = TopNavigationScroll()
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var contentInsets: EdgeInsets {
@@ -119,6 +120,7 @@ private struct TopBarNavigationContent: View {
                 }
                 .disabled(isNavigating && contentRequest == nil)
                 .environment(\.plozzTopNavigationContentInsets, contentInsets)
+                .environment(\.plozzTopNavigationScroll, scroll)
             TopBarNavigationBar(
                 destinations: destinations, current: current,
                 profile: profile, onOpenProfileSwitcher: onOpenProfileSwitcher,
@@ -144,7 +146,7 @@ private struct TopBarNavigationContent: View {
                     value: chrome.isChromeHidden
                 )
                 .disabled(!isShellActive || chrome.isChromeHidden || chrome.transitionSuppressesFocus)
-                .accessibilityHidden(chrome.isChromeHidden)
+                .modifier(TopBarScrollPosition(scroll: scroll, chromeHidden: chrome.isChromeHidden))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
@@ -236,10 +238,14 @@ private struct TopBarNavigationContent: View {
 
     private func openNavigation() {
         guard isShellActive, !chrome.isChromeHidden, !chrome.transitionSuppressesFocus else { return }
-        returnFocus.capture()
         contentRequest = nil
         destinationFocus.cancel()
         isNavigating = true
+        if scroll.scrollToTop() {
+            returnFocus.clear()
+        } else {
+            returnFocus.capture()
+        }
         navigationGeneration &+= 1
         navigationRequest = navigationGeneration
     }
@@ -263,6 +269,18 @@ private struct TopBarNavigationContent: View {
         guard isShellActive, contentRequest == request else { return }
         contentRequest = nil
         if !didFocus, navigationHasFocus { openNavigation() }
+    }
+}
+
+private struct TopBarScrollPosition: ViewModifier {
+    let scroll: TopNavigationScroll
+    let chromeHidden: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: -scroll.offset)
+            .disabled(scroll.offset >= TopBarNavigationMetrics.foregroundTop)
+            .accessibilityHidden(chromeHidden || scroll.offset >= TopBarNavigationMetrics.foregroundTop)
     }
 }
 

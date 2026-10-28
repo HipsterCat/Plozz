@@ -6,11 +6,13 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
-`topNavigationForegroundFade()` softens scrolling foreground over 48 points,
-ending fully opaque 16 points below the custom top bar. It retains a 10% glimpse
-under the chrome, like the pinned sidebar, without masking hero artwork.
-Its screen-relative boundary and stable wrapper preserve scroll/focus state
-when navigation hides or returns; native navigation receives no mask.
+`TopNavigationScroll` connects each root vertical scroll owner to the custom
+top bar. `scrollsTopNavigation()` handles ordinary SwiftUI roots; native grids
+and Showcase report through their existing owners. Source tokens reject late
+callbacks from departed pages. Back resets the active owner to the page top;
+scroll updates invalidate only the bar's position, not the page builder.
+There is no top-navigation foreground mask. Native and pinned sidebars do not
+receive this coordinator and retain their existing behavior.
 
 `NavigationStyleSwatch` preserves the miniature-window illustrations for all
 three navigation choices: a full-height dotted pinned sidebar, a compact sidebar

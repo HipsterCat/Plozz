@@ -34,7 +34,6 @@ struct SettingsWorkspace<Sidebar: View, Detail: View>: View {
         ) {
             sidebar()
                 .padding(.top, topNavigationInsets.top)
-                .topNavigationForegroundFade()
                 .focusSection()
                 .focusScope(sidebarScope)
                 .environment(\.settingsWorkspaceFocusScope, sidebarScope)

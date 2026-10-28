@@ -146,9 +146,15 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
         try exerciseLibraryFocus(recommended: true)
     }
 
-    private func exerciseLibraryFocus(recommended: Bool) throws {
+    func testHorizontalSwiftUIGridScrollsNavigationAndResetsOnBack() throws {
+        try exerciseLibraryFocus(recommended: false, customGrid: true)
+    }
+
+    private func exerciseLibraryFocus(recommended: Bool, customGrid: Bool = false) throws {
         #if targetEnvironment(simulator)
-        let app = launch(arguments: ["--real-library-pages"] + (recommended ? ["--recommended-library-pages"] : []))
+        let app = launch(arguments: ["--real-library-pages"]
+            + (recommended ? ["--recommended-library-pages"] : [])
+            + (customGrid ? ["--swiftui-library-grid"] : []))
         defer { app.terminate() }
         XCTAssertTrue(app.buttons["large-navigation-content"].waitForExistence(timeout: 15))
         XCUIRemote.shared.press(.menu)
@@ -174,7 +180,8 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
             XCUIRemote.shared.press(.menu)
             assertFocused(tab, in: app)
             if title.hasPrefix("Library ") || title == "All Libraries" {
-                XCTAssertTrue(app.staticTexts["Movie 0"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+                XCTAssertTrue(app.staticTexts[recommended ? "Continue 0" : "Movie 0"].firstMatch
+                    .waitForExistence(timeout: 5), app.debugDescription)
                 // Let the async real grid populate without pressing another direction.
                 let stillFocused = XCTNSPredicateExpectation(
                     predicate: NSPredicate { _, _ in !tab.exists || !tab.hasFocus }, object: nil
@@ -210,6 +217,22 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
                            "The maximum bar must be exactly 25% narrower than the page keylines.")
         }
         capture("Library navigation remains reachable", in: app)
+        let initialModesTop = modes.frame.minY
+        for _ in 0..<2 {
+            XCUIRemote.shared.press(.down)
+            for _ in 0..<5 { XCUIRemote.shared.press(.down) }
+            capture(recommended ? "Recommended navigation scrolled away" : "Browse navigation scrolled away", in: app)
+            XCTAssertFalse(app.buttons["top-navigation-library:plex:3"].isHittable, app.debugDescription)
+            XCUIRemote.shared.press(.menu)
+            assertFocused(app.buttons["top-navigation-library:plex:3"], in: app)
+            let returnedToTop = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in abs(modes.frame.minY - initialModesTop) <= 1 }, object: nil
+            )
+            let result = XCTWaiter.wait(for: [returnedToTop], timeout: 5)
+            capture(recommended ? "Recommended Back restores top" : "Browse Back restores top", in: app)
+            XCTAssertEqual(result, .completed, app.debugDescription)
+            XCTAssertTrue(app.buttons["library-content-mode-recommended"].isHittable)
+        }
         #else
         throw XCTSkip("Synthetic navigation fixtures run only on an owned simulator.")
         #endif

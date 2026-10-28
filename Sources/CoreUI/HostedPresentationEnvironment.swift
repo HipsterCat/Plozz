@@ -33,6 +33,7 @@ public extension EnvironmentValues {
         plozzNavigationStyle = source.plozzNavigationStyle
         plozzNavigationContentInset = source.plozzNavigationContentInset
         plozzTopNavigationContentInsets = source.plozzTopNavigationContentInsets
+        plozzTopNavigationScroll = source.plozzTopNavigationScroll
         mediaRowHeaderTrailingInset = source.mediaRowHeaderTrailingInset
         plozzPinnedSidebarActive = source.plozzPinnedSidebarActive
         plozzPinnedSidebarInteraction = source.plozzPinnedSidebarInteraction

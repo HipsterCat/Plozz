@@ -43,10 +43,20 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertEqual(profile.frame, initialProfile)
         XCTAssertEqual(name.frame, initialName)
         try focus(section("language", in: app), in: app)
-        XCTAssertTrue(app.buttons["top-navigation-settings"].isHittable)
-        capture("settings-scrolling-beneath-top-navigation", in: app)
+        XCTAssertFalse(app.buttons["top-navigation-settings"].isHittable)
+        capture("settings-top-navigation-scrolled-away", in: app)
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(hasFocus(app.buttons["top-navigation-settings"]))
+        XCTAssertEqual(profile.frame.minY, initialProfile.minY, accuracy: 1)
+        capture("settings-back-restores-page-and-navigation", in: app)
+        XCUIRemote.shared.press(.down)
+        let reentered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"), object: profile
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [reentered], timeout: 5), .completed,
+                       "Content re-entry must not restore a deep offscreen row.")
+        XCTAssertEqual(profile.frame.minY, initialProfile.minY, accuracy: 1)
+        capture("settings-reentered-at-top", in: app)
         #else
         throw XCTSkip("Simulator-only Settings presentation.")
         #endif
@@ -933,6 +943,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         let app = try launchSettings(style: style)
         defer { app.terminate() }
         let navigation = settingsNavigationItem(style: style, in: app)
+        let initialRootTop = app.buttons["settings-profile-switch"].frame.minY
         capture("root-navigation-\(style)", in: app)
         XCTAssertTrue(settingsNavigationIsVisible(style: style, in: app),
                       "Root Settings keeps its navigation affordance visible.")
@@ -965,6 +976,9 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertTrue(settingsNavigationIsVisible(style: style, in: app),
                       "Root return restores the mounted navigation without reparenting Settings.")
         capture("root-navigation-return-\(style)", in: app)
+        let rootEntryAfterBack = style == "tabBar"
+            && app.buttons["settings-profile-switch"].frame.minY < initialRootTop - 1
+            ? "playback" : "screensNavigation"
         XCUIRemote.shared.press(.menu)
         let focused = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in self.hasFocus(navigation) }, object: nil
@@ -982,7 +996,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed, app.debugDescription)
         } else {
-            waitForCategoryFocus("screensNavigation", in: app)
+            waitForCategoryFocus(rootEntryAfterBack, in: app)
         }
         XCUIRemote.shared.press(.menu)
         XCUIRemote.shared.press(style == "tabBar" ? .left : .up)

@@ -250,16 +250,17 @@ for explicit content entry; its presentation owns focus until the choice finishe
 Full-bleed Live TV surfaces read the shared top-content inset for guide controls
 and loading placeholders without shrinking expanded playback.
 The common UIKit host propagates a real top safe area through nested stacks.
-Foreground begins below the bar with a 16-point gap. Scrolling foreground uses
-CoreUI's shared top-navigation fade across Home, library grids and headers,
-Showcase, Watchlist, Search, Music, and Settings. Content dissolves over 48 points
-to a faint 10% underlap behind the bar rather than disappearing at a hard edge.
-Hero artwork remains outside that fade; Live TV's bounded guide stays below its
-own header rather than scrolling beneath app navigation.
+Foreground begins below the bar with a 16-point gap. The bar scrolls vertically
+offscreen with Home, library grids, Showcase, Watchlist, Search, Music, and
+Settings; foreground no longer fades beneath fixed navigation. The existing
+root Back action resets the page to its top and focuses the selected destination,
+discarding deep-row return focus. Subpage Back still returns one level first.
+Showcase follows its native spring's painted viewport with a bounded display
+observer that stops at rest or teardown. Hero artwork stays full bleed; Live TV's
+bounded guide does not scroll the global bar.
 The host's safe area stays stable across detail transitions so returning content
 does not relayout under incoming remote input. Full-bleed detail surfaces ignore
-that safe area; hidden chrome releases the foreground fade without replacing its
-view subtree.
+that safe area. Scrolling the bar does not change the safe area or detail depth.
 
 The profile-picker Settings request is a one-shot `ProfileFlowModel` intent,
 scoped to the active profile. A cancellable picker returns to its already-admitted

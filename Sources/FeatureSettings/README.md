@@ -804,7 +804,8 @@ watch history and planning-list behavior are documented in
   child path throughout the Settings visit; the new chrome takes effect on exit.
   Settings columns remain centered and subpage headers keep their full-height
   layout; only root foreground reserves space below the top bar.
-  Scrolling root content shares the app-wide top-bar fade and faint underlap.
+  The top bar scrolls away with root content, without a foreground fade.
+  Root Back restores the page top and navigation; subpage Back remains one level.
   The profile action reserves a stable 100-point height: native focus shifts the
   name upward and reveals "Switch profile" below it at the normal helper size.
   The avatar, Edit action, and following rows stay anchored; Reduce Motion

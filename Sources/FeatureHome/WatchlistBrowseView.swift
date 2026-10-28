@@ -146,7 +146,7 @@ public struct WatchlistBrowseView: View {
                 .padding(.top, PlozzTheme.Spacing.large)
             }
             .scrollClipDisabled()
-            .topNavigationForegroundFade()
+            .scrollsTopNavigation()
         }
     }
 

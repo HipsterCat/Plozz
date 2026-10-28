@@ -112,6 +112,7 @@ public struct LibraryBrowseView: View {
     /// Custom pinned-sidebar clearance. Native top/sidebar styles publish zero.
     @Environment(\.plozzNavigationContentInset) private var navigationContentInset
     @Environment(\.plozzNavigationStyle) private var navigationStyle
+    @Environment(\.plozzTopNavigationScroll) private var topNavigationScroll
     /// Align the visible card surface, not its invisible layout margins.
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.plozzCardFocusStyle) private var focusStyle
@@ -163,6 +164,7 @@ public struct LibraryBrowseView: View {
     public var body: some View {
         #if os(tvOS)
         NativeLibraryFocusHost(scrollTarget: nativeScrollTarget, content: libraryContent)
+            .environment(\.plozzTopNavigationScroll, isNavigationRoot ? topNavigationScroll : nil)
             .ignoresSafeArea(.container, edges: [.vertical, .trailing])
             .toolbar(isNavigationRoot ? .automatic : .hidden, for: .tabBar)
         #else
@@ -214,7 +216,6 @@ public struct LibraryBrowseView: View {
                     swiftUIGrid(total: total, generation: generation, columns: columns)
                     #endif
                 }
-                .topNavigationForegroundFade()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -231,7 +232,6 @@ public struct LibraryBrowseView: View {
                     .padding(.vertical, PlozzTheme.Spacing.large)
             )
             .padding(.top, headerTopClearance)
-            .topNavigationForegroundFade()
             .onGeometryChange(for: CGFloat.self) { geometry in
                 geometry.frame(in: .global).maxY
             } action: { headerBottom in
@@ -452,7 +452,8 @@ public struct LibraryBrowseView: View {
             spoilerSettings: spoilerSettings,
             navigationStyle: .tabBar,
             isFrontmost: isFrontmost,
-            minimumDetailsTop: showcaseHeaderBottom
+            minimumDetailsTop: showcaseHeaderBottom,
+            onReturnToTop: { showcaseNavigation.focusedRowID = nil }
         ) { row, reporter in
             if let section = sectionsByID[row.id] {
                 MediaRowView(
@@ -588,6 +589,7 @@ public struct LibraryBrowseView: View {
             }
             // Never clip a focused card's lift, shadow or border.
             .scrollClipDisabled()
+            .scrollsTopNavigation()
             .onScrollGeometryChange(for: CGFloat.self) {
                 $0.contentOffset.y + $0.contentInsets.top
             } action: { _, offset in

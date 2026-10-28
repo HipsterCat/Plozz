@@ -9,62 +9,58 @@ import XCTest
 
 @MainActor
 final class TopBarPresentationHostedTests: XCTestCase {
-    func testForegroundFadeUsesScreenCoordinatesAndLeavesArtworkUntouched() throws {
-        func pixels(_ image: CGImage) throws -> [UInt8] {
-            var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
-            try bytes.withUnsafeMutableBytes { buffer in
-                let context = try XCTUnwrap(CGContext(
-                    data: buffer.baseAddress, width: image.width, height: image.height,
-                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
-                    space: CGColorSpaceCreateDeviceRGB(),
-                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-                ))
-                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            }
-            return bytes
+    func testScrollOwnershipRejectsDepartedPagesAndResetsOnlyTheActiveRoot() {
+        let scroll = TopNavigationScroll()
+        let first = UUID()
+        let second = UUID()
+        var firstResets = 0
+        var secondResets = 0
+        scroll.register(source: first, offset: 90) { firstResets += 1 }
+        scroll.register(source: second, offset: 250) { secondResets += 1 }
+        scroll.update(offset: 900, source: first)
+        scroll.unregister(source: first)
+        XCTAssertEqual(scroll.offset, 250)
+        XCTAssertTrue(scroll.scrollToTop())
+        XCTAssertEqual(firstResets, 0)
+        XCTAssertEqual(secondResets, 1)
+        XCTAssertEqual(scroll.offset, 0)
+        XCTAssertFalse(scroll.scrollToTop())
+        scroll.update(offset: -30, source: second)
+        XCTAssertEqual(scroll.offset, 0, "Top-edge bounce must not push the bar down.")
+        scroll.update(offset: 180, source: second)
+        scroll.unregister(source: second)
+        XCTAssertEqual(scroll.offset, 0, "Non-scrolling destinations keep their navigation visible.")
+        XCTAssertNil(EnvironmentValues().plozzTopNavigationScroll, "Sidebars do not own a scrolling top bar.")
+    }
+
+    func testScrollMovesOnlyTheBarAndKeepsOffscreenNavigationIneligible() async throws {
+        let (window, previous) = try await makeWindow()
+        let model = Model()
+        model.selection = .settings
+        window.rootViewController = UIHostingController(rootView: Fixture(model: model))
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
         }
-        for insets in [
-            EdgeInsets(),
-            EdgeInsets(top: 0, leading: 80, bottom: 0, trailing: 80),
-            EdgeInsets(top: 108, leading: 80, bottom: 0, trailing: 80)
-        ] {
-            for offset in [CGFloat(0), 36] {
-                for direction in [LayoutDirection.leftToRight, .rightToLeft] {
-                    let content = Color.clear
-                        .frame(width: 320, height: 300)
-                        .overlay { Color.white.padding(-20) }
-                        .topNavigationForegroundFade()
-                        .padding(.horizontal, 40)
-                        .padding(.top, offset)
-                        .environment(\.plozzTopNavigationContentInsets, insets)
-                        .environment(\.layoutDirection, direction)
-                    let renderer = ImageRenderer(content: content)
-                    renderer.scale = 1
-                    let image = try XCTUnwrap(renderer.cgImage)
-                    let bytes = try pixels(image)
-                    func alpha(_ y: Int) -> Int { Int(bytes[(y * image.width + image.width / 2) * 4 + 3]) }
-                    if insets.top > 0 {
-                        XCTAssertEqual(alpha(50), 26, accuracy: 2, "Keep faint underlap at offset \(offset), \(direction).")
-                        XCTAssertEqual(alpha(76), 26, accuracy: 3)
-                        XCTAssertTrue((130...150).contains(alpha(100)), "The fade must be gradual, not a cutoff.")
-                        for y in 77...124 {
-                            XCTAssertGreaterThanOrEqual(alpha(y), alpha(y - 1))
-                        }
-                    } else {
-                        XCTAssertEqual(alpha(50), 255, "Native or hidden chrome must not dim foreground.")
-                    }
-                    XCTAssertEqual(alpha(124), 255)
-                    XCTAssertEqual(alpha(240), 255)
-                    for x in [25, image.width - 25] {
-                        XCTAssertEqual(bytes[(240 * image.width + x) * 4 + 3], 255,
-                                       "The mask must preserve horizontal focus bloom outside the foreground bounds.")
-                    }
-                    let artworkRenderer = ImageRenderer(content: content.background(Color.red))
-                    artworkRenderer.scale = 1
-                    let artwork = try pixels(XCTUnwrap(artworkRenderer.cgImage))
-                    XCTAssertEqual(artwork[(50 * image.width + image.width / 2) * 4 + 3], 255,
-                                   "Full-bleed artwork stays outside the foreground mask.")
-                }
+        try await waitForPage(.settings, model: model, window: window)
+        try await Task.sleep(for: .milliseconds(350))
+        let scroll = try XCTUnwrap(model.scroll)
+        let source = UUID()
+        scroll.register(source: source, offset: 0, scrollToTop: {})
+        let marker = try XCTUnwrap(navigationMarkers(in: window).first)
+        let initial = marker.convert(marker.bounds, to: window)
+        let builds = model.contentBuilds
+        for offset: CGFloat in [20, 60, 160, 600, 20, 0] {
+            scroll.update(offset: offset, source: source)
+            try await Task.sleep(for: .milliseconds(40))
+            window.layoutIfNeeded()
+            XCTAssertEqual(marker.convert(marker.bounds, to: window).minY, initial.minY - offset, accuracy: 0.5)
+            XCTAssertEqual(model.contentBuilds, builds, "Scroll frames must not reconstruct page closures.")
+            XCTAssertTrue(model.buttons[.settings]?.isFocused == true)
+            if offset >= TopBarNavigationMetrics.foregroundTop {
+                XCTAssertNil(NavigationRowFocusRequester.target(for: marker, in: window))
             }
         }
     }
@@ -352,6 +348,7 @@ final class TopBarPresentationHostedTests: XCTestCase {
             [.home, .watchlist, .liveTV, .search] + (1...20).map { .library("plex:\($0)") }
         @ObservationIgnored var buttons: [NavigationRailDestination: UIButton] = [:]
         @ObservationIgnored var contentBuilds = 0
+        @ObservationIgnored var scroll: TopNavigationScroll?
     }
 
     private struct Fixture: View {
@@ -389,6 +386,7 @@ final class TopBarPresentationHostedTests: XCTestCase {
 
         func updateUIView(_ button: UIButton, context: Context) {
             button.isEnabled = active && context.environment.isEnabled
+            model.scroll = context.environment.plozzTopNavigationScroll
         }
     }
 }

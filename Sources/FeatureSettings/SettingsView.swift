@@ -414,6 +414,7 @@ public struct SettingsView: View {
                 .padding(.bottom, SettingsFormMetrics.pageBottomInset)
             }
             .scrollClipDisabled()
+            .scrollsTopNavigation(onReturnToTop: { navigation.select(.playback) })
         } detail: { route in
             destination(for: route)
         }

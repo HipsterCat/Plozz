@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import Observation
 
 /// How far the page's content has been pushed in from the leading edge to make
 /// room for the custom navigation rail, in points. `0` under horizontal navigation
@@ -24,6 +25,47 @@ private struct PlozzNavigationContentInsetKey: EnvironmentKey {
 
 private struct PlozzTopNavigationContentInsetsKey: EnvironmentKey {
     static let defaultValue = EdgeInsets()
+}
+
+private struct PlozzTopNavigationScrollKey: EnvironmentKey {
+    static let defaultValue: TopNavigationScroll? = nil
+}
+
+/// The root scroll owner moves the custom top bar; detail chrome remains independent.
+@MainActor @Observable
+public final class TopNavigationScroll {
+    public private(set) var offset: CGFloat = 0
+    @ObservationIgnored private var source: UUID?
+    @ObservationIgnored private var reset: (() -> Void)?
+
+    public init() {}
+
+    public func register(source: UUID, offset: CGFloat, scrollToTop: @escaping () -> Void) {
+        self.source = source
+        reset = scrollToTop
+        self.offset = max(0, offset)
+    }
+
+    public func update(offset: CGFloat, source: UUID) {
+        guard self.source == source else { return }
+        self.offset = max(0, offset)
+    }
+
+    public func unregister(source: UUID) {
+        guard self.source == source else { return }
+        self.source = nil
+        reset = nil
+        offset = 0
+    }
+
+    /// Returns whether content moved, so navigation can discard its old deep-row focus.
+    @discardableResult
+    public func scrollToTop() -> Bool {
+        guard offset > 0, let reset else { return false }
+        reset()
+        offset = 0
+        return true
+    }
 }
 
 private struct PlozzPinnedSidebarActiveKey: EnvironmentKey {
@@ -78,6 +120,11 @@ public extension EnvironmentValues {
         set { self[PlozzTopNavigationContentInsetsKey.self] = newValue }
     }
 
+    var plozzTopNavigationScroll: TopNavigationScroll? {
+        get { self[PlozzTopNavigationScrollKey.self] }
+        set { self[PlozzTopNavigationScrollKey.self] = newValue }
+    }
+
     /// Whether Plozz's custom pinned sidebar owns the surrounding shell.
     ///
     /// Separate from the live inset because the sidebar publishes inset 0 while
@@ -96,36 +143,43 @@ public extension EnvironmentValues {
 }
 
 public extension View {
-    /// Feathers scrolling foreground beneath the top navigation, retaining a faint underlap.
-    /// Apply before full-bleed artwork backgrounds, never to the complete page.
-    func topNavigationForegroundFade() -> some View {
-        modifier(TopNavigationForegroundFade())
+    /// Apply to a root vertical ScrollView, not a detail page or horizontal media row.
+    func scrollsTopNavigation(onReturnToTop: @escaping () -> Void = {}) -> some View {
+        modifier(TopNavigationRootScroll(onReturnToTop: onReturnToTop))
     }
 }
 
-private struct TopNavigationForegroundFade: ViewModifier {
-    @Environment(\.plozzTopNavigationContentInsets) private var insets
+private struct TopNavigationRootScroll: ViewModifier {
+    let onReturnToTop: () -> Void
+    @Environment(\.plozzTopNavigationScroll) private var navigation
+    @State private var position = ScrollPosition()
+    @State private var source = Source()
+
+    private final class Source {
+        let id = UUID()
+        var offset: CGFloat = 0
+    }
 
     @ViewBuilder func body(content: Content) -> some View {
-        if insets.top > 0 || insets.leading > 0 || insets.trailing > 0 {
-            content.mask(alignment: .topLeading) {
-                GeometryReader { geometry in
-                    let width = geometry.size.width
-                    let height = geometry.size.height
-                    ZStack(alignment: .topLeading) {
-                        Path(CGRect(x: -width, y: -height, width: width * 3, height: height * 3))
-                            .fill(.black.opacity(insets.top > 0 ? 0.1 : 1))
-                        if insets.top > 0 {
-                            let solidTop = insets.top + 16 - geometry.frame(in: .global).minY
-                            VerticalEdgeFadeMask(topFade: 48, bottomFade: 0)
-                                .frame(width: width * 3, height: height * 2 + abs(solidTop) + 48)
-                                .offset(x: -width, y: solidTop - 48)
-                        }
-                    }
-                    .frame(width: width, height: height, alignment: .topLeading)
-                    .environment(\.layoutDirection, .leftToRight)
+        if let navigation {
+            content
+                .scrollPosition($position)
+                .onScrollGeometryChange(for: CGFloat.self) {
+                    max(0, $0.contentOffset.y + $0.contentInsets.top)
+                } action: { _, offset in
+                    source.offset = offset
+                    navigation.update(offset: offset, source: source.id)
                 }
-            }
+                .onAppear {
+                    let binding = $position
+                    navigation.register(source: source.id, offset: source.offset) {
+                        onReturnToTop()
+                        binding.wrappedValue.scrollTo(edge: .top)
+                    }
+                }
+                .onDisappear {
+                    navigation.unregister(source: source.id)
+                }
         } else {
             content
         }

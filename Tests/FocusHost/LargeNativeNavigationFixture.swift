@@ -71,6 +71,8 @@ struct LargeNativeNavigationFixture: View {
         .environment(\.themePalette, .dark)
         .environment(\.colorScheme, .dark)
         .environment(\.plozzNavigationStyle, isSidebar ? .sidebar : .tabBar)
+        .environment(\.plozzCardFocusStyle,
+                     ProcessInfo.processInfo.arguments.contains("--swiftui-library-grid") ? .outlined : .system)
         .environment(\.plozzReduceTransparency,
                      ProcessInfo.processInfo.arguments.contains("--opaque-controls"))
         .overlay(alignment: .bottom) {
@@ -263,6 +265,12 @@ struct LargeNativeNavigationFixture: View {
 
         func libraries() async throws -> [MediaLibrary] { [] }
         func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
+        func continueWatching(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem] {
+            guard let libraryID = libraryIDs?.first else { return try await continueWatching(limit: limit) }
+            return (0..<min(limit, 20)).map {
+                MediaItem(id: "continue-\($0)", title: "Continue \($0)", kind: .movie).taggingLibrary(libraryID)
+            }
+        }
         func latest(limit: Int) async throws -> [MediaItem] { [] }
         func item(id: String) async throws -> MediaItem { throw AppError.notFound }
         func children(of itemID: String) async throws -> [MediaItem] { [] }
