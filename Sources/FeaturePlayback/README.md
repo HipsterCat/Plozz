@@ -40,6 +40,14 @@ bounded language-match/accessibility flags without track titles or URLs.
   sidecars, Plozzigen decoders, and `NativeSubtitleCueOutput` for native legible
   tracks. `SubtitleStyleRules` remains the reduced AVPlayer styling adapter
   for system-owned external presentation.
+  Live cue replacement compares timing and payload, not only cue IDs: revised
+  text, styling, placement, or bitmap frames reach both subtitle lanes even when
+  the decoder retains an ID. Unchanged active cues do not republish on clock
+  ticks; immutable bitmap identity is compared without reading pixels.
+  Core Text views are configured before their first measurement and measure
+  the current cue before UIKit updates, avoiding empty or stale line dimensions.
+  These updates do not depend on pausing or revealing controls, and do not
+  change saved positioning, subtitle offsets, or cue end times.
 - **Native-only video assets** — when that engine is selected, tvOS feeds the resolved URL directly to
   AVPlayer even when sidecars are available. Track menus still use provider
   tracks; the owned overlay authorizes and fetches selected SRT/WebVTT sidecars.
