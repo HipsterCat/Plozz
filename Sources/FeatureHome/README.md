@@ -365,6 +365,8 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   The full Watchlist grid filters All, Movies, or TV Shows and sorts by Date
   Added, Release Date, or Name, in either direction. Its choices are retained
   with that profile's Home model and persisted separately from library queries.
+  Synced choices and resets refresh that retained model without writing back;
+  local edits preserve other choices received before a change notification.
   Home's Watchlist row and the canonical union order are unchanged. Filtering
   never fetches another list or changes membership; controls remain available
   during loading, errors, and empty results.
