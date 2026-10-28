@@ -160,11 +160,17 @@ final class LargeNativeNavigationRemoteTests: XCTestCase {
             XCTAssertTrue(tab.waitForExistence(timeout: 5), app.debugDescription)
             assertFocused(tab, in: app)
             XCTAssertEqual(selection.label, previous)
+            let destination = String(tab.identifier.dropFirst("top-navigation-".count))
             XCUIRemote.shared.press(.select)
-            let entersPage = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                selection.label == String(tab.identifier.dropFirst("top-navigation-".count)) && !tab.hasFocus
-            }, object: nil)
+            let entersPage = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label == %@", destination), object: selection
+            )
             XCTAssertEqual(XCTWaiter.wait(for: [entersPage], timeout: 5), .completed, app.debugDescription)
+            let entersContent = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "hasFocus == false"), object: tab
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [entersContent], timeout: 5), .completed, app.debugDescription)
+            XCTAssertTrue(tab.exists)
             XCUIRemote.shared.press(.menu)
             assertFocused(tab, in: app)
             if title.hasPrefix("Library ") || title == "All Libraries" {

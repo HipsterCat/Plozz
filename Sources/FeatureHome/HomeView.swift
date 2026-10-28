@@ -666,7 +666,7 @@ public struct HomeView: View {
                                         lift: Self.recedeRowLift
                                     )
                                 )
-                                .topNavigationForegroundClip()
+                                .topNavigationForegroundFade()
                             }
                             // Span the hero and rows in one focus scope so the hero's
                             // Play button can be the scope's preferred default — tvOS

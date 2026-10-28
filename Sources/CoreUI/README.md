@@ -6,6 +6,12 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
+`topNavigationForegroundFade()` softens scrolling foreground over 48 points,
+ending fully opaque 16 points below the custom top bar. It retains a 10% glimpse
+under the chrome, like the pinned sidebar, without masking hero artwork.
+Its screen-relative boundary and stable wrapper preserve scroll/focus state
+when navigation hides or returns; native navigation receives no mask.
+
 `NavigationStyleSwatch` preserves the miniature-window illustrations for all
 three navigation choices: a full-height dotted pinned sidebar, a compact sidebar
 of stacked tabs, and a centered top bar. The shared 320-by-180 drawing scales to

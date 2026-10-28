@@ -9,6 +9,66 @@ import XCTest
 
 @MainActor
 final class TopBarPresentationHostedTests: XCTestCase {
+    func testForegroundFadeUsesScreenCoordinatesAndLeavesArtworkUntouched() throws {
+        func pixels(_ image: CGImage) throws -> [UInt8] {
+            var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            try bytes.withUnsafeMutableBytes { buffer in
+                let context = try XCTUnwrap(CGContext(
+                    data: buffer.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+                ))
+                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            }
+            return bytes
+        }
+        for insets in [
+            EdgeInsets(),
+            EdgeInsets(top: 0, leading: 80, bottom: 0, trailing: 80),
+            EdgeInsets(top: 108, leading: 80, bottom: 0, trailing: 80)
+        ] {
+            for offset in [CGFloat(0), 36] {
+                for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                    let content = Color.clear
+                        .frame(width: 320, height: 300)
+                        .overlay { Color.white.padding(-20) }
+                        .topNavigationForegroundFade()
+                        .padding(.horizontal, 40)
+                        .padding(.top, offset)
+                        .environment(\.plozzTopNavigationContentInsets, insets)
+                        .environment(\.layoutDirection, direction)
+                    let renderer = ImageRenderer(content: content)
+                    renderer.scale = 1
+                    let image = try XCTUnwrap(renderer.cgImage)
+                    let bytes = try pixels(image)
+                    func alpha(_ y: Int) -> Int { Int(bytes[(y * image.width + image.width / 2) * 4 + 3]) }
+                    if insets.top > 0 {
+                        XCTAssertEqual(alpha(50), 26, accuracy: 2, "Keep faint underlap at offset \(offset), \(direction).")
+                        XCTAssertEqual(alpha(76), 26, accuracy: 3)
+                        XCTAssertTrue((130...150).contains(alpha(100)), "The fade must be gradual, not a cutoff.")
+                        for y in 77...124 {
+                            XCTAssertGreaterThanOrEqual(alpha(y), alpha(y - 1))
+                        }
+                    } else {
+                        XCTAssertEqual(alpha(50), 255, "Native or hidden chrome must not dim foreground.")
+                    }
+                    XCTAssertEqual(alpha(124), 255)
+                    XCTAssertEqual(alpha(240), 255)
+                    for x in [25, image.width - 25] {
+                        XCTAssertEqual(bytes[(240 * image.width + x) * 4 + 3], 255,
+                                       "The mask must preserve horizontal focus bloom outside the foreground bounds.")
+                    }
+                    let artworkRenderer = ImageRenderer(content: content.background(Color.red))
+                    artworkRenderer.scale = 1
+                    let artwork = try pixels(XCTUnwrap(artworkRenderer.cgImage))
+                    XCTAssertEqual(artwork[(50 * image.width + image.width / 2) * 4 + 3], 255,
+                                   "Full-bleed artwork stays outside the foreground mask.")
+                }
+            }
+        }
+    }
+
     func testRapidAndSettledNativeFocusNeverChangesTheOpenPage() async throws {
         let (window, previous) = try await makeWindow()
         let model = Model()

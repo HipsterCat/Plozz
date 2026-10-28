@@ -251,11 +251,14 @@ Full-bleed Live TV surfaces read the shared top-content inset for guide controls
 and loading placeholders without shrinking expanded playback.
 The common UIKit host propagates a real top safe area through nested stacks.
 Foreground begins below the bar with a 16-point gap. Scrolling foreground uses
-CoreUI's shared top-navigation clip so old rows cannot reappear behind the bar
-when returning from deeper content. Hero artwork remains outside that clip.
+CoreUI's shared top-navigation fade across Home, library grids and headers,
+Showcase, Watchlist, Search, Music, and Settings. Content dissolves over 48 points
+to a faint 10% underlap behind the bar rather than disappearing at a hard edge.
+Hero artwork remains outside that fade; Live TV's bounded guide stays below its
+own header rather than scrolling beneath app navigation.
 The host's safe area stays stable across detail transitions so returning content
 does not relayout under incoming remote input. Full-bleed detail surfaces ignore
-that safe area; hidden chrome releases the foreground clip without replacing its
+that safe area; hidden chrome releases the foreground fade without replacing its
 view subtree.
 
 The profile-picker Settings request is a one-shot `ProfileFlowModel` intent,

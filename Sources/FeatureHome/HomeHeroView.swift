@@ -493,7 +493,7 @@ struct HomeHeroView: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: frameHeight, alignment: .bottomLeading)
-        .topNavigationForegroundClip()
+        .topNavigationForegroundFade()
         .background(alignment: .top) {
             // Laid out at the FULL hero height and anchored to the frame's TOP, so
             // it stays put as a full-bleed background regardless of the content

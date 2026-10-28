@@ -1,7 +1,57 @@
 import XCTest
+import Vision
 
 @MainActor
 final class SettingsWorkspaceRemoteTests: XCTestCase {
+    func testProfileHintAnimatesWithinStableSettingsHeader() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        let profile = app.buttons["settings-profile-switch"]
+        let name = app.staticTexts["settings-profile-name"]
+        let edit = app.buttons["settings-profile-edit"]
+        let initialProfile = profile.frame
+        let initialName = name.frame
+        let initialEdit = edit.frame
+        XCTAssertEqual(name.frame.midY, profile.frame.midY, accuracy: 1)
+        capture("profile-hint-resting", in: app)
+        try focus(profile, in: app)
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            name.frame.minY < initialName.minY - 15
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed, app.debugDescription)
+        XCTAssertEqual(profile.frame, initialProfile)
+        XCTAssertEqual(edit.frame, initialEdit)
+        XCTAssertEqual(name.frame.minY, initialName.minY - 17, accuracy: 1)
+        XCTAssertTrue(profile.frame.contains(name.frame))
+        capture("profile-hint-focused", in: app)
+        let screenshot = app.screenshot().image
+        let scale = screenshot.scale
+        let crop = CGRect(x: profile.frame.minX * scale, y: profile.frame.minY * scale,
+                          width: profile.frame.width * scale, height: profile.frame.height * scale)
+        let image = try XCTUnwrap(screenshot.cgImage?.cropping(to: crop))
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        let hint = try XCTUnwrap(request.results?.first { $0.topCandidates(1).first?.string == "Switch profile" })
+        XCTAssertGreaterThanOrEqual(hint.boundingBox.minY * profile.frame.height, 12,
+                                    "The visible hint needs breathing room above the control's bottom edge.")
+        XCTAssertGreaterThanOrEqual(hint.boundingBox.height * profile.frame.height, 20,
+                                    "Use readable Settings subtext rather than a tiny caption.")
+        try focus(section("playback", in: app), in: app)
+        XCTAssertEqual(profile.frame, initialProfile)
+        XCTAssertEqual(name.frame, initialName)
+        try focus(section("language", in: app), in: app)
+        XCTAssertTrue(app.buttons["top-navigation-settings"].isHittable)
+        capture("settings-scrolling-beneath-top-navigation", in: app)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(hasFocus(app.buttons["top-navigation-settings"]))
+        #else
+        throw XCTSkip("Simulator-only Settings presentation.")
+        #endif
+    }
+
     func testAppNavigationEntryAndTitleStayConsistent() throws {
         #if targetEnvironment(simulator)
         let app = try launchSettings()
@@ -1019,6 +1069,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed, app.debugDescription)
         try focus(app.buttons["settings-profile-switch"], in: app)
+        capture("profile-switch-ready", in: app)
         XCUIRemote.shared.press(.select)
         let sam = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Sam")).firstMatch
         XCTAssertTrue(sam.waitForExistence(timeout: 5), app.debugDescription)
@@ -2756,6 +2807,17 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             XCTFail("Missing focus target. \(app.debugDescription)")
             return
         }
+        if target.identifier == "settings-profile-edit" {
+            try focus(app.buttons["settings-profile-switch"], in: app)
+            let restingWidth = target.frame.width
+            XCUIRemote.shared.press(.right)
+            let arrived = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                self.hasFocus(target) || target.frame.width > restingWidth + 2
+            }, object: nil)
+            // Native Edit can omit AX focus; its visible focus expansion still proves arrival.
+            XCTAssertEqual(XCTWaiter.wait(for: [arrived], timeout: 5), .completed, app.debugDescription)
+            return
+        }
         var requestedNavigation = false
         var lastDirection: XCUIRemote.Button = .left
         for _ in 0..<35 {
@@ -2806,6 +2868,11 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
 
     private func hasFocus(_ target: XCUIElement) -> Bool {
         guard target.exists, target.isEnabled else { return false }
+        if target.identifier == "settings-profile-switch" {
+            // This native button can omit AX focus; its name moves only on actual native focus.
+            let name = target.staticTexts["settings-profile-name"]
+            if name.exists, abs(name.frame.midY - target.frame.midY + 17) < 1 { return true }
+        }
         // Category selection mirrors native FocusState, not the saved section.
         // Nested UIKit hosts can omit AX hasFocus while still exposing this trait.
         if target.identifier.hasPrefix("settings-section-"), target.isSelected { return true }
