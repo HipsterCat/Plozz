@@ -1477,6 +1477,7 @@ public final class PlayerViewModel {
         rewritten.streamingSessionID = nil
         rewritten.negotiatedStreamingVideoCodec = nil
         rewritten.burnedInSubtitleTrackID = nil
+        rewritten.serverDecision = nil
         rewritten.isManifestStream = false
         rewritten.isTranscoding = false
         rewritten.deliveryMode = .directPlay

@@ -55,10 +55,8 @@ extension JellyfinCapabilityProfile {
 
     func applying(_ options: StreamingPlaybackOptions) -> Self {
         var result = self
-        if let limit = options.quality.maximumBitrate {
-            result.maxStreamingBitrate = limit
-            result.maxStaticBitrate = limit
-        }
+        result.maxStreamingBitrate = options.quality.maximumBitrate
+        result.maxStaticBitrate = options.quality.maximumBitrate
         for index in result.transcodingProfiles.indices {
             result.transcodingProfiles[index].videoCodec = options.codec.codecs(supportsHEVC: canRequestHEVC)
                 .joined(separator: ",")
@@ -99,6 +97,21 @@ extension PlaybackInfoResponse {
 }
 
 extension MediaSourceInfo {
+    func playbackServerDecision(clientMaxBitrate: Int?) -> PlaybackServerDecision {
+        let urlReasons = TranscodingUrl.flatMap { URLComponents(string: $0)?.queryItems }?
+            .filter { $0.name.caseInsensitiveCompare("TranscodeReasons") == .orderedSame }
+            .compactMap(\.value)
+            .flatMap { $0.split(separator: ",").map(String.init) }
+        let reasons = TranscodeReasons == nil && urlReasons?.isEmpty != false
+            ? nil : Array(((TranscodeReasons ?? []) + (urlReasons ?? [])).prefix(32))
+        return PlaybackServerDecision(
+            sourceBitrate: Bitrate, clientMaxBitrate: clientMaxBitrate,
+            supportsDirectPlay: SupportsDirectPlay, supportsDirectStream: SupportsDirectStream,
+            supportsTranscoding: SupportsTranscoding, subtitleBurnIn: burnedInSubtitleTrackID != nil,
+            transcodeReasons: reasons
+        )
+    }
+
     mutating func requestSDRForH264Transcode(provider: ProviderKind, forceVideoTranscode: Bool) throws {
         guard let TranscodingUrl else { return }
         guard var url = URLComponents(string: TranscodingUrl) else {

@@ -1637,6 +1637,7 @@ public struct JellyfinProvider: MediaProvider, ServerRatingsProviding, SeriesRes
                 ?? PlaybackRequest.sourceFileName(from: originalSource.Name)
         )
         request.burnedInSubtitleTrackID = source.burnedInSubtitleTrackID
+        request.serverDecision = source.playbackServerDecision(clientMaxBitrate: streaming?.quality.maximumBitrate)
         request.chapters = MediaChapter.normalized((detail.Chapters ?? []).enumerated().compactMap { index, chapter -> MediaChapter? in
             // Emby mixes skip boundaries into this array; those are not chapters.
             let marker = chapter.MarkerType?.lowercased() ?? ""
