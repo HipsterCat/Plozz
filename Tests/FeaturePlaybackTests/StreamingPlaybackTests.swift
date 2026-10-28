@@ -915,6 +915,117 @@ final class StreamingPlaybackTests: XCTestCase {
         await model.stop()
     }
 
+    func testOrdinaryServerHLSStartupGetsOneCodecRetryWithoutChangingContinuation() async {
+        let (model, engine, provider) = make(options: nil)
+        await model.load()
+        XCTAssertNil(model.streamingOptions, "Ordinary playback must not opt into quality negotiation up front.")
+        model.selectAudioOption(id: 4)
+        engine.currentTime = 123
+        model.setPaused(true)
+        model.setPlaybackSpeed(1.5)
+        guard model.handoffHandleStartupTimeout() else {
+            XCTFail("Server-selected HLS needs the same bounded recovery as explicitly selected quality.")
+            await model.stop()
+            return
+        }
+        await wait { engine.positions.count == 2 && model.phase == .ready }
+        let calls = await provider.calls
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls.first?.item, "movie")
+        XCTAssertEqual(calls.first?.source, "version")
+        XCTAssertEqual(calls.first?.options.quality, .original)
+        XCTAssertEqual(calls.first?.options.codec, .preferH264)
+        XCTAssertEqual(calls.first?.options.audioTrack?.id, 4)
+        XCTAssertEqual(calls.first?.forceTranscode, true)
+        XCTAssertEqual(engine.positions.last, 123)
+        XCTAssertTrue(engine.isPaused)
+        XCTAssertEqual(model.controls.playbackSpeed, 1.5)
+        XCTAssertFalse(model.handoffHandleStartupTimeout(), "Do not loop through server renditions.")
+        XCTAssertEqual(model.streamingQualityError, .startupTimedOut)
+        let ordinaryCalls = await provider.ordinaryCalls
+        XCTAssertEqual(ordinaryCalls, 1, "Never retry the original file to bypass a server decision.")
+        await model.stop()
+    }
+
+    func testOrdinaryServerHLSRefusalDoesNotBecomeCodecRecovery() async {
+        for failure in [
+            StreamingPlaybackFailure(kind: .network, domain: .url, code: -1009),
+            .init(kind: .accessDenied, httpStatus: 403),
+            .init(kind: .server, httpStatus: 503)
+        ] {
+            let (model, engine, provider) = make(options: nil)
+            await model.load()
+            engine.streamingFailure = failure
+            XCTAssertFalse(model.handoffHandleStartupTimeout())
+            XCTAssertEqual(model.streamingQualityError, .playback(failure))
+            XCTAssertNil(model.streamingOptions)
+            let calls = await provider.calls
+            XCTAssertTrue(calls.isEmpty)
+            await model.stop()
+        }
+    }
+
+    func testOrdinaryServerHLSDecoderFailureUsesTheSameBoundedRecovery() async {
+        let (model, engine, provider) = make(options: nil)
+        await model.load()
+        engine.streamingFailure = .init(kind: .unsupportedFormat, domain: .avFoundation, code: -11829)
+        engine.onFailure?(.invalidResponse)
+        await wait { engine.positions.count == 2 && model.phase == .ready }
+        let calls = await provider.calls
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls.first?.options.codec, .preferH264)
+        XCTAssertEqual(calls.first?.forceTranscode, true)
+        await model.stop()
+    }
+
+    func testOrdinaryServerHLSRecoveryPinsTheServerSelectedVersion() async throws {
+        func source(_ version: String) throws -> PlaybackSource {
+            .authenticatedHTTP(try .init(
+                provider: .plex, accountID: "account", credentialRevision: CredentialRevision(),
+                itemID: "movie", mediaSourceID: version, deliveryMode: .serverTranscode,
+                purpose: .mediaStream,
+                resource: try .init(pathBase: .configuredBaseURL, path: "master.m3u8")
+            ))
+        }
+        let provider = QualityPlaybackProvider()
+        await provider.setOrdinaryPlaybackSource(try source("version-a"))
+        let engine = QualityEngine()
+        let model = PlayerViewModel(
+            provider: provider, itemID: "movie",
+            engineFactory: .init(makeNative: { _ in engine })
+        )
+        await model.load()
+        XCTAssertEqual(model.currentMediaSourceID, "version-a")
+        await provider.setOrdinaryPlaybackSource(try source("version-b"))
+        XCTAssertTrue(model.handoffHandleStartupTimeout())
+        await wait { engine.positions.count == 2 && model.phase == .ready }
+        let calls = await provider.calls
+        XCTAssertEqual(calls.map(\.source), ["version-a"], "Do not ask the provider to choose its default again.")
+        XCTAssertEqual(model.currentMediaSourceID, "version-a")
+        await model.stop()
+    }
+
+    func testStopCancelsOrdinaryServerHLSRecoveryBeforeNegotiation() async {
+        let (model, engine, provider) = make(options: nil)
+        await model.load()
+        let gate = QualityDecisionGate()
+        engine.drainGate = gate
+        guard model.handoffHandleStartupTimeout() else {
+            XCTFail("Expected bounded server-rendition recovery.")
+            engine.drainGate = nil
+            await model.stop()
+            return
+        }
+        await gate.waitUntilEntered()
+        let stopping = Task { await model.stop() }
+        await Task.yield()
+        await gate.release()
+        await stopping.value
+        let calls = await provider.calls
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(engine.positions.count, 1)
+    }
+
     func testNetworkStreamFailureSkipsCodecRetryAndKeepsItsEvidence() async {
         let (model, engine, provider) = make()
         await model.load()
@@ -1182,9 +1293,11 @@ final class StreamingPlaybackTests: XCTestCase {
         await model.stop()
     }
 
-    func testOrdinaryStartupTimeoutRetainsItsCause() async {
-        let (model, _, _) = make(options: nil)
+    func testOrdinaryStartupTimeoutRetainsItsCauseAfterCodecRecovery() async {
+        let (model, engine, _) = make(options: nil)
         await model.load()
+        XCTAssertTrue(model.handoffHandleStartupTimeout())
+        await wait { engine.positions.count == 2 && model.phase == .ready }
         XCTAssertFalse(model.handoffHandleStartupTimeout())
         model.handoffSetPhase(.failed(.invalidResponse))
         XCTAssertEqual(model.streamingQualityError, .startupTimedOut)
@@ -1463,6 +1576,7 @@ private actor QualityPlaybackProvider: StreamingQualityProviding, StreamingSessi
     private var plexSubtitleRenditions = false
     private var burnedSubtitle = false
     private var compatibilityRendition = false
+    private var ordinaryPlaybackSource: PlaybackSource?
     private var scrubStillSource: PlaybackSource?
     private var chapters: [MediaChapter] = []
     private var gate: QualityDecisionGate?
@@ -1486,11 +1600,17 @@ private actor QualityPlaybackProvider: StreamingQualityProviding, StreamingSessi
     func setPlexSubtitleRenditions() { plexSubtitleRenditions = true }
     func setBurnedSubtitle() { burnedSubtitle = true }
     func setCompatibilityRendition() { compatibilityRendition = true }
+    func setOrdinaryPlaybackSource(_ source: PlaybackSource) { ordinaryPlaybackSource = source }
     func setScrubStillSource(_ source: PlaybackSource) { scrubStillSource = source }
     func setChapters(_ chapters: [MediaChapter]) { self.chapters = chapters }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest {
         ordinaryCalls += 1
-        return baseRequest()
+        var request = baseRequest()
+        if let ordinaryPlaybackSource {
+            request.playbackSource = ordinaryPlaybackSource
+            request.streamURL = nil
+        }
+        return request
     }
     func playbackInfo(for itemID: String, mediaSourceID: String?, forceTranscode: Bool, streaming: StreamingPlaybackOptions) async throws -> PlaybackRequest {
         calls.append(.init(item: itemID, source: mediaSourceID, options: streaming, forceTranscode: forceTranscode))

@@ -1420,6 +1420,16 @@ not decode unrelated library-item fields, whose wire types can differ here.
 Automatic recovery uses the observed/negotiated codec: a failed H.264
 conversion can request HEVC on a capable device; HEVC can fall back to H.264.
 There is one compatibility retry, not a loop through the same codec.
+Ordinary movie/episode playback, including TV callers without a quality selection,
+uses that same retry when a supported provider supplies server HLS and the stream
+fails compatibility checks or reaches the app's startup deadline without a
+stronger transport/refusal error. Initial negotiation stays unchanged. Only
+recovery enters managed conversion at Original quality, preserving the account,
+selected file, position, tracks, pause and speed. It stops the outgoing session
+before requesting a forced replacement; it never fetches an original file to
+bypass the server's conversion decision. Conversion can change HDR and audio.
+An unknown delivered codec gets the existing H.264 recovery, not an assumption
+that the original file's HEVC badge describes the failed rendition.
 The Plex H.264 fallback requests MPEG-TS at the unchanged budget.
 Confirmed missing or ended resources require a fresh user retry, not a codec change; retry
 never falls back to the uncapped original. Decision status and numeric codes are retained without
