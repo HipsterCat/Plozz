@@ -67,12 +67,6 @@ struct HelpDiagnosticsDetailView: View {
         .scrollClipDisabled()
     }
 
-    /// Whether the on-demand diagnostics upload can run right now: the build
-    /// shipped with a crash-reporting endpoint AND the user has opted in.
-    private var canSendDiagnostics: Bool {
-        crashReportingConfigured && crashReporting.isEnabled
-    }
-
     // MARK: - Report a Problem
 
     private var reportPanel: some View {
@@ -116,40 +110,19 @@ struct HelpDiagnosticsDetailView: View {
     /// of only stumbling on it deep inside the Recent Activity page.
     private var sendDiagnosticsPanel: some View {
         SendDiagnosticsCard(
-            canSend: canSendDiagnostics,
-            idleDescription: SettingsCopy.manualDiagnostics,
-            disabledDescription: "Turn on Share Crash Reports below to send recent app logs."
+            sharingEnabled: $crashReporting.isEnabled,
+            isConfigured: crashReportingConfigured
         )
     }
 
     // MARK: - Crash reporting
 
-    @ViewBuilder
     private var crashReportingPanel: some View {
-        if crashReportingConfigured {
-            SettingsPanel(
-                title: "Crash Reports",
-                footer: SettingsCopy.automaticDiagnostics
-            ) {
-                Toggle("Share Crash Reports", isOn: $crashReporting.isEnabled)
-                    .toggleStyle(SettingsSwitchToggleStyle())
-                Text(SettingsCopy.automaticDiagnosticsExclusions)
-                    .settingsHelperText()
-            }
-        } else {
-            // No DSN baked in ⇒ the toggle can't do anything, so it's disabled
-            // (and thus unfocusable). Make the whole panel focusable instead so
-            // it stays reachable/readable and doesn't create a focus dead-zone.
-            FocusableSettingsPanel(
-                title: "Crash Reports",
-                footer: "This build has no crash-reporting endpoint configured, so nothing can be sent. Crash reporting is available in TestFlight and release builds."
-            ) {
-                Toggle("Share Crash Reports", isOn: .constant(false))
-                    .toggleStyle(SettingsSwitchToggleStyle())
-                    .disabled(true)
-                    .opacity(0.5)
-                    .allowsHitTesting(false)
-            }
+        SettingsPanel {
+            Toggle(isOn: $crashReporting.isEnabled) { Text(SettingsCopy.shareDiagnostics) }
+                .toggleStyle(SettingsSwitchToggleStyle())
+                .accessibilityIdentifier("diagnostics-sharing-toggle")
+                .disabled(!crashReportingConfigured)
         }
     }
 

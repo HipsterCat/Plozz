@@ -157,7 +157,9 @@ struct PresentationHostApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--source-settings") {
+            if ProcessInfo.processInfo.arguments.contains("--diagnostics-sharing-fixture") {
+                DiagnosticsSharingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--source-settings") {
                 SourceOnboardingFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--featured-card-fixture") {
                 FeaturedCardInteractionFixture()
