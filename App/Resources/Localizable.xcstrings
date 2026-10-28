@@ -119218,6 +119218,7 @@
       }
     },
     "Add a message (optional) — e.g. what went wrong" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -461821,6 +461822,226 @@
         }
       }
     },
+    "Message (required)" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "الرسالة (مطلوبة)"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Съобщение (задължително)"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Missatge (obligatori)"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zpráva (povinná)"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Besked (påkrævet)"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nachricht (erforderlich)"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Μήνυμα (υποχρεωτικό)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mensaje (obligatorio)"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "پیام (الزامی)"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Viesti (pakollinen)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Message (obligatoire)"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "הודעה (חובה)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "संदेश (आवश्यक)"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Poruka (obavezno)"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Üzenet (kötelező)"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pesan (wajib)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Messaggio (obbligatorio)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "メッセージ（必須）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "메시지 (필수)"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mesej (wajib)"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Melding (påkrevd)"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bericht (verplicht)"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wiadomość (wymagana)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mensagem (obrigatória)"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mesaj (obligatoriu)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Сообщение (обязательно)"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Správa (povinná)"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sporočilo (obvezno)"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Poruka (obavezna)"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Meddelande (obligatoriskt)"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ข้อความ (ต้องระบุ)"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mesaj (zorunlu)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Повідомлення (обов’язково)"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lời nhắn (bắt buộc)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "留言（必填）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "留言（必填）"
+          }
+        }
+      }
+    },
     "Metadata" : {
       "comment" : "Title for the Metadata settings destination and page in tvOS and iOS/iPadOS Settings.",
       "extractionState" : "stale",
@@ -534806,6 +535027,7 @@
     },
     "Optional note" : {
       "comment" : "Multi-line text field in the iOS/iPadOS Send Diagnostics screen for an optional user note sent with the diagnostics report.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -708427,7 +708649,228 @@
         }
       }
     },
+    "Send recent logs, technical playback and connection diagnostics, and your message to the developer through Sentry. Don't include passwords or personal information." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "أرسل السجلات الأخيرة، وبيانات التشخيص التقنية للتشغيل والاتصال، ورسالتك إلى المطوّر عبر Sentry. لا تُضمّن كلمات مرور أو معلومات شخصية."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Изпратете последните записи в журналите, техническа диагностична информация за възпроизвеждането и връзката и съобщението си до разработчика чрез Sentry. Не включвайте пароли или лична информация."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envia els registres recents, les dades tècniques de diagnòstic de reproducció i connexió i el teu missatge al desenvolupador a través de Sentry. No hi incloguis contrasenyes ni informació personal."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odešlete vývojáři přes Sentry nejnovější záznamy protokolu, technické diagnostické údaje o přehrávání a připojení a svou zprávu. Neuvádějte hesla ani osobní údaje."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send de seneste logfiler, tekniske diagnosticeringsdata om afspilning og forbindelse samt din besked til udvikleren via Sentry. Medtag ikke adgangskoder eller personlige oplysninger."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sende aktuelle Protokolle, technische Diagnosedaten zu Wiedergabe und Verbindung sowie deine Nachricht über Sentry an den Entwickler. Gib keine Passwörter oder persönlichen Informationen an."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Στείλτε πρόσφατα αρχεία καταγραφής, τεχνικά διαγνωστικά στοιχεία αναπαραγωγής και σύνδεσης, καθώς και το μήνυμά σας στον προγραμματιστή μέσω του Sentry. Μην συμπεριλάβετε κωδικούς πρόσβασης ή προσωπικές πληροφορίες."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envía los registros recientes, los datos técnicos de diagnóstico de reproducción y conexión y tu mensaje al desarrollador a través de Sentry. No incluyas contraseñas ni información personal."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های اخیر، اطلاعات فنی عیب‌یابی پخش و اتصال و پیام خود را از طریق Sentry برای توسعه‌دهنده ارسال کنید. رمز عبور یا اطلاعات شخصی را وارد نکنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lähetä viimeaikaiset lokit, toiston ja yhteyden tekniset diagnostiikkatiedot sekä viestisi kehittäjälle Sentryn kautta. Älä sisällytä salasanoja tai henkilötietoja."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envoyez les journaux récents, les données techniques de diagnostic de lecture et de connexion, ainsi que votre message au développeur via Sentry. N’incluez pas de mots de passe ni d’informations personnelles."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שלחו למפתח באמצעות Sentry את היומנים האחרונים, את נתוני האבחון הטכניים של הניגון והחיבור ואת ההודעה שלכם. אל תכללו סיסמאות או מידע אישי."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "हाल के लॉग, प्लेबैक और कनेक्शन संबंधी तकनीकी जाँच की जानकारी और अपना संदेश Sentry के ज़रिए डेवलपर को भेजें। पासवर्ड या निजी जानकारी शामिल न करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošaljite nedavne zapise, tehničke dijagnostičke podatke o reprodukciji i vezi te svoju poruku razvojnom programeru putem servisa Sentry. Nemojte uključivati lozinke ni osobne podatke."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Küldje el a legutóbbi naplókat, a lejátszás és a kapcsolat technikai diagnosztikai adatait, valamint az üzenetét a fejlesztőnek a Sentry szolgáltatáson keresztül. Ne adjon meg jelszavakat vagy személyes adatokat."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kirim log terbaru, data diagnostik teknis pemutaran dan koneksi, serta pesan Anda kepada pengembang melalui Sentry. Jangan sertakan kata sandi atau informasi pribadi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Invia allo sviluppatore tramite Sentry i log recenti, i dati diagnostici tecnici sulla riproduzione e sulla connessione e il tuo messaggio. Non includere password o informazioni personali."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "最近のログ、再生・接続に関する技術的な診断情報、入力したメッセージをSentry経由で開発者に送信します。パスワードや個人情報は含めないでください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "최근 로그, 재생 및 연결 관련 기술 진단 정보, 작성한 메시지를 Sentry를 통해 개발자에게 보냅니다. 비밀번호나 개인정보를 포함하지 마세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hantar log terkini, diagnostik teknikal untuk main balik dan sambungan serta mesej anda kepada pembangun melalui Sentry. Jangan sertakan kata laluan atau maklumat peribadi."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send nylige logger, teknisk diagnostikk for avspilling og tilkobling samt meldingen din til utvikleren via Sentry. Ikke ta med passord eller personopplysninger."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Stuur recente logboeken, technische diagnosegegevens voor het afspelen en de verbinding en je bericht via Sentry naar de ontwikkelaar. Voeg geen wachtwoorden of persoonsgegevens toe."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wyślij ostatnie logi, techniczne dane diagnostyczne odtwarzania i połączenia oraz swoją wiadomość do dewelopera za pośrednictwem Sentry. Nie podawaj haseł ani danych osobowych."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envie registros recentes, dados técnicos de diagnóstico de reprodução e conexão e sua mensagem ao desenvolvedor pelo Sentry. Não inclua senhas nem informações pessoais."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimite dezvoltatorului prin Sentry jurnalele recente, datele tehnice de diagnosticare a redării și a conexiunii și mesajul tău. Nu include parole sau informații personale."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отправьте разработчику через Sentry последние журналы, технические диагностические данные о воспроизведении и подключении, а также своё сообщение. Не указывайте пароли или личную информацию."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odošlite vývojárovi cez Sentry nedávne záznamy, technické diagnostické údaje o prehrávaní a pripojení a svoju správu. Neuvádzajte heslá ani osobné údaje."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Razvijalcu prek storitve Sentry pošljite nedavne dnevniške zapise, tehnične diagnostične podatke o predvajanju in povezavi ter svoje sporočilo. Ne vključujte gesel ali osebnih podatkov."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošaljite programeru putem servisa Sentry nedavne zapise iz dnevnika, tehničke dijagnostičke podatke o reprodukciji i vezi i svoju poruku. Ne unosite lozinke ni lične podatke."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skicka de senaste loggarna, tekniska diagnostikuppgifter om uppspelning och anslutning samt ditt meddelande till utvecklaren via Sentry. Ta inte med lösenord eller personuppgifter."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งบันทึกล่าสุด ข้อมูลวินิจฉัยทางเทคนิคเกี่ยวกับการเล่นและการเชื่อมต่อ และข้อความของคุณไปยังผู้พัฒนาผ่าน Sentry อย่าใส่รหัสผ่านหรือข้อมูลส่วนบุคคล"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Son günlükleri, oynatma ve bağlantıyla ilgili teknik tanılama verilerini ve mesajınızı Sentry aracılığıyla geliştiriciye gönderin. Parola veya kişisel bilgi eklemeyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Надішліть розробнику через Sentry останні журнали, технічні дані діагностики відтворення та з’єднання, а також своє повідомлення. Не додавайте паролі чи особисту інформацію."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gửi nhật ký gần đây, dữ liệu chẩn đoán kỹ thuật về phát lại và kết nối cùng lời nhắn của bạn đến nhà phát triển qua Sentry. Không gửi kèm mật khẩu hoặc thông tin cá nhân."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "通过 Sentry 向开发者发送近期日志、播放与连接的技术诊断信息，以及您的留言。请勿包含密码或个人信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "透過 Sentry 向開發者傳送近期日誌、播放與連線的技術診斷資訊，以及您的留言。請勿包含密碼或個人資訊。"
+          }
+        }
+      }
+    },
     "Send recent logs, technical playback and connection diagnostics, and your optional message to the developer through Sentry. Don't include passwords or personal information." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
