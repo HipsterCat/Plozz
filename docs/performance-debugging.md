@@ -61,6 +61,21 @@ Fatal iOS 18 Downloads samples have included filesystem metadata lookup during
 episode-row rendering; a sampled UI frame alone does not prove a decoder fault
 or establish that every Downloads hang shares one cause.
 
+The completed-episode detail push also reproduced a separate main-thread
+navigation/List update loop on an iPhone XR simulator running iOS 18.0. The same
+four-push interaction completed on iOS 26.2, while iOS 18.0 stayed near 99% CPU
+after the first episode tap and exceeded the 120-second test allowance. No
+artwork files or active transfers were needed to reproduce it.
+
+Keep the downloaded show's destination closure scoped to `[appModel]`, not the
+whole view containing `@Environment(\.dismiss)`. Capturing only the model broke
+the loop with the original navigation hierarchy unchanged; moving the destination
+outside the conditional subtree alone did not. The native
+`DownloadsInteractionTests.testCompletedEpisodeDetailsRemainNavigableAcrossRepeatedPushes`
+regression uses a synthetic connected provider and the real episode detail page,
+then returns through both Back levels four times. Run it on iOS 18 as well as a
+current OS; this verifies navigation, not network transfer or offline playback.
+
 ## Sentry diagnostics and matching symbols
 
 Crash-reporting consent gates all uploads. Automatic UI/network breadcrumbs and

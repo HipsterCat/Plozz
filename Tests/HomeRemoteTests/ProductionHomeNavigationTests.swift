@@ -21,6 +21,9 @@ final class ProductionHomeNavigationTests: XCTestCase {
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(title.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertGreaterThanOrEqual(title.frame.minY, bar.frame.maxY + 16)
+        let initialTitleY = title.frame.minY
+        XCTAssertTrue(app.buttons["watchlist-filter-menu"].exists)
+        XCTAssertTrue(app.buttons["watchlist-sort-menu"].exists)
         let first = app.buttons["Fixture movie 0"]
         XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertGreaterThanOrEqual(first.frame.minY, bar.frame.maxY + 16)
@@ -36,8 +39,14 @@ final class ProductionHomeNavigationTests: XCTestCase {
         )], timeout: 5), .completed, app.debugDescription)
         XCUIRemote.shared.press(.down)
         XCUIRemote.shared.press(.down)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in !app.buttons["top-navigation-watchlist"].isHittable }, object: nil
+        )], timeout: 5), .completed, "Watchlist scrolling must carry the top bar offscreen.")
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(app.buttons["top-navigation-watchlist"].hasFocus)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in abs(title.frame.minY - initialTitleY) < 1 }, object: nil
+        )], timeout: 5), .completed, "Back must restore both Watchlist content and navigation to the top.")
         captureNavigation("Watchlist navigation after scrolling", app: app)
         XCUIRemote.shared.press(.right)
         let search = app.searchFields.firstMatch

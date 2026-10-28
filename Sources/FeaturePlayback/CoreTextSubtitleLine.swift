@@ -65,7 +65,11 @@ struct CoreTextSubtitleLine: UIViewRepresentable {
     var systemFontDescriptor: UIFontDescriptor? = nil
     var glyphBackground: UIColor? = nil
 
-    func makeUIView(context: Context) -> SubtitleLineView { SubtitleLineView() }
+    func makeUIView(context: Context) -> SubtitleLineView {
+        let view = SubtitleLineView()
+        view.configure(configuration)
+        return view
+    }
 
     func updateUIView(_ view: SubtitleLineView, context: Context) {
         view.configure(configuration)
@@ -82,6 +86,8 @@ struct CoreTextSubtitleLine: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SubtitleLineView, context: Context) -> CGSize? {
+        // Measurement must use this cue, even before updateUIView has run.
+        uiView.configure(configuration)
         let w = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 10_000
         return uiView.measure(maxWidth: w)
     }
@@ -149,6 +155,9 @@ final class SubtitleLineView: UIView {
     private var config: Config?
     private var layout: Layout?
     private var layoutWidth: CGFloat = -1
+    #if DEBUG
+    private(set) var drawnTextForTesting: String?
+    #endif
 
     override init(frame: CGRect) { super.init(frame: frame); commonInit() }
     required init?(coder: NSCoder) { super.init(coder: coder); commonInit() }
@@ -279,6 +288,9 @@ final class SubtitleLineView: UIView {
                 ctx.restoreGState()
             }
         }
+        #if DEBUG
+        drawnTextForTesting = l.path.isEmpty && l.colorGlyphs.isEmpty ? nil : c.text
+        #endif
     }
 
     // MARK: - Layout

@@ -665,7 +665,7 @@ public struct LibraryBrowseView: View {
                 }
             }
             if !viewModel.availableSortFields.isEmpty {
-                HStack(spacing: PlozzTheme.Spacing.medium) {
+                BrowseQueryControls {
                     if viewModel.showsFilterMenu {
                         LibraryFilterMenu(
                             filters: viewModel.filters, capabilities: viewModel.queryCapabilities, facets: viewModel.queryFacets,
@@ -715,46 +715,10 @@ public struct LibraryBrowseView: View {
 
     /// A focusable native sort menu.
     private var sortControl: some View {
-        Menu {
-            Picker("Sort By", selection: sortFieldBinding) {
-                ForEach(viewModel.availableSortFields, id: \.self) { field in
-                    Text(field.displayName).tag(field)
-                }
-            }
-            Picker("Order", selection: sortDirectionBinding) {
-                ForEach(SortDirection.allCases, id: \.self) { direction in
-                    Text(direction.displayName).tag(direction)
-                }
-            }
-        } label: {
-            Label("Sort: \(viewModel.sort.field.displayName)", systemImage: "arrow.up.arrow.down")
+        BrowseSortMenu(sort: viewModel.sort, fields: viewModel.availableSortFields) { sort in
+            Task { await viewModel.setSort(sort) }
         }
         .accessibilityIdentifier("library-sort-menu")
-    }
-
-    private var sortFieldBinding: Binding<SortField> {
-        Binding(
-            get: { viewModel.sort.field },
-            set: { field in
-                Task {
-                    await viewModel.setSort(
-                        CoreModels.SortDescriptor(
-                            field: field,
-                            direction: field.defaultDirection
-                        )
-                    )
-                }
-            }
-        )
-    }
-
-    private var sortDirectionBinding: Binding<SortDirection> {
-        Binding(
-            get: { viewModel.sort.direction },
-            set: { direction in
-                Task { await viewModel.setSort(CoreModels.SortDescriptor(field: viewModel.sort.field, direction: direction)) }
-            }
-        )
     }
 
     /// Warms decoded poster art in the viewport's direction once a cell loads.

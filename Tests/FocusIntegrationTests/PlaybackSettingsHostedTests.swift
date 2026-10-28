@@ -9,7 +9,55 @@ import XCTest
 
 @MainActor
 final class PlaybackSettingsHostedTests: XCTestCase {
-    func testSkipControlsRevealAutomaticTimingAndHideConfigurationWhenDisabled() async throws {
+    func testAudioOutputSettingsShareOneGroup() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "audio-output-settings-hosted-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let playback = PlaybackSettingsModel(store: PlaybackSettingsStore(defaults: defaults))
+        let page = PlaybackDetailView(
+            playback: playback,
+            subtitleBehavior: SubtitleBehaviorModel(store: SubtitleBehaviorStore(defaults: defaults)),
+            subtitleStyle: SubtitleStyleModel(store: SubtitleStyleStore(defaults: defaults)),
+            subtitlePolicy: SubtitlePolicyModel(store: SubtitlePolicyStore(defaults: defaults)),
+            audioPolicy: AudioPolicyModel(store: AudioPolicyStore(defaults: defaults))
+        )
+        XCTAssertEqual(page.audioRows.map(\.id), ["audio-defaults", "lossless-surround"])
+        let outputRow = try XCTUnwrap(page.audioRows.first { $0.id == "lossless-surround" })
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            SettingsFormLayout(title: Text("Playback"), rows: [outputRow])
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let text = try visibleText(in: window, attachment: "Playback-audio-output-group")
+        for label in ["Prefer lossless audio", "regular HDMI ARC", "compressed audio"] {
+            XCTAssertTrue(text.contains(label), text)
+        }
+        if #available(tvOS 26.0, *) {
+            for label in ["Spatial audio", "height channel support", "TrueHD Atmos",
+                          "DTS:X", "Apple spatial audio", "lossy"] {
+                XCTAssertTrue(text.contains(label), text)
+            }
+        } else {
+            XCTAssertFalse(text.contains("Spatial audio"), text)
+        }
+    }
+
+    func testSkipMarkerPagesShowEveryKindAndIndependentContentTiming() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first(where: \.isKeyWindow)
@@ -19,11 +67,8 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         window.rootViewController = UIHostingController(rootView:
-            ScrollView {
-                SkipMarkerSettingsControl(model: playback)
-                    .frame(width: SettingsFormMetrics.pageWidth)
-                    .padding(40)
-            }
+            SkipMarkerSettingsView(model: playback)
+            .frame(width: SettingsFormMetrics.pageWidth)
             .toggleStyle(SettingsSwitchToggleStyle())
             .environment(\.themePalette, .dark)
             .environment(\.locale, Locale(identifier: "en_US"))
@@ -38,29 +83,117 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(400))
         let manual = try visibleText(in: window, attachment: "skip-settings-TV-manual")
+        XCTAssertTrue(manual.contains("Default behavior"), manual)
         XCTAssertTrue(manual.contains("Show skip button"), manual)
         XCTAssertFalse(manual.contains("Skip after"), manual)
-        for label in ["Enable skipping", "Movies", "TV Shows", "Anime"] {
+        for label in ["Intros, credits & more", "Movies", "TV Shows", "Anime"] {
             XCTAssertTrue(manual.contains(label), manual)
         }
-        playback.settings.setConfiguredSkipMode(.autoDelay)
-        playback.settings.setSkipAutomaticDelay(30)
-        try await Task.sleep(for: .milliseconds(200))
-        let automatic = try visibleText(in: window, attachment: "skip-settings-TV-automatic")
-        XCTAssertTrue(automatic.contains("Skip automatically"), automatic)
-        XCTAssertTrue(automatic.contains("Skip after"), automatic)
-        XCTAssertTrue(automatic.contains("30 seconds"), automatic)
-        playback.settings.setSkipAutomaticDelay(0)
-        try await Task.sleep(for: .milliseconds(500))
-        let immediate = try visibleText(in: window, attachment: "skip-settings-TV-immediate")
-        XCTAssertTrue(immediate.contains("Immediately"), immediate)
-        playback.settings.setSkipMarkersEnabled(false)
-        try await Task.sleep(for: .milliseconds(200))
-        let disabled = try visibleText(in: window, attachment: "skip-settings-TV-disabled")
-        XCTAssertTrue(disabled.contains("Enable skipping"), disabled)
-        for label in ["Behavior", "Skip after", "Movies", "Set each marker separately", "Use community markers"] {
-            XCTAssertFalse(disabled.contains(label), disabled)
+        XCTAssertFalse(manual.contains("Set each marker separately"), manual)
+        let page = try await allPageText(in: window, attachment: "skip-marker-page-TV")
+        for label in ["Intros", "Credits", "Recaps", "Previews", "Commercials",
+                      "Use community markers", "From IntroDB", "Shares"] {
+            XCTAssertTrue(page.contains(label), page)
         }
+        for kind in MediaSegment.Kind.skippable {
+            playback.settings.setConfiguredSkipMode(.autoDelay, for: kind, category: .movie)
+            playback.settings.setSkipAutomaticDelay(30, for: kind, category: .movie)
+            playback.settings.setConfiguredSkipMode(.off, for: kind, category: .anime)
+            window.rootViewController = UIHostingController(rootView:
+                SkipMarkerContentSettingsView(model: playback, kind: kind)
+                    .frame(width: SettingsFormMetrics.pageWidth)
+                    .environment(\.themePalette, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                    .background(.black)
+            )
+            try await Task.sleep(for: .milliseconds(200))
+            let automatic = try visibleText(in: window, attachment: "skip-\(kind.rawValue)-TV-content")
+            for label in ["Movies", "TV Shows", "Anime", "Show skip button (default)",
+                          "Skip after", "30 seconds", "Off"] {
+                XCTAssertTrue(automatic.localizedCaseInsensitiveContains(label), automatic)
+            }
+            let movie = SkipMarkerRuleControls(model: playback, scope: .content(kind, .movie))
+            movie.behavior.wrappedValue = .instant
+            try await Task.sleep(for: .milliseconds(100))
+            let immediate = try visibleText(in: window, attachment: "skip-\(kind.rawValue)-TV-immediate")
+            XCTAssertTrue(immediate.contains("Skip instantly"), immediate)
+            XCTAssertFalse(immediate.contains("Skip after"), immediate)
+            XCTAssertEqual(playback.settings.configuredSkipMode(for: kind, category: .tvShow), .on)
+            XCTAssertEqual(playback.settings.configuredSkipDelay(for: kind, category: .tvShow), 5)
+            XCTAssertEqual(playback.settings.configuredSkipMode(for: kind, category: .anime), .off)
+        }
+    }
+
+    func testSharedSkipDefaultAndAnimeExceptionUseTheSamePickerBindings() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "SkipDefaultTV-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = PlaybackSettingsStore(defaults: defaults, namespace: "viewer")
+        let playback = PlaybackSettingsModel(store: store)
+        let shared = SkipMarkerRuleControls(model: playback, scope: .defaultBehavior)
+        let anime = SkipMarkerRuleControls(model: playback, scope: .content(.intro, .anime))
+        XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed])
+        XCTAssertEqual(anime.behaviors, [.useDefault, .manual, .instant, .delayed, .off])
+        shared.behavior.wrappedValue = .off
+        XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed, .off])
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            SkipMarkerSettingsView(model: playback)
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        shared.behavior.wrappedValue = .instant
+        try await Task.sleep(for: .milliseconds(300))
+        let instant = try visibleText(in: window, attachment: "skip-default-TV-instant")
+        XCTAssertTrue(instant.contains("Default behavior"), instant)
+        XCTAssertTrue(instant.contains("Skip instantly"), instant)
+        XCTAssertFalse(instant.contains("Skip after"), instant)
+        for category in [ContentCategory.movie, .tvShow, .anime] {
+            for kind in MediaSegment.Kind.skippable {
+                XCTAssertEqual(store.load().skipMarkerModes(for: category).mode(for: kind), .autoInstant)
+            }
+        }
+        anime.behavior.wrappedValue = .manual
+        window.rootViewController = UIHostingController(rootView:
+            SkipMarkerContentSettingsView(model: playback, kind: .intro)
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .background(.black)
+        )
+        try await Task.sleep(for: .milliseconds(300))
+        let exception = try visibleText(in: window, attachment: "skip-default-TV-anime-exception")
+        for label in ["Movies", "TV Shows", "Anime", "Skip instantly (default)", "Show skip button"] {
+            XCTAssertTrue(exception.contains(label), exception)
+        }
+        XCTAssertFalse(exception.contains("Default:"), exception)
+        XCTAssertFalse(exception.contains("Use default"), exception)
+        shared.behavior.wrappedValue = .delayed
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(store.load().skipMarkerModes(for: .movie).delay(for: .intro), 5)
+        XCTAssertEqual(anime.behavior.wrappedValue, .manual)
+        anime.behavior.wrappedValue = .useDefault
+        try await Task.sleep(for: .milliseconds(200))
+        let inherited = try visibleText(in: window, attachment: "skip-default-TV-inherited")
+        XCTAssertTrue(inherited.contains("Skip after 5 seconds (default)"), inherited)
+        XCTAssertFalse(inherited.contains("Show skip button"), inherited)
+        XCTAssertTrue(store.load().skipMarkerRules.isEmpty)
+        shared.behavior.wrappedValue = .instant
+        XCTAssertEqual(anime.behavior.wrappedValue, .useDefault)
+        XCTAssertEqual(store.load().skipMarkerModes(for: .anime).mode(for: .intro), .autoInstant)
+        XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
     }
 
     func testAdvancedPlaybackShowsFELControlAndAudioTradeoff() async throws {
@@ -168,7 +301,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         }
     }
 
-    func testSkipMarkerControlsAreInlineOnPlaybackPage() async throws {
+    func testPlaybackShowsOnlySkipToggleAndConditionalSettingsLink() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
               ContinuousClock.now < deadline {
@@ -207,13 +340,9 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         window.layoutIfNeeded()
         let scroll = try XCTUnwrap(scrollView(in: window))
-        for separate in [false, true] {
-            if separate {
-                playback.settings.skipModeOverrides = Dictionary(
-                    uniqueKeysWithValues: MediaSegment.Kind.skippable.map { ($0, .on) }
-                )
-                try await Task.sleep(for: .milliseconds(400))
-            }
+        for enabled in [false, true] {
+            playback.settings.setSkipMarkersEnabled(enabled)
+            try await Task.sleep(for: .milliseconds(400))
             let top = -scroll.adjustedContentInset.top
             let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
             var visible = ""
@@ -230,12 +359,12 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
                 let page = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
                 visible += " " + page
-                if page.contains("Skip intros") || page.contains("Use community markers")
+                if page.contains("Skip intros, credits")
                     || page.contains("Version selection") || page.contains("Video buffer")
                     || page.contains("Live TV buffer") || page.contains("Autoplay")
                     || page.contains("Preferred audio language") {
                     let attachment = XCTAttachment(image: image)
-                    attachment.name = "Playback-inline-skip-separate-\(separate)-\(Int(offset))"
+                    attachment.name = "Playback-skip-enabled-\(enabled)-\(Int(offset))"
                     attachment.lifetime = .keepAlways
                     add(attachment)
                 }
@@ -247,9 +376,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 "Remember audio language per series",
                 "Autoplay next episode", "Autoplay next playlist item",
                 "Show Up Next card", "Time before the end",
-                "Skip intros, credits", "Enable skipping", "Movies", "TV Shows", "Anime",
-                "Show skip button", "Set each marker separately", "Use community markers",
-                "From IntroDB", "your server has none", "Shares",
+                "Skip intros, credits & more",
                 "Video buffer", "Live TV buffer", "Automatic", "temporary storage",
                 "adds live delay", "Spatial audio", "height channel support",
                 "TrueHD Atmos", "DTS:X", "Apple spatial audio", "lossy"
@@ -267,10 +394,11 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             XCTAssertFalse(visible.contains("Show a Skip button, or skip automatically"), visible)
             XCTAssertFalse(visible.contains("When your server has no intro or credits marker"), visible)
             XCTAssertTrue(playback.settings.trueHDAtmosEnabled)
-            if separate {
-                for label in ["Intros", "Credits", "Recaps", "Previews", "Commercials"] {
-                    XCTAssertTrue(visible.contains(label), "Missing inline per-kind control \(label)")
-                }
+            XCTAssertEqual(visible.contains("Customize"), enabled, visible)
+            XCTAssertFalse(visible.contains("Skip markers"), visible)
+            for label in ["Set each marker separately", "Use community markers", "Show skip button",
+                          "Skip after", "Intros", "Credits", "Recaps", "Previews", "Commercials"] {
+                XCTAssertFalse(visible.contains(label), "Customization belongs on the child page: \(visible)")
             }
         }
         playback.settings.autoPlayNextEpisode = false
@@ -289,6 +417,20 @@ final class PlaybackSettingsHostedTests: XCTestCase {
     private func scrollView(in view: UIView) -> UIScrollView? {
         if let scroll = view as? UIScrollView { return scroll }
         return view.subviews.lazy.compactMap { self.scrollView(in: $0) }.first
+    }
+
+    private func allPageText(in window: UIWindow, attachment name: String) async throws -> String {
+        let scroll = try XCTUnwrap(scrollView(in: window))
+        let top = -scroll.adjustedContentInset.top
+        let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        var text = ""
+        for offset in stride(from: top, through: bottom + 540, by: 540) {
+            scroll.setContentOffset(CGPoint(x: 0, y: min(offset, bottom)), animated: false)
+            try await Task.sleep(for: .milliseconds(100))
+            text += " " + (try visibleText(in: window, attachment: "\(name)-\(Int(offset))"))
+            if offset >= bottom { break }
+        }
+        return text
     }
 
     private func visibleText(in window: UIWindow, attachment name: String) throws -> String {

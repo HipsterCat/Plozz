@@ -244,7 +244,7 @@ final class ItemDetailViewModelTests: XCTestCase {
             vm.suspendEnrichment()
         }
         await vm.load()
-        XCTAssertNotNil(vm.playbackVersionsLoader(for: item), "Unknown inventory must leave version selection discoverable.")
+        XCTAssertNotNil(vm.playbackVersionsLoader(for: item), "Explicit inventory loading remains available to callers.")
         let lookup = Task { try await vm.loadPlaybackVersions(for: item) }
         await entered.wait()
         XCTAssertEqual(vm.state.value?.item.title, "Movie")
@@ -2398,6 +2398,55 @@ final class ItemDetailViewModelTests: XCTestCase {
             "plex",
             "A source-specific library is authoritative even when another copy ranks as more local"
         )
+    }
+
+    func testHomeEpisodeEntryCanToggleWatchedRepeatedlyWithoutReopening() async throws {
+        for kind: ProviderKind in [.plex, .jellyfin] {
+            for hasResumeSeed in [false, true] {
+                let account = kind.rawValue
+                let series = MediaItem(id: "series", title: "Series", kind: .series)
+                let season = MediaItem(id: "season", title: "Season 1", kind: .season, seasonNumber: 1)
+                let tapped = MediaItem(
+                    id: "episode-4", title: "Four", kind: .episode,
+                    seasonNumber: 1, episodeNumber: 4, seriesID: series.id, seasonID: season.id,
+                    sourceAccountID: account
+                )
+                let sibling = MediaItem(id: "episode-5", title: "Five", kind: .episode, episodeNumber: 5)
+                let provider = FakeMediaProvider(allItems: [series, season, tapped, sibling], kind: kind)
+                provider.childrenByParent = [series.id: [season], season.id: [tapped, sibling]]
+                provider.continueWatchingItems = hasResumeSeed ? [tapped] : []
+                let vm = ItemDetailViewModel(
+                    provider: provider, itemID: series.id,
+                    sourceAccountID: account,
+                    onlineTrailerResolver: { _ in [] },
+                    playableVideoIDResolver: { _ in nil },
+                    trailerCache: TrailerResolutionCache()
+                )
+                defer { vm.suspendEnrichment() }
+                await vm.load()
+                await vm.loadEpisodes(for: season.id)
+                for played in [true, false, true, false] {
+                    vm.applyWatchedState(MediaItemMutation(
+                        itemIDs: [tapped.id], scopedItemIDs: ["\(account):\(tapped.id)"],
+                        played: played, resumePosition: 0
+                    ))
+                    let episodes = try XCTUnwrap(vm.episodes(for: season.id))
+                    let hero = try XCTUnwrap(SeriesEpisodeEntry.resolvedOpeningEpisode(
+                        initialEpisode: tapped, initialSeasonID: season.id,
+                        resumeEpisode: vm.serverResumeEpisode, in: episodes
+                    ))
+                    XCTAssertEqual(hero.id, tapped.id)
+                    XCTAssertEqual(hero.sourceAccountID, account)
+                    XCTAssertEqual(hero.isPlayed, played, "\(kind), resume=\(hasResumeSeed)")
+                    XCTAssertEqual(
+                        MediaItemActionCatalog.actions(for: hero, supportsWatchState: true).first,
+                        played ? .markUnwatched : .markWatched
+                    )
+                    XCTAssertEqual(episodes.map(\.id), [tapped.id, sibling.id])
+                    XCTAssertFalse(episodes[1].isPlayed)
+                }
+            }
+        }
     }
 
     func testSeriesWatchMutationCascadesToLoadedEpisodes() async {

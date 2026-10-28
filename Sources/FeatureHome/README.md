@@ -158,9 +158,11 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   family succeeds, including an authoritative empty result. Cancellation never
   publishes a partial success or replaces the last completed diagnostic.
 
-- **Explicit version inventory** — providers that advertise lazy file discovery
-  expose Version regardless of the cached source count, but load it only after
-  that action is opened. Home, detail dwell, returning to a page and passive
+- **Explicit version inventory** — Version is offered only with at least two
+  known choices on both platforms. A provider's ability to discover more files
+  is not itself another choice. Lazy file discovery still runs only after an
+  available version action is opened or Play requests its own inventory.
+  Home, detail dwell, returning to a page and passive
   episode badge enrichment use presentation metadata, never playback inventory.
   Publication is fenced by the current source and the picker task's cancellation;
   later sparse metadata cannot erase authoritative file choices. Same-account
@@ -362,6 +364,27 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   On mobile, a root-owned `LazyViewState` retains the shared Home/Watchlist
   model by profile, credentials and active accounts. Rebuilding the tab shell
   for settings/theme changes must not construct and rehydrate throwaway models.
+  The full Watchlist grid filters All, Movies, or TV Shows and sorts by Date
+  Added, Release Date, or Name, in either direction. Its choices are retained
+  with that profile's Home model and persisted separately from library queries.
+  Synced choices and resets refresh that retained model without writing back;
+  local edits preserve other choices received before a change notification.
+  Home's Watchlist row and the canonical union order are unchanged. Filtering
+  never fetches another list or changes membership; controls remain available
+  during loading, errors, and empty results.
+  On TV, navigation enters the available cards rather than the query controls.
+  The outer Watchlist scroll view owns Top Bar scrolling; Back restores both
+  the header and navigation to the top.
+  Date Added uses the Watchlist add time, never a library/catalog add date or
+  import time. Local actions and available Plex, Trakt, and Simkl dates survive
+  publication and native caching. Undated/tied entries retain source order after
+  dated entries in either direction; duplicate native entries use the earliest
+  known add across enabled sources. Release dates survive alias presentation and
+  owned-copy retargeting; missing exact dates use the shared library comparator.
+  Queries apply to resolved titles from every provider, including mixed-server
+  and network-share lists. Existing Jellyfin, Emby, or Silo entries without a
+  Watchlist-add timestamp keep their source order; Plozz's own add actions retain
+  their actual action dates for every provider.
   Watchlist artwork rehydration shares URL sanitization and signing only within
   one synchronous publication batch, including repeated cast images. Cache keys
   preserve artwork ownership, playback fallback account and requested size;
@@ -520,6 +543,10 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   `DetailHeroView` / `DetailExtrasView` render the cinematic full-bleed
   backdrop, logo, overview, ratings, cast, and Play/Resume button. Works
   for movies, episodes, and people.
+  Explicit episode entries retain that episode as the hero's watched-action
+  target. The opening card selects identity, not ongoing watch state: TV and
+  mobile resolve the loaded episode with live resume data, never reapplying the
+  original card's watched flag after a toggle.
   An episode's show breadcrumb is a single native button showing only the show
   title and chevron, without a background or border in either focus state.
   Play takes initial focus when available; Up then reaches

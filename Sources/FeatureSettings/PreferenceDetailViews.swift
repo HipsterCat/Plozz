@@ -417,6 +417,8 @@ struct PlaybackDetailView: View {
     @Environment(\.locale) private var locale
     #if os(tvOS)
     @Environment(\.settingsInWorkspace) private var inWorkspace
+    #else
+    @State private var showsSkipMarkerSettings = false
     #endif
     @Bindable var playback: PlaybackSettingsModel
     /// The profile base subtitle mode/language now lives in `SubtitleBehavior`
@@ -568,6 +570,11 @@ struct PlaybackDetailView: View {
 
     var body: some View {
         SettingsSplitLayout(title: section == .subtitles ? "Subtitles" : "Playback", rows: rows)
+            #if !os(tvOS)
+            .navigationDestination(isPresented: $showsSkipMarkerSettings) {
+                SkipMarkerSettingsView(model: playback)
+            }
+            #endif
     }
 
     // MARK: - Split sections
@@ -792,8 +799,8 @@ struct PlaybackDetailView: View {
         ]
     }
 
-    private var audioRows: [SettingsSplitRow] {
-        var rows = [
+    var audioRows: [SettingsSplitRow] {
+        [
             SettingsSplitRow(
                 id: "audio-defaults",
                 title: "Audio defaults"
@@ -826,22 +833,22 @@ struct PlaybackDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             },
             SettingsSplitRow(id: "lossless-surround", title: "Audio") {
-                LosslessAudioControl()
+                SettingsControlRows {
+                    LosslessAudioControl()
+                    #if os(tvOS)
+                    if #available(tvOS 26.0, *) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
+                                .accessibilityIdentifier("spatial-audio-toggle")
+                            Text("Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy).")
+                                .settingsHelperText()
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    #endif
+                }
             }
         ]
-        #if os(tvOS)
-        if #available(tvOS 26.0, *) {
-            rows.append(SettingsSplitRow(
-                id: "truehd-atmos",
-                title: "Spatial audio (height channel support)",
-                description: "Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy)."
-            ) {
-                Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
-                    .accessibilityIdentifier("spatial-audio-toggle")
-            })
-        }
-        #endif
-        return rows
     }
 
     private var skipIntroRows: [SettingsSplitRow] {
@@ -850,8 +857,12 @@ struct PlaybackDetailView: View {
                 id: "skip-intros-mode",
                 title: "Skip intros, credits & more"
             ) {
+                #if os(tvOS)
                 SkipMarkerSettingsControl(model: playback)
-            }
+                #else
+                SkipMarkerSettingsControl(model: playback, onOpenSettings: { showsSkipMarkerSettings = true })
+                #endif
+            }.labeledControl()
         ]
     }
 

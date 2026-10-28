@@ -1392,7 +1392,7 @@ private struct PlozziOSSourceVersionControls: View {
                 .buttonStyle(.bordered)
             }
 
-            if versions.count > 1 || loadVersions != nil {
+            if versions.count > 1 {
                 Button {
                     isVersionPickerPresented = true
                 } label: {
@@ -1772,7 +1772,7 @@ struct PlozziOSInlineSeriesBrowser: View {
                     resolvedSeasonID = nil
                     railTargetID = nil
                 }
-                if !hasInteractedWithEpisodeBrowser,
+                if !hasInteractedWithEpisodeBrowser, initialEpisode == nil,
                    let series = viewModel.state.value?.item,
                    let seed = SeriesEpisodeEntry.openingSeed(
                        for: series, initialEpisode: initialEpisode,
@@ -1852,14 +1852,15 @@ struct PlozziOSInlineSeriesBrowser: View {
         // loaded empty array, which still publishes.
         guard let displayedEpisodes else { return }
         // An explicitly opened episode outranks the resume point.
-        let openingEpisode = initialEpisode ?? (initialSeasonID == nil ? viewModel.serverResumeEpisode : nil)
-        if let loaded = SeriesEpisodeEntry.episode(
-            matching: openingEpisode,
+        if let loaded = SeriesEpisodeEntry.resolvedOpeningEpisode(
+            initialEpisode: initialEpisode,
+            initialSeasonID: initialSeasonID,
+            resumeEpisode: viewModel.serverResumeEpisode,
             in: displayedEpisodes
         ) {
             resolvedSeasonID = selectedSeasonID
             railTargetID = loaded.id
-            onPlayTargetChange(DetailPlaybackSelection.applyingResumeItem(openingEpisode, to: loaded))
+            onPlayTargetChange(loaded)
             onHeroShowsSeriesChange(false)
             return
         }

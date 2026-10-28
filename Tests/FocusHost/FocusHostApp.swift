@@ -29,6 +29,8 @@ struct FocusHostApp: App {
                 ServerAddressNavigationFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--read-ahead-settings-fixture") {
                 PlaybackReadAheadFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--skip-settings-fixture") {
+                SkipSettingsFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--iptv-organization-fixture") {
                 IPTVOrganizationFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--category-search-fixture") {
@@ -101,6 +103,31 @@ struct FocusHostApp: App {
                 Color.black
             }
         }
+    }
+}
+
+private struct SkipSettingsFixture: View {
+    @State private var playback: PlaybackSettingsModel
+    @State private var navigation = SettingsPageNavigation<String>()
+
+    init() {
+        let store = PlaybackSettingsStore(namespace: "skip-settings-remote-fixture")
+        store.save(.init(
+            skipIntros: .autoInstant,
+            skipMarkerRules: [.anime: [.intro: .init(mode: .on, automaticDelaySeconds: 5)]]
+        ))
+        _playback = State(initialValue: PlaybackSettingsModel(store: store))
+    }
+
+    var body: some View {
+        SettingsPageStack(navigation: navigation, pageWidth: 960, onRootBack: {}) {
+            SkipMarkerSettingsView(model: playback)
+        } destination: { _ in EmptyView() }
+        .environment(\.settingsInWorkspace, true)
+        .environment(\.themePalette, .dark)
+        .environment(\.colorScheme, .dark)
+        .toggleStyle(SettingsSwitchToggleStyle())
+        .background { SettingsPageBackground() }
     }
 }
 

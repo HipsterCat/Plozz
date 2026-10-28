@@ -68,11 +68,15 @@ struct PlozziOSDiagnosticsSettingsView: View {
             }
 
             SettingsSectionGroup("Send Diagnostics") {
-                TextField("Optional note", text: $diagnosticNote, axis: .vertical)
-                    .lineLimit(2...4)
+                TextField(text: $diagnosticNote, axis: .vertical) {
+                    Text(SettingsCopy.diagnosticsMessage)
+                }
+                .lineLimit(2...4)
+                .accessibilityIdentifier("diagnostics-message")
+                .disabled(isSending)
                 Button {
                     appModel.applyCrashReportingPreference()
-                    let note = diagnosticNote.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let note = diagnosticNote
                     isSending = true
                     Task {
                         defer { isSending = false }
@@ -84,10 +88,12 @@ struct PlozziOSDiagnosticsSettingsView: View {
                 } label: {
                     Label("Send to Developer", systemImage: "paperplane")
                 }
+                .accessibilityIdentifier("diagnostics-submit")
                 .disabled(
                     !appModel.crashReportingController.isConfigured
                         || !crashReporting.isEnabled
                         || isSending
+                        || CrashDiagnostics.normalizedNote(diagnosticNote) == nil
                 )
 
                 if let sendStatus {
@@ -194,15 +200,10 @@ private struct PlozziOSRecentActivityView: View {
                         }
                     }
                 } label: {
-                    Label {
-                        // The category is a log-subsystem name from our own
-                        // logging, so it stays verbatim; "Filter" is copy.
-                        selectedCategory.map { Text(verbatim: $0.capitalized) } ?? Text("Filter")
-                    } icon: {
-                        Image(systemName: selectedCategory == nil
-                              ? "line.3.horizontal.decrease.circle"
-                              : "line.3.horizontal.decrease.circle.fill")
-                    }
+                    BrowseFilterLabel(
+                        activeCount: selectedCategory == nil ? 0 : 1,
+                        summary: selectedCategory?.capitalized ?? ""
+                    )
                 }
                 Button("Refresh", systemImage: "arrow.clockwise") {
                     entries = PlozzLog.recentEntries(limit: 500)

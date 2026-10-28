@@ -21,6 +21,18 @@ fit both compact Settings cards and onboarding, keeping the top bar centered and
 all three equal-sized posters visible. Preview sizing does not change the shared
 card's focus or selection treatment.
 
+`BrowseQueryControls`, `BrowseSortMenu`, and `BrowseFilterMenu` own the native
+query-control layout, sort choices/directions, and active-filter labels shared
+by Library and Watchlist on TV and mobile. Mobile controls wrap at narrow widths
+and keep their 44-point action targets; TV keeps the existing native menu style.
+`WatchlistBrowseControls` supplies Watchlist's supported choices, not a parallel
+menu design. Callers retain their query behavior and accessibility identifiers.
+Sort and filter buttons show their icon and current choice, without `Sort:` or
+`Filter:` prefixes. An unfiltered button shows `All`; compound filters keep their
+summary and fall back to the active count at narrow widths. Descriptive prefixes
+remain in accessibility labels. `BrowseFilterLabel` also supplies this presentation
+to Recent Activity; native icon-only toolbars and titles inside menus remain intact.
+
 `ServerUserRow` keeps the user's name above its owner/PIN metadata. The metadata
 wraps independently, preserving the avatar, native focus treatment, and trailing
 selection indicator without squeezing the name alongside badges.
@@ -219,9 +231,11 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   Adaptive hero rows own `PlaybackSourceMenuState` and its presentation above
   `ViewThatFits`; candidate rows contain only triggers. Late trailer, action or
   inventory updates can rearrange the row without destroying an open version page.
-  An optional `MediaVersionInventoryLoader` keeps lazy sources discoverable even
-  with no cached alternatives. Only a mounted version page/sheet starts discovery,
-  not the overflow root or focus changes. Shared loading/error/Retry content
+  Version actions require at least two known choices, including when a
+  `MediaVersionInventoryLoader` is available. Unknown or single-version inventory
+  does not create an action, reserve a menu row, or provide a focus target.
+  Only a mounted version page/sheet starts discovery, not the overflow root or
+  focus changes. Shared loading/error/Retry content
   never starts playback or retries automatically. Loader identity fences retained
   choices across owner, account and playable-target changes; dismissal cancels
   the reader, not any server work already admitted by its provider.
@@ -413,6 +427,8 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   stepper, not placed outside its focus target. Left/Right adjusts,
   Select increments, and Up/Down remains native focus navigation. Bounds clamp
   unless a caller explicitly requests wrapping. Width reserves the longest value.
+  Numeric labels update immediately on every adjustment rather than rolling
+  through an animation that can hide changing digits during repeated presses.
   `SettingsAdjustmentFocusScope` shares the player's horizontal input ownership,
   held-press cancellation, and navigation-rail protection. VoiceOver adjustment
   uses the same stepping operation. Mobile retains separate buttons.

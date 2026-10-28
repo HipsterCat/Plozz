@@ -66,8 +66,9 @@ automatic and manual diagnostic disclosures consistent across platforms.
 Automatic reports describe technical errors, app/device information, screen
 categories and performance diagnostics, not a blanket anonymity guarantee.
 Manual uploads disclose additional playback/connection records and the user's
-optional message, which is sent as written. Submission copy does not promise
-confirmed server delivery. Privacy-policy content is maintained on the website.
+required message, which is sent as written apart from surrounding whitespace.
+Submission copy does not promise confirmed server delivery. Privacy-policy
+content is maintained on the website.
 Manual attachments are constructed from typed activity categories/severity,
 bounded technical operation timings, and structured playback/source journals.
 Library browsing, recommendations and Continue Watching failures retain their
@@ -78,7 +79,7 @@ they can contain server addresses, account identifiers, titles or search text.
 Journal identifiers are replaced with report-local aliases and record times are
 relative ages, preserving relationships and timing without exporting persistent
 identity hashes or session UUIDs. Activity copy/share and prefilled issue links
-use the same filtered activity projection. Filtering cannot make the optional
+use the same filtered activity projection. Filtering cannot make the user's
 message anonymous or hide connection metadata from the receiving service.
 
 On tvOS, Video buffer and Live TV buffer use the shared `SettingsMenuRow`: one
@@ -189,25 +190,43 @@ specific audio track or format. Its label needs no explanatory footer.
 On TV, related control groups can share one section heading through
 `SettingsConnectedControlGroups`: an 8pt gap and tighter 8pt facing corners keep
 them connected, while the section's outer corners retain the standard radius.
-Audio language controls share the first group and spatial audio the second.
+Audio language controls share the first group; Prefer lossless audio and Spatial
+audio share the second, retaining their independent preferences and helpers.
 Autoplay switches share a group, separate from the Up Next card and its
 conditional timing control. These use the existing surfaces and native controls,
 without an enclosing card or changing the independent settings.
 
-**Skip intros, credits & more** uses one profile-scoped master switch on both
-platforms. Turning it off hides configuration without clearing behavior, timing,
-content selections, per-marker overrides, or community-marker consent. Behavior
-chooses a manual skip button or automatic skipping; only automatic behavior
-reveals **Skip after**, from Immediately through 30 seconds in one-second steps.
+**Skip intros, credits & more** uses one profile-scoped master switch on the
+Playback page on both platforms. Enabling it reveals **Customize**, which opens
+**Intros, credits & more**. Its first control, **Default behavior**, applies to
+every marker and content type without an exception: Show skip button, Skip
+instantly, or Skip after. Existing Off defaults remain visible until changed.
+Each marker page always shows Movies, TV Shows, and Anime. Inherited choices show
+the effective behavior with **(default)** in the picker value, without a helper
+line. The native menu offers **Use default** to follow the shared behavior and timing.
+It lists Use default, Show skip button, Skip instantly, and Skip after together,
+then **Off** below a native divider on both platforms. Off uses normal styling.
+An explicit Off, Show skip button, Skip instantly, or Skip after choice overrides
+only that marker/content pair. There is no separate opt-in for exceptions.
+Turning skipping off hides the link without clearing any saved choices.
+Only an explicit **Skip after** choice reveals a timer, from 1 through 30 seconds
+in one-second steps. Instant skipping is a direct choice, not a zero-second timer.
 The default delayed skip remains five seconds. Movies, TV Shows, and Anime can
 be enabled independently, using the existing audio/subtitle content classifier.
-Disabling a category suppresses skip prompts and automatic skips, not the
-independent Up Next or autoplay preferences. Advanced per-marker choices retain
+Disabling a category disables its controls on every marker page with a short
+explanation, preserving all of its choices. It suppresses skip prompts and
+automatic skips, not the independent Up Next or autoplay preferences.
+Advanced per-marker choices retain
 independent Off/manual/automatic behavior and timing. Existing saved modes,
-including mixed immediate/delayed marker overrides, migrate without changing
-their playback behavior. Community-marker attribution and identifier sharing
-appear as a short caption attached to its switch, without a separate section
-footer.
+including mixed immediate/delayed marker overrides, remain explicit exceptions.
+Choosing **Use default** removes only the selected content rule; legacy per-marker
+exceptions are preserved for the other categories. Changing the shared default
+never overwrites exceptions, even if an exception currently matches the default.
+Movies and episodes classified
+as anime use the anime rules on either server provider. The new rules remain
+profile-scoped and travel through settings transfer. Community-marker attribution
+and identifier sharing appear as a short caption attached to its switch, without
+a separate section footer.
 
 The **Spatial audio (height channel support)** switch is available on tvOS 26 and later. Its
 profile-scoped `trueHDAtmosEnabled` preference defaults on, preserves saved Off
@@ -620,8 +639,9 @@ watch history and planning-list behavior are documented in
   Music Player. Moving these controls does not change their profile-scoped stores.
   Playback groups
   audio, autoplay/Up Next, marker skipping, seeking and display fades.
-  Marker skipping is inline on the Playback page: the shared mode, per-kind
-  overrides and community-marker switch do not require opening another page.
+  **Skip intros, credits & more** has one inline toggle and a conditional **Customize**
+  link. That page contains the shared default, community markers, and one page
+  per marker with Movies, TV Shows, and Anime exceptions or **Use default**.
   Subtitles is its own profile category for mode, the shared/Live TV style
   editors, language, downloading and per-series memory; downloading still
   follows the active profile's provider capabilities.
@@ -733,10 +753,13 @@ watch history and planning-list behavior are documented in
   auto-download) lives here; the subtitle *look* is now adjusted in the
   player while watching.
 - **Send Diagnostics** on TV and mobile uses the existing crash-reporting consent.
-  Each submission appears in Sentry's User Feedback inbox with the optional note
-  (or "User diagnostics report" when blank), linked to the diagnostic event in
-  Issues and its `plozz-recent-activity.log` attachment. No name or email is
-  collected. The privacy filter retains only the feedback message, custom source,
+  Send remains disabled until a nonblank message is entered. The shared submission
+  path also rejects missing or whitespace-only messages before collecting or
+  submitting any diagnostics; automatic crash reports are unchanged.
+  Each submission appears in Sentry's User Feedback inbox with the required message,
+  linked to the diagnostic event in Issues and its `plozz-diagnostics.json`
+  attachment. No name or email is collected. The privacy filter retains only the
+  feedback message, custom source,
   and valid associated event ID, not identity or arbitrary feedback fields.
   Success means SDK handoff, not server acknowledgment; inactive reporting or a
   rejected event returns failure. Feedback is not submitted when its diagnostic

@@ -29,6 +29,11 @@ public struct HTTPRequestNotSentError: Error, Sendable {
     }
 }
 
+/// Opt-in discovery signal: a rejected TLS identity must not trigger HTTP fallback.
+public struct HTTPServerTrustFailure: Error, Sendable {
+    public init() {}
+}
+
 final class HTTPRequestDeliveryEvidence: @unchecked Sendable {
     private let lock = NSLock()
     private var hasTransactions = false
@@ -254,6 +259,16 @@ public struct URLSessionHTTPClient: HTTPClient {
             )
             if delivery?.confirmedNotSent == true {
                 throw HTTPRequestNotSentError(underlying: Self.map(urlError))
+            }
+            if endpoint.reportsServerTrustFailures {
+                switch urlError.code {
+                case .serverCertificateHasBadDate, .serverCertificateUntrusted,
+                     .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid,
+                     .clientCertificateRejected, .clientCertificateRequired:
+                    throw HTTPServerTrustFailure()
+                default:
+                    break
+                }
             }
             throw Self.map(urlError)
         } catch is CancellationError {

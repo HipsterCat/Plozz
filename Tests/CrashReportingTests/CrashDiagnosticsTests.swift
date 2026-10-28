@@ -21,7 +21,7 @@ final class CrashDiagnosticsTests: XCTestCase {
         for enabled in [false, true] {
             var captures = 0
             XCTAssertEqual(CrashDiagnostics.send(
-                note: nil, isEnabled: enabled,
+                note: "Playback failed", isEnabled: enabled,
                 sourceDiagnostics: { self.sourceExport(scope: scope) },
                 playbackDiagnostics: playback,
                 captureEvent: { _, attachment in
@@ -42,7 +42,7 @@ final class CrashDiagnosticsTests: XCTestCase {
     func testEveryDiagnosticSendAppendsSourceSnapshotAfterConsentCheck() {
         var snapshots = 0
         XCTAssertFalse(CrashDiagnostics.send(
-            note: nil, isEnabled: false,
+            note: "Sources disappeared", isEnabled: false,
             activity: { XCTFail("No activity collection without consent"); return PlozzLog.activityExport() },
             sourceDiagnostics: { snapshots += 1; return self.sourceExport() },
             preparationDiagnostics: {
@@ -58,7 +58,7 @@ final class CrashDiagnosticsTests: XCTestCase {
         ))
         XCTAssertEqual(snapshots, 0)
         XCTAssertTrue(CrashDiagnostics.send(
-            note: nil, isEnabled: true,
+            note: "Sources disappeared", isEnabled: true,
             sourceDiagnostics: { snapshots += 1; return self.sourceExport() },
             captureEvent: { _, attachment in
                 XCTAssertNotNil(self.payload(attachment)["sources"])
@@ -158,27 +158,64 @@ final class CrashDiagnosticsTests: XCTestCase {
     }
 
     @MainActor
-    func testBlankNotesHaveNonemptyFeedbackAndEmptyActivityIsExplicit() {
-        for note: String? in [nil, "", " \n\t "] {
-            var didCaptureFeedback = false
-            XCTAssertTrue(CrashDiagnostics.send(
+    func testBlankNotesDoNotCollectOrSubmitDiagnostics() {
+        for note: String? in [nil, "", " \n\t\r ", "\u{00A0}\u{2003}\u{2028}"] {
+            XCTAssertNil(CrashDiagnostics.normalizedNote(note))
+            XCTAssertFalse(CrashDiagnostics.send(
                 note: note, isEnabled: true,
-                activity: { PlozzLog.activityExport(entries: []) },
-                sourceDiagnostics: { self.sourceExport() },
-                captureEvent: { event, attachment in
-                    XCTAssertEqual(event.message?.formatted, "User diagnostics report")
-                    let activity = self.payload(attachment)["activity"] as? [String: Any]
-                    XCTAssertEqual((activity?["entries"] as? [Any])?.count, 0)
-                    return SentryId()
+                activity: {
+                    XCTFail("No activity collection without a message")
+                    return PlozzLog.activityExport(entries: [])
                 },
-                captureFeedback: { feedback in
-                    didCaptureFeedback = true
-                    XCTAssertEqual(feedback.context?["feedback"]?["message"] as? String, "User diagnostics report")
-                    return SentryId()
+                sourceDiagnostics: {
+                    XCTFail("No source collection without a message")
+                    return self.sourceExport()
+                },
+                preparationDiagnostics: {
+                    XCTFail("No preparation collection without a message")
+                    return PlaybackPreparationDiagnostics.export(scope: DiagnosticExportScope())
+                },
+                libraryDiagnostics: {
+                    XCTFail("No library collection without a message")
+                    return LibraryDiagnosticJournal().export(scope: DiagnosticExportScope())
+                },
+                captureEvent: { _, _ in
+                    XCTFail("No diagnostic event without a message")
+                    return .empty
+                },
+                captureFeedback: { _ in
+                    XCTFail("No feedback without a message")
+                    return .empty
                 }
             ))
-            XCTAssertTrue(didCaptureFeedback)
         }
+    }
+
+    func testMessageValidationPreservesContentAndTrimsSurroundingWhitespace() {
+        XCTAssertEqual(CrashDiagnostics.normalizedNote(" \nSources disappeared\nAfter refresh\t "), "Sources disappeared\nAfter refresh")
+        XCTAssertEqual(CrashDiagnostics.normalizedNote("x"), "x")
+    }
+
+    @MainActor
+    func testEmptyActivityRemainsExplicitWithARequiredMessage() {
+        var didCaptureFeedback = false
+        XCTAssertTrue(CrashDiagnostics.send(
+            note: "Playback failed", isEnabled: true,
+            activity: { PlozzLog.activityExport(entries: []) },
+            sourceDiagnostics: { self.sourceExport() },
+            captureEvent: { event, attachment in
+                XCTAssertEqual(event.message?.formatted, "User diagnostics report")
+                let activity = self.payload(attachment)["activity"] as? [String: Any]
+                XCTAssertEqual((activity?["entries"] as? [Any])?.count, 0)
+                return SentryId()
+            },
+            captureFeedback: { feedback in
+                didCaptureFeedback = true
+                XCTAssertEqual(feedback.context?["feedback"]?["message"] as? String, "Playback failed")
+                return SentryId()
+            }
+        ))
+        XCTAssertTrue(didCaptureFeedback)
     }
 
     func testBeforeSendRetainsFeedbackAssociationButRemovesIdentityAndArbitraryFields() throws {
@@ -305,7 +342,7 @@ final class CrashDiagnosticsTests: XCTestCase {
         operations.begin(.serverRequest, provider: .jellyfin)?
             .finish(.failed, metrics: .init(bytes: 128, requests: 1), httpStatus: 401)
         XCTAssertTrue(CrashDiagnostics.send(
-            note: "My optional message", isEnabled: true,
+            note: "My report message", isEnabled: true,
             activity: { PlozzLog.activityExport(scope: scope) },
             sourceDiagnostics: { sources.export(scope: scope) },
             preparationDiagnostics: { PlaybackPreparationDiagnostics.export(scope: scope) },
@@ -318,7 +355,7 @@ final class CrashDiagnosticsTests: XCTestCase {
                                                HandoffDiagnostics.correlationID("private-account")] {
                     XCTAssertFalse(text.contains(value), value)
                 }
-                XCTAssertFalse(text.contains("My optional message"))
+                XCTAssertFalse(text.contains("My report message"))
                 let records = (body["playback"] as? [String: Any])?["entries"] as? [[String: Any]]
                 XCTAssertEqual(records?.count, 2)
                 XCTAssertEqual(records?.first?["session"] as? String, records?.last?["session"] as? String)
@@ -341,7 +378,7 @@ final class CrashDiagnosticsTests: XCTestCase {
                 return SentryId()
             },
             captureFeedback: { feedback in
-                XCTAssertEqual(feedback.context?["feedback"]?["message"] as? String, "My optional message")
+                XCTAssertEqual(feedback.context?["feedback"]?["message"] as? String, "My report message")
                 return SentryId()
             }
         ))

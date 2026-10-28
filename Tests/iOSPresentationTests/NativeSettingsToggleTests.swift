@@ -26,6 +26,11 @@ final class NativeSettingsToggleTests: XCTestCase {
         }
     }
 
+    @Observable
+    final class SkipMarkerNavigation {
+        var showsSettings = false
+    }
+
     func testGroupedSettingsUseNativeSwitchesAndPreserveBindings() async throws {
         try await verifyNativeSwitch(grouped: true)
     }
@@ -34,7 +39,7 @@ final class NativeSettingsToggleTests: XCTestCase {
         try await verifyNativeSwitch(grouped: false)
     }
 
-    func testSkipControlsRevealNativeConfigurationAndRetainProfileChoices() async throws {
+    func testSkipToggleRevealsOnlySettingsLinkAndRetainsProfileChoices() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first(where: \.isKeyWindow)
@@ -55,75 +60,261 @@ final class NativeSettingsToggleTests: XCTestCase {
                 skipContentCategories: [.tvShow, .anime], skipAutomaticDelaySeconds: 12
             ))
             let model = PlaybackSettingsModel(store: store)
+            let navigation = SkipMarkerNavigation()
             window.frame = CGRect(x: 0, y: 0, width: width, height: 1000)
             window.rootViewController = UIHostingController(rootView:
-                List { SkipMarkerSettingsControl(model: model) }
+                NavigationStack {
+                    List {
+                        SkipMarkerSettingsControl(model: model, onOpenSettings: { navigation.showsSettings = true })
+                    }
+                    .navigationDestination(isPresented: Binding(
+                        get: { navigation.showsSettings },
+                        set: { navigation.showsSettings = $0 }
+                    )) {
+                        SkipMarkerSettingsView(model: model)
+                    }
+                }
                     .environment(\.themePalette, .dark)
                     .environment(\.colorScheme, .dark)
                     .environment(\.locale, Locale(identifier: "en_US"))
             )
             window.makeKeyAndVisible()
             try await settle(window)
-            XCTAssertEqual(listedSwitches(in: window).count, 1)
-            let master = try XCTUnwrap(listedSwitches(in: window).first)
-            master.setOn(true, animated: false)
-            master.sendActions(for: .valueChanged)
+            for enabled in [false, true, false, true] {
+                XCTAssertEqual(listedSwitches(in: window).count, 1)
+                let master = try XCTUnwrap(listedSwitches(in: window).first)
+                master.setOn(enabled, animated: false)
+                master.sendActions(for: .valueChanged)
+                try await settle(window)
+                XCTAssertEqual(model.settings.skipMarkersEnabled, enabled)
+                XCTAssertEqual(listedSwitches(in: window).count, 1)
+                let text = try captureText(window, name: "skip-marker-link-\(Int(width))-\(enabled)")
+                XCTAssertTrue(text.contains("Skip intros, credits & more"), text)
+                XCTAssertEqual(text.contains("Customize"), enabled, text)
+                XCTAssertFalse(text.contains("Skip markers"), text)
+                for label in ["Behavior", "Show skip button", "Skip after", "Set each marker separately",
+                              "Intros", "Credits", "Use community markers"] {
+                    XCTAssertFalse(text.contains(label), text)
+                }
+                XCTAssertEqual(store.load().skipContentCategories, [.tvShow, .anime])
+                XCTAssertEqual(store.load().skipAutomaticDelaySeconds, 12)
+                XCTAssertEqual(store.load().skipIntros, .autoDelay)
+                XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
+            }
+            navigation.showsSettings = true
+            try await Task.sleep(for: .milliseconds(500))
             try await settle(window)
+            let child = try await skipMarkerPageText(in: window, name: "skip-marker-navigation-\(Int(width))")
+            for label in ["Default behavior", "Skip after", "12 seconds", "Intros", "Credits",
+                          "Recaps", "Previews", "Commercials"] {
+                XCTAssertTrue(child.contains(label), child)
+            }
+            navigation.showsSettings = false
+            try await Task.sleep(for: .milliseconds(500))
+            try await settle(window)
+            XCTAssertEqual(listedSwitches(in: window).count, 1)
             XCTAssertTrue(model.settings.skipMarkersEnabled)
-            XCTAssertEqual(listedSwitches(in: window).count, 6)
+        }
+    }
+
+    func testSkipMarkerPageEditsNativePerMarkerTimingWithoutSeparateMode() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "SkipMarkerPageHosted-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = PlaybackSettingsStore(defaults: defaults, namespace: "viewer")
+        window.overrideUserInterfaceStyle = .dark
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        for width: CGFloat in [390, 834] {
+            store.save(.init(
+                skipIntros: .on, skipAutomaticDelaySeconds: 12,
+                skipMarkerRules: [.movie: [.intro: .init(mode: .autoDelay, automaticDelaySeconds: 12)]]
+            ))
+            let model = PlaybackSettingsModel(store: store)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 1000)
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack {
+                    SkipMarkerContentSettingsView(model: model, kind: .intro)
+                }
+                .environment(\.themePalette, .dark)
+                .environment(\.colorScheme, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            window.makeKeyAndVisible()
+            try await settle(window)
             let automatic = try captureText(window, name: "skip-settings-automatic-\(Int(width))")
-            for label in ["Enable skipping", "Behavior", "Skip automatically", "Skip after", "12 seconds",
-                          "Movies", "TV Shows", "Anime", "Set each marker separately",
-                          "Use community markers", "From IntroDB", "your server has none", "Shares"] {
+            for label in ["Intros", "Skip after", "12 seconds", "Show skip button (default)",
+                          "Movies", "TV Shows", "Anime"] {
                 XCTAssertTrue(automatic.contains(label), "Missing \(label): \(automatic)")
             }
+            XCTAssertFalse(automatic.contains("Set each marker separately"), automatic)
             XCTAssertFalse(automatic.contains("When your server has no intro or credits marker"), automatic)
             let stepper = try XCTUnwrap(firstStepper(in: window))
             stepper.value += stepper.stepValue
             stepper.sendActions(for: .valueChanged)
             try await settle(window)
-            XCTAssertEqual(model.settings.skipAutomaticDelaySeconds, 13)
-            XCTAssertEqual(store.load().skipAutomaticDelaySeconds, 13)
-            model.settings.setSkipAutomaticDelay(29)
+            XCTAssertEqual(model.settings.configuredSkipDelay(for: .intro, category: .movie), 13)
+            XCTAssertEqual(store.load().configuredSkipDelay(for: .intro, category: .movie), 13)
+            XCTAssertEqual(store.load().configuredSkipDelay(for: .intro, category: .anime), 12)
+            XCTAssertEqual(store.load().configuredSkipDelay(for: .credits), 12)
+            model.settings.setSkipAutomaticDelay(29, for: .intro, category: .movie)
             try await settle(window)
             for _ in 0..<2 {
                 stepper.value += stepper.stepValue
                 stepper.sendActions(for: .valueChanged)
                 try await settle(window)
-                XCTAssertEqual(model.settings.skipAutomaticDelaySeconds, 30)
+                XCTAssertEqual(model.settings.configuredSkipDelay(for: .intro, category: .movie), 30)
             }
-            let categories = listedSwitches(in: window).sorted {
-                $0.convert($0.bounds, to: window).minY < $1.convert($1.bounds, to: window).minY
-            }
-            let movies = try XCTUnwrap(categories.dropFirst().first)
-            XCTAssertFalse(movies.isOn)
-            movies.setOn(true, animated: false)
-            movies.sendActions(for: .valueChanged)
-            try await settle(window)
-            XCTAssertEqual(model.settings.skipContentCategories, [.movie, .tvShow, .anime])
-            movies.setOn(false, animated: false)
-            movies.sendActions(for: .valueChanged)
-            model.settings.setSkipAutomaticDelay(1)
+            model.settings.setSkipAutomaticDelay(1, for: .intro, category: .movie)
             try await settle(window)
             for _ in 0..<2 {
                 stepper.value -= stepper.stepValue
                 stepper.sendActions(for: .valueChanged)
                 try await settle(window)
-                XCTAssertEqual(model.settings.skipAutomaticDelaySeconds, 0)
-                XCTAssertEqual(model.settings.skipMarkerModes.mode(for: .intro), .autoInstant)
+                XCTAssertEqual(model.settings.configuredSkipDelay(for: .intro, category: .movie), 1)
+                XCTAssertEqual(model.settings.skipMarkerModes(for: .movie).mode(for: .intro), .autoDelay)
             }
+            let movie = SkipMarkerRuleControls(model: model, scope: .content(.intro, .movie))
+            movie.behavior.wrappedValue = .instant
             try await settle(window)
-            XCTAssertTrue(try captureText(window, name: "skip-settings-immediate-\(Int(width))").contains("Immediately"))
-            model.settings.setConfiguredSkipMode(.on)
+            XCTAssertNil(firstStepper(in: window))
+            XCTAssertTrue(try captureText(window, name: "skip-settings-immediate-\(Int(width))").contains("Skip instantly"))
+            movie.behavior.wrappedValue = .manual
             try await settle(window)
             let manual = try captureText(window, name: "skip-settings-manual-\(Int(width))")
             XCTAssertTrue(manual.contains("Show skip button"), manual)
             XCTAssertFalse(manual.contains("Skip after"), manual)
-            model.settings.setSkipMarkersEnabled(false)
+            model.settings.skipContentCategories.remove(.anime)
             try await settle(window)
-            XCTAssertEqual(listedSwitches(in: window).count, 1)
-            XCTAssertEqual(store.load().skipContentCategories, [.tvShow, .anime])
-            XCTAssertEqual(store.load().skipAutomaticDelaySeconds, 0)
+            XCTAssertTrue(try captureText(window, name: "skip-anime-disabled-\(Int(width))")
+                .contains("Disabled on the previous page."))
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack { SkipMarkerSettingsView(model: model) }
+                    .environment(\.themePalette, .dark)
+                    .environment(\.colorScheme, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            try await settle(window)
+            let page = try await skipMarkerPageText(in: window, name: "skip-marker-page-\(Int(width))")
+            for label in ["Intros", "Credits", "Recaps", "Previews", "Commercials",
+                          "Use community markers", "From IntroDB", "your server has none", "Shares"] {
+                XCTAssertTrue(page.contains(label), page)
+            }
+            XCTAssertFalse(page.contains("Set each marker separately"), page)
+            XCTAssertEqual(store.load().skipContentCategories, Set(ContentCategory.allCases).subtracting([.anime]))
+            XCTAssertEqual(store.load().configuredSkipDelay(for: .intro, category: .movie), 0)
+            XCTAssertEqual(store.load().configuredSkipDelay(for: .credits), 12)
+            XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
+        }
+    }
+
+    func testSharedSkipDefaultAndSingleAnimeExceptionAtPhoneAndTabletWidths() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "SkipDefaultHosted-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = PlaybackSettingsStore(defaults: defaults, namespace: "viewer")
+        window.overrideUserInterfaceStyle = .dark
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        for width: CGFloat in [390, 834] {
+            store.save(.default)
+            let model = PlaybackSettingsModel(store: store)
+            let shared = SkipMarkerRuleControls(model: model, scope: .defaultBehavior)
+            let anime = SkipMarkerRuleControls(model: model, scope: .content(.intro, .anime))
+            XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed])
+            XCTAssertEqual(anime.behaviors, [.useDefault, .manual, .instant, .delayed, .off])
+            shared.behavior.wrappedValue = .off
+            XCTAssertEqual(shared.behaviors, [.manual, .instant, .delayed, .off])
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 1000)
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack { SkipMarkerSettingsView(model: model) }
+                    .environment(\.themePalette, .dark)
+                    .environment(\.colorScheme, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            window.makeKeyAndVisible()
+            try await settle(window)
+            shared.behavior.wrappedValue = .instant
+            try await settle(window)
+            let instant = try captureText(window, name: "skip-default-instant-\(Int(width))")
+            XCTAssertTrue(instant.contains("Default behavior"), instant)
+            XCTAssertTrue(instant.contains("Skip instantly"), instant)
+            XCTAssertNil(firstStepper(in: window))
+            for category in [ContentCategory.movie, .tvShow, .anime] {
+                for kind in MediaSegment.Kind.skippable {
+                    XCTAssertTrue(store.load().usesDefaultSkipRule(for: kind, category: category))
+                    XCTAssertEqual(store.load().skipMarkerModes(for: category).mode(for: kind), .autoInstant)
+                }
+            }
+            shared.behavior.wrappedValue = .delayed
+            try await settle(window)
+            let defaultStepper = try XCTUnwrap(firstStepper(in: window))
+            defaultStepper.value += defaultStepper.stepValue
+            defaultStepper.sendActions(for: .valueChanged)
+            try await settle(window)
+            XCTAssertEqual(store.load().configuredSkipDelay(), 6)
+            XCTAssertEqual(store.load().skipMarkerModes(for: .anime).delay(for: .intro), 6)
+            shared.behavior.wrappedValue = .instant
+            anime.behavior.wrappedValue = .manual
+            XCTAssertEqual(store.load().skipMarkerRules.count, 1)
+            XCTAssertEqual(store.load().skipMarkerRules[.anime]?.count, 1)
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack { SkipMarkerContentSettingsView(model: model, kind: .intro) }
+                    .environment(\.themePalette, .dark)
+                    .environment(\.colorScheme, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            try await settle(window)
+            let exception = try captureText(window, name: "skip-default-anime-exception-\(Int(width))")
+            for label in ["Movies", "TV Shows", "Anime", "Skip instantly (default)", "Show skip button"] {
+                XCTAssertTrue(exception.contains(label), exception)
+            }
+            XCTAssertFalse(exception.contains("Default:"), exception)
+            XCTAssertFalse(exception.contains("Use default"), exception)
+            XCTAssertNil(firstStepper(in: window))
+            shared.behavior.wrappedValue = .delayed
+            try await settle(window)
+            XCTAssertEqual(model.settings.configuredSkipDelay(), 5)
+            XCTAssertEqual(anime.behavior.wrappedValue, .manual)
+            XCTAssertEqual(store.load().skipMarkerModes(for: .movie).delay(for: .intro), 5)
+            XCTAssertNil(firstStepper(in: window), "Inherited timing is edited only on the default page")
+            anime.behavior.wrappedValue = .useDefault
+            try await settle(window)
+            let inherited = try captureText(window, name: "skip-default-inherited-\(Int(width))")
+            XCTAssertTrue(inherited.contains("Skip after 5 seconds (default)"), inherited)
+            XCTAssertFalse(inherited.contains("Show skip button"), inherited)
+            XCTAssertTrue(store.load().skipMarkerRules.isEmpty)
+            XCTAssertEqual(store.load().skipMarkerModes(for: .anime).delay(for: .intro), 5)
+            anime.behavior.wrappedValue = .instant
+            XCTAssertEqual(store.load().skipMarkerModes(for: .anime).mode(for: .intro), .autoInstant)
+            anime.behavior.wrappedValue = .delayed
+            try await settle(window)
+            let stepper = try XCTUnwrap(firstStepper(in: window))
+            stepper.value += stepper.stepValue
+            stepper.sendActions(for: .valueChanged)
+            try await settle(window)
+            XCTAssertEqual(store.load().skipMarkerModes(for: .anime).delay(for: .intro), 6)
+            XCTAssertEqual(store.load().skipMarkerModes(for: .movie).delay(for: .intro), 5)
+            anime.behavior.wrappedValue = .useDefault
+            shared.behavior.wrappedValue = .instant
+            try await settle(window)
+            XCTAssertNil(firstStepper(in: window))
+            XCTAssertEqual(anime.behavior.wrappedValue, .useDefault)
+            XCTAssertEqual(store.load().skipMarkerModes(for: .anime).mode(for: .intro), .autoInstant)
             XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
         }
     }
@@ -131,6 +322,26 @@ final class NativeSettingsToggleTests: XCTestCase {
     private func firstStepper(in view: UIView) -> UIStepper? {
         if let stepper = view as? UIStepper { return stepper }
         return view.subviews.lazy.compactMap { self.firstStepper(in: $0) }.first
+    }
+
+    private func skipMarkerPageText(in window: UIWindow, name: String) async throws -> String {
+        func list(in view: UIView) -> UICollectionView? {
+            if let list = view as? UICollectionView { return list }
+            return view.subviews.lazy.compactMap { list(in: $0) }.first
+        }
+        let scroll = try XCTUnwrap(list(in: window))
+        let top = -scroll.adjustedContentInset.top
+        var text = ""
+        var offset = top
+        for index in 0..<10 {
+            let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+            scroll.setContentOffset(CGPoint(x: 0, y: min(offset, bottom)), animated: false)
+            try await settle(window)
+            text += " " + (try captureText(window, name: "\(name)-\(index)"))
+            if offset >= bottom { break }
+            offset += scroll.bounds.height / 2
+        }
+        return text
     }
 
     func testBufferControlsShowIndependentDeviceSelectionsAtPhoneAndTabletWidths() async throws {
