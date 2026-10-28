@@ -5,6 +5,59 @@ import XCTest
 @testable import ProviderJellyfin
 
 final class JellyfinPlaybackNegotiationTests: XCTestCase {
+    func testOriginalCodecRecoveryKeepsNoClientCapAndHonorsServerRenditionLimits() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let http = fixtureHTTP(decisions: [
+                decision(session: "initial"),
+                decision(
+                    session: "replacement",
+                    url: "/Videos/movie/master.m3u8?VideoCodec=h264&VideoBitrate=35000000&MaxStreamingBitrate=35128000&TranscodeReasons=DirectPlayError"
+                )
+            ])
+            let provider = provider(kind, http: http, hybrid: true)
+            let initial = try await provider.playbackInfo(
+                for: "movie", mediaSourceID: "version", forceTranscode: false
+            )
+            XCTAssertTrue(initial.isTranscoding)
+            XCTAssertNil(initial.streamingOptions)
+            XCTAssertNil(initial.serverDecision?.clientMaxBitrate)
+            let replacement = try await provider.playbackInfo(
+                for: "movie", mediaSourceID: "version", forceTranscode: true,
+                streaming: .init(quality: .original, codec: .preferH264)
+            )
+            XCTAssertTrue(replacement.isTranscoding)
+            XCTAssertEqual(replacement.streamingOptions?.quality, .original)
+            XCTAssertEqual(replacement.negotiatedStreamingVideoCodec, .h264)
+            XCTAssertNil(replacement.originalFileSource)
+            XCTAssertNil(replacement.localRemuxSource)
+            let evidence = try XCTUnwrap(replacement.serverDecision)
+            XCTAssertNil(evidence.clientMaxBitrate)
+            XCTAssertEqual(evidence.transcodeReasons, ["DirectPlayError"])
+            guard case .authenticatedHTTP(let locator) = replacement.playbackSource else {
+                return XCTFail("Recovery must keep a server-issued authenticated rendition.")
+            }
+            XCTAssertEqual(locator.mediaSourceID, "version")
+            XCTAssertEqual(locator.deliveryMode, .serverTranscode)
+            for (name, value) in [
+                ("VideoBitrate", "35000000"), ("MaxStreamingBitrate", "35128000"),
+                ("AllowVideoStreamCopy", "false"), ("AllowAudioStreamCopy", "false")
+            ] {
+                XCTAssertEqual(locator.resource.queryItems.first { $0.name == name }?.value, value)
+            }
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(
+                with: XCTUnwrap(http.sentBodies["/Items/movie/PlaybackInfo"])
+            ) as? [String: Any])
+            let profile = try XCTUnwrap(body["DeviceProfile"] as? [String: Any])
+            XCTAssertNil(body["MaxStreamingBitrate"])
+            XCTAssertTrue(profile["MaxStreamingBitrate"] is NSNull)
+            XCTAssertTrue(profile["MaxStaticBitrate"] is NSNull)
+            XCTAssertEqual(body["EnableDirectPlay"] as? Bool, false)
+            XCTAssertEqual(body["EnableDirectStream"] as? Bool, false)
+            XCTAssertEqual(body["EnableTranscoding"] as? Bool, true)
+            XCTAssertEqual(http.sentPaths.filter { $0.hasSuffix("/PlaybackInfo") }.count, 2)
+        }
+    }
+
     func testServerRequiredRemuxConversionKeepsDecisionEvidenceAtOriginalQuality() async throws {
         for kind in [ProviderKind.jellyfin, .emby] {
             let http = fixtureHTTP(decisions: ["""

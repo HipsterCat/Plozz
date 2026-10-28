@@ -1855,23 +1855,35 @@ private struct PlozziOSWatchlistLandingView: View {
     @State private var watchlistIntentRevision = 0
 
     var body: some View {
-        ContentStateView(
-            state: viewModel.state,
-            emptyMessage: "Your Watchlist is empty.",
-            onRetry: { Task { await viewModel.load() } },
-            loadingContent: {
-                watchlistContent(
-                    [],
-                    loadingPlaceholderCount:
-                        horizontalSizeClass == .regular ? 12 : 6
-                )
+        @Bindable var browse = viewModel.watchlistBrowse
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                WatchlistBrowseControls(preferences: $browse.preferences)
+                    .padding(.horizontal)
+                ContentStateView(
+                    state: viewModel.state,
+                    emptyMessage: "Your Watchlist is empty.",
+                    onRetry: { Task { await viewModel.load() } },
+                    loadingContent: {
+                        watchlistContent(
+                            [],
+                            loadingPlaceholderCount: horizontalSizeClass == .regular ? 12 : 6
+                        )
+                    }
+                ) { content in
+                    watchlistContent(
+                        content.watchlist,
+                        loadingPlaceholderCount: viewModel.watchlistLoadingPlaceholderCount
+                    )
+                }
             }
-        ) { content in
-            watchlistContent(
-                content.watchlist,
-                loadingPlaceholderCount:
-                    viewModel.watchlistLoadingPlaceholderCount
-            )
+            .padding(.vertical)
+        }
+        .onScrollGeometryChange(for: CGFloat.self) {
+            $0.contentOffset.y
+        } action: { oldOffset, newOffset in
+            guard oldOffset != newOffset else { return }
+            viewModel.noteHomeNavigationInteraction()
         }
         .task(
             id: PlozziOSHomeLoadID(
@@ -1926,55 +1938,44 @@ private struct PlozziOSWatchlistLandingView: View {
         _ items: [MediaItem],
         loadingPlaceholderCount: Int
     ) -> some View {
-        if items.isEmpty, loadingPlaceholderCount == 0 {
-            ContentUnavailableView {
-                Label("Your Watchlist is empty", systemImage: "bookmark")
-            } description: {
-                Text("Add a movie or show from Plozz or any connected Watchlist.")
+        let filteredItems = viewModel.watchlistBrowse.preferences.items(from: items)
+        if filteredItems.isEmpty, loadingPlaceholderCount == 0 {
+            WatchlistEmptyStateView(isFiltered: !items.isEmpty) {
+                viewModel.watchlistBrowse.preferences.filter = .all
             }
         } else {
-            ScrollView(.vertical) {
-                LazyVGrid(
-                    columns: appModel.settings.density.density
-                        .iOSPosterGridColumns(
-                            horizontalSizeClass: horizontalSizeClass
-                        ),
-                    spacing: 18
-                ) {
-                    ForEach(MediaRowView.presentationElements(
-                        items: items,
-                        loadingPlaceholderCount: loadingPlaceholderCount
-                    )) { element in
-                        switch element {
-                        case .item(let item):
-                            Button {
-                                navigateToItem?(item)
-                            } label: {
-                                PlozziOSPosterCard(
-                                    item: item,
-                                    spoilerSettings:
-                                        appModel.settings.spoilers.settings,
-                                    isPendingRemoval: isPendingRemoval(item)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        case .loadingPlaceholder:
+            LazyVGrid(
+                columns: appModel.settings.density.density.iOSPosterGridColumns(
+                    horizontalSizeClass: horizontalSizeClass
+                ),
+                spacing: 18
+            ) {
+                ForEach(MediaRowView.presentationElements(
+                    items: filteredItems,
+                    loadingPlaceholderCount: loadingPlaceholderCount
+                )) { element in
+                    switch element {
+                    case .item(let item):
+                        Button {
+                            navigateToItem?(item)
+                        } label: {
                             PlozziOSPosterCard(
-                                item: nil,
-                                spoilerSettings:
-                                    appModel.settings.spoilers.settings
+                                item: item,
+                                spoilerSettings: appModel.settings.spoilers.settings,
+                                isPendingRemoval: isPendingRemoval(item)
                             )
                         }
+                        .buttonStyle(.plain)
+                    case .loadingPlaceholder:
+                        PlozziOSPosterCard(
+                            item: nil,
+                            spoilerSettings: appModel.settings.spoilers.settings
+                        )
                     }
                 }
-                .padding()
             }
-            .onScrollGeometryChange(for: CGFloat.self) {
-                $0.contentOffset.y
-            } action: { oldOffset, newOffset in
-                guard oldOffset != newOffset else { return }
-                viewModel.noteHomeNavigationInteraction()
-            }
+            .padding(.horizontal)
+            .accessibilityIdentifier("watchlist-grid")
         }
     }
 

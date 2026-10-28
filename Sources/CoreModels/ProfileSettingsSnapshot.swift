@@ -66,6 +66,7 @@ public enum ProfileSettingsTransfer {
         "com.plozz.heroSettings",
         "com.plozz.homeLibraryVisibility",
         LibraryBrowsePreferencesStore.storageKey,
+        WatchlistBrowsePreferencesStore.storageKey,
         LibraryPresentationSettingsStore.storageKey,
         "com.plozz.homeLayout.v2",
         "home-content",

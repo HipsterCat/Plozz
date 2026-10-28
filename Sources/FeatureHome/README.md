@@ -364,6 +364,24 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   On mobile, a root-owned `LazyViewState` retains the shared Home/Watchlist
   model by profile, credentials and active accounts. Rebuilding the tab shell
   for settings/theme changes must not construct and rehydrate throwaway models.
+  The full Watchlist grid filters All, Movies, or TV Shows and sorts by Date
+  Added, Release Date, or Name, in either direction. Its choices are retained
+  with that profile's Home model and persisted separately from library queries.
+  Synced choices and resets refresh that retained model without writing back;
+  local edits preserve other choices received before a change notification.
+  Home's Watchlist row and the canonical union order are unchanged. Filtering
+  never fetches another list or changes membership; controls remain available
+  during loading, errors, and empty results.
+  Date Added uses the Watchlist add time, never a library/catalog add date or
+  import time. Local actions and available Plex, Trakt, and Simkl dates survive
+  publication and native caching. Undated/tied entries retain source order after
+  dated entries in either direction; duplicate native entries use the earliest
+  known add across enabled sources. Release dates survive alias presentation and
+  owned-copy retargeting; missing exact dates use the shared library comparator.
+  Queries apply to resolved titles from every provider, including mixed-server
+  and network-share lists. Existing Jellyfin, Emby, or Silo entries without a
+  Watchlist-add timestamp keep their source order; Plozz's own add actions retain
+  their actual action dates for every provider.
   Watchlist artwork rehydration shares URL sanitization and signing only within
   one synchronous publication batch, including repeated cast images. Cache keys
   preserve artwork ownership, playback fallback account and requested size;

@@ -200,15 +200,10 @@ private struct PlozziOSRecentActivityView: View {
                         }
                     }
                 } label: {
-                    Label {
-                        // The category is a log-subsystem name from our own
-                        // logging, so it stays verbatim; "Filter" is copy.
-                        selectedCategory.map { Text(verbatim: $0.capitalized) } ?? Text("Filter")
-                    } icon: {
-                        Image(systemName: selectedCategory == nil
-                              ? "line.3.horizontal.decrease.circle"
-                              : "line.3.horizontal.decrease.circle.fill")
-                    }
+                    BrowseFilterLabel(
+                        activeCount: selectedCategory == nil ? 0 : 1,
+                        summary: selectedCategory?.capitalized ?? ""
+                    )
                 }
                 Button("Refresh", systemImage: "arrow.clockwise") {
                     entries = PlozzLog.recentEntries(limit: 500)

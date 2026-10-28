@@ -320757,6 +320757,7 @@
       }
     },
     "Enter a valid server address." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -342664,6 +342665,7 @@
       }
     },
     "Filter: %lld" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "variations" : {

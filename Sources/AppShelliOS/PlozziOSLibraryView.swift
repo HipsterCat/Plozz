@@ -463,17 +463,7 @@ struct PlozziOSLibraryGridView: View {
                 PlozziOSLibraryContentModeControl(viewModel: viewModel)
             }
             if viewModel.showsFilterMenu || !viewModel.availableSortFields.isEmpty {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 24) {
-                        queryControls.fixedSize()
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        queryControls
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .font(.subheadline)
-                .tint(palette.primaryText)
+                BrowseQueryControls { queryControls }
                 .padding(.horizontal, horizontalInset)
             }
         }
@@ -539,58 +529,12 @@ struct PlozziOSLibraryGridView: View {
     }
 
     private var sortControl: some View {
-        Menu {
-            Picker("Sort By", selection: sortFieldBinding) {
-                ForEach(viewModel.availableSortFields, id: \.self) { field in
-                    Text(field.displayName).tag(field)
-                }
-            }
-            Picker("Order", selection: sortDirectionBinding) {
-                ForEach(SortDirection.allCases, id: \.self) { direction in
-                    Text(direction.displayName).tag(direction)
-                }
-            }
-        } label: {
-            Label(
-                "Sort: \(viewModel.sort.field.displayName)",
-                systemImage: "arrow.up.arrow.down"
-            )
-            .frame(minWidth: 44, minHeight: 44)
+        BrowseSortMenu(sort: viewModel.sort, fields: viewModel.availableSortFields) { sort in
+            Task { await viewModel.setSort(sort) }
         }
         .accessibilityIdentifier("library-sort")
     }
 
-    private var sortFieldBinding: Binding<SortField> {
-        Binding(
-            get: { viewModel.sort.field },
-            set: { field in
-                Task {
-                    await viewModel.setSort(
-                        CoreModels.SortDescriptor(
-                            field: field,
-                            direction: field.defaultDirection
-                        )
-                    )
-                }
-            }
-        )
-    }
-
-    private var sortDirectionBinding: Binding<SortDirection> {
-        Binding(
-            get: { viewModel.sort.direction },
-            set: { direction in
-                Task {
-                    await viewModel.setSort(
-                        CoreModels.SortDescriptor(
-                            field: viewModel.sort.field,
-                            direction: direction
-                        )
-                    )
-                }
-            }
-        )
-    }
 }
 
 private struct PlozziOSLibraryContentModeControl: View {

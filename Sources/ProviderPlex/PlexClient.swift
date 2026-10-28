@@ -1686,7 +1686,7 @@ public struct PlexClient: Sendable {
                 // inline.
                 URLQueryItem(
                     name: "includeFields",
-                    value: "title,type,year,thumb,art,guid,Guid,ratingKey"
+                    value: "title,type,year,thumb,art,guid,Guid,ratingKey,watchlistedAt,originallyAvailableAt"
                 )
             ],
             headers: plexTVHeaders

@@ -156,6 +156,7 @@ struct SearchTab: View {
                 spoilerSettings: spoilerSettings,
                 onSelect: { open($0) }
             )
+            .modifier(NavigationRailSearchRootInset())
             .youTubeTrailerOpeningFailures(trailerOpening)
             .navigationDestination(for: MediaItem.self) { item in
                 let provider = try? resolveProvider(item.sourceAccountID, in: accounts)
