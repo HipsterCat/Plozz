@@ -29,6 +29,8 @@ public struct Endpoint: Sendable {
     public var allowsAutomaticAddressRetry: Bool
     /// Preserve proof that a one-time mutation never reached HTTP transmission.
     public var reportsUndeliveredRequests: Bool = false
+    /// Manual scheme discovery must distinguish rejected trust from an offline port.
+    public var reportsServerTrustFailures: Bool = false
 
     public init(
         method: HTTPMethod = .get,
