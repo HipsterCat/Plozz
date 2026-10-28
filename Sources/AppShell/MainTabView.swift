@@ -538,6 +538,7 @@ struct MainTabView: View {
     /// presents unreliably under the sidebar tab style (the cover only appears
     /// after a stray Back press). Bound down into `MusicTabView`, which flips it.
     @State private var showNowPlaying = false
+    @State private var profileTrailerSuppressionID = UUID()
     /// The video player is hosted here on the root `TabView` (not inside a tab's
     /// navigation stack) so it presents reliably on the FIRST trigger — the same
     /// reason `showNowPlaying` lives here. A `fullScreenCover` attached inside a
@@ -1963,6 +1964,14 @@ struct MainTabView: View {
         let _ = plozzPrintChanges { Self._printChanges() }
         let _ = PlozzBodyRate.tick("MainTabView")
         return playbackShell
+        #if os(tvOS)
+        .background(
+            TVProfilePlaybackPresence(
+                isActive: playRequest != nil || showNowPlaying || audioController.isPlaying
+            )
+            .frame(width: 0, height: 0)
+        )
+        #endif
         .themeMusicScope(
             controller: themeMusicController,
             model: themeMusicModel,
@@ -1984,6 +1993,13 @@ struct MainTabView: View {
             "\(seer.connectionRevision)|\(activeProfile.id)|\(activeProfile.seerrUserID.map(String.init) ?? "admin")|\(activeProfile.seerrServerIdentity?.canonicalURL ?? "")"
         )
         .environment(heroTrailerController)
+        .onChange(of: isLiveTVProfileAuthorized(), initial: true) { _, authorized in
+            if authorized {
+                heroTrailerController.resumeAfterPlayback(owner: profileTrailerSuppressionID)
+            } else {
+                heroTrailerController.suspendForPlayback(owner: profileTrailerSuppressionID)
+            }
+        }
         .environment(heroBackgroundModel)
         .onChange(of: artworkPolicy.forArea(.music), initial: true) { _, policy in
             audioController.updateArtworkPolicy(policy)

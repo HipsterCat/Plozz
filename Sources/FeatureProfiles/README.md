@@ -42,6 +42,20 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
 
 ## Invariants
 
+- **tvOS foreground protection.** Leaving the app while browsing a PIN-protected
+  profile requires profile selection and fresh local/Plex authorization on return.
+  Control Center and other inactive-only interruptions do not lock. Open video
+  players (including paused/buffering sessions), visible Live TV players, Now
+  Playing, actively playing music, and the current external-player handoff are
+  exempt; ambient hero trailers and an empty Live TV guide are not.
+  A scene-owned opaque window covers browsing and any presented Settings page,
+  removing their input/accessibility access without destroying their navigation.
+  Selecting the same profile restores that context after successful PIN entry;
+  choosing another profile uses normal identity/settings rescoping. Cancellation
+  stays at the mandatory picker, including when leaving from a previously
+  cancelable profile picker or in-app account setup. Top Shelf links wait for
+  authorization, and a late async result cannot start a new player behind the
+  gate. This policy does not change iOS.
 - **Non-secret only.** Profiles are non-secret metadata; tokens belong
   to `FeatureAuth.AccountStore`.
 - **Default profile is special.** Stable id
