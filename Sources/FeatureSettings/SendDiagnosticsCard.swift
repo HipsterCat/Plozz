@@ -5,7 +5,7 @@ import CoreNetworking
 import CoreUI
 import CrashReporting
 
-/// One-tap "send my recent activity to the developer" card, shared by the Help &
+/// "Send my recent activity to the developer" card, shared by the Help &
 /// Diagnostics page (so it's discoverable without digging) and the Recent
 /// Activity page (next to the log it sends).
 ///
@@ -32,15 +32,18 @@ struct SendDiagnosticsCard: View {
         if canSend {
             SettingsPanel(title: "Send to Developer", footer: footer) {
                 VStack(alignment: .leading, spacing: 18) {
-                    TextField("Add a message (optional) — e.g. what went wrong", text: $message)
-                        .disabled(sendState == .sent)
+                    TextField(text: $message) {
+                        Text(SettingsCopy.diagnosticsMessage)
+                    }
+                    .accessibilityIdentifier("diagnostics-message")
+                    .disabled(sendState == .sent || isSending)
 
                     Button {
-                        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let note = message
                         isSending = true
                         Task {
                             defer { isSending = false }
-                            let ok = await CrashDiagnostics.send(note: trimmed.isEmpty ? nil : trimmed)
+                            let ok = await CrashDiagnostics.send(note: note)
                             sendState = ok ? .sent : .failed
                             if ok { message = "" }
                         }
@@ -52,7 +55,8 @@ struct SendDiagnosticsCard: View {
                         .font(.headline)
                     }
                     .buttonStyle(PlozzOpaquePillButtonStyle())
-                    .disabled(sendState == .sent || isSending)
+                    .accessibilityIdentifier("diagnostics-submit")
+                    .disabled(sendState == .sent || isSending || CrashDiagnostics.normalizedNote(message) == nil)
                 }
             }
         } else {

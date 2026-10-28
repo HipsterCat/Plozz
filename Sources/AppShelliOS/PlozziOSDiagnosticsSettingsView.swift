@@ -68,11 +68,15 @@ struct PlozziOSDiagnosticsSettingsView: View {
             }
 
             SettingsSectionGroup("Send Diagnostics") {
-                TextField("Optional note", text: $diagnosticNote, axis: .vertical)
-                    .lineLimit(2...4)
+                TextField(text: $diagnosticNote, axis: .vertical) {
+                    Text(SettingsCopy.diagnosticsMessage)
+                }
+                .lineLimit(2...4)
+                .accessibilityIdentifier("diagnostics-message")
+                .disabled(isSending)
                 Button {
                     appModel.applyCrashReportingPreference()
-                    let note = diagnosticNote.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let note = diagnosticNote
                     isSending = true
                     Task {
                         defer { isSending = false }
@@ -84,10 +88,12 @@ struct PlozziOSDiagnosticsSettingsView: View {
                 } label: {
                     Label("Send to Developer", systemImage: "paperplane")
                 }
+                .accessibilityIdentifier("diagnostics-submit")
                 .disabled(
                     !appModel.crashReportingController.isConfigured
                         || !crashReporting.isEnabled
                         || isSending
+                        || CrashDiagnostics.normalizedNote(diagnosticNote) == nil
                 )
 
                 if let sendStatus {

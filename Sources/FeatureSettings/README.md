@@ -66,8 +66,9 @@ automatic and manual diagnostic disclosures consistent across platforms.
 Automatic reports describe technical errors, app/device information, screen
 categories and performance diagnostics, not a blanket anonymity guarantee.
 Manual uploads disclose additional playback/connection records and the user's
-optional message, which is sent as written. Submission copy does not promise
-confirmed server delivery. Privacy-policy content is maintained on the website.
+required message, which is sent as written apart from surrounding whitespace.
+Submission copy does not promise confirmed server delivery. Privacy-policy
+content is maintained on the website.
 Manual attachments are constructed from typed activity categories/severity,
 bounded technical operation timings, and structured playback/source journals.
 Library browsing, recommendations and Continue Watching failures retain their
@@ -78,7 +79,7 @@ they can contain server addresses, account identifiers, titles or search text.
 Journal identifiers are replaced with report-local aliases and record times are
 relative ages, preserving relationships and timing without exporting persistent
 identity hashes or session UUIDs. Activity copy/share and prefilled issue links
-use the same filtered activity projection. Filtering cannot make the optional
+use the same filtered activity projection. Filtering cannot make the user's
 message anonymous or hide connection metadata from the receiving service.
 
 On tvOS, Video buffer and Live TV buffer use the shared `SettingsMenuRow`: one
@@ -744,10 +745,13 @@ watch history and planning-list behavior are documented in
   auto-download) lives here; the subtitle *look* is now adjusted in the
   player while watching.
 - **Send Diagnostics** on TV and mobile uses the existing crash-reporting consent.
-  Each submission appears in Sentry's User Feedback inbox with the optional note
-  (or "User diagnostics report" when blank), linked to the diagnostic event in
-  Issues and its `plozz-recent-activity.log` attachment. No name or email is
-  collected. The privacy filter retains only the feedback message, custom source,
+  Send remains disabled until a nonblank message is entered. The shared submission
+  path also rejects missing or whitespace-only messages before collecting or
+  submitting any diagnostics; automatic crash reports are unchanged.
+  Each submission appears in Sentry's User Feedback inbox with the required message,
+  linked to the diagnostic event in Issues and its `plozz-diagnostics.json`
+  attachment. No name or email is collected. The privacy filter retains only the
+  feedback message, custom source,
   and valid associated event ID, not identity or arbitrary feedback fields.
   Success means SDK handoff, not server acknowledgment; inactive reporting or a
   rejected event returns failure. Feedback is not submitted when its diagnostic

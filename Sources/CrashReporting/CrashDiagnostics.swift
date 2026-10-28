@@ -14,12 +14,24 @@ import Sentry
 /// SDK is actually running). Otherwise it sends nothing and returns `false`, and
 /// the caller should tell the user to turn crash reporting on first.
 public enum CrashDiagnostics {
+    /// Trims the submitted message; missing or whitespace-only messages are invalid.
+    public static func normalizedNote(_ note: String?) -> String? {
+        guard let note = note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else {
+            return nil
+        }
+        return note
+    }
+
     /// Send a filtered diagnostic attachment and explicitly submitted feedback.
     /// Returns `true` for SDK handoff, not confirmation of server delivery;
-    /// `false` when reporting is inactive or either event was rejected.
+    /// `false` when the message is blank, reporting is inactive, or either event was rejected.
     @MainActor
     @discardableResult
     public static func send(note: String? = nil) async -> Bool {
+        guard let note = normalizedNote(note) else {
+            PlozzLog.app.error("A message is required to submit diagnostics; nothing submitted.")
+            return false
+        }
         #if canImport(Sentry)
         guard SentrySDK.isEnabled else { return false }
         let scope = DiagnosticExportScope()
@@ -64,6 +76,10 @@ public enum CrashDiagnostics {
         captureEvent: (Event, Attachment) -> SentryId,
         captureFeedback: (Event) -> SentryId
     ) -> Bool {
+        guard let message = normalizedNote(note) else {
+            PlozzLog.app.error("A message is required to submit diagnostics; nothing submitted.")
+            return false
+        }
         guard isEnabled else { return false }
 
         let report = TechnicalReport(
@@ -85,8 +101,6 @@ public enum CrashDiagnostics {
             PlozzLog.app.error("Privacy-filtered diagnostic report exceeded its size limit; nothing submitted.")
             return false
         }
-        let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let message = trimmedNote.isEmpty ? "User diagnostics report" : trimmedNote
         let attachment = Attachment(
             data: body,
             filename: "plozz-diagnostics.json",
