@@ -1693,15 +1693,15 @@ private struct PlozziOSScreensNavigationSettingsView: View {
     @State private var destination: Page?
 
     private enum Page: String, CaseIterable, Identifiable {
-        case home, libraries, navigation, detail, spoilers
+        case home, libraries, navigation, detail, allScreens
         var id: Self { self }
         var title: LocalizedStringResource {
             switch self {
-            case .home: "Customize Home"
-            case .libraries: "Customize Libraries"
+            case .home: "Home"
+            case .libraries: "Libraries"
             case .navigation: "App navigation"
-            case .detail: "Detail Page"
-            case .spoilers: "Spoiler Protection"
+            case .detail: "Movie & show details"
+            case .allScreens: "All screens"
             }
         }
     }
@@ -1713,19 +1713,17 @@ private struct PlozziOSScreensNavigationSettingsView: View {
                     SettingsDisclosureLabel { Text(Page.navigation.title) }
                 }
                 .accessibilityIdentifier("screens-navigation")
-            }
-            SettingsSectionGroup("All screens") {
-                ContentRatingToggle(model: appModel.settings.contentRatings)
-                Button { destination = .spoilers } label: {
-                    SettingsDisclosureLabel { Text(Page.spoilers.title) }
+                Button { destination = .allScreens } label: {
+                    SettingsDisclosureLabel { Text(Page.allScreens.title) }
                 }
-                .accessibilityIdentifier("screens-spoilers")
+                .accessibilityIdentifier("screens-all-screens")
             }
-            SettingsSectionGroup("Customize individual screens") {
+            SettingsSectionGroup {
                 ForEach([Page.home, .libraries, .detail]) { page in
                     Button { destination = page } label: {
                         SettingsDisclosureLabel { Text(page.title) }
                     }
+                    .accessibilityIdentifier("screens-\(page.rawValue)")
                 }
             }
         }
@@ -1733,8 +1731,10 @@ private struct PlozziOSScreensNavigationSettingsView: View {
         .navigationTitle("Screens & Navigation")
         .navigationDestination(item: $destination) { page in
             switch page {
-            case .spoilers:
-                PlozziOSSpoilerSettingsView(model: appModel.settings.spoilers)
+            case .allScreens:
+                PlozziOSAllScreensSettingsView(
+                    contentRatings: appModel.settings.contentRatings, spoilers: appModel.settings.spoilers
+                )
             case .home:
                 PlozziOSHomeSettingsView(
                     hero: appModel.settings.hero, heroBackground: appModel.settings.heroBackground,
@@ -1765,6 +1765,22 @@ private struct PlozziOSScreensNavigationSettingsView: View {
                 )
             }
         }
+    }
+}
+
+struct PlozziOSAllScreensSettingsView: View {
+    let contentRatings: ContentRatingSettingsModel
+    let spoilers: SpoilerSettingsModel
+
+    var body: some View {
+        List {
+            SettingsSectionGroup {
+                ContentRatingToggle(model: contentRatings)
+            }
+            PlozziOSSpoilerSettingsControls(model: spoilers)
+        }
+        .settingsPageSurface()
+        .navigationTitle("All screens")
     }
 }
 
@@ -2006,14 +2022,14 @@ private struct PlozziOSDetailPageSettingsView: View {
                     ThemeMusicVolumeControl(model: themeMusic)
                 }
             } footer: {
-                Text("Choose what plays behind the hero on a movie or show's detail page. Trailer and theme music never play together.")
+                Text("Choose what plays behind the hero on a movie or show's details screen. Trailer and theme music never play together.")
             }
             SettingsSectionGroup("Cards") {
                 CardCaptionSettingsLink(cards: cards, scope: .detail)
             }
         }
         .settingsPageSurface()
-        .navigationTitle("Detail Page")
+        .navigationTitle("Movie & show details")
     }
 }
 
@@ -2390,37 +2406,33 @@ private struct SeparateSettingLabel: View {
     }
 }
 
-private struct PlozziOSSpoilerSettingsView: View {
+private struct PlozziOSSpoilerSettingsControls: View {
     @Bindable var model: SpoilerSettingsModel
 
     var body: some View {
-        List {
-            SettingsSectionGroup {
-                Toggle("Protect unwatched episodes", isOn: $model.settings.isEnabled)
-                Picker("Thumbnail treatment", selection: $model.settings.mode) {
-                    ForEach(SpoilerSettings.Mode.allCases, id: \.self) {
-                        Text($0.displayName).tag($0)
-                    }
+        SettingsSectionGroup("Spoiler Protection") {
+            Toggle("Protect unwatched episodes", isOn: $model.settings.isEnabled)
+            Picker("Thumbnail treatment", selection: $model.settings.mode) {
+                ForEach(SpoilerSettings.Mode.allCases, id: \.self) {
+                    Text($0.displayName).tag($0)
                 }
-                .disabled(!model.settings.isEnabled)
-                Toggle(
-                    "Hide ratings until watched",
-                    isOn: $model.settings.hideRatingsUntilWatched
-                )
-            } footer: {
-                Text(LocalizedStringResource(
-                    "settings.spoilers.footer",
-                    defaultValue: """
-                        Episode titles, summaries, and artwork can be hidden until \
-                        you watch them. Hidden ratings are blurred on a title's \
-                        page — tap to reveal them.
-                        """,
-                    comment: "Footer under the Spoilers settings group on iPhone/iPad, explaining what the switches above it do."
-                ))
             }
+            .disabled(!model.settings.isEnabled)
+            Toggle(
+                "Hide ratings until watched",
+                isOn: $model.settings.hideRatingsUntilWatched
+            )
+        } footer: {
+            Text(LocalizedStringResource(
+                "settings.spoilers.footer",
+                defaultValue: """
+                    Episode titles, summaries, and artwork can be hidden until \
+                    you watch them. Tap blurred ratings on the details screen \
+                    to reveal them.
+                    """,
+                comment: "Footer under the Spoilers settings group on iPhone/iPad, explaining what the switches above it do."
+            ))
         }
-        .settingsPageSurface()
-        .navigationTitle("Spoiler Protection")
     }
 }
 

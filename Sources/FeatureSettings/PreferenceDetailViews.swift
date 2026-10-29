@@ -38,7 +38,6 @@ struct AppearanceDetailView: View {
     @Environment(NavigationStyleSettingsModel.self) private var navigation
     @Environment(TransparencyPreferenceModel.self) private var transparency
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
-    @Environment(ContentRatingSettingsModel.self) private var contentRatings
 
     var body: some View {
         @Bindable var settingsNavigation = settingsNavigation
@@ -70,22 +69,17 @@ struct AppearanceDetailView: View {
         let availableRows = allRows
         if section == .screensNavigation {
             return availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
+                SettingsSplitRow(id: "all-screens", title: "All screens") { EmptyView() }
+                    .destination(.allScreens),
                 SettingsSplitRow(
-                    id: "content-ratings", title: "Show content ratings",
-                    sectionStart: .heading(Text("All screens"))
-                ) {
-                    ContentRatingToggle(model: contentRatings)
-                }.labeledControl()
-            ] + SpoilerRowsBuilder(spoilers: spoilers).rows.map { $0.page() } + [
-                    SettingsSplitRow(
-                        id: "customize-home", title: "Customize Home",
-                        sectionStart: .heading(Text("Customize individual screens"))
-                    ) { EmptyView() }.destination(.customizeHome),
-                    SettingsSplitRow(id: "customize-libraries", title: "Customize Libraries") { EmptyView() }
-                        .destination(.customizeLibraries),
-                    SettingsSplitRow(id: "title-details", title: "Detail Page") { EmptyView() }
-                        .destination(.detailPage)
-                ] + availableRows.filter { $0.id == "music-player" }.map { $0.page() }
+                    id: "customize-home", title: "Home",
+                    sectionStart: .divider
+                ) { EmptyView() }.destination(.customizeHome),
+                SettingsSplitRow(id: "customize-libraries", title: "Libraries") { EmptyView() }
+                    .destination(.customizeLibraries),
+                SettingsSplitRow(id: "title-details", title: "Movie & show details") { EmptyView() }
+                    .destination(.detailPage)
+            ] + availableRows.filter { $0.id == "music-player" }.map { $0.page() }
         }
         #if os(tvOS)
         if inWorkspace {
@@ -174,7 +168,7 @@ struct AppearanceDetailView: View {
                 }.groupedContent(),
                 SettingsSplitRow(
                     id: "music-player",
-                    title: "Music Player",
+                    title: "Music player",
                     description: "How the now-playing music screen looks.",
                 ) {
                     MusicPlayerStyleDetail(
@@ -263,6 +257,19 @@ struct AppearanceDetailView: View {
     }
 }
 
+struct AllScreensDetailView: View {
+    @Environment(ContentRatingSettingsModel.self) private var contentRatings
+    let spoilers: SpoilerSettingsModel
+
+    var body: some View {
+        SettingsSplitLayout(title: "All screens", rows: [
+            SettingsSplitRow(id: "content-ratings", title: "Show content ratings") {
+                ContentRatingToggle(model: contentRatings)
+            }.labeledControl()
+        ] + SpoilerRowsBuilder(spoilers: spoilers).rows)
+    }
+}
+
 struct SpoilersDetailView: View {
     @Bindable var spoilers: SpoilerSettingsModel
 
@@ -324,7 +331,7 @@ struct DetailPageDetailView: View {
     @Environment(\.detailHeaderSettings) private var detailHeaderSettings
 
     var body: some View {
-        SettingsSplitLayout(title: "Detail Page", rows: heroRows)
+        SettingsSplitLayout(title: "Movie & show details", rows: heroRows)
     }
 
     private var heroRows: [SettingsSplitRow] {

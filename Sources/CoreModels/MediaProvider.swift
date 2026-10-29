@@ -59,6 +59,10 @@ public protocol MediaProvider: Sendable {
     /// ``continueWatching(limit:inLibraries:)`` for the scoping/tagging contract.
     func latest(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem]
 
+    /// Completes local container watch state for a bounded Recently Added batch.
+    /// Server providers already include their authoritative user state in feeds.
+    func recentlyAddedWatchState(_ items: [MediaItem]) async throws -> [MediaItem]
+
     /// Full presentation metadata without probe-capable playback preparation.
     func item(id: String) async throws -> MediaItem
 
@@ -657,6 +661,10 @@ public extension MediaProvider {
     /// ``continueWatching(limit:inLibraries:)``.
     func latest(limit: Int, inLibraries libraryIDs: [String]?) async throws -> [MediaItem] {
         try await latest(limit: limit)
+    }
+
+    func recentlyAddedWatchState(_ items: [MediaItem]) async throws -> [MediaItem] {
+        items
     }
 
     /// Default: no trailers. Providers that can surface them (Jellyfin local

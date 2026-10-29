@@ -6,8 +6,8 @@ struct HomeDisplayPreferencesDto: Decodable {
     let CustomPrefs: [String: String?]?
 }
 
-/// The native Emby ContentService contract. SectionType is deliberately not
-/// interpreted: its string vocabulary is not specified by the public API.
+/// The native Emby ContentService contract. Only verified SectionType values
+/// are interpreted; unknown sections retain their server-owned presentation.
 struct EmbyHomeSectionDto: Decodable {
     let Id: String
     let Name: String? // l10n:content — server-authored section heading
@@ -256,6 +256,8 @@ extension JellyfinProvider {
                 kind = .libraries
             } else if section.Query?.IsResumable == true {
                 kind = .continueWatching
+            } else if section.SectionType?.lowercased() == "latestmedia" {
+                kind = .recentlyAdded
             } else {
                 kind = .recommendations
             }

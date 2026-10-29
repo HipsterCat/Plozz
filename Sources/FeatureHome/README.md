@@ -7,6 +7,45 @@ an empty provider feed from local curation without recording media or account ID
 Home rows, item detail, series/season experience, and the online-trailer
 fallback when the user's server has no attached trailer.
 
+## Recently Added watched filtering
+
+Screens & Navigation > Home > Filtering offers **Recently Added** under
+**Hide watched content**, off by default and saved per profile. The shared presentation policy covers combined,
+per-library, and typed server-authored Recently Added rows on TV and mobile. It leaves
+Continue Watching, Next Up, Watchlist, collections, hero, and Top Shelf unchanged.
+Movies/episodes use current completion (rewatches remain resumable). Series and
+seasons stay visible with unfinished episodes; unknown completion is not inferred
+from progress percentages. A selected alternate copy with unfinished episodes
+keeps a merged show visible.
+
+Enabled loads request a bounded 100-candidate window instead of the normal 20,
+then filter before taking 20 cards. This is not a full-library scan or a promise
+to fill every row: a server's shorter native feed, or an entirely watched window,
+can still leave a short/empty row. Raw candidates are retained for live mutations,
+toggle reversal, and credential-sanitized launch snapshots; hero/Top Shelf retain
+their original feed. Server row batching remains shared, with non-Recent results
+trimmed to their original budget.
+
+Plex, Jellyfin/Emby, and Silo supply mapped server watch state. SMB, WebDAV, NFS,
+SFTP, and FTP use the same ShareProvider/account/profile watch store; Home rolls
+up share series from indexed logical episodes, counting alternate files once,
+without walking the remote filesystem. Account/profile changes and the existing
+post-write refresh path remain authoritative.
+
+Emby's native `latestmedia` sections are classified using the machine-readable
+contract verified against an Emby 4.10.2 server, including custom-named rows.
+Unknown native sections remain unchanged; display titles and sort order are
+never used to guess a row's purpose. Server-side watch filters remain authoritative
+even when this additional client-side filter is off.
+
+`JellyfinRecentlyAddedLiveTests` exercises the native Emby contract and mapped
+watch policy against an explicitly approved passwordless test account. Set
+`TEST_RUNNER_PLOZZ_TEST_EMBY_URL` and `TEST_RUNNER_PLOZZ_TEST_EMBY_USER` when
+invoking Xcode tests; without them it skips. The check reads bounded native/latest
+feeds and simulates watch changes only on in-memory copies, never server history.
+Provider fixtures cover the other mappings; shared policy and Home model tests
+cover candidate replenishment, identity reenrichment, and profile persistence.
+
 Theme audio is owned by `FeatureHomeCore.ThemeMusicController` and the shared
 `themeMusicScope` / `themeMusicPlayback` modifiers on both TV and mobile.
 Only the frontmost active detail owns playback. Full video, Live TV, hero trailers,
