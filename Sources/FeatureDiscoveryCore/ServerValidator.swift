@@ -9,12 +9,15 @@ public struct ServerValidator: Sendable {
     private let http: HTTPClient
     private let manualHTTP: HTTPClient
     private let provider: ProviderKind
+    private let diagnostics: ServerConnectionDiagnostics
 
     public init(
         provider: ProviderKind = .jellyfin,
-        http: HTTPClient? = nil
+        http: HTTPClient? = nil,
+        diagnostics: ServerConnectionDiagnostics = .shared
     ) {
         self.provider = provider
+        self.diagnostics = diagnostics
         self.http = http ?? URLSessionHTTPClient()
         self.manualHTTP = http ?? URLSessionHTTPClient(session: .plozzDiscovery)
     }
@@ -43,7 +46,15 @@ public struct ServerValidator: Sendable {
     /// Throws `.serverUnreachable` / `.invalidResponse` on failure so the UI can
     /// show a friendly message.
     public func validate(rawURL: String) async throws -> MediaServer {
-        try await validate(rawURL: rawURL, http: http, reportsServerTrustFailures: false)
+        guard provider == .jellyfin || provider == .emby else {
+            return try await validate(rawURL: rawURL, http: http, reportsServerTrustFailures: false)
+        }
+        return try await diagnostics.capture(
+            provider: provider, stage: .addressValidation,
+            baseURL: ServerURLNormalizer.normalize(rawURL, defaultPort: 8096)
+        ) {
+            try await validate(rawURL: rawURL, http: http, reportsServerTrustFailures: false)
+        }
     }
 
     /// Resolves a new manual entry before credentials are requested. At most
@@ -58,9 +69,13 @@ public struct ServerValidator: Sendable {
         for (index, candidate) in candidates.enumerated() {
             try Task.checkCancellation()
             do {
-                let server = try await validate(
-                    rawURL: candidate.absoluteString, http: manualHTTP, reportsServerTrustFailures: true
-                )
+                let server = try await diagnostics.capture(
+                    provider: provider, stage: .addressValidation, baseURL: candidate, candidate: index + 1
+                ) {
+                    try await validate(
+                        rawURL: candidate.absoluteString, http: manualHTTP, reportsServerTrustFailures: true
+                    )
+                }
                 try Task.checkCancellation()
                 PlozzLog.discovery.info("Manual server address validated attempt=\(index + 1) scheme=\(server.baseURL.scheme ?? "")")
                 return server

@@ -105,6 +105,17 @@ Library browsing, recommendations and Continue Watching additionally retain
 typed section, route, decode/paging facts and numeric errors, rather than relying
 on the local free-form log. These and preparation failures use bounded local
 record buffers with explicit dropped-record counts.
+The `connections` section records Jellyfin/Emby address validation (each candidate,
+including successful fallback), password sign-in, and Quick Connect begin/approval.
+It retains at most 32 attempts for 48 hours in memory, with at most four requests
+per attempt; restarting the app clears this journal. Submit after reproducing,
+before restarting. Facts include scheme, explicit-port/base-prefix presence,
+outcome, timings, response format/status, URL error codes, and bounded underlying
+error-domain categories/numeric codes (for example POSIX connection refusal).
+It never contains hosts, IPs, ports, paths, credentials, response bodies, or error
+descriptions, and does not infer VPN reachability from a VPN product name.
+Cancelled attempts and background reachability polling are excluded. There is
+no extra request, changed timeout, certificate exception, or automatic upload.
 Source/account/profile/attempt references are remapped within each report,
 including relationships between journals; stable local hashes and UUIDs do not
 leave the device. Record times are relative ages. The optional written message
