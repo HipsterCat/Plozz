@@ -197,6 +197,14 @@ Live playback, shared players and muted previews do not opt in.
 See [playback engines](../../docs/playback-engines.md#dolby-vision-fel) for eligibility
 and output limits.
 
+On tvOS 26+, Playback > Advanced also offers **Rendering layout** in a native
+menu: 5.1.2, 5.1.4, 7.1.2, 7.1.4 and the default 9.1.6. This device-local choice
+is shared by profiles, excluded from profile transfer and read on each new load.
+It does not enable Spatial audio or alter saved On/Off choices. The helper
+discloses that DTS:X heights require 7.1.4 or 9.1.6; smaller layouts retain
+ordinary channel playback for those tracks. This is a rendering bed, not a
+speaker-detection setting.
+
 **Remember audio language per series** stores only the selected language, not a
 specific audio track or format. Its label needs no explanatory footer.
 
@@ -245,8 +253,8 @@ The **Spatial audio (height channel support)** switch is available on tvOS 26 an
 profile-scoped `trueHDAtmosEnabled` preference defaults on, preserves saved Off
 choices and travels through profile transfer. It applies to new supported
 on-demand sessions, not live streams, shared players or muted previews. The
-helper identifies TrueHD Atmos and DTS:X as inputs and discloses lossy conversion
-to Apple spatial audio. Format names describe compatibility, not certification,
+helper identifies TrueHD Atmos and DTS:X as inputs, PCM rendering and lossy
+AirPlay output. Format names describe compatibility, not certification,
 lossless passthrough, or patent clearance.
 FEL can use the same spatial conversion on tvOS 26+; source eligibility and
 fallback remain engine-owned. Unsupported platforms

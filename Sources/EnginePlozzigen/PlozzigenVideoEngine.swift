@@ -348,6 +348,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     private let readAheadPreference: @MainActor () -> PlaybackReadAhead
     private let liveBufferPreference: @MainActor () -> LivePlaybackBuffer
     private let losslessAudioPreference: @MainActor () -> Bool
+    private let spatialAudioLayoutPreference: @MainActor () -> SpatialAudioLayout
     private var liveOutputPolicy = LiveChannelOutputPolicy()
     private var outputPolicyReload: Task<Void, Never>?
     private var outputLoadGeneration = UUID()
@@ -379,7 +380,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil,
         readAheadPreference: @escaping @MainActor () -> PlaybackReadAhead = { .default },
         liveBufferPreference: @escaping @MainActor () -> LivePlaybackBuffer = { .default },
-        losslessAudioPreference: @escaping @MainActor () -> Bool = { LosslessAudioSettingsStore().load() }
+        losslessAudioPreference: @escaping @MainActor () -> Bool = { LosslessAudioSettingsStore().load() },
+        spatialAudioLayoutPreference: @escaping @MainActor () -> SpatialAudioLayout = { SpatialAudioLayoutStore().load() }
     ) throws {
         self.engine = try AEEngine()
         // Plozz owns its audio session, and on an E-AC-3/Atmos bitstream-passthrough route the HDMI sink
@@ -392,6 +394,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         self.readAheadPreference = readAheadPreference
         self.liveBufferPreference = liveBufferPreference
         self.losslessAudioPreference = losslessAudioPreference
+        self.spatialAudioLayoutPreference = spatialAudioLayoutPreference
         #if canImport(UIKit)
         let surface = AetherPlayerView()
         engine.bind(view: surface)
@@ -825,6 +828,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         let options = Self.onDemandLoadOptions(
             losslessAudioEnabled: losslessAudioPreference(),
             trueHDAtmosEnabled: request.trueHDAtmosEnabled,
+            spatialAudioLayout: spatialAudioLayoutPreference(),
             dolbyVisionFELEnabled: request.dolbyVisionFELEnabled,
             outputPolicy: outputPolicy,
             readAhead: isLocalFile || request.suppressOrdinaryWatchReporting
@@ -836,6 +840,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     nonisolated static func onDemandLoadOptions(
         losslessAudioEnabled: Bool = LosslessAudioSettingsStore.defaultEnabled,
         trueHDAtmosEnabled: Bool = PlaybackSettings.default.trueHDAtmosEnabled,
+        spatialAudioLayout: SpatialAudioLayout = .default,
         dolbyVisionFELEnabled: Bool = PlaybackSettings.default.dolbyVisionFELEnabled,
         outputPolicy: LiveChannelOutputPolicy = .init(),
         readAhead: PlaybackReadAhead = .default
@@ -863,13 +868,23 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         #if os(tvOS)
         if #available(tvOS 26.0, *), trueHDAtmosEnabled,
            outputPolicy.isAudible, !outputPolicy.sharesAudioSession {
-            // Intermediate spatial bed, not a detected speaker inventory.
-            // The engine checks source/route eligibility and retains channel fallback.
-            options.objectAudioRendering = .apac(.l714)
+            // This is the rendering bed, not detected speakers. Aether chooses PCM
+            // or APAC for the route and retains its source/channel fallback.
+            options.objectAudioRendering = .render(spatialSpeakerLayout(spatialAudioLayout))
         }
         #endif
         applyLiveOutputPolicy(outputPolicy, to: &options)
         return options
+    }
+
+    nonisolated static func spatialSpeakerLayout(_ layout: SpatialAudioLayout) -> SpatialSpeakerLayout {
+        switch layout {
+        case .fiveOneTwo: .l512
+        case .fiveOneFour: .l514
+        case .sevenOneTwo: .l712
+        case .sevenOneFour: .l714
+        case .nineOneSix: .l916
+        }
     }
 
     func liveLoadOptions(

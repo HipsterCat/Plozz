@@ -840,7 +840,7 @@ struct PlaybackDetailView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
                                 .accessibilityIdentifier("spatial-audio-toggle")
-                            Text("Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy).")
+                            Text("Uses PCM for supported TrueHD Atmos and DTS:X tracks; lossy audio over AirPlay.")
                                 .settingsHelperText()
                                 .fixedSize(horizontal: false, vertical: true)
                         }

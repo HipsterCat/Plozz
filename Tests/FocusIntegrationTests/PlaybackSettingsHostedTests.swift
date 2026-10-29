@@ -125,7 +125,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         }
         if #available(tvOS 26.0, *) {
             for label in ["Spatial audio", "height channel support", "TrueHD Atmos",
-                          "DTS:X", "Apple spatial audio", "lossy"] {
+                          "DTS:X", "PCM", "AirPlay", "lossy"] {
                 XCTAssertTrue(text.contains(label), text)
             }
         } else {
@@ -306,12 +306,60 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         }
         if #available(tvOS 26.0, *) {
             XCTAssertFalse(text.contains("Disables spatial audio."), text)
+            let page = try await allPageText(in: window, attachment: "Advanced-spatial-layout")
+            for label in ["Rendering layout", "9.1.6", "DTS:X heights require 7.1.4 or 9.1.6."] {
+                XCTAssertTrue(page.contains(label), page)
+            }
         } else {
             XCTAssertTrue(text.contains("Disables spatial audio."), text)
+            XCTAssertFalse(text.contains("DTS:X"), text)
         }
         XCTAssertFalse(text.contains("Dolby Atmos"), text)
-        XCTAssertFalse(text.contains("DTS:X"), text)
         XCTAssertFalse(playback.settings.dolbyVisionFELEnabled)
+    }
+
+    func testSpatialLayoutControlUpdatesFromDeviceStoreAndFitsLargeText() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "SpatialLayoutHosted-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = SpatialAudioLayoutStore(defaults: defaults)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        for (size, typeSize): (CGSize, DynamicTypeSize) in [
+            (.init(width: 1100, height: 440), .large),
+            (.init(width: 760, height: 700), .accessibility3)
+        ] {
+            window.frame = CGRect(origin: .zero, size: size)
+            window.rootViewController = UIHostingController(rootView:
+                SpatialAudioLayoutControl(defaults: defaults)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .environment(\.themePalette, .dark)
+                    .environment(\.colorScheme, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                    .background(.black)
+            )
+            window.makeKeyAndVisible()
+            for layout in SpatialAudioLayout.allCases {
+                store.save(layout)
+                try await Task.sleep(for: .milliseconds(200))
+                let text = try visibleText(in: window, attachment: "Spatial-layout-\(layout.rawValue)-\(typeSize)")
+                for label in ["Rendering layout", layout.rawValue, "Applies to this device.",
+                              "DTS:X heights require 7.1.4 or 9.1.6."] {
+                    XCTAssertTrue(text.contains(label), text)
+                }
+                XCTAssertFalse(text.contains("…"), text)
+                XCTAssertEqual(store.load(), layout)
+            }
+        }
     }
 
     func testLibrarySourcesShowConfiguredNamesAndUpdateWithProfileSelection() async throws {
@@ -455,7 +503,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 "Skip intros, credits & more",
                 "Video buffer", "Live TV buffer", "Automatic", "temporary storage",
                 "adds live delay", "Spatial audio", "height channel support",
-                "TrueHD Atmos", "DTS:X", "Apple spatial audio", "lossy"
+                "TrueHD Atmos", "DTS:X", "PCM", "AirPlay", "lossy"
             ] {
                 XCTAssertTrue(visible.contains(label), "Missing inline control \(label): \(visible)")
             }
