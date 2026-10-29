@@ -411,6 +411,9 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   Home's Watchlist row and the canonical union order are unchanged. Filtering
   never fetches another list or changes membership; controls remain available
   during loading, errors, and empty results.
+  On TV, navigation enters the available cards rather than the query controls.
+  The outer Watchlist scroll view owns Top Bar scrolling; Back restores both
+  the header and navigation to the top.
   Date Added uses the Watchlist add time, never a library/catalog add date or
   import time. Local actions and available Plex, Trakt, and Simkl dates survive
   publication and native caching. Undated/tied entries retain source order after
@@ -651,6 +654,11 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   The sidebar's mask changes without replacing the scroll view, preserving
   browse position and restoring the normal feather when navigation returns.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
+  distinguish navigation roots from pushed pages with `isNavigationRoot`.
+  Individual library and All Libraries roots preserve automatic native-sidebar
+  visibility. The custom Top Bar owns its own chrome and content-focus gate,
+  so loading content cannot remove its focused destination. Pushed
+  library/collection pages retain their hidden native tab bar. They
   own a bounded, directional `ArtworkPrefetchWindow`. Its URL/variant requests
   preserve overlapping work across reversals and cancel obsolete queued work.
   Admission rechecks decoded residency; content, density, lifecycle and background
@@ -842,6 +850,13 @@ On iPhone and iPad, the loading and loaded Home layouts share the hero visibilit
 gate. Disabling the hero or deselecting all its sources removes both the carousel
 and its placeholder, including the reserved height. Only an active hero extends
 under the top safe area; a rows-only Home keeps its first row below navigation.
+The Home artwork, legibility scrim, and dissolve mask share window-wide bounds,
+including behind native side chrome. The title, actions, paging, and touch targets
+retain their safe-area layout; extending the artwork does not extend hit testing.
+On devices using a native vertical toolbar, root pages keep the profile/settings
+avatar in that rail, including Search and Live TV. The system's toolbar-edge
+environment selects this layout; ordinary iPhone and iPad placement is unchanged.
+The titleless Home hero explicitly keeps that native rail visible.
 
 Library cards preserve server-supplied cover artwork. Missing covers use a stable,
 locally composed poster collage from that exact library, with a provider-colored

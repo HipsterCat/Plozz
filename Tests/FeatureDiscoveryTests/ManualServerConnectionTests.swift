@@ -8,6 +8,42 @@ import FoundationNetworking
 
 @MainActor
 final class ManualServerConnectionTests: XCTestCase {
+    func testDiagnosticReportRetainsFailedCandidatesAndSuccessfulFallback() async throws {
+        for provider in [ProviderKind.jellyfin, .emby] {
+            let diagnostics = ServerConnectionDiagnostics()
+            let http = ManualConnectionHTTP(replies: ["http://private.example:8096": .server])
+            let validator = ServerValidator(provider: provider, http: http, diagnostics: diagnostics)
+            _ = try await validator.resolveManualAddress("private.example")
+            let data = try JSONEncoder().encode(diagnostics.export(scope: DiagnosticExportScope()))
+            let report = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let entries = try XCTUnwrap(report["entries"] as? [[String: Any]])
+            let facts = entries.compactMap { $0["facts"] as? [String: Any] }
+            XCTAssertEqual(facts.count, 2)
+            XCTAssertEqual(facts.compactMap { $0["candidate"] as? Int }, [1, 2])
+            XCTAssertEqual(facts.compactMap { $0["scheme"] as? String }, ["https", "http"])
+            XCTAssertEqual(facts.compactMap { $0["outcome"] as? String }, ["failed", "succeeded"])
+            XCTAssertEqual(facts.compactMap { $0["provider"] as? String }, [provider.rawValue, provider.rawValue])
+            XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("private.example"))
+        }
+    }
+
+    func testDiagnosticReportDistinguishesTrustRejection() async throws {
+        let diagnostics = ServerConnectionDiagnostics()
+        let http = ManualConnectionHTTP(replies: ["https://media.example": .trustFailure])
+        let validator = ServerValidator(http: http, diagnostics: diagnostics)
+        do {
+            _ = try await validator.resolveManualAddress("media.example")
+            XCTFail("Expected trust rejection")
+        } catch {
+            XCTAssertEqual(error as? AppError, .serverUnreachable)
+        }
+        let data = try JSONEncoder().encode(diagnostics.export(scope: DiagnosticExportScope()))
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let entries = try XCTUnwrap(report["entries"] as? [[String: Any]])
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual((entries.first?["facts"] as? [String: Any])?["error"] as? String, "tlsTrustRejected")
+    }
+
     func testBareAndHTTPAddressesFindHTTPSBeforeSignInForBothProviders() async throws {
         for provider in [ProviderKind.jellyfin, .emby] {
             for raw in ["media.example/jf", "http://media.example/jf"] {

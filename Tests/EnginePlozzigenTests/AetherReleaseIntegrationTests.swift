@@ -22,7 +22,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
     }
 
     func testResolvedEngineAndSourceCreditIdentifyPinnedReleaseIntegration() throws {
-        XCTAssertEqual(AetherEngine.version, "7.48.0")
+        XCTAssertEqual(AetherEngine.version, "7.51.0")
         let credit = try XCTUnwrap(PlozzAttributions.entries.first { $0.title == "AetherEngine" })
         // The metadata guard compares the exact revision with Package.resolved.
         XCTAssertNotNil(credit.detail.range(
@@ -203,7 +203,7 @@ final class AetherReleaseIntegrationTests: XCTestCase {
     ) {
         #if os(tvOS)
         if #available(tvOS 26.0, *), enabled {
-            XCTAssertEqual(options.objectAudioRendering, .apac(.l714), file: file, line: line)
+            XCTAssertEqual(options.objectAudioRendering, .render(.l916), file: file, line: line)
             return
         }
         #endif

@@ -46,6 +46,10 @@ bounded language-match/accessibility flags without track titles or URLs.
   ticks; immutable bitmap identity is compared without reading pixels.
   Core Text views are configured before their first measurement and measure
   the current cue before UIKit updates, avoiding empty or stale line dimensions.
+  A per-cue cache keeps at most four measured layouts so speculative sizing
+  does not replace the glyph paths for the accepted view size. Zero-width
+  probes do not shape text; unchanged measurements and control-only repositioning
+  reuse cached paths. Configuration changes clear the cache.
   These updates do not depend on pausing or revealing controls, and do not
   change saved positioning, subtitle offsets, or cue end times.
 - **Native-only video assets** — when that engine is selected, tvOS feeds the resolved URL directly to
@@ -851,9 +855,13 @@ step, not the original recording's fidelity, resampling/downmixing, or the
 receiver's final output. In particular, stream-copy of a lossy source is not
 labelled lossless. The same shared rows follow live pipeline changes on both
 platforms, without changing audio selection or conversion behavior.
-On tvOS 26+, the profile's default-on **Spatial audio** choice requests a 7.1.4
-APAC intermediate bed for supported on-demand playback. This is lossy conversion,
-not a speaker inventory or bitstream passthrough. Saved Off choices survive.
+On tvOS 26+, the profile's default-on **Spatial audio** choice requests a
+device-selected intermediate bed for supported on-demand playback. It defaults
+to 9.1.6; Playback > Advanced offers all five engine layouts. The engine chooses
+24-bit PCM at load, or lossy APAC over AirPlay. Diagnostics label the actual
+rendered PCM pipeline **Rendered to PCM**, distinct from ordinary **Decoded to PCM**.
+This is not a speaker inventory or bitstream passthrough. DTS:X heights require
+7.1.4 or 9.1.6; other layouts retain channel playback. Saved Off choices survive.
 `PlayerViewModel` captures the active preference for initial and handoff loads;
 live streams, shared players, muted previews and other platforms stay off.
 The engine owns source eligibility and fallback. On tvOS 26+, software/FEL

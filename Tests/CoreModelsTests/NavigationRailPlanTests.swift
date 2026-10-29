@@ -5,6 +5,27 @@ import XCTest
 /// they're wrong — a library that vanishes when a server is added, an order that
 /// resets, or a hidden library that comes back on relaunch.
 final class NavigationRailPlanTests: XCTestCase {
+    func testNewPlexLibrariesAppearAutomaticallyInEveryTVNavigationStyle() {
+        let libraries = [
+            AggregatedLibrary(
+                accountID: "plex", accountName: "Viewer", serverName: "Plex",
+                providerKind: .plex,
+                library: MediaLibrary(id: "movies", title: "Movies", kind: .movie)
+            ),
+            library("shows", title: "Shows", account: "jellyfin", kind: .series)
+        ]
+        for style in [NavigationStyle.tabBar, .sidebar, .rail] {
+            let layout = NavigationLibraryLayout.default
+            let keys = NavigationRailPlan.customizableKeys(visibleLibraries: libraries, style: style)
+            let destinations = NavigationRailPlan.destinations(
+                visibleLibraries: libraries, layout: layout, availableKeys: keys
+            )
+            XCTAssertTrue(destinations.contains(.library("plex:movies")), "\(style)")
+            XCTAssertTrue(destinations.contains(.library("jellyfin:shows")), "\(style)")
+            XCTAssertTrue(layout.sections(available: keys).enabled.contains("plex:movies"), "\(style)")
+        }
+    }
+
     func testOfflineBadgesKeepDestinationsAndOnlyMarkAllLibrariesWhenAllAreOffline() {
         let libraries = [
             library("movies", title: "Movies", account: "a"),
@@ -72,29 +93,82 @@ final class NavigationRailPlanTests: XCTestCase {
         )
     }
 
-    func testHorizontalLibrariesAreOptInAndKeepTheirDistinctDestinationIdentities() {
+    func testTopBarIncludesEveryResolvedDestinationWithoutChangingSidebarLayout() {
+        let libraries = (1...20).map { library("\($0)", title: "Library \($0)", account: "plex") }
+        var layout = NavigationLibraryLayout(
+            order: ["plex:20", NavigationLibraryLayout.homeKey],
+            hiddenKeys: ["plex:1", NavigationLibraryLayout.musicKey]
+        )
+        let saved = layout
+        func resolved() -> [NavigationRailDestination] {
+            NavigationRailPlan.destinations(
+                visibleLibraries: libraries, layout: layout,
+                availableKeys: NavigationDestinationDefaults.sidebar(visibleLibraries: libraries, hasMusic: true)
+            )
+        }
+        let sidebar = resolved()
+        let horizontal = NavigationDestinationDefaults.topBar(destinations: sidebar)
+        XCTAssertEqual(horizontal, sidebar)
+        XCTAssertEqual(horizontal.first, .library("plex:20"))
+        XCTAssertTrue(horizontal.contains(.settings))
+        XCTAssertFalse(horizontal.contains(.music))
+        XCTAssertFalse(horizontal.contains(.library("plex:1")))
+        XCTAssertEqual(layout, saved)
+        XCTAssertTrue(sidebar.contains(.settings))
+        XCTAssertEqual(sidebar.filter { if case .library = $0 { return true }; return false }.count, 19)
+        layout.setVisible(false, for: "plex:20")
+        let next = NavigationDestinationDefaults.topBar(destinations: resolved())
+        XCTAssertEqual(next.count, horizontal.count - 1, "Hiding an item removes only that destination.")
+        XCTAssertEqual(next.first, .home)
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.settings]), [.settings])
+    }
+
+    func testHorizontalSettingsRespectsExplicitMoveAndHideWithoutChangingVerticalSafety() throws {
+        let keys = [NavigationLibraryLayout.homeKey, "plex:1", NavigationLibraryLayout.settingsKey]
+        var layout = NavigationLibraryLayout()
+        XCTAssertTrue(layout.pinsSettingsInTopBar)
+        layout.apply(.init(enabled: [NavigationLibraryLayout.homeKey, NavigationLibraryLayout.settingsKey, "plex:1"],
+                           disabled: []), available: keys)
+        XCTAssertTrue(layout.pinsSettingsInTopBar, "Moving another destination must not unpin Settings.")
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.home, .settings, .library("plex:1")],
+                                                            layout: layout),
+                       [.home, .library("plex:1"), .settings])
+        layout.recordMove(of: NavigationLibraryLayout.settingsKey)
+        XCTAssertFalse(layout.pinsSettingsInTopBar)
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.home, .settings, .library("plex:1")],
+                                                            layout: layout),
+                       [.home, .settings, .library("plex:1")])
+        layout.apply(.init(enabled: [NavigationLibraryLayout.homeKey, "plex:1"],
+                           disabled: [NavigationLibraryLayout.settingsKey]), available: keys, requiredEnabled: [])
+        let restored = try JSONDecoder().decode(NavigationLibraryLayout.self, from: JSONEncoder().encode(layout))
+        XCTAssertEqual(restored, layout)
+        XCTAssertFalse(restored.pinsSettingsInTopBar)
+        XCTAssertEqual(NavigationDestinationDefaults.topBar(destinations: [.home, .settings, .library("plex:1")],
+                                                            layout: restored),
+                       [.home, .library("plex:1")])
+        XCTAssertTrue(restored.sections(available: keys).enabled.contains(NavigationLibraryLayout.settingsKey))
+        XCTAssertTrue(NavigationLibraryLayout.default.pinsSettingsInTopBar)
+    }
+
+    func testHorizontalLibrariesAppearByDefaultAndKeepTheirDistinctDestinationIdentities() {
         let libraries = [
             library("movies", title: "Movies", account: "a"),
             library("movies", title: "Movies", account: "b"),
             library("music", title: "Music", account: "a", isMusic: true)
         ]
         let keys = NavigationRailPlan.customizableKeys(visibleLibraries: libraries, style: .tabBar)
-        let automatic = NavigationRailPlan.automaticallyHiddenLibraryKeys(
-            visibleLibraries: libraries, style: .tabBar
-        )
-        XCTAssertEqual(automatic, [NavigationLibraryLayout.allLibrariesKey, "a:movies", "b:movies"])
         var layout = NavigationLibraryLayout.default
         func destinations() -> [NavigationRailDestination] {
             NavigationRailPlan.destinations(
                 visibleLibraries: libraries,
-                layout: layout.resolvingAutomaticVisibility(hidden: automatic),
+                layout: layout,
                 availableKeys: keys
             )
         }
-        XCTAssertEqual(destinations(), [.home, .watchlist, .liveTV, .search, .music, .settings])
-        layout.setVisible(true, for: "a:movies")
-        layout.setVisible(true, for: "b:movies")
-        layout.setVisible(true, for: NavigationLibraryLayout.allLibrariesKey)
+        XCTAssertTrue(destinations().contains(.library("a:movies")))
+        XCTAssertTrue(destinations().contains(.library("b:movies")))
+        XCTAssertTrue(destinations().contains(.allLibraries))
+        XCTAssertFalse(destinations().contains(.library("a:music")))
         layout.order = ["b:movies", NavigationLibraryLayout.homeKey, "a:movies"]
         let resolved = destinations()
         XCTAssertEqual(Array(resolved.prefix(3)), [.library("b:movies"), .home, .library("a:movies")])
@@ -115,13 +189,8 @@ final class NavigationRailPlanTests: XCTestCase {
         )
     }
 
-    func testSidebarsDoNotAutomaticallyHideLibrariesAndUnavailableLibrariesCannotReappear() {
+    func testUnavailableLibrariesCannotReappear() {
         let libraries = [library("movies", title: "Movies", account: "a")]
-        for style in [NavigationStyle.sidebar, .rail] {
-            XCTAssertTrue(NavigationRailPlan.automaticallyHiddenLibraryKeys(
-                visibleLibraries: libraries, style: style
-            ).isEmpty)
-        }
         let layout = NavigationLibraryLayout(shownKeys: ["removed:movies", "a:movies"])
         let destinations = NavigationRailPlan.destinations(
             visibleLibraries: libraries, layout: layout,
@@ -144,6 +213,20 @@ final class NavigationRailPlanTests: XCTestCase {
         let first = [NavigationLibraryLayout.downloadsKey, NavigationLibraryLayout.searchKey]
         let layout = NavigationLibraryLayout(order: first)
         XCTAssertEqual(Array(layout.visibleKeys(available: available).prefix(2)), first)
+    }
+
+    func testMobileNavigationIncludesEveryVideoLibraryAndPreservesBuiltinOrder() {
+        let libraries = (0..<20).map { library("\($0)", title: "Library \($0)", account: "server") }
+        let music = library("music", title: "Music", account: "server", isMusic: true)
+        let keys = NavigationDestinationDefaults.iOS(visibleLibraries: libraries + [music])
+        XCTAssertEqual(keys.filter { !Set(libraries.map(\.key)).contains($0) }, NavigationDestinationDefaults.iOS)
+        XCTAssertEqual(keys.filter { $0.hasPrefix("server:") }, libraries.map(\.key))
+        XCTAssertEqual(keys.last, NavigationLibraryLayout.searchKey)
+        let layout = NavigationLibraryLayout(order: ["server:19", "server:0"], hiddenKeys: ["server:1"])
+        let visible = layout.sections(available: keys, requiredEnabled: []).enabled
+        XCTAssertFalse(visible.contains("server:1"))
+        XCTAssertLessThan(visible.firstIndex(of: "server:19")!, visible.firstIndex(of: "server:0")!)
+        XCTAssertTrue(NavigationDestinationDefaults.iPhoneOverflowKeys(visible: visible).contains("server:18"))
     }
 
 

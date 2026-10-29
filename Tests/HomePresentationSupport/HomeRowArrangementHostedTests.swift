@@ -286,6 +286,116 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         add(attachment)
     }
 
+    func testNavigationIllustrationsFitCompleteChromeAndThreePosters() throws {
+        let sizes = [
+            CGSize(width: 160, height: 124), CGSize(width: 254, height: 210),
+            CGSize(width: 320, height: 180), CGSize(width: 320, height: 200),
+            CGSize(width: 640, height: 360)
+        ]
+        for size in sizes {
+            for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                for style in NavigationStyle.allCases {
+                    let renderer = ImageRenderer(content:
+                        NavigationStyleSwatch(style: style)
+                            .frame(width: size.width, height: size.height)
+                            .environment(\.layoutDirection, direction)
+                            .background(.black)
+                    )
+                    renderer.scale = 2
+                    let image = try XCTUnwrap(renderer.uiImage)
+                    if size.width <= 254, direction == .leftToRight {
+                        let attachment = XCTAttachment(image: image)
+                        attachment.name = "Navigation \(style.rawValue) at \(Int(size.width))"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+                    }
+                    let bitmap = try XCTUnwrap(image.cgImage)
+                    let pixels = try rgba(bitmap)
+                    let context = "\(style) \(size) \(direction)"
+                    var chrome = CGRect.null
+                    for y in 0..<bitmap.height {
+                        for x in 0..<bitmap.width {
+                            let offset = (y * bitmap.width + x) * 4
+                            let r = Int(pixels[offset]), g = Int(pixels[offset + 1]), b = Int(pixels[offset + 2])
+                            if r >= 60, abs(r - g) <= 2, b - r > 5 {
+                                chrome = chrome.union(CGRect(x: x, y: y, width: 1, height: 1))
+                            }
+                        }
+                    }
+                    XCTAssertFalse(chrome.isNull, context)
+                    XCTAssertTrue(
+                        CGRect(x: 4, y: 4, width: bitmap.width - 8, height: bitmap.height - 8).contains(chrome),
+                        "Chrome must fit without clipping: \(context) \(chrome)"
+                    )
+                    let screenHeight = min(size.height, size.width * 9 / 16) * renderer.scale
+                    switch style {
+                    case .tabBar:
+                        XCTAssertEqual(chrome.midX, CGFloat(bitmap.width) / 2, accuracy: 2, context)
+                        XCTAssertGreaterThan(chrome.width, chrome.height * 4, context)
+                    case .sidebar:
+                        XCTAssertGreaterThan(chrome.height, chrome.width * 1.3, "Show stacked tabs, not a symbol: \(context)")
+                        XCTAssertLessThan(chrome.height, screenHeight * 0.65, context)
+                    case .rail:
+                        XCTAssertGreaterThan(chrome.height, screenHeight * 0.75, context)
+                        XCTAssertLessThan(chrome.width, chrome.height / 3, context)
+                    }
+
+                    func isPoster(x: Int, y: Int) -> Bool {
+                        let offset = (y * bitmap.width + x) * 4
+                        let r = Int(pixels[offset]), g = Int(pixels[offset + 1]), b = Int(pixels[offset + 2])
+                        return r > 50 && r < 110 && max(r, max(g, b)) - min(r, min(g, b)) <= 3
+                    }
+                    var posters: [ClosedRange<Int>] = []
+                    var start: Int?
+                    for x in 0...bitmap.width {
+                        if x < bitmap.width, isPoster(x: x, y: bitmap.height / 2) {
+                            if start == nil { start = x }
+                        } else if let first = start {
+                            if x - first > 4 { posters.append(first...(x - 1)) }
+                            start = nil
+                        }
+                    }
+                    XCTAssertEqual(posters.count, 3, "All three posters must remain visible: \(context)")
+                    for poster in posters {
+                        let x = (poster.lowerBound + poster.upperBound) / 2
+                        // Measure the connected tile, not the separate gray window border.
+                        var top = bitmap.height / 2
+                        var bottom = top
+                        while top > 0, isPoster(x: x, y: top - 1) { top -= 1 }
+                        while bottom + 1 < bitmap.height, isPoster(x: x, y: bottom + 1) { bottom += 1 }
+                        let height = bottom - top + 1
+                        XCTAssertEqual(CGFloat(height) / CGFloat(poster.count), 1.5, accuracy: 0.08, context)
+                        XCTAssertGreaterThan(poster.lowerBound, 4, context)
+                        XCTAssertLessThan(poster.upperBound, bitmap.width - 4, context)
+                        if let first = posters.first {
+                            XCTAssertLessThanOrEqual(abs(poster.count - first.count), 2, context)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testNavigationPickerRestoresMiniatureIllustrations() async throws {
+        var frame = CGRect.zero
+        try await withWindow {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("App navigation").font(.title.bold())
+                CompactNavigationPicker(selection: .constant(.tabBar))
+            }
+            .frame(width: 880)
+            .padding(32)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+        } inspect: { window in
+            let image = try await self.snapshot(window, name: "Restored navigation illustrations")
+            let cropped = try XCTUnwrap(image.cgImage?.cropping(to: frame.integral))
+            let attachment = XCTAttachment(image: UIImage(cgImage: cropped))
+            attachment.name = "Restored navigation picker"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
+    }
+
     func testFeaturedLogosUseOnDarkTreatmentInEveryPageTheme() async throws {
         let cache = try XCTUnwrap(ArtworkSession.shared.configuration.urlCache)
         let artworkURL = try XCTUnwrap(URL(string: "https://featured-contrast.invalid/\(UUID())/artwork.png"))

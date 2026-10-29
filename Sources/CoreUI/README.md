@@ -6,6 +6,21 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
+`TopNavigationScroll` connects each root vertical scroll owner to the custom
+top bar. `scrollsTopNavigation()` handles ordinary SwiftUI roots; native grids
+and Showcase report through their existing owners. Source tokens reject late
+callbacks from departed pages. Back resets the active owner to the page top;
+scroll updates invalidate only the bar's position, not the page builder.
+There is no top-navigation foreground mask. Native and pinned sidebars do not
+receive this coordinator and retain their existing behavior.
+
+`NavigationStyleSwatch` preserves the miniature-window illustrations for all
+three navigation choices: a full-height dotted pinned sidebar, a compact sidebar
+of stacked tabs, and a centered top bar. The shared 320-by-180 drawing scales to
+fit both compact Settings cards and onboarding, keeping the top bar centered and
+all three equal-sized posters visible. Preview sizing does not change the shared
+card's focus or selection treatment.
+
 `BrowseQueryControls`, `BrowseSortMenu`, and `BrowseFilterMenu` own the native
 query-control layout, sort choices/directions, and active-filter labels shared
 by Library and Watchlist on TV and mobile. Mobile controls wrap at narrow widths

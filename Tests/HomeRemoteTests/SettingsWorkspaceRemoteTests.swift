@@ -1,7 +1,67 @@
 import XCTest
+import Vision
 
 @MainActor
 final class SettingsWorkspaceRemoteTests: XCTestCase {
+    func testProfileHintAnimatesWithinStableSettingsHeader() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        let profile = app.buttons["settings-profile-switch"]
+        let name = app.staticTexts["settings-profile-name"]
+        let edit = app.buttons["settings-profile-edit"]
+        let initialProfile = profile.frame
+        let initialName = name.frame
+        let initialEdit = edit.frame
+        XCTAssertEqual(name.frame.midY, profile.frame.midY, accuracy: 1)
+        capture("profile-hint-resting", in: app)
+        try focus(profile, in: app)
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            name.frame.minY < initialName.minY - 15
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed, app.debugDescription)
+        XCTAssertEqual(profile.frame, initialProfile)
+        XCTAssertEqual(edit.frame, initialEdit)
+        XCTAssertEqual(name.frame.minY, initialName.minY - 17, accuracy: 1)
+        XCTAssertTrue(profile.frame.contains(name.frame))
+        capture("profile-hint-focused", in: app)
+        let screenshot = app.screenshot().image
+        let scale = screenshot.scale
+        let crop = CGRect(x: profile.frame.minX * scale, y: profile.frame.minY * scale,
+                          width: profile.frame.width * scale, height: profile.frame.height * scale)
+        let image = try XCTUnwrap(screenshot.cgImage?.cropping(to: crop))
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        let hint = try XCTUnwrap(request.results?.first { $0.topCandidates(1).first?.string == "Switch profile" })
+        XCTAssertGreaterThanOrEqual(hint.boundingBox.minY * profile.frame.height, 12,
+                                    "The visible hint needs breathing room above the control's bottom edge.")
+        XCTAssertGreaterThanOrEqual(hint.boundingBox.height * profile.frame.height, 20,
+                                    "Use readable Settings subtext rather than a tiny caption.")
+        try focus(section("playback", in: app), in: app)
+        XCTAssertEqual(profile.frame, initialProfile)
+        XCTAssertEqual(name.frame, initialName)
+        try focus(section("language", in: app), in: app)
+        XCTAssertFalse(app.buttons["top-navigation-settings"].isHittable)
+        capture("settings-top-navigation-scrolled-away", in: app)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(hasFocus(app.buttons["top-navigation-settings"]))
+        XCTAssertEqual(profile.frame.minY, initialProfile.minY, accuracy: 1)
+        capture("settings-back-restores-page-and-navigation", in: app)
+        XCUIRemote.shared.press(.down)
+        let reentered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"), object: profile
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [reentered], timeout: 5), .completed,
+                       "Content re-entry must not restore a deep offscreen row.")
+        XCTAssertEqual(profile.frame.minY, initialProfile.minY, accuracy: 1)
+        capture("settings-reentered-at-top", in: app)
+        #else
+        throw XCTSkip("Simulator-only Settings presentation.")
+        #endif
+    }
+
     func testCompactSkipDefaultMenuAndContentExceptions() throws {
         #if targetEnvironment(simulator)
         continueAfterFailure = false
@@ -403,6 +463,84 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
 
     func testSwitchingFromTopBarKeepsNavigationSettingsResponsive() throws {
         try exerciseSidebarSwitch(from: "tabBar")
+    }
+
+    func testTopBarProfilePickerCogReturnsToActiveProfileSettings() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        let profile = app.buttons["settings-profile-switch"]
+        XCTAssertEqual(profile.value as? String, "Alex")
+        try focus(profile, in: app)
+        XCUIRemote.shared.press(.select)
+        try openProfilePickerSettings(in: app)
+        XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 10))
+        XCTAssertEqual(profile.value as? String, "Alex")
+        capture("profile-picker-opened-active-settings", in: app)
+        XCUIRemote.shared.press(.menu)
+        let navigation = settingsNavigationItem(style: "tabBar", in: app)
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.hasFocus(navigation) }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
+        XCTAssertTrue(app.buttons["settings-section-playback"].exists)
+        XCUIRemote.shared.press(.select)
+        waitForCategoryFocus("playback", in: app)
+        XCTAssertEqual(profile.value as? String, "Alex")
+        #else
+        throw XCTSkip("Never changes profile selection on a physical device.")
+        #endif
+    }
+
+    func testStartupPickerCogOpensActiveProfileSettings() throws {
+        #if targetEnvironment(simulator)
+        let seeded = try launchSettings(style: "tabBar")
+        seeded.terminate()
+        let app = try launchSettings(style: "tabBar", settingsFromStartupPicker: true)
+        defer { app.terminate() }
+        XCTAssertEqual(app.buttons["settings-profile-switch"].value as? String, "Alex")
+        try enterAndReturn("playback", in: app)
+        #else
+        throw XCTSkip("Never changes profile selection on a physical device.")
+        #endif
+    }
+
+    func testTopBarProfileCancellationKeepsProductionNavigationResponsive() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        XCUIRemote.shared.press(.menu)
+        let profile = app.buttons["top-navigation-profile"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 10))
+        let focusedNavigation = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND hasFocus == true", "top-navigation-"
+        )).firstMatch
+        for _ in 0..<3 {
+            if !focusedNavigation.exists { XCUIRemote.shared.press(.menu) }
+            let count = app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "top-navigation-"
+            )).count
+            for _ in 0..<count {
+                if profile.hasFocus { break }
+                XCUIRemote.shared.press(.left)
+            }
+            XCTAssertTrue(profile.hasFocus, app.debugDescription)
+            XCTAssertFalse(app.buttons["profile-picker-settings"].exists)
+            XCUIRemote.shared.press(.select)
+            XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+            XCUIRemote.shared.press(.menu)
+            let returned = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in focusedNavigation.exists }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed, app.debugDescription)
+            XCUIRemote.shared.press(.right)
+            XCTAssertTrue(focusedNavigation.exists, app.debugDescription)
+            XCUIRemote.shared.press(.left)
+        }
+        capture("horizontal-profile-cancel-return", in: app)
+        #else
+        throw XCTSkip("Never changes profile selection on a physical device.")
+        #endif
     }
 
     private func exerciseSidebarSwitch(from style: String) throws {
@@ -961,23 +1099,112 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         #endif
     }
 
-    func testNativeSidebarAndTopBarEntryAndExit() throws {
+    func testPinnedSettingsRootKeepsNavigationAndAppliesTopBarAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "rail", nextStyle: "tabBar", choice: "Top Bar")
+    }
+
+    func testTopBarSettingsRootKeepsNavigationAndAppliesSidebarAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "tabBar", nextStyle: "sidebar", choice: "Sidebar")
+    }
+
+    func testSidebarSettingsRootKeepsNavigationAndAppliesPinnedAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "sidebar", nextStyle: "rail", choice: "Pinned Sidebar")
+    }
+
+    private func assertSettingsNavigationLifecycle(style: String, nextStyle: String, choice: String) throws {
         #if targetEnvironment(simulator)
-        for style in ["sidebar", "tabBar"] {
-            let app = try launchSettings(style: style)
-            XCTAssertTrue(section("playback", in: app).isSelected)
-            capture("entry-\(style)", in: app)
-            try enterAndReturn("playback", in: app)
-            XCUIRemote.shared.press(.menu)
-            XCTAssertFalse(section("playback", in: app).exists, app.debugDescription)
-            capture("exit-\(style)", in: app)
-            try openSettingsIfNeeded(in: app)
-            try enterAndReturn("playback", in: app)
-            app.terminate()
+        let app = try launchSettings(style: style)
+        defer { app.terminate() }
+        let navigation = settingsNavigationItem(style: style, in: app)
+        let initialRootTop = app.buttons["settings-profile-switch"].frame.minY
+        capture("root-navigation-\(style)", in: app)
+        XCTAssertTrue(settingsNavigationIsVisible(style: style, in: app),
+                      "Root Settings keeps its navigation affordance visible.")
+        if style == "tabBar" {
+            XCTAssertGreaterThanOrEqual(
+                app.buttons["settings-profile-switch"].frame.minY, navigation.frame.maxY + 16,
+                "Settings foreground must clear the top navigation."
+            )
         }
+        try focus(section("screensNavigation", in: app), in: app)
+        XCUIRemote.shared.press(.select)
+        let page = app.buttons["settings-page-navigation"]
+        try focus(page, in: app)
+        capture("category-navigation-hidden-\(style)", in: app)
+        XCTAssertFalse(settingsNavigationIsVisible(style: style, in: app), "Categories hide app navigation.")
+        assertCenteredSettingsColumn(in: app)
+        XCUIRemote.shared.press(.select)
+        let option = app.buttons[choice]
+        try focus(option, in: app)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(hasFocus(option), "Changing style must not recreate or steal focus from its picker.")
+        XCTAssertFalse(settingsNavigationIsVisible(style: style, in: app), "Nested Settings pages keep navigation hidden.")
+        capture("nested-navigation-hidden-\(style)", in: app)
+        XCUIRemote.shared.press(.menu)
+        waitForEnabled(page)
+        XCTAssertTrue(hasFocus(page), "Back must restore the originating Settings row.")
+        XCTAssertFalse(settingsNavigationIsVisible(style: style, in: app))
+        XCUIRemote.shared.press(.menu)
+        waitForCategoryFocus("screensNavigation", in: app)
+        XCTAssertTrue(settingsNavigationIsVisible(style: style, in: app),
+                      "Root return restores the mounted navigation without reparenting Settings.")
+        capture("root-navigation-return-\(style)", in: app)
+        let rootEntryAfterBack = style == "tabBar"
+            && app.buttons["settings-profile-switch"].frame.minY < initialRootTop - 1
+            ? "playback" : "screensNavigation"
+        XCUIRemote.shared.press(.menu)
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.hasFocus(navigation) }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
+        XCTAssertTrue(app.buttons["settings-section-screensNavigation"].exists,
+                      "Root Back focuses app navigation instead of dismissing Settings.")
+        XCUIRemote.shared.press(.select)
+        if style == "sidebar" {
+            // Native same-tab reentry may restore the row or choose the root's
+            // first action. Subpage Back above must still restore its exact row.
+            let entered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                self.hasFocus(self.section("screensNavigation", in: app))
+                    || self.hasFocus(app.buttons["settings-profile-switch"])
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed, app.debugDescription)
+        } else {
+            waitForCategoryFocus(rootEntryAfterBack, in: app)
+        }
+        XCUIRemote.shared.press(.menu)
+        XCUIRemote.shared.press(style == "tabBar" ? .left : .up)
+        XCUIRemote.shared.press(.select)
+        let leftSettings = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in !app.buttons["settings-section-screensNavigation"].exists },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [leftSettings], timeout: 5), .completed, app.debugDescription)
+        try openSettingsIfNeeded(in: app)
+        XCTAssertTrue(settingsNavigationIsVisible(style: nextStyle, in: app),
+                      "The saved navigation style takes effect after leaving Settings.")
+        capture("root-navigation-new-\(nextStyle)", in: app)
         #else
         throw XCTSkip("Simulator-only Settings review.")
         #endif
+    }
+
+    private func settingsNavigationItem(style: String, in app: XCUIApplication) -> XCUIElement {
+        if style == "tabBar" { return app.buttons["top-navigation-settings"] }
+        if style == "sidebar" {
+            return app.collectionViews["Sidebar"].cells.containing(.button, identifier: "gearshape.fill").firstMatch
+        }
+        return app.buttons.matching(NSPredicate(format: "label == %@", "Settings")).firstMatch
+    }
+
+    private func settingsNavigationIsVisible(style: String, in app: XCUIApplication) -> Bool {
+        if style == "sidebar" {
+            // The collapsed native sidebar is a noninteractive indicator; Menu
+            // expands its actual controls, which the lifecycle test also exercises.
+            let indicator = app.images["chevron.compact.backward"]
+            return indicator.exists && indicator.isHittable
+        }
+        let item = settingsNavigationItem(style: style, in: app)
+        return item.exists && item.isHittable
     }
 
     func testRootCategoriesOnlyStaySelectedWhileFocused() throws {
@@ -1029,6 +1256,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed, app.debugDescription)
         try focus(app.buttons["settings-profile-switch"], in: app)
+        capture("profile-switch-ready", in: app)
         XCUIRemote.shared.press(.select)
         let sam = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Sam")).firstMatch
         XCTAssertTrue(sam.waitForExistence(timeout: 5), app.debugDescription)
@@ -2551,7 +2779,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
 
     private func launchSettings(
         style: String = "rail", profile: String = "Alex", kids: String = "off",
-        diagnostics: Bool = false, sources: Bool = false
+        diagnostics: Bool = false, sources: Bool = false, settingsFromStartupPicker: Bool = false
     ) throws -> XCUIApplication {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["PLOZZ_SETTINGS_REVIEW"] == "1",
@@ -2581,6 +2809,12 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             XCUIRemote.shared.press(.select)
         }
         try completeAppearanceChoices(in: app)
+        if settingsFromStartupPicker {
+            try openProfilePickerSettings(in: app)
+            XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 20), app.debugDescription)
+            try focus(section("playback", in: app), in: app)
+            return app
+        }
         let alex = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", profile)).firstMatch
         if app.staticTexts["Who's watching?"].exists, alex.waitForExistence(timeout: 2) {
             try focus(alex, in: app)
@@ -2614,10 +2848,43 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         let playback = section("playback", in: app)
         if !playback.waitForExistence(timeout: 3) {
             XCTAssertEqual(app.state, .runningForeground, "Settings navigation requires the actual foreground app.")
-            let settings = app.buttons.matching(NSPredicate(
+            if app.buttons["profile-picker-settings"].exists {
+                try openProfilePickerSettings(in: app)
+                XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
+                try focus(playback, in: app)
+                return
+            }
+            var settings = app.buttons.matching(NSPredicate(
                 format: "label IN %@", ["Settings", "Réglages"]
             )).firstMatch
+            let profileAction = app.buttons["top-navigation-profile"]
+            if !settings.exists, profileAction.exists {
+                let focusedTab = app.buttons.matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@ AND hasFocus == true", "top-navigation-"
+                )).firstMatch
+                if !focusedTab.exists { XCUIRemote.shared.press(.menu) }
+                let navigationFocused = XCTNSPredicateExpectation(
+                    predicate: NSPredicate { _, _ in focusedTab.exists }, object: nil
+                )
+                XCTAssertEqual(XCTWaiter.wait(for: [navigationFocused], timeout: 5), .completed, app.debugDescription)
+                let itemCount = app.buttons.matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@", "top-navigation-"
+                )).count
+                for _ in 0..<itemCount {
+                    if profileAction.hasFocus { break }
+                    XCUIRemote.shared.press(.left)
+                }
+                XCTAssertTrue(profileAction.hasFocus, app.debugDescription)
+                XCUIRemote.shared.press(.select)
+                try openProfilePickerSettings(in: app)
+                XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
+                try focus(playback, in: app)
+                return
+            }
             XCTAssertTrue(settings.waitForExistence(timeout: 5), app.debugDescription)
+            let sidebarCell = app.collectionViews["Sidebar"].cells
+                .containing(.button, identifier: settings.identifier).firstMatch
+            if sidebarCell.exists { settings = sidebarCell }
             if !settings.isEnabled {
                 XCUIRemote.shared.press(.menu)
                 waitForEnabled(settings)
@@ -2629,6 +2896,16 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         }
         XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
         try focus(playback, in: app)
+    }
+
+    private func openProfilePickerSettings(in app: XCUIApplication) throws {
+        let cog = app.buttons["profile-picker-settings"]
+        XCTAssertTrue(cog.waitForExistence(timeout: 5), app.debugDescription)
+        XCUIRemote.shared.press(.up)
+        let focused = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.hasFocus(cog) }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
+        capture("production-profile-picker-settings-cog", in: app)
+        XCUIRemote.shared.press(.select)
     }
 
     private func section(_ route: String, in app: XCUIApplication) -> XCUIElement {
@@ -2720,6 +2997,17 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
             XCTFail("Missing focus target. \(app.debugDescription)")
             return
         }
+        if target.identifier == "settings-profile-edit" {
+            try focus(app.buttons["settings-profile-switch"], in: app)
+            let restingWidth = target.frame.width
+            XCUIRemote.shared.press(.right)
+            let arrived = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                self.hasFocus(target) || target.frame.width > restingWidth + 2
+            }, object: nil)
+            // Native Edit can omit AX focus; its visible focus expansion still proves arrival.
+            XCTAssertEqual(XCTWaiter.wait(for: [arrived], timeout: 5), .completed, app.debugDescription)
+            return
+        }
         var requestedNavigation = false
         var lastDirection: XCUIRemote.Button = .left
         for _ in 0..<35 {
@@ -2770,6 +3058,14 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
 
     private func hasFocus(_ target: XCUIElement) -> Bool {
         guard target.exists, target.isEnabled else { return false }
+        if target.identifier == "settings-profile-switch" {
+            // This native button can omit AX focus; its name moves only on actual native focus.
+            let name = target.staticTexts["settings-profile-name"]
+            if name.exists, abs(name.frame.midY - target.frame.midY + 17) < 1 { return true }
+        }
+        // Category selection mirrors native FocusState, not the saved section.
+        // Nested UIKit hosts can omit AX hasFocus while still exposing this trait.
+        if target.identifier.hasPrefix("settings-section-"), target.isSelected { return true }
         return target.hasFocus || target.descendants(matching: .any)
             .matching(NSPredicate(format: "hasFocus == true")).firstMatch.exists
     }

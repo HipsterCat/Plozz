@@ -222,12 +222,15 @@ headers when updating the vendored sources, and update sources, public headers,
 binary checksums, and bundled notices together.
 
 Plozz pins the playback-corrected
-[AetherEngine fork](https://github.com/brandomoore/AetherEngine/tree/c5eeb230b9cd78a64f57448aee5d553bd3368ad3)
-at commit `c5eeb230b9cd78a64f57448aee5d553bd3368ad3`, integrating upstream
-**7.48.0** (`263dc11579274e83458bd3839715caf99f3d8969`).
-Playback diagnostics show `AetherEngine v7.48.0`, read from the linked engine
+[AetherEngine fork](https://github.com/brandomoore/AetherEngine/tree/c1ce4cf48bad416e6be5230032a2b7f332e833d8)
+at commit `c1ce4cf48bad416e6be5230032a2b7f332e833d8`, integrating upstream
+**7.51.0** (`a877941bd3402d5f531edad0cbe4c9b33eefa856`).
+Playback diagnostics show `AetherEngine v7.51.0`, read from the linked engine
 rather than a duplicated version constant. The exact fork commit remains in
 attributions because the upstream version does not identify Plozz's patches.
+The 7.51.0 integration includes 7.50.0's 24-bit PCM spatial-bed output with
+route-selected APAC for AirPlay. FFmpegBuild 3.10.1, LibDovi 2.1.0 and
+LibTrueHD 3.1.0 remain unchanged in the resolved graph.
 The update retains overlapped VOD/HDR preparation and adds the upstream
 subtitle, HLG, chapter-timing, bounded-loading and cache fixes. Bitmap subtitle
 OCR is armed only for a native rendition used by PiP, AirPlay or an external
@@ -346,16 +349,30 @@ profile transfers; missing or malformed values use the central default. A build
 that previously omitted the preference cannot recover an Off value already
 discarded by an intervening settings save.
 
-The adapter requests `objectAudioRendering = .apac(.l714)` only for an audible,
-non-shared on-demand session with the preference enabled. The 7.1.4 layout is an
-intermediate spatial bed, not the detected speaker inventory. The engine checks
-48 kHz TrueHD Atmos/DTS:X source eligibility on native and software routes, with ordinary
-channel fallback. APAC is lossy conversion, not lossless bitstream passthrough;
-actual overhead output requires compatible equipment.
+The adapter requests `objectAudioRendering = .render(layout)` only for an audible,
+non-shared on-demand session with the preference enabled. **Rendering layout** in
+Playback > Advanced defaults to **9.1.6** and offers 5.1.2, 5.1.4, 7.1.2, 7.1.4
+and 9.1.6. `SpatialAudioLayoutStore` is device-local, shared by profiles and excluded
+from profile transfer. Each new load reads it; changing the setting does not
+restart playback. The layout is an intermediate rendering bed, not detected
+speakers or proof of the receiver's capabilities.
+
+The engine renders eligible 48 kHz TrueHD Atmos/DTS:X sources on native and
+software routes, retaining ordinary channel fallback. DTS:X separate heights
+require 7.1.4 or 9.1.6; smaller layouts keep normal DTS:X channel playback, not
+silence. Smaller beds can reduce intermediate PCM bandwidth and downstream
+remapping, but no layout is universally better for every output chain.
+
+At load, Aether selects 24-bit PCM unless the active route includes AirPlay,
+which uses lossy APAC. PCM avoids an additional lossy encode of the rendered bed;
+it is not source-bit-identical object audio or original compressed-bitstream
+passthrough. Actual overhead output still requires compatible equipment.
+Diagnostics identify actual `PCM <layout>` pipelines as **Rendered to PCM** and
+APAC as **Lossy encoding**, never inferring either from the selected setting.
 
 The pinned production TrueHD implementation decodes the object presentation with
 matrix interpolation through LibTrueHD 3.1.0 and renders it into the requested
-speaker layout before APAC encoding. Upstream removed `BedSplitter` and the
+speaker layout before PCM packing or APAC encoding. Upstream removed `BedSplitter` and the
 measurement-only reference-rendering trait in 7.48.0.
 This implementation description is not patent clearance: upstream explicitly
 leaves third-party patent licensing to integrators. Other apps enabling the
@@ -487,7 +504,7 @@ on iOS/iPadOS. Enabling the option is not evidence that a particular file took
 the route or that a physical display applied its metadata. The engine logs
 `DV P7 dual-layer route: taken` or the reason it was not taken; actual picture
 and HDMI output require a suitable physical-device sample.
-See the pinned [FEL design and evidence](https://github.com/brandomoore/AetherEngine/blob/c5eeb230b9cd78a64f57448aee5d553bd3368ad3/docs/dolby-vision-fel.md).
+See the pinned [FEL design and evidence](https://github.com/brandomoore/AetherEngine/blob/c1ce4cf48bad416e6be5230032a2b7f332e833d8/docs/dolby-vision-fel.md).
 
 ## Remote AV1 Matroska startup
 
