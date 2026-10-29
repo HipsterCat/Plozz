@@ -46,6 +46,10 @@ bounded language-match/accessibility flags without track titles or URLs.
   ticks; immutable bitmap identity is compared without reading pixels.
   Core Text views are configured before their first measurement and measure
   the current cue before UIKit updates, avoiding empty or stale line dimensions.
+  A per-cue cache keeps at most four measured layouts so speculative sizing
+  does not replace the glyph paths for the accepted view size. Zero-width
+  probes do not shape text; unchanged measurements and control-only repositioning
+  reuse cached paths. Configuration changes clear the cache.
   These updates do not depend on pausing or revealing controls, and do not
   change saved positioning, subtitle offsets, or cue end times.
 - **Native-only video assets** — when that engine is selected, tvOS feeds the resolved URL directly to
