@@ -7,7 +7,7 @@ public struct ResponseDecodingDiagnostic: Encodable, Equatable, Sendable {
         case collectionCandidates, collectionLibraryScope, collectionMembers
         case continueWatching, continueWatchingItems, continueWatchingHub, onDeck
         case resumeItems, nextUp
-        case itemDetail, playbackInventory, serverDiscovery
+        case itemDetail, playbackInventory, serverDiscovery, serverAuthentication
     }
     public enum Payload: String, Encodable, Sendable { case empty, object, array, scalar, nonJSON }
     public enum Reason: String, Encodable, Sendable { case missingKey, wrongType, nullValue, corruptedData, other }
@@ -107,10 +107,15 @@ public struct LibraryPagingDiagnostic: Encodable, Equatable, Sendable {
 public struct ResponseTransportDiagnostic: Encodable, Equatable, Sendable {
     public let route: ResponseDecodingDiagnostic.Route
     public let urlErrorCode: Int
+    public let underlying: [PlaybackFailureEvidence.ErrorCode]
 
-    public init(route: ResponseDecodingDiagnostic.Route, urlErrorCode: Int) {
+    public init(
+        route: ResponseDecodingDiagnostic.Route, urlErrorCode: Int,
+        underlying: [PlaybackFailureEvidence.ErrorCode] = []
+    ) {
         self.route = route
         self.urlErrorCode = urlErrorCode
+        self.underlying = Array(underlying.prefix(7).filter(\.isValid))
     }
 }
 
