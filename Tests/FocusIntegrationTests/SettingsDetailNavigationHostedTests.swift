@@ -11,7 +11,7 @@ import XCTest
 
 @MainActor
 final class SettingsDetailNavigationHostedTests: XCTestCase {
-    func testTopBarSettingsKeepsScrollGeometryAndSwitchesOnlyTheCurrentPage() async throws {
+    func testTopBarSettingsSlidesWithoutChangingScrollGeometry() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
               ContinuousClock.now < deadline {
@@ -51,9 +51,10 @@ final class SettingsDetailNavigationHostedTests: XCTestCase {
                 let rootFrame = try XCTUnwrap(probes.frame("root", in: window))
                 let rootPosition = rootScroll.contentOffset
                 XCTAssertEqual(rootPosition.y, rootOffset, accuracy: 1)
-                XCTAssertFalse(navigation.pages.animationsEnabled)
+                XCTAssertEqual(navigation.pages.animationsEnabled, !reducedMotion && !UIAccessibility.isReduceMotionEnabled)
 
-                func assertStationaryPages(current: String, returning: Bool = false) async throws {
+                func assertStableScrollDuringSlide(current: String, returning: Bool = false) async throws {
+                    var movingFrames = 0
                     for _ in 0..<15 {
                         try await Task.sleep(for: .milliseconds(40))
                         let root = try XCTUnwrap(probes.frame("root", in: window))
@@ -61,27 +62,39 @@ final class SettingsDetailNavigationHostedTests: XCTestCase {
                         XCTAssertEqual(root.height, rootFrame.height, accuracy: 0.5)
                         XCTAssertEqual(rootScroll.contentOffset.y, rootPosition.y, accuracy: 0.5)
                         let visible = try XCTUnwrap(probes.frame(current, in: window))
-                        XCTAssertEqual(visible.midX, rootFrame.midX, accuracy: 0.5)
-                        XCTAssertEqual(try XCTUnwrap(probes.opacity(current)), 1, accuracy: 0.01)
-                        XCTAssertEqual(chrome.isChromeHidden, !returning)
+                        let travel = abs(visible.midX - rootFrame.midX)
+                        let opacity = try XCTUnwrap(probes.opacity(current))
+                        if travel > 0.5, travel < SettingsPageMotion.travelDistance - 0.5,
+                           opacity > 0.01, opacity < 0.99 {
+                            movingFrames += 1
+                        }
+                        XCTAssertLessThanOrEqual(travel, SettingsPageMotion.travelDistance + 0.5)
+                    }
+                    XCTAssertEqual(try XCTUnwrap(probes.frame(current, in: window)).midX, rootFrame.midX, accuracy: 0.5)
+                    XCTAssertEqual(try XCTUnwrap(probes.opacity(current)), 1, accuracy: 0.01)
+                    XCTAssertEqual(chrome.isChromeHidden, !returning)
+                    if navigation.pages.animationsEnabled {
+                        XCTAssertGreaterThan(movingFrames, 2, "The page must slide and fade, not appear instantly.")
+                    } else {
+                        XCTAssertEqual(movingFrames, 0)
                     }
                 }
 
                 navigation.enterDetail()
-                try await assertStationaryPages(current: "detail")
+                try await assertStableScrollDuringSlide(current: "detail")
                 let detailScroll = try scrollView("detail")
                 detailScroll.setContentOffset(CGPoint(x: 0, y: 280), animated: false)
                 try await Task.sleep(for: .milliseconds(100))
                 let detailPosition = detailScroll.contentOffset
                 XCTAssertEqual(detailPosition.y, 280, accuracy: 1)
                 navigation.pages.push(.artwork)
-                try await assertStationaryPages(current: "nested")
+                try await assertStableScrollDuringSlide(current: "nested")
                 navigation.pages.pop()
-                try await assertStationaryPages(current: "detail")
+                try await assertStableScrollDuringSlide(current: "detail")
                 XCTAssertTrue(try scrollView("detail") === detailScroll)
                 XCTAssertEqual(detailScroll.contentOffset.y, detailPosition.y, accuracy: 0.5)
                 navigation.pages.pop()
-                try await assertStationaryPages(current: "root", returning: true)
+                try await assertStableScrollDuringSlide(current: "root", returning: true)
                 XCTAssertTrue(try scrollView("root") === rootScroll)
                 XCTAssertEqual(probes.creations["root"], 1)
                 XCTAssertEqual(probes.creations["detail"], 1)

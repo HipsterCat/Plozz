@@ -169,7 +169,6 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
     let fullWidthDestination: (Route) -> Bool
     let presentsSubpagesFullScreen: Bool
     let onSubpagesDismiss: (() -> Void)?
-    let animatesPages: Bool
     let root: () -> Root
     let destination: (Route) -> Destination
     @Environment(\.isEnabled) private var isEnabled
@@ -181,7 +180,6 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
         fullWidthDestination: @escaping (Route) -> Bool = { _ in false },
         presentsSubpagesFullScreen: Bool = false,
         onSubpagesDismiss: (() -> Void)? = nil,
-        animatesPages: Bool = true,
         @ViewBuilder root: @escaping () -> Root,
         @ViewBuilder destination: @escaping (Route) -> Destination
     ) {
@@ -191,7 +189,6 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
         self.fullWidthDestination = fullWidthDestination
         self.presentsSubpagesFullScreen = presentsSubpagesFullScreen
         self.onSubpagesDismiss = onSubpagesDismiss
-        self.animatesPages = animatesPages
         self.root = root
         self.destination = destination
     }
@@ -221,8 +218,8 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
             }
         }
         .mask { Rectangle().ignoresSafeArea(.container, edges: .vertical) }
-        .onChange(of: animatesPages && !reduceMotion, initial: true) { _, value in
-            navigation.animationsEnabled = value
+        .onChange(of: reduceMotion, initial: true) { _, value in
+            navigation.animationsEnabled = !value
         }
     }
 
@@ -244,7 +241,7 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
                         page.content
                     }
                 }
-                .transition(animatesPages && !reduceMotion ? SettingsPageMotion.transition(edge: .trailing) : .identity)
+                .transition(reduceMotion ? .identity : SettingsPageMotion.transition(edge: .trailing))
             }
         }
     }

@@ -1038,6 +1038,36 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         try assertSettingsNavigationLifecycle(style: "sidebar", nextStyle: "rail", choice: "Pinned Sidebar")
     }
 
+    func testTopBarReturnsToDeepSettingsCategoryWithoutScrollingToLibraries() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        for route in ["profile", "help", "profile"] {
+            let origin = section(route, in: app)
+            try focus(origin, in: app)
+            XCTAssertTrue(origin.isSelected)
+            XCTAssertFalse(settingsNavigationIsVisible(style: "tabBar", in: app))
+            let originY = origin.frame.minY
+            capture("deep-settings-before-\(route)", in: app)
+            XCUIRemote.shared.press(.select)
+            let back = app.buttons["settings-category-back"]
+            let entered = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in self.hasFocus(back) }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed, app.debugDescription)
+            XCUIRemote.shared.press(.menu)
+            waitForCategoryFocus(route, in: app)
+            XCTAssertEqual(origin.frame.minY, originY, accuracy: 1,
+                           "Back must preserve the scrolled category's position.")
+            XCTAssertFalse(settingsNavigationIsVisible(style: "tabBar", in: app))
+            XCTAssertFalse(hasFocus(section("myLibraries", in: app)))
+            capture("deep-settings-return-\(route)", in: app)
+        }
+        #else
+        throw XCTSkip("Simulator-only Settings review.")
+        #endif
+    }
+
     func testScreenDestinationsAndIndependentHomeFiltering() throws {
         #if targetEnvironment(simulator)
         let app = try launchSettings(style: "sidebar")
