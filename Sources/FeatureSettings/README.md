@@ -369,7 +369,7 @@ watch history and planning-list behavior are documented in
   Manual hides and ordering stay
   profile-scoped. Refreshing Libraries also updates the main navigation inventory;
   unchanged results must not invalidate the navigation chrome during Settings entry.
-  Mobile retains its existing built-in destinations rather than adding library tabs.
+  Mobile includes enabled library tabs alongside its built-in destinations.
   VoiceOver retains the equivalent state description.
   Use default retains the existing inheritance; On/Off remains
   one shared override, explicitly noted as also affecting Home.
@@ -379,6 +379,8 @@ watch history and planning-list behavior are documented in
   Library tabs share an arrangement across the profile; each library separately
   owns its Recommended row arrangement. Both editors use `LiftableReorderList`,
   its Hidden divider, native focus/drag behavior, and scoped reset actions.
+  Navigation library rows use the shared content-kind glyph, with the provider
+  mark and server name below the library name rather than beside the drag handle.
   `LibraryPresentationLoading` connects the settings UI to the existing browse
   and discovery pipeline through AppRuntime, without a feature-to-feature
   dependency. Identity changes cancel pending discovery and replace row editors.
@@ -538,6 +540,9 @@ watch history and planning-list behavior are documented in
   The mobile app shell uses native adaptive tabs, sidebar, and system More
   overflow. Destination declarations and their navigation stacks stay mounted
   across width changes; profile-scoped ordering and visibility remain authoritative.
+  Library tabs use the same content-kind icons as tvOS and library names without
+  server suffixes. Same-named libraries remain separate destinations; the
+  arrangement editor identifies their servers on a second line.
   Settings opens as a sheet from direct tabs or native More without replacing
   the selected page or its navigation history.
   Everyone uses the TV order, with mobile-only Downloads last. Version/build,
