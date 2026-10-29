@@ -46,6 +46,7 @@ public struct MediaCardPlaybackIndicators: View {
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzWatchStatusIndicator) private var watchStatusIndicator
     @Environment(\.plozzShowsUnwatchedEpisodeCount) private var showsUnwatchedEpisodeCount
+    @Environment(\.plozzShowsProgressBars) private var showsProgressBars
     @Environment(\.plozzEpisodeCountBadgeStyle) private var episodeCountStyle
     /// Whether an unowned title can be requested, or is merely flagged as absent.
     @Environment(\.plozzSeerConnected) private var seerConnected
@@ -189,7 +190,7 @@ public struct MediaCardPlaybackIndicators: View {
     }
 
     private var showsProgressBar: Bool {
-        MediaPlaybackIndicatorPresentation.showsProgress(for: playback)
+        showsProgressBars && MediaPlaybackIndicatorPresentation.showsProgress(for: playback)
     }
 
     /// Any chrome along the card's bottom edge that needs the artwork darkened

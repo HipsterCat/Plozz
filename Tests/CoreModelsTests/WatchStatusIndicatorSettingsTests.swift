@@ -53,6 +53,40 @@ final class WatchStatusIndicatorSettingsStoreTests: XCTestCase {
         XCTAssertEqual(copy.color, .purple)
     }
 
+    @MainActor
+    func testProgressBarsDefaultOnAndPersistIndependentlyPerProfile() {
+        let defaults = makeDefaults()
+        let store = WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "viewer")
+        let model = WatchStatusIndicatorSettingsModel(store: store)
+        XCTAssertTrue(model.showsProgressBars)
+        model.showsProgressBars = false
+        XCTAssertFalse(WatchStatusIndicatorSettingsModel(store: store).showsProgressBars)
+        XCTAssertTrue(model.showsUnwatchedEpisodeCount)
+        XCTAssertEqual(model.indicator, .default)
+        XCTAssertTrue(WatchStatusIndicatorSettingsStore(defaults: defaults).loadShowsProgressBars())
+        XCTAssertTrue(WatchStatusIndicatorSettingsStore(defaults: defaults, namespace: "other").loadShowsProgressBars())
+        let destination = makeDefaults()
+        ProfileSettingsTransfer.apply(
+            ProfileSettingsTransfer.capture(namespace: "viewer", defaults: defaults),
+            namespace: "copy", defaults: destination
+        )
+        XCTAssertFalse(WatchStatusIndicatorSettingsStore(defaults: destination, namespace: "copy").loadShowsProgressBars())
+        XCTAssertTrue(WatchStatusIndicatorSettingsStore(defaults: destination).loadShowsProgressBars())
+        model.showsProgressBars = true
+        XCTAssertTrue(store.loadShowsProgressBars())
+    }
+
+    func testLegacyAndInvalidProgressBarPreferenceUseDefault() {
+        let defaults = makeDefaults()
+        let store = WatchStatusIndicatorSettingsStore(defaults: defaults)
+        store.save(.hidden)
+        XCTAssertTrue(store.loadShowsProgressBars())
+        defaults.set("invalid", forKey: WatchStatusIndicatorSettingsStore.progressBarsStorageKey)
+        XCTAssertTrue(store.loadShowsProgressBars())
+        store.saveShowsProgressBars(false)
+        XCTAssertEqual(defaults.object(forKey: WatchStatusIndicatorSettingsStore.progressBarsStorageKey) as? Bool, false)
+    }
+
     func testCorruptValueFallsBackToDefault() {
         let defaults = makeDefaults()
         defaults.set("not-a-real-indicator", forKey: "com.plozz.watchStatusIndicator")

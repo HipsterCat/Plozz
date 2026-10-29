@@ -287,6 +287,24 @@ final class SettingsInteractionTests: XCTestCase {
         capture("episode-count-floating")
     }
 
+    func testProgressBarsUseNativeIndependentToggleAndSurviveNavigation() {
+        launch()
+        app.buttons["appearance-cards"].tap()
+        XCTAssertTrue(app.navigationBars["Cards"].waitForExistence(timeout: 5))
+        let progress = app.switches["progress-bars-toggle"]
+        reveal(progress, fullyVisible: true)
+        XCTAssertEqual(progress.value as? String, "1")
+        tapNativeSwitch(progress)
+        XCTAssertEqual(progress.value as? String, "0")
+        XCTAssertEqual(app.switches["unwatched-episode-count-toggle"].value as? String, "1")
+        app.navigationBars["Cards"].buttons.firstMatch.tap()
+        app.buttons["appearance-cards"].tap()
+        reveal(progress, fullyVisible: true)
+        XCTAssertEqual(progress.value as? String, "0")
+        tapNativeSwitch(progress)
+        XCTAssertEqual(progress.value as? String, "1")
+    }
+
     func testWatchIndicatorColorsStayInOneRowAndSelectionSurvivesNavigation() {
         launch()
         app.buttons["appearance-cards"].tap()
@@ -306,6 +324,7 @@ final class SettingsInteractionTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(button.frame.width, 44)
             XCTAssertGreaterThanOrEqual(button.frame.height, 44)
         }
+
         let blue = buttons[1]
         blue.tap()
         XCTAssertTrue(blue.isSelected)

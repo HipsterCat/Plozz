@@ -497,7 +497,7 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   watch-indicator Settings previews reuse the same check badge and flag.
   Their middle poster represents an in-progress series with three remaining
   episodes. Its shared count badge follows the live count toggle and independent
-  Attached/Floating preference while progress stays visible. Count style crosses
+  Attached/Floating preference while progress follows its independent visibility setting. Count style crosses
   native hosting boundaries, controls overlay placement, and invalidates both
   native poster bitmap caches.
   `MediaWatchIndicatorStyle` owns the eight opaque watch-mark colors and contrasting

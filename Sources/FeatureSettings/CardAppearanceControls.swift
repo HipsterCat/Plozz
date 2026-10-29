@@ -23,6 +23,7 @@ public struct CardAppearanceControls: View {
         controls
             .environment(\.plozzWatchIndicatorColor, watchIndicator.color)
             .environment(\.plozzShowsUnwatchedEpisodeCount, watchIndicator.showsUnwatchedEpisodeCount)
+            .environment(\.plozzShowsProgressBars, watchIndicator.showsProgressBars)
             .environment(\.plozzEpisodeCountBadgeStyle, watchIndicator.episodeCountStyle)
     }
 
@@ -40,6 +41,7 @@ public struct CardAppearanceControls: View {
                 }
                 episodeCountToggle
                 if watchIndicator.showsUnwatchedEpisodeCount { episodeCountStyleMenu }
+                progressBarsToggle
             }
             SettingsDetailGroup(
                 title: LocalizedStringResource(
@@ -73,6 +75,7 @@ public struct CardAppearanceControls: View {
                 }
                 episodeCountToggle
                 if watchIndicator.showsUnwatchedEpisodeCount { episodeCountStyleMenu }
+                progressBarsToggle
             }
             SettingsSectionGroup("Style") {
                 CompactCardStylePicker(selection: $cards.style, swatchHeight: 112)
@@ -101,6 +104,11 @@ public struct CardAppearanceControls: View {
     private var episodeCountToggle: some View {
         Toggle("Show unwatched episode count", isOn: $watchIndicator.showsUnwatchedEpisodeCount)
             .accessibilityIdentifier("unwatched-episode-count-toggle")
+    }
+
+    private var progressBarsToggle: some View {
+        Toggle("Show progress bars", isOn: $watchIndicator.showsProgressBars)
+            .accessibilityIdentifier("progress-bars-toggle")
     }
 
     private var episodeCountStyleMenu: some View {

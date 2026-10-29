@@ -650,6 +650,11 @@ watch history and planning-list behavior are documented in
   The choice is profile-scoped, transfers with the profile, and never changes watch marks.
   Turning counts off retains the style. Existing profiles keep their previous
   placement on upgrade; both previews then follow this independent choice.
+  **Show progress bars** is a separate default-on, profile-scoped toggle below
+  the count controls. It hides viewing-progress bars on media and episode cards,
+  including Continue Watching and live previews, without removing episode/time
+  text, download indicators, or changing player timelines and play-button progress.
+  The preference transfers/syncs with the profile.
   The eight watch-mark colors appear as one horizontal swatch row below the
   indicator previews. White remains the default; changes update the previews
   immediately and persist/transfer per profile. Narrow mobile layouts scroll

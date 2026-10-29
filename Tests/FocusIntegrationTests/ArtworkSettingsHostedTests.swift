@@ -1167,8 +1167,8 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                     XCTAssertTrue(text.contains("Changes labels below Home cards"), text)
                     XCTAssertFalse(text.contains("Mixed hides labels"), text)
                 }
-                XCTAssertTrue(text.contains("each page's setting"), text)
-                XCTAssertTrue(text.contains("Home and Recommended"), text)
+                XCTAssertTrue(text.contains("Default"), text)
+                XCTAssertFalse(text.contains("each page's setting"), text)
                 XCTAssertFalse(text.contains("Labels are visible"), text)
                 XCTAssertFalse(text.contains("Labels are hidden"), text)
             }
@@ -1595,19 +1595,41 @@ final class ArtworkSettingsHostedTests: XCTestCase {
             settings: settings
         )) { window in
             let initial = try await self.capture(window, name: "labels-browse-inherited", includeMaster: true)
-            XCTAssertTrue(initial.contains("Card labels"), initial)
+            XCTAssertTrue(initial.contains("Customize labels"), initial)
             XCTAssertTrue(initial.contains("Mixed"), initial)
             XCTAssertFalse(initial.contains("Main setting"), initial)
             XCTAssertFalse(initial.contains("App default"), initial)
-            XCTAssertFalse(initial.contains("Use default"), initial)
             XCTAssertTrue(initial.contains("Home"), initial)
             XCTAssertTrue(initial.contains("Continue Watching"), initial)
             XCTAssertFalse(initial.contains("No labels"), initial)
+            var views = [try XCTUnwrap(window.rootViewController?.view)]
+            var scrollViews: [UIScrollView] = []
+            while let view = views.popLast() {
+                if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height {
+                    scrollViews.append(scroll)
+                }
+                views.append(contentsOf: view.subviews)
+            }
+            let scroll = scrollViews.max { $0.bounds.width < $1.bounds.width }
+            let initialOffset = scroll?.contentOffset ?? .zero
+            if let scroll {
+                scroll.setContentOffset(CGPoint(
+                    x: initialOffset.x,
+                    y: scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom
+                ), animated: false)
+            }
+            let overrides = try await self.capture(window, name: "labels-home-row-overrides")
+            for label in ["Overrides", "Continue Watching", "Libraries", "Use default"] {
+                XCTAssertTrue(overrides.contains(label), overrides)
+            }
+            XCTAssertTrue(overrides.contains("Continue Watching is shared with Recommended"), overrides)
+            scroll?.setContentOffset(initialOffset, animated: false)
             cards.captions.toggleCustomization(in: .home)
             let changed = try await self.capture(window, name: "labels-home-explicit")
             XCTAssertFalse(changed.contains("Custom"), changed)
-            XCTAssertFalse(changed.contains("Use default"), changed)
             XCTAssertEqual(cards.captions.override(for: .home), .show)
+            XCTAssertEqual(cards.captions.override(for: .continueWatching), .automatic)
+            XCTAssertEqual(cards.captions.override(for: .homeLibraries), .automatic)
             XCTAssertTrue(cards.captions.showsLabels(in: .home))
             XCTAssertEqual(CardCaptionSettingsStore(defaults: defaults).load(), cards.captions)
             cards.captions.applyPreset(.show)

@@ -199,6 +199,33 @@ final class NativePosterIndicatorCacheTests: XCTestCase {
         return result
     }
 
+    func testProgressVisibilityInvalidatesBottomCachesButPreservesStatusAndDownloads() throws {
+        let visible = environment()
+        var hidden = visible
+        hidden.plozzShowsProgressBars = false
+        let input = indicators(progress: 0.4, downloaded: true)
+        for layer in [NativePosterIndicatorLayer.combined, .background] {
+            let visibleKey = Key(input, environment: visible, layer: layer)
+            let hiddenKey = Key(input, environment: hidden, layer: layer)
+            XCTAssertNotEqual(visibleKey, hiddenKey)
+            XCTAssertNotEqual(try render(visibleKey, environment: visible).pngData(),
+                              try render(hiddenKey, environment: hidden).pngData())
+            let withoutProgress = indicators(progress: 0, downloaded: true)
+            XCTAssertEqual(try render(hiddenKey, environment: hidden).pngData(),
+                           try render(Key(withoutProgress, environment: hidden, layer: layer), environment: hidden).pngData())
+        }
+        XCTAssertEqual(Key(input, environment: visible, layer: .foreground),
+                       Key(input, environment: hidden, layer: .foreground))
+        let item = MediaItem(id: "movie", title: "Movie", kind: .movie, playedPercentage: 0.4)
+        XCTAssertNotEqual(
+            NativeLibraryPosterBitmap.Presentation(item: item, spoilerSettings: .default, environment: visible),
+            NativeLibraryPosterBitmap.Presentation(item: item, spoilerSettings: .default, environment: hidden)
+        )
+        var hosted = EnvironmentValues()
+        hosted.copyHostedPresentation(from: hidden)
+        XCTAssertFalse(hosted.plozzShowsProgressBars)
+    }
+
     private func indicators(
         progress: Double, count: Int = 8, downloaded: Bool = false,
         hidden: Bool = false, inset: CGFloat = 12, corner: CGFloat? = nil
