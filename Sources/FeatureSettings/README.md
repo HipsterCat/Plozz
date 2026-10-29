@@ -639,8 +639,10 @@ watch history and planning-list behavior are documented in
   its watched/unwatched style. Both previews show a sample count on the
   in-progress series when enabled; toggling it updates the previews immediately
   without removing the separate watched check or unwatched flag examples.
-  **Episode count style** offers Attached or Floating while counts are enabled;
-  it is profile-scoped, transfers with the profile, and never changes watch marks.
+  **Episode count style** offers Attached or Floating while counts are enabled.
+  Mobile uses the same native menu picker as Watch indicators, with a trailing
+  selected value and the system menu affordance.
+  The choice is profile-scoped, transfers with the profile, and never changes watch marks.
   Turning counts off retains the style. Existing profiles keep their previous
   placement on upgrade; both previews then follow this independent choice.
   The eight watch-mark colors appear as one horizontal swatch row below the

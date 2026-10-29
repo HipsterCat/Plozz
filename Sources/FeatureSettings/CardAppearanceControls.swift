@@ -108,17 +108,23 @@ public struct CardAppearanceControls: View {
             "episodeCountStyle.label", defaultValue: "Episode count style",
             comment: "Settings control for choosing an attached or floating unwatched episode-count badge."
         )
+        let picker = Picker(selection: $watchIndicator.episodeCountStyle) {
+            ForEach(EpisodeCountBadgeStyle.allCases) { style in
+                Text(style.displayName)
+                    .tag(style)
+                    .accessibilityIdentifier("episode-count-style-\(style.rawValue)")
+            }
+        } label: { Text(title) }
+        #if os(tvOS)
         return SettingsMenuRow(title: title, value: Text(watchIndicator.episodeCountStyle.displayName)) {
-            Picker(selection: $watchIndicator.episodeCountStyle) {
-                ForEach(EpisodeCountBadgeStyle.allCases) { style in
-                    Text(style.displayName)
-                        .tag(style)
-                        .accessibilityIdentifier("episode-count-style-\(style.rawValue)")
-                }
-            } label: { Text(title) }
-            .pickerStyle(.inline)
+            picker.pickerStyle(.inline)
         }
         .accessibilityIdentifier("episode-count-style")
+        #else
+        return picker
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("episode-count-style")
+        #endif
     }
 }
 

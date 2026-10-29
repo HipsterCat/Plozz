@@ -268,6 +268,7 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["appearance-cards"].waitForNonExistence(timeout: 5))
         let style = app.buttons["episode-count-style"]
         reveal(style, fullyVisible: true)
+        XCTAssertEqual(style.label, "Episode count style")
         let indicator = app.buttons["watch-indicator-picker"]
         let originalValue = indicator.value as? String
         for choice in ["Attached", "Floating"] {
@@ -275,15 +276,14 @@ final class SettingsInteractionTests: XCTestCase {
             let option = app.buttons["episode-count-style-\(choice.lowercased())"]
             XCTAssertTrue(option.waitForExistence(timeout: 3), app.debugDescription)
             option.tap()
-            XCTAssertTrue(style.staticTexts[choice].exists)
-            XCTAssertLessThan(style.staticTexts[choice].frame.height, 30, "The value must not wrap on a narrow phone.")
+            XCTAssertEqual(style.value as? String, choice, "The native picker must expose its selected value.")
             XCTAssertEqual(indicator.value as? String, originalValue)
         }
         let toggle = app.switches["unwatched-episode-count-toggle"]
         tapNativeSwitch(toggle)
         XCTAssertFalse(style.exists)
         tapNativeSwitch(toggle)
-        XCTAssertTrue(style.staticTexts["Floating"].exists, "Hiding counts must retain the style.")
+        XCTAssertEqual(style.value as? String, "Floating", "Hiding counts must retain the style.")
         capture("episode-count-floating")
     }
 
