@@ -1178,12 +1178,15 @@ struct PlozziOSTabShell: View {
               let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) else {
             return Text(destination.title)
         }
-        let hasDuplicateName = appModel.visibleNavigationLibraries.contains {
-            $0.key != key && $0.library.title == library.library.title
+        return library.library.displayName
+    }
+
+    func destinationSystemImage(_ destination: PlozziOSDestination) -> String {
+        guard case let .library(key) = destination,
+              let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) else {
+            return destination.systemImage
         }
-        return hasDuplicateName
-            ? library.library.displayName + Text(verbatim: " · \(library.serverName)")
-            : library.library.displayName
+        return library.library.navigationSymbolName
     }
 
     private static func makeHomeViewModel(
@@ -1247,7 +1250,7 @@ struct PlozziOSTabShell: View {
                                     profile: appModel.profiles.activeProfile, size: 28, rendersAsImage: true
                                 )
                             } else {
-                                Image(systemName: destination.systemImage)
+                                Image(systemName: destinationSystemImage(destination))
                             }
                         }
                     }

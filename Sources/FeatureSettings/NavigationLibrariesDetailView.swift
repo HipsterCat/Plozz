@@ -126,9 +126,8 @@ public struct NavigationLibrariesDetailView: View {
         }
     }
 
-    /// One row descriptor per arrangeable key: library name, provider brand mark,
-    /// and server name so same-named libraries on different servers are distinct.
-    private static func rowsByKey(
+    /// Content glyphs match navigation; provider and server share the subtitle.
+    static func rowsByKey(
         visible: [AggregatedLibrary]
     ) -> [String: LiftableReorderList<String>.Row] {
         var rows: [String: LiftableReorderList<String>.Row] = [
@@ -147,9 +146,11 @@ public struct NavigationLibrariesDetailView: View {
         for aggregated in NavigationRailPlan.browsableLibraries(visible) {
             rows[aggregated.key] = LiftableReorderList<String>.Row(
                 title: aggregated.library.displayName,
+                symbolName: aggregated.library.navigationSymbolName,
                 providerKind: aggregated.providerKind,
                 mediaShareTransport: aggregated.transportKind,
-                detail: Text(verbatim: aggregated.serverName)
+                subtitle: Text(verbatim: aggregated.serverName),
+                providerMarkInSubtitle: true
             )
         }
         return rows

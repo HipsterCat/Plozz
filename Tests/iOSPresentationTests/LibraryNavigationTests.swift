@@ -5,11 +5,123 @@ import FeatureAuth
 import FeatureHomeCore
 import SwiftUI
 import UIKit
+import Vision
 import XCTest
 @testable import AppShelliOS
+@testable import FeatureSettings
 
 @MainActor
 final class LibraryNavigationTests: XCTestCase {
+    func testLibraryIconsMatchTVNavigationAndServerNamesUseSubtitles() async throws {
+        let app = try makeApp()
+        await app.refreshNavigationLibraries()
+        let shell = makeShell(app: app)
+        let libraries = app.visibleNavigationLibraries
+        XCTAssertEqual(libraries.count, 2)
+        let rows = NavigationLibrariesDetailView.rowsByKey(visible: libraries)
+        for library in libraries {
+            let symbol = library.library.navigationSymbolName
+            XCTAssertEqual(shell.destinationSystemImage(.library(library.key)), symbol)
+            XCTAssertNotNil(UIImage(systemName: symbol))
+            let row = try XCTUnwrap(rows[library.key])
+            XCTAssertEqual(row.title, library.library.displayName)
+            XCTAssertEqual(row.symbolName, symbol)
+            XCTAssertNil(row.detail, "Server names must not compete with the drag handle.")
+            XCTAssertEqual(row.subtitle, Text(verbatim: library.serverName))
+            XCTAssertEqual(row.providerKind, library.providerKind)
+            XCTAssertTrue(row.providerMarkInSubtitle)
+        }
+        XCTAssertEqual(shell.destinationSystemImage(.home), "house")
+        XCTAssertEqual(shell.destinationSystemImage(.search), "magnifyingglass")
+    }
+
+    func testSameNamedLibrariesKeepShortSeparateNativeTabs() async throws {
+        let app = try makeApp(usesDuplicateLibraryNames: true)
+        try await withTabs(app: app) { tabs, window in
+            try await waitUntil(window: window) {
+                self.tabTitles(tabs).filter { $0 == "Videos" }.count == 2
+            }
+            let titles = tabTitles(tabs)
+            XCTAssertEqual(titles.filter { $0 == "Videos" }.count, 2, "\(titles)")
+            XCTAssertFalse(titles.contains { $0.contains(" · ") }, "\(titles)")
+            let destinations = PlozziOSTabShell.configuredDestinations(appModel: app)
+            XCTAssertTrue(destinations.contains(.library("plex:library")))
+            XCTAssertTrue(destinations.contains(.library("jellyfin:library")))
+        }
+    }
+
+    func testArrangementRendersServerBelowLibraryOnPhoneAndTablet() async throws {
+        let library = AggregatedLibrary(
+            accountID: "plex", accountName: "Viewer", serverName: "Brandoland", providerKind: .plex,
+            library: MediaLibrary(id: "movies", title: "Movies", kind: .movie)
+        )
+        let rows = NavigationLibrariesDetailView.rowsByKey(visible: [library])
+        let row = try XCTUnwrap(rows[library.key])
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.overrideUserInterfaceStyle = .dark
+        window.backgroundColor = .black
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for (width, typeSize) in [
+            (CGFloat(390), DynamicTypeSize.large), (390, .accessibility1), (834, .large)
+        ] {
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 844)
+            let host = UIHostingController(rootView:
+                ScrollView {
+                    LiftableReorderList(
+                        sections: .init(enabled: [library.key], disabled: []),
+                        disabledSectionTitle: "Hidden", disabledPlaceholder: "Hidden items",
+                        isLifting: .constant(false), row: { _ in row }, onChange: { _ in }
+                    )
+                    .padding(24)
+                }
+                .background(Color.black)
+                .environment(\.themePalette, .dark)
+                .environment(\.colorScheme, .dark)
+                .environment(\.dynamicTypeSize, typeSize)
+                .environment(\.locale, Locale(identifier: "en"))
+            )
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            let deadline = ContinuousClock.now + .seconds(5)
+            var titleBounds: CGRect?
+            var serverBounds: CGRect?
+            var image: UIImage?
+            repeat {
+                window.layoutIfNeeded()
+                let capture = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+                }
+                image = capture
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                try VNImageRequestHandler(cgImage: XCTUnwrap(capture.cgImage)).perform([request])
+                titleBounds = request.results?.first {
+                    $0.topCandidates(1).first?.string.contains("Movies") == true
+                }?.boundingBox
+                serverBounds = request.results?.first {
+                    $0.topCandidates(1).first?.string.contains("Brandoland") == true
+                }?.boundingBox
+                if titleBounds != nil && serverBounds != nil { break }
+                try await Task.sleep(for: .milliseconds(50))
+            } while ContinuousClock.now < deadline
+            let attachment = XCTAttachment(image: try XCTUnwrap(image))
+            attachment.name = "navigation-arrangement-\(Int(width))-\(typeSize)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let title = try XCTUnwrap(titleBounds)
+            let server = try XCTUnwrap(serverBounds)
+            XCTAssertLessThan(server.maxY, title.minY, "The server belongs on a separate line below the library.")
+            XCTAssertLessThan(server.minX - title.minX, 0.12, "The source stays beside its provider, not the drag handle.")
+        }
+    }
+
     func testDiscoveredLibrariesAppearInNativePhoneAndTabletNavigation() async throws {
         let app = try makeApp()
         try await withTabs(app: app) { tabs, window in
@@ -164,7 +276,10 @@ final class LibraryNavigationTests: XCTestCase {
         XCTAssertEqual(second.diagnosticCategory, "library")
     }
 
-    private func makeApp(fixture: LibraryNavigationFixture = LibraryNavigationFixture()) throws -> PlozziOSAppModel {
+    private func makeApp(
+        fixture: LibraryNavigationFixture = LibraryNavigationFixture(),
+        usesDuplicateLibraryNames: Bool = false
+    ) throws -> PlozziOSAppModel {
         let suite = "LibraryNavigationTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
@@ -189,7 +304,9 @@ final class LibraryNavigationTests: XCTestCase {
             app.accountsProviders.registry.register(kind) { context in
                 LibraryNavigationProvider(
                     session: context.session,
-                    library: MediaLibrary(id: "library", title: title, kind: mediaKind),
+                    library: MediaLibrary(
+                        id: "library", title: usesDuplicateLibraryNames ? "Videos" : title, kind: mediaKind
+                    ),
                     fixture: fixture
                 )
             }
@@ -198,6 +315,14 @@ final class LibraryNavigationTests: XCTestCase {
         app.accountsProviders.tokenResolver = { _ in "fixture" }
         app.accountsProviders.reloadAccounts()
         return app
+    }
+
+    private func makeShell(app: PlozziOSAppModel) -> PlozziOSTabShell {
+        PlozziOSTabShell(
+            appModel: app, homeViewModelBox: LazyViewState<HomeViewModel>(), onAddServer: {},
+            showingSettings: .constant(false), showingProfileSwitcher: .constant(false),
+            deferredPairingURL: .constant(nil), systemColorScheme: .dark
+        )
     }
 
     private func withTabs(
@@ -215,11 +340,7 @@ final class LibraryNavigationTests: XCTestCase {
         for (width, sizeClass) in [(CGFloat(390), UserInterfaceSizeClass.compact), (834, .regular)] {
             window.frame = CGRect(x: 0, y: 0, width: width, height: 1024)
             let host = UIHostingController(rootView:
-                PlozziOSTabShell(
-                    appModel: app, homeViewModelBox: LazyViewState<HomeViewModel>(), onAddServer: {},
-                    showingSettings: .constant(false), showingProfileSwitcher: .constant(false),
-                    deferredPairingURL: .constant(nil), systemColorScheme: .dark
-                )
+                makeShell(app: app)
                 .environment(app)
                 .environment(HeroTrailerController())
                 .environment(PlozziOSSidebarGeometryModel())
