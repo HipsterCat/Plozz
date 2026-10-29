@@ -16,6 +16,7 @@ struct PlozziOSDownloadsView: View {
     @State private var notificationDestination: PlozziOSDownloadNotificationDestination?
     @State private var selectedShowID: String?
     @State private var detailNav: PlozziOSDownloadDetailNav?
+    @State private var openInRecord: DownloadedMediaRecord?
 
     var body: some View {
         let library = model.library
@@ -39,6 +40,7 @@ struct PlozziOSDownloadsView: View {
             }
         }
         .navigationTitle("Downloads")
+        .modifier(DownloadOpenInModifier(record: $openInRecord, model: model, appModel: appModel))
         .task { await model.refreshArtwork() }
         .task(id: notificationPresentationID) {
             let navigation = PlozziOSDownloadNotificationNavigation.shared
@@ -214,6 +216,12 @@ struct PlozziOSDownloadsView: View {
         DownloadCompactCard(
             menu: {
                 transferMenuActions(for: record)
+                if record.status == .completed {
+                    Button("Open in…", systemImage: "square.and.arrow.up") {
+                        openInRecord = record
+                    }
+                    .accessibilityIdentifier("download-open-in")
+                }
                 Button("Remove", systemImage: "trash", role: .destructive) {
                     Task { await model.remove(record) }
                 }
