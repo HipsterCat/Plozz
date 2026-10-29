@@ -77,6 +77,7 @@ final class TopBarPresentationHostedTests: XCTestCase {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
+
         try await waitForPage(.home, model: model, window: window)
         let owner = try XCTUnwrap(find(NavigationRailFocusHostController.self, in: host))
         let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
@@ -115,6 +116,41 @@ final class TopBarPresentationHostedTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(250))
         XCTAssertEqual(model.selection, .home, "Removing a highlighted item must not change the open page.")
         XCTAssertNil(model.buttons[.watchlist])
+    }
+
+    func testOffscreenChromeHidesAndReturnsWithoutAnimation() async throws {
+        let (window, previous) = try await makeWindow()
+        let model = Model()
+        model.selection = .settings
+        window.rootViewController = UIHostingController(rootView: Fixture(model: model))
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await waitForPage(.settings, model: model, window: window)
+        try await Task.sleep(for: .milliseconds(350))
+        let scroll = try XCTUnwrap(model.scroll)
+        let source = UUID()
+        scroll.register(source: source, offset: 600, scrollToTop: {})
+        try await Task.sleep(for: .milliseconds(100))
+        let marker = try XCTUnwrap(navigationMarkers(in: window).first)
+        func presentedY() -> CGFloat {
+            let layer = marker.layer.presentation() ?? marker.layer
+            return layer.convert(layer.bounds, to: window.layer.presentation() ?? window.layer).minY
+        }
+        let initial = presentedY()
+        for depth in [1, 0] {
+            model.chrome.setStackDepth(depth)
+            for _ in 0..<8 {
+                try await Task.sleep(for: .milliseconds(25))
+                let travel: CGFloat = depth > 0 && !UIAccessibility.isReduceMotionEnabled ? 12 : 0
+                XCTAssertEqual(presentedY(), initial - travel, accuracy: 0.5)
+                XCTAssertEqual(scroll.offset, 600)
+                XCTAssertNil(NavigationRowFocusRequester.target(for: marker, in: window))
+            }
+        }
     }
 
     func testLiftedSettingsMovementPersistsOnlyAfterAnActualStep() async throws {

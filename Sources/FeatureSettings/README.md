@@ -872,6 +872,12 @@ watch history and planning-list behavior are documented in
   child path throughout the Settings visit; the new chrome takes effect on exit.
   Settings columns remain centered and subpage headers keep their full-height
   layout; only root foreground reserves space below the top bar.
+  That reservation remains constant while subpages cover the retained root, so
+  its scroll viewport and offset do not change as navigation hides or returns.
+  Settings pages retain their horizontal slide/fade transitions without resizing
+  their scroll viewports. Parent pages retain their scroll positions and return
+  focus to the originating row. Navigation chrome animates independently, only
+  while visible.
   The top bar scrolls away with root content, without a foreground fade.
   Root Back restores the page top and navigation; subpage Back remains one level.
   The profile action reserves a stable 100-point height: native focus shifts the

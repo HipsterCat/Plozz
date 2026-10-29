@@ -9,8 +9,8 @@ fallback when the user's server has no attached trailer.
 
 ## Recently Added watched filtering
 
-Customize Home > Rows offers **Hide watched in Recently Added**, off by default
-and saved per profile. The shared presentation policy covers combined,
+Screens & Navigation > Home > Filtering offers **Recently Added** under
+**Hide watched content**, off by default and saved per profile. The shared presentation policy covers combined,
 per-library, and typed server-authored Recently Added rows on TV and mobile. It leaves
 Continue Watching, Next Up, Watchlist, collections, hero, and Top Shelf unchanged.
 Movies/episodes use current completion (rewatches remain resumable). Series and
@@ -605,6 +605,12 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
 - **Series** — `SeriesDetailView` + `SeriesResume` provide one stable
   series backdrop with focus-driven season tabs and an episode rail; the
   hero text updates as focus moves without distracting backdrop swaps.
+  Season lists publish independently of the server resume lookup on both
+  platforms. "Go to Show" retains the episode's season and can load its rail
+  while resume is pending; entries without an explicit season still wait for
+  resume before settling the opening episode. A failed initial show request
+  exposes the existing retry state instead of leaving a bare seed loading.
+  Refresh failures retain a previously loaded season list.
   On tvOS, opening an individual episode from Home or Search starts at the hero
   with Play focused, just like opening the show. The episode's source, season,
   and prepared rail target are retained; the rail does not claim initial focus

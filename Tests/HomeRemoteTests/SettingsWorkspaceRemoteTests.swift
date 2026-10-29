@@ -473,6 +473,11 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertEqual(profile.value as? String, "Alex")
         try focus(profile, in: app)
         XCUIRemote.shared.press(.select)
+        let activeProfile = app.buttons.matching(NSPredicate(format: "label == %@", "Alex")).firstMatch
+        let profileFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.hasFocus(activeProfile) }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [profileFocused], timeout: 5), .completed, app.debugDescription)
         try openProfilePickerSettings(in: app)
         XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 10))
         XCTAssertEqual(profile.value as? String, "Alex")
@@ -1026,6 +1031,48 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         #endif
     }
 
+    func testPinnedSettingsRootKeepsNavigationAndAppliesTopBarAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "rail", nextStyle: "tabBar", choice: "Top Bar")
+    }
+
+    func testTopBarSettingsRootKeepsNavigationAndAppliesSidebarAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "tabBar", nextStyle: "sidebar", choice: "Sidebar")
+    }
+
+    func testSidebarSettingsRootKeepsNavigationAndAppliesPinnedAfterExit() throws {
+        try assertSettingsNavigationLifecycle(style: "sidebar", nextStyle: "rail", choice: "Pinned Sidebar")
+    }
+
+    func testTopBarReturnsToDeepSettingsCategoryWithoutScrollingToLibraries() throws {
+        #if targetEnvironment(simulator)
+        let app = try launchSettings(style: "tabBar")
+        defer { app.terminate() }
+        for route in ["profile", "help", "profile"] {
+            let origin = section(route, in: app)
+            try focus(origin, in: app)
+            XCTAssertTrue(origin.isSelected)
+            XCTAssertFalse(settingsNavigationIsVisible(style: "tabBar", in: app))
+            let originY = origin.frame.minY
+            capture("deep-settings-before-\(route)", in: app)
+            XCUIRemote.shared.press(.select)
+            let back = app.buttons["settings-category-back"]
+            let entered = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in self.hasFocus(back) }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed, app.debugDescription)
+            XCUIRemote.shared.press(.menu)
+            waitForCategoryFocus(route, in: app)
+            XCTAssertEqual(origin.frame.minY, originY, accuracy: 1,
+                           "Back must preserve the scrolled category's position.")
+            XCTAssertFalse(settingsNavigationIsVisible(style: "tabBar", in: app))
+            XCTAssertFalse(hasFocus(section("myLibraries", in: app)))
+            capture("deep-settings-return-\(route)", in: app)
+        }
+        #else
+        throw XCTSkip("Simulator-only Settings review.")
+        #endif
+    }
+
     func testScreenDestinationsAndIndependentHomeFiltering() throws {
         #if targetEnvironment(simulator)
         let app = try launchSettings(style: "sidebar")
@@ -1097,18 +1144,6 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         #else
         throw XCTSkip("Simulator-only settings navigation.")
         #endif
-    }
-
-    func testPinnedSettingsRootKeepsNavigationAndAppliesTopBarAfterExit() throws {
-        try assertSettingsNavigationLifecycle(style: "rail", nextStyle: "tabBar", choice: "Top Bar")
-    }
-
-    func testTopBarSettingsRootKeepsNavigationAndAppliesSidebarAfterExit() throws {
-        try assertSettingsNavigationLifecycle(style: "tabBar", nextStyle: "sidebar", choice: "Sidebar")
-    }
-
-    func testSidebarSettingsRootKeepsNavigationAndAppliesPinnedAfterExit() throws {
-        try assertSettingsNavigationLifecycle(style: "sidebar", nextStyle: "rail", choice: "Pinned Sidebar")
     }
 
     private func assertSettingsNavigationLifecycle(style: String, nextStyle: String, choice: String) throws {
@@ -2810,6 +2845,11 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         }
         try completeAppearanceChoices(in: app)
         if settingsFromStartupPicker {
+            let activeProfile = app.buttons.matching(NSPredicate(format: "label == %@", profile)).firstMatch
+            let focused = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in self.hasFocus(activeProfile) }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
             try openProfilePickerSettings(in: app)
             XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 20), app.debugDescription)
             try focus(section("playback", in: app), in: app)
@@ -2889,9 +2929,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
                 XCUIRemote.shared.press(.menu)
                 waitForEnabled(settings)
             }
-            let sidebarCell = app.collectionViews["Sidebar"].cells
-                .containing(.button, identifier: settings.identifier).firstMatch
-            try focus(sidebarCell.exists ? sidebarCell : settings, in: app, stoppingWhen: { playback.exists })
+            try focus(settings, in: app, stoppingWhen: { playback.exists })
             if !playback.waitForExistence(timeout: 2) { XCUIRemote.shared.press(.select) }
         }
         XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)
