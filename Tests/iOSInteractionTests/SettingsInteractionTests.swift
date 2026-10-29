@@ -519,7 +519,7 @@ final class SettingsInteractionTests: XCTestCase {
     func testScreenCardLabelControlsShareCentralOverrides() {
         openSettingsPage("Screens & Navigation")
         let screens: [(String, String, [String])] = [
-            ("Customize Home", "home", ["home", "continueWatchingPortrait"]),
+            ("Customize Home", "home", ["home", "continueWatchingPortrait", "homeLibraries"]),
             ("Customize Libraries", "library", ["recommended", "browse", "collections", "playlists", "continueWatchingPortrait"]),
             ("Detail Page", "detail", ["episodes", "related", "extras"])
         ]
@@ -544,6 +544,7 @@ final class SettingsInteractionTests: XCTestCase {
                 } else {
                     row = app.buttons["card-label-view-\(view)"]
                 }
+
                 reveal(row)
                 if title == "Customize Libraries", view == "continueWatchingPortrait" {
                     XCTAssertEqual(row.value as? String, "Off", "Home and Libraries must share this override.")
@@ -568,7 +569,7 @@ final class SettingsInteractionTests: XCTestCase {
         customize.tap()
         let page = app.buttons["card-label-page"]
         for (name, views) in [
-            ("Home", ["home", "continueWatchingPortrait"]),
+            ("Home", ["home", "continueWatchingPortrait", "homeLibraries"]),
             ("Recommended", ["recommended", "continueWatchingPortrait"]),
             ("Browse", ["browse"]), ("Collections", ["collections"]), ("Playlists", ["playlists"]),
             ("Detail Page", ["episodes", "related", "extras"])
@@ -607,6 +608,35 @@ final class SettingsInteractionTests: XCTestCase {
         capture("detail-labels-round-trip")
     }
 
+    func testHomeLibraryLabelsInheritDefaultAndOverridesFollowPreview() {
+        openSettingsPage("Customize Home")
+        let customize = app.buttons["home-customize-labels"]
+        reveal(customize)
+        customize.tap()
+        let parent = app.buttons["card-label-view-home"]
+        let libraries = app.buttons["card-label-view-homeLibraries"]
+        let watching = app.buttons["card-label-view-continueWatchingPortrait"]
+        let preview = app.descendants(matching: .any)["card-label-preview-home"].firstMatch
+        XCTAssertTrue(parent.waitForExistence(timeout: 3))
+        selectCustomization(parent, expecting: "Off")
+        reveal(libraries)
+        XCTAssertEqual(libraries.value as? String, "Use default")
+        XCTAssertEqual(watching.value as? String, "Use default")
+        XCTAssertLessThan(preview.frame.maxY, watching.frame.minY)
+        XCTAssertLessThan(watching.frame.minY, libraries.frame.minY)
+        XCTAssertTrue(preview.label.contains("Libraries: Off"), preview.label)
+        selectCustomization(libraries, expecting: "On")
+        XCTAssertTrue(preview.label.contains("Libraries: On"), preview.label)
+        XCTAssertEqual(watching.value as? String, "Use default")
+        selectCustomization(libraries, expecting: "Use default")
+        XCTAssertTrue(preview.label.contains("Libraries: Off"), preview.label)
+        reveal(parent, towardTop: true)
+        selectCustomization(parent, expecting: "On")
+        reveal(libraries)
+        XCTAssertTrue(preview.label.contains("Libraries: On"), preview.label)
+        capture("home-library-label-override-below-preview")
+    }
+
     func testLibraryLabelEditorUsesTouchSelectionAndPreservesUseDefault() {
         openSettingsPage("Customize Libraries")
         XCTAssertFalse(app.buttons["card-label-view-recommended"].exists)
@@ -640,7 +670,9 @@ final class SettingsInteractionTests: XCTestCase {
         let recommended = app.descendants(matching: .any)["card-label-preview-recommended"].firstMatch
         XCTAssertFalse(home.exists, "The preview should stay on the selected page.")
         XCTAssertTrue(recommended.exists)
-        XCTAssertTrue(app.staticTexts["Shared with Home."].exists)
+        XCTAssertLessThan(recommended.frame.maxY, watching.frame.minY,
+                          "Recommended must place its Overrides section below the preview too.")
+        XCTAssertTrue(app.staticTexts["Continue Watching is shared with Home."].exists)
         selectCustomization(watching, expecting: "On")
         capture("library-labels-watching-shared-on")
         XCTAssertEqual(value.value as? String, "Off", "Continue Watching must not edit the page's labels.")

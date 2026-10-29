@@ -1714,10 +1714,13 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertFalse(app.buttons["card-label-page"].exists)
         try focus(app.buttons["card-label-view-home"], in: app)
         XCTAssertTrue(app.staticTexts["Card labels"].exists)
-        let preview = app.descendants(matching: .any)["card-label-preview-home"].firstMatch
+        let preview = app.descendants(matching: .any)["view-customization-help"].firstMatch
         let watchingLabels = app.buttons["card-label-view-continueWatchingPortrait"]
-        XCTAssertLessThan(preview.frame.minY - watchingLabels.frame.maxY, 170,
-                          "The scoped preview belongs directly below the controls and shared-scope note.")
+        XCTAssertTrue(preview.exists)
+        XCTAssertTrue(app.buttons["card-label-view-homeLibraries"].exists)
+        XCTAssertLessThan(app.buttons["card-label-view-home"].frame.maxY, preview.frame.minY)
+        XCTAssertLessThan(preview.frame.maxY, watchingLabels.frame.minY,
+                          "Overrides belong below the preview.")
         capture("home-ux-card-labels", in: app)
         XCUIRemote.shared.press(.menu)
         capture("home-labels-return", in: app)

@@ -2410,7 +2410,7 @@ private struct PlozziOSHomeRowView: View {
                     style: cardStyle,
                     cardCount: row.loadingPlaceholderCount > 0 ? row.loadingPlaceholderCount : 8,
                     showsCaption: row.kind == .libraries
-                        ? appModel.settings.cardStyle.captions.showsLabels
+                        ? appModel.settings.cardStyle.captions.showsLabels(in: .homeLibraries)
                         : appModel.settings.cardStyle.captions.showsLabels(
                             in: .home,
                             hasArtworkTitle: row.kind == .continueWatching
@@ -3024,7 +3024,7 @@ struct PlozziOSHomeLibraryCard: View {
                 cornerRadius: metrics.landscapeArtworkCornerRadius
             )
 
-            if captions.showsLabels {
+            if captions.showsLabels(in: .homeLibraries) {
                 caption
             }
         }

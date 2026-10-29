@@ -268,7 +268,7 @@ public enum CardCaptionSettingsScope: CaseIterable, Sendable {
     public var views: [CardCaptionView] {
         switch self {
         case .all: CardCaptionView.allCases
-        case .home: [.home, .continueWatching]
+        case .home: [.home, .continueWatching, .homeLibraries]
         case .libraries: [.recommended, .browse, .collections, .playlists, .continueWatching]
         case .detail: [.episodes, .related, .extras]
         }
@@ -362,7 +362,7 @@ struct CardCaptionViewChoices: View {
             )
         ) {
             ForEach(view.customizationChoices) { choice in
-                Text(view == .continueWatching && choice == .automatic
+                Text(view.isRowOverride && choice == .automatic
                     ? LocalizedStringResource("Use default") : choice.displayName).tag(choice)
             }
         }
@@ -396,13 +396,16 @@ extension CardCaptionSettings {
     }
 
     func customizationValue(in view: CardCaptionView) -> LocalizedStringResource {
-        if view == .continueWatching, customization(in: view) == .automatic {
+        if view.isRowOverride, customization(in: view) == .automatic {
             return "Use default"
         }
         return customization(in: view).displayName
     }
 
     func customizationDetail(in view: CardCaptionView) -> LocalizedStringResource {
+        if view == .homeLibraries, customization(in: view) == .automatic {
+            return "Uses Home's default."
+        }
         if view == .continueWatching {
             switch customization(in: view) {
             case .automatic: return "Uses Home rows or Recommended, depending on where the row appears."

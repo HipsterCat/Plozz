@@ -14,7 +14,7 @@ import XCTest
 final class NativeLibraryCardHostedTests: XCTestCase {
     private var savedProviders = MetadataProviderSettings.default
 
-    func testLibraryCaptionsFollowGlobalPresetAcrossCardAndFocusStyles() async throws {
+    func testLibraryCaptionsHonorHomeLibraryOverrideAcrossCardAndFocusStyles() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
@@ -41,7 +41,8 @@ final class NativeLibraryCardHostedTests: XCTestCase {
                             .background(LibraryCardFrameProbe())
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .environment(\.plozzCardCaptionSettings, .init(
-                                preference: preset, overrides: [.home: preset == .hide]
+                                preference: preset,
+                                overrides: [.home: preset == .hide, .homeLibraries: preset != .hide]
                             ))
                             .environment(\.plozzCardCaptionView, .home)
                             .environment(\.plozzCardStyle, style)

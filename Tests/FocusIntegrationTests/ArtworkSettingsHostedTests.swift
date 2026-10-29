@@ -220,7 +220,7 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                     XCTAssertTrue(text.contains("Use default"), text)
                     XCTAssertTrue(text.contains(String(localized: try XCTUnwrap(page.sharedRowNote))), text)
                 }
-                for view in page.controls where view == .continueWatching || page == .detail {
+                for view in page.controls where view.isRowOverride || page == .detail {
                     XCTAssertTrue(text.contains(String(localized: view.cardLabelTitle)), text)
                 }
                 XCTAssertFalse(text.contains("Filmography"), text)

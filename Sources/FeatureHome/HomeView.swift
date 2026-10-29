@@ -2334,6 +2334,7 @@ struct LibraryCardView: View {
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzCardCaptionSettings) private var captions
+    @Environment(\.plozzCardCaptionIsShowcase) private var isShowcase
     /// Per-profile card presentation, so a Home "Libraries" tile switches between
     /// the framed glass card and the borderless "Posters" look with every other
     /// card on Home.
@@ -2380,7 +2381,7 @@ struct LibraryCardView: View {
                     ? ProviderBrandMark.brandTint(aggregated.providerKind) : nil,
                 providerKind: aggregated.providerKind,
                 mediaShareTransport: aggregated.transportKind,
-                showsCaption: captions.showsLabels,
+                showsCaption: captions.showsLabels(in: .homeLibraries, isShowcase: isShowcase),
                 focus: $isFocused,
                 action: action
             ) {
@@ -2412,7 +2413,7 @@ struct LibraryCardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous))
                 .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
 
-            if captions.showsLabels {
+            if captions.showsLabels(in: .homeLibraries, isShowcase: isShowcase) {
                 framedCaption
             }
         }
@@ -2484,7 +2485,7 @@ struct LibraryCardView: View {
                     isFocused: isFocused
                 )
 
-            if captions.showsLabels {
+            if captions.showsLabels(in: .homeLibraries, isShowcase: isShowcase) {
                 BorderlessCardCaption(
                     title: aggregated.library.displayName,
                     subtitle: subtitle.isEmpty ? nil : subtitle,

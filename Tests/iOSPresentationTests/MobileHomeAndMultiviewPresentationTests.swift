@@ -673,7 +673,7 @@ final class MobileHomeAndMultiviewPresentationTests: XCTestCase {
         }
     }
 
-    func testLibraryCardsHideGlobalCaptionsWithoutRetainingTheirSpace() async throws {
+    func testLibraryCardsRespectHomeOverridesWithoutChangingDirectoryLabels() async throws {
         let artwork = try await posterArtwork()
         let library = AggregatedLibrary(
             accountID: "caption-fixture", accountName: "Viewer", serverName: "Media Server",
@@ -687,7 +687,8 @@ final class MobileHomeAndMultiviewPresentationTests: XCTestCase {
                     var captionBottoms: [CardCaptionPreference: CGFloat] = [:]
                     for preset in [CardCaptionPreference.show, .hide, .recommended] {
                         let captions = CardCaptionSettings(
-                            preference: preset, overrides: [.home: preset == .hide, .browse: preset == .hide]
+                            preference: preset,
+                            overrides: [.home: preset == .hide, .browse: preset == .hide, .homeLibraries: preset != .hide]
                         )
                         host.rootView = AnyView(
                             VStack(alignment: .leading, spacing: 8) {
