@@ -15,7 +15,7 @@ enum CardCaptionSettingsPage: String, CaseIterable {
         case .playlists: "Playlists"
         case .search: "Search"
         case .watchlist: "Watchlist"
-        case .detail: "Detail Page"
+        case .detail: "Movie & show details"
         case .people: "People"
         }
     }

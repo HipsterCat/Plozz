@@ -763,10 +763,10 @@ final class ArtworkSettingsHostedTests: XCTestCase {
         .environment(models.heroSettingsModel)
         .environment(models.heroBackgroundModel)) { window in
             let root = try await self.capture(window, name: "hero-inline-titles", includeMaster: true)
-            for title in ["Hero content sources", "Hide watched content", "Items to show", "Advance automatically"] {
+            for title in ["Hero content sources", "Items to show", "Advance automatically"] {
                 XCTAssertTrue(root.contains(title), root)
             }
-            for title in ["Titles shown in hero", "Automatic changes", "Appearance", "Rotation", "Rotate automatically"] {
+            for title in ["Hide watched content", "Titles shown in hero", "Automatic changes", "Appearance", "Rotation", "Rotate automatically"] {
                 XCTAssertFalse(root.contains(title), root)
             }
             XCTAssertFalse(root.contains("TMDB"), root)

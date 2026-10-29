@@ -1386,6 +1386,75 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         }
     }
 
+    func testMobileAllScreensKeepsRatingsAndSpoilerControlsIndependent() async throws {
+        let suite = "MobileAllScreens.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ContentRatingSettingsStore(defaults: defaults, namespace: "viewer")
+        let ratings = ContentRatingSettingsModel(store: store)
+        let spoilers = SpoilerSettingsModel(store: SpoilerSettingsStore(defaults: defaults, namespace: "viewer"))
+        try await withWindow {
+            NavigationStack {
+                PlozziOSAllScreensSettingsView(contentRatings: ratings, spoilers: spoilers)
+            }
+        } inspect: { window in
+            let before = try await self.capture(window, name: "All screens settings")
+            let text = before.map(\.0).joined(separator: " ")
+            XCTAssertTrue(text.contains("All screens"), text)
+            XCTAssertTrue(text.contains("Show content ratings"), text)
+            XCTAssertTrue(text.localizedCaseInsensitiveContains("Spoiler Protection"), text)
+            XCTAssertTrue(text.contains("Protect unwatched episodes"), text)
+            XCTAssertTrue(text.contains("Hide ratings until watched"), text)
+            func switches(_ view: UIView) -> [UISwitch] {
+                (view as? UISwitch).map { [$0] } ?? view.subviews.flatMap(switches)
+            }
+            let controls = switches(window).sorted {
+                $0.convert($0.bounds, to: window).minY < $1.convert($1.bounds, to: window).minY
+            }
+            XCTAssertEqual(controls.count, 3)
+            let control = try XCTUnwrap(controls.first)
+            XCTAssertTrue(control.isOn)
+            control.setOn(false, animated: false)
+            control.sendActions(for: .valueChanged)
+            let after = try await self.capture(window, name: "All screens ratings off")
+            XCTAssertFalse(store.load())
+            XCTAssertTrue(ContentRatingSettingsStore(defaults: defaults, namespace: "other").load())
+            XCTAssertTrue(after.contains { $0.0.contains("All screens") })
+            XCTAssertTrue(after.contains { $0.0.contains("Hide ratings until watched") })
+            XCTAssertEqual(spoilers.settings, .default)
+            let protect = try XCTUnwrap(controls.dropFirst().first)
+            protect.setOn(true, animated: false)
+            protect.sendActions(for: .valueChanged)
+            _ = try await self.capture(window, name: "All screens spoiler protection enabled")
+            XCTAssertTrue(SpoilerSettingsStore(defaults: defaults, namespace: "viewer").load().isEnabled)
+            XCTAssertFalse(SpoilerSettingsStore(defaults: defaults, namespace: "other").load().isEnabled)
+            XCTAssertFalse(store.load(), "Spoiler controls must not change content-rating badges.")
+            XCTAssertFalse(spoilers.settings.hideRatingsUntilWatched)
+        }
+    }
+
+    func testMobileHomeListsFilteringWithoutInlineWatchedSwitches() async throws {
+        try await withWindow {
+            NavigationStack {
+                HomeRowsSettingsView(
+                    libraries: [], accounts: [],
+                    visibility: HomeLibraryVisibilityModel(store: HomeLibraryVisibilityStore(namespace: UUID().uuidString))
+                )
+                .environment(HeroSettingsModel(store: InMemoryHeroSettingsStore()))
+                .environment(HeroBackgroundSettingsModel(store: InMemoryHeroBackgroundSettingsStore()))
+                .environment(CardStyleSettingsModel())
+            }
+        } inspect: { window in
+            let lines = try await self.capture(window, name: "Home settings destinations")
+            let text = lines.map(\.0).joined(separator: " ")
+            for label in ["Home", "Hero", "Card labels", "Rows", "Filtering"] {
+                XCTAssertTrue(text.contains(label), text)
+            }
+            XCTAssertFalse(text.contains("Hide watched"), text)
+            XCTAssertFalse(text.contains("Add row"), text)
+        }
+    }
+
     func testMobileRecentlyAddedSwitchPersistsWithoutChangingPreset() async throws {
         let suite = "MobileRecentlyAdded.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -1393,22 +1462,34 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         let store = HomeLibraryVisibilityStore(defaults: defaults, namespace: "viewer")
         let visibility = HomeLibraryVisibilityModel(store: store)
         visibility.useRowDefaults(.combined)
+        let heroStore = InMemoryHeroSettingsStore()
+        let hero = HeroSettingsModel(store: heroStore)
         try await withWindow {
             NavigationStack {
-                HomeSectionsSettingsView(libraries: [], accounts: [], visibility: visibility)
+                HomeFilteringSettingsView(visibility: visibility)
+                    .environment(hero)
             }
         } inspect: { window in
             let before = try await self.capture(window, name: "Recently Added filtering off")
-            XCTAssertTrue(before.contains { $0.0.contains("Hide watched in Recently Added") })
+            XCTAssertTrue(before.contains { $0.0.localizedCaseInsensitiveContains("Hide watched content") })
+            XCTAssertTrue(before.contains { $0.0.contains("Recently Added") })
+            XCTAssertTrue(before.contains { $0.0.contains("Hero & discovery") })
             func switches(_ view: UIView) -> [UISwitch] {
                 (view as? UISwitch).map { [$0] } ?? view.subviews.flatMap(switches)
             }
-            let control = try XCTUnwrap(switches(window).first)
+            let controls = switches(window).sorted {
+                $0.convert($0.bounds, to: window).minY < $1.convert($1.bounds, to: window).minY
+            }
+            XCTAssertEqual(controls.count, 2)
+            let control = try XCTUnwrap(controls.first)
+            let heroControl = try XCTUnwrap(controls.last)
             XCTAssertFalse(control.isOn)
+            XCTAssertTrue(heroControl.isOn)
             control.setOn(true, animated: false)
             control.sendActions(for: .valueChanged)
             _ = try await self.capture(window, name: "Recently Added filtering on")
             XCTAssertTrue(store.load().hideWatchedRecentlyAdded)
+            XCTAssertTrue(hero.settings.hideWatched, "Recently Added must not change hero filtering.")
             XCTAssertEqual(visibility.visibility.rowCustomization?.defaults, .combined)
             XCTAssertFalse(HomeLibraryVisibilityStore(defaults: defaults, namespace: "other").load()
                 .hideWatchedRecentlyAdded)
@@ -1416,6 +1497,13 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             control.sendActions(for: .valueChanged)
             _ = try await self.capture(window, name: "Recently Added filtering restored")
             XCTAssertFalse(store.load().hideWatchedRecentlyAdded)
+            heroControl.setOn(false, animated: false)
+            heroControl.sendActions(for: .valueChanged)
+            _ = try await self.capture(window, name: "Hero filtering off independently")
+            XCTAssertFalse(hero.settings.hideWatched)
+            XCTAssertFalse(heroStore.load().hideWatched)
+            XCTAssertFalse(store.load().hideWatchedRecentlyAdded)
+            XCTAssertEqual(visibility.visibility.rowCustomization?.defaults, .combined)
         }
     }
 
