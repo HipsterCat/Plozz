@@ -7,6 +7,41 @@ import XCTest
 final class HTTPPerformanceDiagnosticsTests: XCTestCase {
     private struct Payload: Decodable { let value: String }
 
+    func testSearchAndScopedCaptureShareSafeUnderlyingTransportEvidence() async throws {
+        let journal = SearchDiagnosticJournal()
+        journal.start()
+        let error = URLError(.cannotConnectToHost, userInfo: [
+            NSUnderlyingErrorKey: NSError(
+                domain: NSPOSIXErrorDomain, code: 61,
+                userInfo: [NSLocalizedDescriptionKey: "private-server"]
+            )
+        ])
+        for route: ResponseDecodingDiagnostic.Route in [.other, .serverAuthentication] {
+            let source = try XCTUnwrap(journal.beginSearch()?.source(
+                index: 0, provider: .silo, limit: 40, disabledLibraries: 0
+            ))
+            let captured = await SearchDiagnosticJournal.$currentSource.withValue(source) {
+                await HTTPResponseDiagnostics.$route.withValue(route) {
+                    await HTTPResponseDiagnostics.capture { () async throws -> Bool in
+                        HTTPResponseDiagnostics.recordTransportFailure(error)
+                        throw AppError.serverUnreachable
+                    }
+                }
+            }
+            source.finish(error: .serverUnreachable)
+            let transport = try XCTUnwrap(captured.transport.first)
+            XCTAssertEqual(transport.route, route == .other ? .search : route)
+            XCTAssertEqual(transport.urlErrorCode, URLError.cannotConnectToHost.rawValue)
+            XCTAssertEqual(transport.underlying.count, 1)
+            XCTAssertEqual(transport.underlying.first?.code, 61)
+            XCTAssertEqual(journal.export(scope: DiagnosticExportScope()).entries.last?.facts.transport, [transport])
+        }
+        let text = String(decoding: try JSONEncoder().encode(journal.export(scope: DiagnosticExportScope())), as: UTF8.self)
+        XCTAssertFalse(text.contains("private-server"))
+        XCTAssertNil(SearchDiagnosticJournal.currentSource)
+        XCTAssertFalse(HTTPResponseDiagnostics.isCapturing)
+    }
+
     func testSearchJournalCapturesRequestsAfterSuccessFailureTimeoutAndCancellation() async throws {
         let session = makeSession()
         defer { session.invalidateAndCancel() }

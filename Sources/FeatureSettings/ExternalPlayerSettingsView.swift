@@ -38,7 +38,7 @@ public struct PlaybackAdvancedSettingsView: View {
     static func rows(
         playback: PlaybackSettingsModel, model: ExternalPlayerSettingsModel = .shared
     ) -> [SettingsSplitRow] {
-        ExternalPlayerSettingsRows.advanced(model: model) + [
+        var rows = ExternalPlayerSettingsRows.advanced(model: model) + [
             SettingsSplitRow(id: "dolby-vision-fel", title: "Video") {
                 DolbyVisionFELControl(isOn: Binding(
                     get: { playback.settings.dolbyVisionFELEnabled },
@@ -46,6 +46,14 @@ public struct PlaybackAdvancedSettingsView: View {
                 ))
             }
         ]
+        #if os(tvOS)
+        if #available(tvOS 26.0, *) {
+            rows.append(SettingsSplitRow(id: "spatial-audio-layout", title: "Audio") {
+                SpatialAudioLayoutControl()
+            })
+        }
+        #endif
+        return rows
     }
 }
 

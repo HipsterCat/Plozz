@@ -1150,6 +1150,8 @@ public struct JellyfinClient: Sendable {
     ) async throws -> PlaybackInfoResponse {
         try streaming?.quality.validate()
         var capabilityProfile = streaming.map { self.capabilityProfile.applying($0) } ?? self.capabilityProfile
+        capabilityProfile.maxStreamingBitrate = streaming?.quality.maximumBitrate
+        capabilityProfile.maxStaticBitrate = streaming?.quality.maximumBitrate
         var queryItems = [URLQueryItem(name: "UserId", value: userID)]
         if let streaming {
             if let track = streaming.audioTrack {
@@ -1613,7 +1615,9 @@ public struct JellyfinClient: Sendable {
 
     // MARK: Music
 
-    var musicMaxStreamingBitrate: Int { capabilityProfile.maxStreamingBitrate }
+    var musicMaxStreamingBitrate: Int {
+        capabilityProfile.maxStreamingBitrate ?? JellyfinCapabilityProfile.defaultMaxBitrate
+    }
 
     /// One page of music items from a container, using an explicit Jellyfin
     /// `SortBy` (music needs multi-key sorts like `ParentIndexNumber,IndexNumber`
@@ -1736,7 +1740,7 @@ public struct JellyfinClient: Sendable {
             ),
             AuthenticatedHTTPQueryItem(
                 name: "MaxStreamingBitrate",
-                value: String(capabilityProfile.maxStreamingBitrate)
+                value: String(musicMaxStreamingBitrate)
             ),
             // Bare containers would allow unsupported codecs (such as DTS in WAV).
             AuthenticatedHTTPQueryItem(

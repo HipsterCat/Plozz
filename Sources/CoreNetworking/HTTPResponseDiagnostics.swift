@@ -30,14 +30,16 @@ public enum HTTPResponseDiagnostics {
     }
 
     public static func capture<Value: Sendable>(
+        retainingSuccessfulRequests: Bool = false,
         _ operation: @Sendable () async throws -> Value
     ) async -> CapturedResult<Value> {
         let recorder = Recorder()
         return await $recorder.withValue(recorder) {
             do {
+                let value = try await operation()
                 return CapturedResult(
-                    result: .success(try await operation()), responses: [], paging: [], transport: [], http: [],
-                    requests: [], validation: []
+                    result: .success(value), responses: [], paging: [], transport: [], http: [],
+                    requests: retainingSuccessfulRequests ? recorder.snapshot().requests : [], validation: []
                 )
             } catch {
                 let evidence = recorder.snapshot()
@@ -76,8 +78,11 @@ public enum HTTPResponseDiagnostics {
     }
 
     public static func recordTransportFailure(_ error: URLError) {
-        guard error.code != .cancelled else { return }
-        let diagnostic = ResponseTransportDiagnostic(route: effectiveRoute, urlErrorCode: error.errorCode)
+        guard isCapturing, error.code != .cancelled else { return }
+        let diagnostic = ResponseTransportDiagnostic(
+            route: effectiveRoute, urlErrorCode: error.errorCode,
+            underlying: Array(PlaybackFailureEvidence.ErrorCode.chain(error as NSError).dropFirst())
+        )
         recorder?.append(diagnostic)
         SearchDiagnosticJournal.currentSource?.transport(diagnostic)
     }

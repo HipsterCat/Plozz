@@ -44,6 +44,7 @@ public enum CrashDiagnostics {
             preparationDiagnostics: { PlaybackPreparationDiagnostics.export(scope: scope) },
             libraryDiagnostics: { LibraryDiagnosticJournal.shared.export(scope: scope) },
             searchDiagnostics: { SearchDiagnosticJournal.shared.export(scope: scope) },
+            connectionDiagnostics: { ServerConnectionDiagnostics.shared.export(scope: scope) },
             playbackDiagnostics: playbackJournal,
             captureEvent: { event, attachment in
                 SentrySDK.capture(event: event) { scope in
@@ -75,6 +76,9 @@ public enum CrashDiagnostics {
         searchDiagnostics: @MainActor () -> SearchDiagnosticJournal.Export = {
             SearchDiagnosticJournal.shared.export(scope: DiagnosticExportScope())
         },
+        connectionDiagnostics: @MainActor () -> ServerConnectionDiagnostics.Export = {
+            ServerConnectionDiagnostics.shared.export(scope: DiagnosticExportScope())
+        },
         playbackDiagnostics: PlaybackDiagnosticJournal.Export? = nil,
         operations: PerformanceDiagnostics = .shared,
         captureEvent: (Event, Attachment) -> SentryId,
@@ -88,7 +92,7 @@ public enum CrashDiagnostics {
 
         let report = TechnicalReport(
             activity: activity(), sources: sourceDiagnostics(), preparation: preparationDiagnostics(),
-            library: libraryDiagnostics(),
+            library: libraryDiagnostics(), connections: connectionDiagnostics(),
             playback: playbackDiagnostics,
             search: searchDiagnostics(),
             operations: operations.snapshot()
@@ -139,6 +143,7 @@ public enum CrashDiagnostics {
         let sources: LiveTVSourceDiagnostics.Export
         let preparation: PlaybackPreparationDiagnostics.Export
         let library: LibraryDiagnosticJournal.Export
+        let connections: ServerConnectionDiagnostics.Export
         let playback: PlaybackDiagnosticJournal.Export?
         let search: SearchDiagnosticJournal.Export
         let operations: PerformanceDiagnostics.Snapshot?

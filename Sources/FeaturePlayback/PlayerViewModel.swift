@@ -817,11 +817,9 @@ public final class PlayerViewModel {
             Task { [weak self] in
                 guard let self, self.engineToken == callbackEngineToken,
                       self.streamingLoadGeneration == failureGeneration else { return }
-                if self.streamingOptions != nil {
-                    let facts = failureEvidence
-                    let canRetry = facts?.allowsCodecFallback ?? (error == .invalidResponse)
-                    if (canRetry || facts?.kind == .hdrConversion), self.retryStreamingCodecIfNeeded(failure: facts) { return }
-                }
+                let canRetry = failureEvidence?.allowsCodecFallback ?? (error == .invalidResponse)
+                if (canRetry || failureEvidence?.kind == .hdrConversion),
+                   self.retryStreamingCodecIfNeeded(failure: failureEvidence) { return }
                 self.streamingQuality.error = Self.streamingFailure(error, evidence: failureEvidence)
                 await self.engineHandoff.handleEngineFailure(
                     error,
@@ -1477,6 +1475,7 @@ public final class PlayerViewModel {
         rewritten.streamingSessionID = nil
         rewritten.negotiatedStreamingVideoCodec = nil
         rewritten.burnedInSubtitleTrackID = nil
+        rewritten.serverDecision = nil
         rewritten.isManifestStream = false
         rewritten.isTranscoding = false
         rewritten.deliveryMode = .directPlay
@@ -1574,14 +1573,26 @@ public final class PlayerViewModel {
     }
 
     private func retryStreamingCodecIfNeeded(failure: StreamingPlaybackFailure? = nil) -> Bool {
-        guard request?.isTranscoding == true, let options = streamingOptions,
-              !didStop, let retry = StreamingCodecRetryPolicy.next(
+        guard let request, request.isTranscoding, !didStop else { return false }
+        let options: StreamingPlaybackOptions
+        if let selected = streamingOptions {
+            options = selected
+        } else {
+            // Ordinary TV playback can receive server HLS without a quality selection.
+            // Enter managed conversion only for recovery, never for the initial resolve.
+            guard provider is any StreamingQualityProviding, request.isManifestStream,
+                  [.movie, .episode].contains(request.item.kind) else { return false }
+            options = .init(quality: .original)
+        }
+        guard let retry = StreamingCodecRetryPolicy.next(
                 preference: options.codec,
-                selectedCodec: engine.streamingOutputVideoCodec ?? request?.negotiatedStreamingVideoCodec
+                selectedCodec: engine.streamingOutputVideoCodec ?? request.negotiatedStreamingVideoCodec
                     ?? (failure?.kind == .hdrConversion ? .h264 : nil),
                 supportsHEVC: capabilities.supportsHEVC && streamingQualitySupport.codecs.contains(.preferHEVC),
                 alreadyRetried: streamingQuality.fallbackCodec != nil
               ) else { return false }
+        streamingMediaSourceID = currentMediaSourceID
+        streamingQuality.options = options
         streamingQuality.fallbackCodec = retry
         recordPlayback(.codecRetry)
         HandoffDiagnostics.emit("streaming CODEC_RETRY requested=\(retry.rawValue) quality=\(options.quality.diagnosticName)")

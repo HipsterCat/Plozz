@@ -127,9 +127,6 @@ private struct NavigationRailShellContent<Content: View>: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
                 }
-                // Native Search owns its navigation bar. Reserve actual container
-                // space above it, rather than overlaying its field or keyboard.
-                .padding(.top, presentation.headerHeight)
                 // The rail makes room for itself by PUBLISHING an inset, never by
                 // insetting this container.
                 //
@@ -418,6 +415,15 @@ struct NavigationRailRootContentInset: ViewModifier {
     }
 }
 
+/// Reserve the page button's space on Search, never on its navigation stack.
+struct NavigationRailSearchRootInset: ViewModifier {
+    @Environment(\.plozzPinnedSidebarActive) private var isPinned
+
+    func body(content: Content) -> some View {
+        content.padding(.top, isPinned ? NavigationRailMetrics.searchHeaderHeight : 0)
+    }
+}
+
 struct NavigationRailPresentation: Equatable {
     let destination: NavigationRailDestination
     let chromeHidden: Bool
@@ -443,7 +449,6 @@ struct NavigationRailPresentation: Equatable {
     // before its focus-request observer adopts the selected destination.
     var isRailVisible: Bool { !chromeHidden && (!usesPageButton || isExpanded || isOpening) }
     var isRailEnabled: Bool { isRailVisible }
-    var headerHeight: CGFloat { showsPageButton ? NavigationRailMetrics.searchHeaderHeight : 0 }
     var contentInset: CGFloat {
         // Live TV also suppresses navigation while handing focus to its guide.
         // Keep that guide in place; its video and Search already use full bounds.

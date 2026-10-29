@@ -662,6 +662,11 @@ on-demand and Live TV playback, including while Up Next is visible, but yield to
 menus, sheets, VoiceOver, external playback and inactive scenes. Multiview and
 inline Live TV do not adjust shared device outputs.
 
+Timeline scrubbing disables shortcuts and both level recognizers without
+deactivating the foreground playback session. Beginning or ending a seek must
+not restore saved brightness; restoration belongs to leaving foreground playback
+or dismissing the player. This applies to both on-demand and Live TV timelines.
+
 Level feedback is a 32-by-156-point monochrome vertical capsule, inset 8 points
 from the respective safe-area edge. It fills upward with
 the swipe, without revealing the timeline. Only the fill and 16-point native output icon
@@ -846,9 +851,13 @@ step, not the original recording's fidelity, resampling/downmixing, or the
 receiver's final output. In particular, stream-copy of a lossy source is not
 labelled lossless. The same shared rows follow live pipeline changes on both
 platforms, without changing audio selection or conversion behavior.
-On tvOS 26+, the profile's default-on **Spatial audio** choice requests a 7.1.4
-APAC intermediate bed for supported on-demand playback. This is lossy conversion,
-not a speaker inventory or bitstream passthrough. Saved Off choices survive.
+On tvOS 26+, the profile's default-on **Spatial audio** choice requests a
+device-selected intermediate bed for supported on-demand playback. It defaults
+to 9.1.6; Playback > Advanced offers all five engine layouts. The engine chooses
+24-bit PCM at load, or lossy APAC over AirPlay. Diagnostics label the actual
+rendered PCM pipeline **Rendered to PCM**, distinct from ordinary **Decoded to PCM**.
+This is not a speaker inventory or bitstream passthrough. DTS:X heights require
+7.1.4 or 9.1.6; other layouts retain channel playback. Saved Off choices survive.
 `PlayerViewModel` captures the active preference for initial and handoff loads;
 live streams, shared players, muted previews and other platforms stay off.
 The engine owns source eligibility and fallback. On tvOS 26+, software/FEL
@@ -1420,6 +1429,16 @@ not decode unrelated library-item fields, whose wire types can differ here.
 Automatic recovery uses the observed/negotiated codec: a failed H.264
 conversion can request HEVC on a capable device; HEVC can fall back to H.264.
 There is one compatibility retry, not a loop through the same codec.
+Ordinary movie/episode playback, including TV callers without a quality selection,
+uses that same retry when a supported provider supplies server HLS and the stream
+fails compatibility checks or reaches the app's startup deadline without a
+stronger transport/refusal error. Initial negotiation stays unchanged. Only
+recovery enters managed conversion at Original quality, preserving the account,
+selected file, position, tracks, pause and speed. It stops the outgoing session
+before requesting a forced replacement; it never fetches an original file to
+bypass the server's conversion decision. Conversion can change HDR and audio.
+An unknown delivered codec gets the existing H.264 recovery, not an assumption
+that the original file's HEVC badge describes the failed rendition.
 The Plex H.264 fallback requests MPEG-TS at the unchanged budget.
 Confirmed missing or ended resources require a fresh user retry, not a codec change; retry
 never falls back to the uncapped original. Decision status and numeric codes are retained without

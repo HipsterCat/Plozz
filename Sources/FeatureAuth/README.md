@@ -141,6 +141,12 @@ session persistence.
   Emby uses password, and Plex uses Link.
 - **Always cancellable.** Every flow must be Cancel-able from the remote
   without leaking polling tasks.
+- **Connection reports distinguish validation from sign-in.** Password sign-in
+  and Quick Connect add bounded `ServerConnectionDiagnostics` records to the
+  existing explicit diagnostic submission. Quick Connect records begin/approval
+  stages rather than one journal entry per poll. Cancelled work is excluded;
+  usernames, passwords, codes, tokens, server addresses, and response bodies
+  are never retained by this journal.
 - **IPTV editor removal captures row identity first.** Guide/header removal
   actions capture the row's ID before mutating its collection. Reading a bound
   row from inside `removeAll` can overlap the collection's exclusive write
