@@ -1512,6 +1512,10 @@ public struct JellyfinProvider: MediaProvider, ServerRatingsProviding, SeriesRes
             try Task.checkCancellation()
         }
 
+        if kind == .emby, streaming?.quality.maximumBitrate == nil {
+            try source.boundEmbyOriginalTranscodingBitrate()
+        }
+
         if !didRemux {
             do {
                 try source.requestSDRForH264Transcode(
