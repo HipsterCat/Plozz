@@ -43,6 +43,7 @@ public enum CrashDiagnostics {
             sourceDiagnostics: { LiveTVSourceDiagnostics.captureExport(scope: scope) },
             preparationDiagnostics: { PlaybackPreparationDiagnostics.export(scope: scope) },
             libraryDiagnostics: { LibraryDiagnosticJournal.shared.export(scope: scope) },
+            searchDiagnostics: { SearchDiagnosticJournal.shared.export(scope: scope) },
             connectionDiagnostics: { ServerConnectionDiagnostics.shared.export(scope: scope) },
             playbackDiagnostics: playbackJournal,
             captureEvent: { event, attachment in
@@ -72,6 +73,9 @@ public enum CrashDiagnostics {
         libraryDiagnostics: @MainActor () -> LibraryDiagnosticJournal.Export = {
             LibraryDiagnosticJournal.shared.export(scope: DiagnosticExportScope())
         },
+        searchDiagnostics: @MainActor () -> SearchDiagnosticJournal.Export = {
+            SearchDiagnosticJournal.shared.export(scope: DiagnosticExportScope())
+        },
         connectionDiagnostics: @MainActor () -> ServerConnectionDiagnostics.Export = {
             ServerConnectionDiagnostics.shared.export(scope: DiagnosticExportScope())
         },
@@ -90,6 +94,7 @@ public enum CrashDiagnostics {
             activity: activity(), sources: sourceDiagnostics(), preparation: preparationDiagnostics(),
             library: libraryDiagnostics(), connections: connectionDiagnostics(),
             playback: playbackDiagnostics,
+            search: searchDiagnostics(),
             operations: operations.snapshot()
         )
         let body: Data
@@ -140,6 +145,7 @@ public enum CrashDiagnostics {
         let library: LibraryDiagnosticJournal.Export
         let connections: ServerConnectionDiagnostics.Export
         let playback: PlaybackDiagnosticJournal.Export?
+        let search: SearchDiagnosticJournal.Export
         let operations: PerformanceDiagnostics.Snapshot?
     }
     #endif

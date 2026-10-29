@@ -675,6 +675,7 @@ public struct HomeView: View {
                         }
                         // Never clip a focused card's lift, shadow or border.
                         .scrollClipDisabled()
+                        .scrollsTopNavigation { heroRecedeModel.isReceded = false }
                         // Drive the recede off the SCROLL, observed as a BOOL so this fires
                         // ONLY when the threshold is crossed — never on every scroll frame.
                         // (The old per-frame CGFloat capture wrote @State each frame, forcing

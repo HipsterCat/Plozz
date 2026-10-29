@@ -121,6 +121,20 @@ including relationships between journals; stable local hashes and UUIDs do not
 leave the device. Record times are relative ages. The optional written message
 is submitted separately as written, so feedback is not guaranteed anonymous.
 
+Search has a separate consent-scoped, in-memory journal in the manual attachment's
+`search` section. It retains 32 completed source attempts and up to 32 active ones;
+ordinary Home/network traffic cannot displace them. Outcomes distinguish results,
+empty, failure, cancellation and still-running work per provider, correlated with
+report-local search aliases. Request/page totals accompany bounded tails (eight
+each); decoding, HTTP and transport failures retain four each. Silo also reports
+numeric library filtering and cursor progression, not names, IDs, query text or
+cursor values. Missing library metrics on other providers mean uninstrumented,
+not zero. Enable Share Crash Reports before reproducing, then submit without
+restarting: opt-out/relaunch clears the journal and late completions from a prior
+consent session are discarded. Completed records also expire after 48 hours.
+This evidence narrows client/server failures but cannot diagnose server indexing
+internals or prove that a successful empty response is correct.
+
 Opted-in reports also carry a bounded, in-memory performance snapshot. It records
 coarse operation/provider categories, elapsed time, start-thread identity,
 overlapping work, and available item/row/credit/account/request/byte counts.

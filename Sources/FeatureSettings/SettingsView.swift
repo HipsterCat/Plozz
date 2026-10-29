@@ -414,6 +414,7 @@ public struct SettingsView: View {
                 .padding(.bottom, SettingsFormMetrics.pageBottomInset)
             }
             .scrollClipDisabled()
+            .scrollsTopNavigation(onReturnToTop: { navigation.select(.playback) })
         } detail: { route in
             destination(for: route)
         }
@@ -1063,7 +1064,8 @@ public struct SettingsView: View {
             )
         case .recentActivity:
             RecentActivityDetailView(
-                canSendDiagnostics: crashReportingConfigured && crashReporting.isEnabled
+                crashReporting: crashReporting,
+                crashReportingConfigured: crashReportingConfigured
             )
         case let .plexUser(accountID):
             PlexLinkedUserDetailView(scope: context.librariesScope, accountID: accountID)

@@ -3,6 +3,7 @@ import CoreModels
 import CoreNetworking
 import CoreUI
 import CrashReporting
+import FeatureSettings
 import Foundation
 import SwiftUI
 import UIKit
@@ -53,28 +54,24 @@ struct PlozziOSDiagnosticsSettingsView: View {
             }
 
             SettingsSectionGroup {
-                Toggle(
-                    "Share Crash Reports",
-                    isOn: $crashReporting.isEnabled
-                )
+                Toggle(isOn: $crashReporting.isEnabled) { Text(SettingsCopy.shareDiagnostics) }
+                .accessibilityIdentifier("diagnostics-sharing-toggle")
                 .disabled(!appModel.crashReportingController.isConfigured)
-            } footer: {
-                if appModel.crashReportingController.isConfigured {
-                    Text(SettingsCopy.automaticDiagnostics)
-                    Text(SettingsCopy.automaticDiagnosticsExclusions)
-                } else {
-                    Text("Crash reporting is unavailable in this build.")
-                }
             }
 
-            SettingsSectionGroup("Send Diagnostics") {
+            SettingsSectionGroup("Send Diagnostics", accessory: { DiagnosticsInfoButton() }) {
                 TextField(text: $diagnosticNote, axis: .vertical) {
                     Text(SettingsCopy.diagnosticsMessage)
                 }
                 .lineLimit(2...4)
                 .accessibilityIdentifier("diagnostics-message")
-                .disabled(isSending)
-                Button {
+                .disabled(!appModel.crashReportingController.isConfigured || isSending)
+                DiagnosticsSendButton(
+                    sharingEnabled: $crashReporting.isEnabled,
+                    isConfigured: appModel.crashReportingController.isConfigured,
+                    hasMessage: CrashDiagnostics.normalizedNote(diagnosticNote) != nil,
+                    isSending: isSending
+                ) {
                     appModel.applyCrashReportingPreference()
                     let note = diagnosticNote
                     isSending = true
@@ -83,25 +80,21 @@ struct PlozziOSDiagnosticsSettingsView: View {
                         let sent = await CrashDiagnostics.send(note: note)
                         sendStatus = sent
                             ? "Diagnostics submitted for delivery. Thank you."
-                            : "Couldn't submit diagnostics. Check that crash reporting is enabled and try again."
+                            : SettingsCopy.diagnosticSubmissionFailed
                     }
-                } label: {
-                    Label("Send to Developer", systemImage: "paperplane")
                 }
-                .accessibilityIdentifier("diagnostics-submit")
-                .disabled(
-                    !appModel.crashReportingController.isConfigured
-                        || !crashReporting.isEnabled
-                        || isSending
-                        || CrashDiagnostics.normalizedNote(diagnosticNote) == nil
-                )
 
                 if let sendStatus {
                     Text(sendStatus)
                         .plozzForeground(.secondary)
                 }
             } footer: {
-                Text(SettingsCopy.manualDiagnostics)
+                if !appModel.crashReportingController.isConfigured {
+                    Text(SettingsCopy.diagnosticSharingUnavailable)
+                } else if !crashReporting.isEnabled {
+                    Text(SettingsCopy.diagnosticSharingRequired)
+                }
+                Text(SettingsCopy.diagnosticsMessagePrivacy)
             }
 
             SettingsSectionGroup {

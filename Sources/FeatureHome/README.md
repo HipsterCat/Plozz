@@ -372,6 +372,9 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   Home's Watchlist row and the canonical union order are unchanged. Filtering
   never fetches another list or changes membership; controls remain available
   during loading, errors, and empty results.
+  On TV, navigation enters the available cards rather than the query controls.
+  The outer Watchlist scroll view owns Top Bar scrolling; Back restores both
+  the header and navigation to the top.
   Date Added uses the Watchlist add time, never a library/catalog add date or
   import time. Local actions and available Plex, Trakt, and Simkl dates survive
   publication and native caching. Undated/tied entries retain source order after
@@ -612,6 +615,11 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   The sidebar's mask changes without replacing the scroll view, preserving
   browse position and restoring the normal feather when navigation returns.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
+  distinguish navigation roots from pushed pages with `isNavigationRoot`.
+  Individual library and All Libraries roots preserve automatic native-sidebar
+  visibility. The custom Top Bar owns its own chrome and content-focus gate,
+  so loading content cannot remove its focused destination. Pushed
+  library/collection pages retain their hidden native tab bar. They
   own a bounded, directional `ArtworkPrefetchWindow`. Its URL/variant requests
   preserve overlapping work across reversals and cancel obsolete queued work.
   Admission rechecks decoded residency; content, density, lifecycle and background
