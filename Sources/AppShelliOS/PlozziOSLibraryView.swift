@@ -119,23 +119,27 @@ private struct PlozziOSLibraryList: View {
     }
 }
 
-private struct PlozziOSLibraryCard: View {
+struct PlozziOSLibraryCard: View {
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.themePalette) private var palette
+    @Environment(\.plozzCardCaptionSettings) private var captions
     let library: MediaLibrary
 
-    @ViewBuilder
     var body: some View {
-        if cardStyle == .framed {
-            content
-                .plozzFramedMediaCard(
-                    innerCornerRadius: metrics.landscapeArtworkCornerRadius
-                )
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-        } else {
-            content
+        Group {
+            if cardStyle == .framed {
+                content
+                    .plozzFramedMediaCard(
+                        innerCornerRadius: metrics.landscapeArtworkCornerRadius
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+            } else {
+                content
+            }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(library.displayName)
     }
 
     private var content: some View {
@@ -168,14 +172,16 @@ private struct PlozziOSLibraryCard: View {
                 cornerRadius: metrics.landscapeArtworkCornerRadius
             )
 
-            library.displayName
-                .font(.headline)
-                .lineLimit(2)
-                .padding(.horizontal, metrics.landscapeCaptionHorizontalInset)
-                .padding(
-                    .bottom,
-                    cardStyle == .framed ? metrics.landscapeCaptionInset : 0
-                )
+            if captions.showsLabels {
+                library.displayName
+                    .font(.headline)
+                    .lineLimit(2)
+                    .padding(.horizontal, metrics.landscapeCaptionHorizontalInset)
+                    .padding(
+                        .bottom,
+                        cardStyle == .framed ? metrics.landscapeCaptionInset : 0
+                    )
+            }
         }
         .contentShape(Rectangle())
     }

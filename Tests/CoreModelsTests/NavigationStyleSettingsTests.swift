@@ -3,6 +3,34 @@ import XCTest
 
 final class NavigationStyleSettingsStoreTests: XCTestCase {
     @MainActor
+    func testLibraryOrderingHintsTrackProfileArrangementAndDiscoveryWithoutHidingCards() {
+        let defaults = makeDefaults()
+        let layoutStore = NavigationLibraryLayoutStore(defaults: defaults, namespace: "viewer")
+        let libraries = ["first", "second", "new"].map { id in
+            AggregatedLibrary(
+                accountID: "server", accountName: "Viewer", serverName: "Server",
+                providerKind: .jellyfin, library: MediaLibrary(id: id, title: id, kind: .movie)
+            )
+        }
+        layoutStore.save(.init(order: [libraries[1].key], hiddenKeys: [libraries[1].key]))
+        let model = NavigationStyleSettingsModel(
+            store: NavigationStyleSettingsStore(defaults: defaults, namespace: "viewer"),
+            layoutStore: layoutStore
+        )
+        model.updateContentLibraries(libraries, accountIDs: ["server"], unreachableAccountIDs: [])
+        XCTAssertEqual(model.libraryOrderingKeys, [libraries[1].key] + libraries.map(\.key))
+        model.resetLibraryLayout()
+        XCTAssertEqual(model.libraryOrderingKeys, libraries.map(\.key))
+        model.applyLibrarySections(
+            .init(enabled: [libraries[2].key, libraries[0].key], disabled: [libraries[1].key]),
+            available: libraries.map(\.key)
+        )
+        XCTAssertEqual(Array(model.libraryOrderingKeys.prefix(3)),
+                       [libraries[2].key, libraries[0].key, libraries[1].key])
+        XCTAssertTrue(NavigationLibraryLayoutStore(defaults: defaults, namespace: "other").load().order.isEmpty)
+    }
+
+    @MainActor
     func testHorizontalSettingsMoveHideResetAndProfileIsolation() throws {
         let defaults = makeDefaults()
         let layoutStore = NavigationLibraryLayoutStore(defaults: defaults, namespace: "viewer")

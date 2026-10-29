@@ -957,7 +957,9 @@ watch history and planning-list behavior are documented in
   caption bars on only one half. Show labels everywhere and Hide labels everywhere
   govern all media captions; App default owns Showcase and title-artwork exceptions.
   Explicit per-view choices, including Episodes, last until a preset replaces them.
-  Library navigation names and on-artwork information are not captions.
+  Library-card names and their server/provider caption follow the global preset;
+  per-view media-label overrides do not affect those navigation cards. Library
+  names in navigation bars, sidebars, menus, and on-artwork information remain visible.
   Per-view help states whether labels are visible or hidden; Mixed explains
   the Showcase and series-artwork exceptions. It follows the focused setting
   and updates when that setting changes.

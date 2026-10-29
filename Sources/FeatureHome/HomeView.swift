@@ -276,6 +276,7 @@ public struct HomeView: View {
     @Environment(\.mediaItemActionHandler) private var mediaItemActionHandler
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.locale) private var locale
+    @Environment(NavigationStyleSettingsModel.self) private var navigation: NavigationStyleSettingsModel?
 
     public init(
         viewModel: HomeViewModel,
@@ -406,6 +407,7 @@ public struct HomeView: View {
             // viewing history remains account-wide.
             let rows = HomeRow.rows(
                 for: content,
+                libraryOrder: navigation?.libraryOrderingKeys ?? [],
                 isLibraryVisible: { visibility.isVisible($0) },
                 isLibraryTileVisible: visibility.isVisibleOnHome,
                 isGlobalRowEnabled: { visibility.visibility.isGlobalRowEnabled($0) },
@@ -905,7 +907,8 @@ public struct HomeView: View {
                     group.sections.map { HomeRowChoice(section: $0, library: group.library) }
                 }
             let rows = HomeRow.rows(
-                for: content, isLibraryVisible: visibility.isVisible,
+                for: content, libraryOrder: navigation?.libraryOrderingKeys ?? [],
+                isLibraryVisible: visibility.isVisible,
                 isLibraryTileVisible: visibility.isVisibleOnHome,
                 isGlobalRowEnabled: visibility.isGlobalRowEnabled,
                 loadingRows: viewModel.loadingRows, failures: viewModel.rowFailures
@@ -2330,6 +2333,7 @@ struct LibraryCardView: View {
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardCaptionSettings) private var captions
     /// Per-profile card presentation, so a Home "Libraries" tile switches between
     /// the framed glass card and the borderless "Posters" look with every other
     /// card on Home.
@@ -2376,6 +2380,7 @@ struct LibraryCardView: View {
                     ? ProviderBrandMark.brandTint(aggregated.providerKind) : nil,
                 providerKind: aggregated.providerKind,
                 mediaShareTransport: aggregated.transportKind,
+                showsCaption: captions.showsLabels,
                 focus: $isFocused,
                 action: action
             ) {
@@ -2407,35 +2412,9 @@ struct LibraryCardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous))
                 .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: PlozzTheme.Spacing.small) {
-                    ProviderBrandMark(
-                        provider: aggregated.providerKind, size: metrics.cardTitleFontSize,
-                        mediaShareTransport: aggregated.transportKind
-                    )
-                    .environment(\.settingsRowIsFocused, surfaceFocused)
-                    .accessibilityHidden(true)
-                    PlozzMarqueeText(
-                        text: aggregated.library.displayName,
-                        font: .system(size: metrics.cardTitleFontSize, weight: .semibold),
-                        color: titleColor,
-                        inset: 0,
-                        fadeWidth: metrics.landscapeCaptionInset * PlozzTheme.Metrics.marqueeFadeRatio,
-                        isFocused: isFocused
-                    )
-                }
-                .padding(.horizontal, metrics.landscapeCaptionInset)
-                PlozzMarqueeText(
-                    text: Text(subtitle.isEmpty ? " " : subtitle),
-                    font: .system(size: metrics.cardSubtitleFontSize),
-                    color: subtitleColor,
-                    inset: metrics.landscapeCaptionInset,
-                    isFocused: isFocused
-                )
-                .opacity(subtitle.isEmpty ? 0 : 1)
+            if captions.showsLabels {
+                framedCaption
             }
-            .padding(.bottom, metrics.landscapeCaptionInset)
-            .frame(width: metrics.landscapeWidth, alignment: .leading)
         }
         .padding(metrics.cardInset)
         .plozzGlassCard(cornerRadius: metrics.landscapeCardCornerRadius, isFocused: surfaceFocused)
@@ -2450,6 +2429,38 @@ struct LibraryCardView: View {
                        accessibilityLabel: aggregated.library.displayName(in: locale), accessibilityValue: subtitle,
                        action: action)
         .plozzCardFocusTransition(isFocused: isFocused)
+    }
+
+    private var framedCaption: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: PlozzTheme.Spacing.small) {
+                ProviderBrandMark(
+                    provider: aggregated.providerKind, size: metrics.cardTitleFontSize,
+                    mediaShareTransport: aggregated.transportKind
+                )
+                .environment(\.settingsRowIsFocused, surfaceFocused)
+                .accessibilityHidden(true)
+                PlozzMarqueeText(
+                    text: aggregated.library.displayName,
+                    font: .system(size: metrics.cardTitleFontSize, weight: .semibold),
+                    color: titleColor,
+                    inset: 0,
+                    fadeWidth: metrics.landscapeCaptionInset * PlozzTheme.Metrics.marqueeFadeRatio,
+                    isFocused: isFocused
+                )
+            }
+            .padding(.horizontal, metrics.landscapeCaptionInset)
+            PlozzMarqueeText(
+                text: Text(subtitle.isEmpty ? " " : subtitle),
+                font: .system(size: metrics.cardSubtitleFontSize),
+                color: subtitleColor,
+                inset: metrics.landscapeCaptionInset,
+                isFocused: isFocused
+            )
+            .opacity(subtitle.isEmpty ? 0 : 1)
+        }
+        .padding(.bottom, metrics.landscapeCaptionInset)
+        .frame(width: metrics.landscapeWidth, alignment: .leading)
     }
 
     /// The borderless ("Posters") Libraries tile: the library artwork with no glass
@@ -2473,16 +2484,18 @@ struct LibraryCardView: View {
                     isFocused: isFocused
                 )
 
-            BorderlessCardCaption(
-                title: aggregated.library.displayName,
-                subtitle: subtitle.isEmpty ? nil : subtitle,
-                horizontalInset: metrics.landscapeCaptionInset,
-                isFocused: isFocused,
-                providerKind: aggregated.providerKind,
-                mediaShareTransport: aggregated.transportKind
-            )
-            .frame(width: width)
-            .offset(y: focusStyle.usesSystemEffect || isFocused ? 0 : -push)
+            if captions.showsLabels {
+                BorderlessCardCaption(
+                    title: aggregated.library.displayName,
+                    subtitle: subtitle.isEmpty ? nil : subtitle,
+                    horizontalInset: metrics.landscapeCaptionInset,
+                    isFocused: isFocused,
+                    providerKind: aggregated.providerKind,
+                    mediaShareTransport: aggregated.transportKind
+                )
+                .frame(width: width)
+                .offset(y: focusStyle.usesSystemEffect || isFocused ? 0 : -push)
+            }
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
         .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius,

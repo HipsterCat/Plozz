@@ -458,6 +458,7 @@ struct PlozziOSHomeView: View {
         )
         let rows = HomeRow.rows(
             for: content,
+            libraryOrder: appModel.settings.navigation.libraryOrderingKeys,
             isLibraryVisible: visibility.isVisibleOnHome,
             isLibraryTileVisible: visibility.isVisibleOnHome,
             isGlobalRowEnabled: visibility.isGlobalRowEnabled,
@@ -2409,7 +2410,8 @@ private struct PlozziOSHomeRowView: View {
                     style: cardStyle,
                     cardCount: row.loadingPlaceholderCount > 0 ? row.loadingPlaceholderCount : 8,
                     showsCaption: row.kind == .libraries
-                        || appModel.settings.cardStyle.captions.showsLabels(
+                        ? appModel.settings.cardStyle.captions.showsLabels
+                        : appModel.settings.cardStyle.captions.showsLabels(
                             in: .home,
                             hasArtworkTitle: row.kind == .continueWatching
                                 && appModel.settings.homeVisibility.continueWatchingUsesSeriesArtwork,
@@ -2983,21 +2985,26 @@ struct PlozziOSHomeLibraryCard: View {
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.themePalette) private var palette
+    @Environment(\.plozzCardCaptionSettings) private var captions
     let library: AggregatedLibrary
     let artworkSource: LibraryArtworkSource?
     let width: CGFloat
 
-    @ViewBuilder
     var body: some View {
-        if cardStyle == .framed {
-            content
-                .plozzFramedMediaCard(
-                    innerCornerRadius: metrics.landscapeArtworkCornerRadius
-                )
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-        } else {
-            content
+        Group {
+            if cardStyle == .framed {
+                content
+                    .plozzFramedMediaCard(
+                        innerCornerRadius: metrics.landscapeArtworkCornerRadius
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+            } else {
+                content
+            }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(library.library.displayName)
+        .accessibilityValue(Text(library.serverName))
     }
 
     private var content: some View {
@@ -3017,29 +3024,35 @@ struct PlozziOSHomeLibraryCard: View {
                 cornerRadius: metrics.landscapeArtworkCornerRadius
             )
 
-            HStack(spacing: 8) {
-                ProviderBrandMark(
-                    provider: library.providerKind, size: providerBadgeSize,
-                    mediaShareTransport: library.transportKind
-                )
-                .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(library.library.title)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(library.serverName)
-                        .font(.caption)
-                        .plozzForeground(.secondary)
-                        .lineLimit(1)
-                }
+            if captions.showsLabels {
+                caption
             }
-            .padding(.trailing, metrics.landscapeCaptionHorizontalInset)
-            .padding(
-                .bottom,
-                cardStyle == .framed ? metrics.landscapeCaptionInset : 0
-            )
         }
         .frame(width: width, alignment: .leading)
+    }
+
+    private var caption: some View {
+        HStack(spacing: 8) {
+            ProviderBrandMark(
+                provider: library.providerKind, size: providerBadgeSize,
+                mediaShareTransport: library.transportKind
+            )
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(library.library.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(library.serverName)
+                    .font(.caption)
+                    .plozzForeground(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.trailing, metrics.landscapeCaptionHorizontalInset)
+        .padding(
+            .bottom,
+            cardStyle == .framed ? metrics.landscapeCaptionInset : 0
+        )
     }
 }
 
