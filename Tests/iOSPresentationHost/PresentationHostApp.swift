@@ -74,7 +74,13 @@ struct PresentationHostApp: App {
         if ProcessInfo.processInfo.arguments.contains("--navigation-interaction-fixture") {
             let available = NavigationDestinationDefaults.iOS
             let enabled: [String]
-            if ProcessInfo.processInfo.arguments.contains("--profile-rail-fixture") {
+            if ProcessInfo.processInfo.arguments.contains("--content-in-more") {
+                enabled = [
+                    NavigationLibraryLayout.homeKey, NavigationLibraryLayout.liveTVKey,
+                    NavigationLibraryLayout.settingsKey, NavigationLibraryLayout.watchlistKey,
+                    NavigationLibraryLayout.searchKey, NavigationLibraryLayout.downloadsKey
+                ]
+            } else if ProcessInfo.processInfo.arguments.contains("--profile-rail-fixture") {
                 enabled = [
                     NavigationLibraryLayout.homeKey, NavigationLibraryLayout.watchlistKey,
                     NavigationLibraryLayout.liveTVKey, NavigationLibraryLayout.downloadsKey,
@@ -546,6 +552,13 @@ private struct SettingsInteractionFixture: View {
                 )
                 .environment(sidebarGeometry)
                 .environment(heroTrailers)
+                .task {
+                    let arguments = ProcessInfo.processInfo.arguments
+                    if let index = arguments.firstIndex(of: "--navigation-destination"),
+                       arguments.indices.contains(index + 1) {
+                        appModel.screenshotDirector.tab = arguments[index + 1]
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if ProcessInfo.processInfo.arguments.contains("--settings-direct-presentation") {
                         Button("Fixture Settings") { showingSettings = true }

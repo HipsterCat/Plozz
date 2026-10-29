@@ -6,6 +6,7 @@ import SwiftUI
 import UIKit
 
 struct PlozziOSDownloadsView: View {
+    @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
     @Bindable var model: PlozziOSDownloadsModel
     let appModel: PlozziOSAppModel
     let onShowSettings: () -> Void
@@ -72,7 +73,7 @@ struct PlozziOSDownloadsView: View {
                 )
             }
         }
-        .toolbarTitleDisplayMode(.large)
+        .toolbarTitleDisplayMode(isOverflowDestination ? .inline : .large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

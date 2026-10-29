@@ -559,6 +559,10 @@ watch history and planning-list behavior are documented in
   The mobile app shell uses native adaptive tabs, sidebar, and system More
   overflow. Destination declarations and their navigation stacks stay mounted
   across width changes; profile-scoped ordering and visibility remain authoritative.
+  Pages opened from More use their existing stack's single navigation bar: Back,
+  an inline title, and page actions share one row. The outer More bar is hidden
+  only while showing a destination and restored on return. Direct tabs keep their
+  normal title styles; deeper pages keep their own back navigation.
   Library tabs use the same content-kind icons as tvOS and library names without
   server suffixes. Same-named libraries remain separate destinations; the
   arrangement editor identifies their servers on a second line.
