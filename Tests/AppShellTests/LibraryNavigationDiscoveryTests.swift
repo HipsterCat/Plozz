@@ -112,6 +112,52 @@ final class LibraryNavigationDiscoveryTests: XCTestCase {
         XCTAssertEqual(navigation.contentLibraries, settings.state.value)
     }
 
+    func testCancelledSettingsRefreshCannotStrandTheShellDiscovery() async {
+        for cancelSettings in [true, false] {
+            let discovery = LibraryDiscoveryModel()
+            let navigation = makeNavigation()
+            let settings = DiscoveredLibrariesStore()
+            let shellStarted = expectation(description: "Shell discovery started")
+            let settingsStarted = expectation(description: "Settings discovery started")
+            let shellGate = LibraryDiscoveryGate()
+            let settingsGate = LibraryDiscoveryGate()
+            let shell = Task {
+                await discovery.refreshNavigationLibraries(
+                    from: [account("plex", kind: .plex) { await shellGate.load(started: shellStarted) }],
+                    navigation: navigation, settings: settings, isCurrent: { true }
+                )
+            }
+            await fulfillment(of: [shellStarted], timeout: 5)
+            let detail = Task {
+                await discovery.refreshNavigationLibraries(
+                    from: [account("plex", kind: .plex) { await settingsGate.load(started: settingsStarted) }],
+                    navigation: navigation, settings: settings, isCurrent: { true }
+                )
+            }
+            await fulfillment(of: [settingsStarted], timeout: 5)
+            if cancelSettings {
+                detail.cancel()
+                await settingsGate.finish()
+                let published = await detail.value
+                XCTAssertFalse(published)
+            } else {
+                shell.cancel()
+                await shellGate.finish()
+                let published = await shell.value
+                XCTAssertFalse(published)
+            }
+            XCTAssertTrue(settings.state.isLoading)
+            XCTAssertEqual(settings.refreshingAccountIDs, ["plex"])
+            if cancelSettings { await shellGate.finish() } else { await settingsGate.finish() }
+            let published = await (cancelSettings ? shell : detail).value
+            XCTAssertTrue(published)
+            XCTAssertEqual(navigation.contentLibraries.map(\.key), ["plex:old"])
+            XCTAssertEqual(navigation.contentLibraries, settings.state.value)
+            XCTAssertFalse(settings.state.isLoading)
+            XCTAssertTrue(settings.refreshingAccountIDs.isEmpty)
+        }
+    }
+
     func testUnchangedSettingsRefreshDoesNotInvalidateNavigationChrome() async {
         let discovery = LibraryDiscoveryModel()
         let navigation = makeNavigation()
@@ -158,6 +204,8 @@ final class LibraryNavigationDiscoveryTests: XCTestCase {
         XCTAssertTrue(original.contentLibraries.isEmpty)
         XCTAssertTrue(replacement.contentLibraries.isEmpty)
         XCTAssertNil(settings.state.value)
+        XCTAssertFalse(settings.state.isLoading)
+        XCTAssertTrue(settings.refreshingAccountIDs.isEmpty)
     }
 
     func testCancellationCannotPublishAProviderAnswerThatIgnoresCancellation() async {
@@ -179,6 +227,8 @@ final class LibraryNavigationDiscoveryTests: XCTestCase {
         XCTAssertFalse(published)
         XCTAssertTrue(navigation.contentLibraries.isEmpty)
         XCTAssertNil(settings.state.value)
+        XCTAssertFalse(settings.state.isLoading)
+        XCTAssertTrue(settings.refreshingAccountIDs.isEmpty)
     }
 
     private func makeNavigation() -> NavigationStyleSettingsModel {

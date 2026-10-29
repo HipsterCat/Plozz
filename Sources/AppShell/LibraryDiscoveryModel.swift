@@ -29,14 +29,16 @@ final class LibraryDiscoveryModel {
         isCurrent: () -> Bool
     ) async -> Bool {
         let accountIDs = Set(accounts.map(\.account.id))
-        settings.beginRefresh(accountIDs: changedAccountID.map { Set([$0]) } ?? accountIDs)
+        let request = settings.beginRefresh(accountIDs: changedAccountID.map { Set([$0]) } ?? accountIDs)
+        defer { settings.cancelRefresh(request) }
         guard let discovered = await navigationDiscovery.refresh(
             from: accounts, navigation: navigation, isCurrent: isCurrent
         ) else { return false }
         settings.finishRefresh(
             with: discovered.libraries,
             unreachableAccountIDs: discovered.unreachableAccountIDs,
-            failures: discovered.failures
+            failures: discovered.failures,
+            request: request
         )
         return !navigation.contentLibraries.isEmpty || discovered.unreachableAccountIDs.isEmpty
     }

@@ -277,8 +277,11 @@ navigation snapshot and library discovery, not a channel/title scan. Failed
 accounts retain their last-known libraries; removed accounts cannot contribute.
 Initial navigation discovery, Settings library refreshes, and account-selection
 refreshes publish through one `LibraryDiscoveryModel` path to both navigation
-and Settings. Superseded, cancelled, or changed-profile/credential results cannot
-publish. Settings loading state stays observed only by its library detail pages.
+and Settings. Cancelled or changed-profile/credential results cannot publish,
+and an older request cannot overwrite a newer published answer. Cancelling a
+Settings refresh does not invalidate a pending shell refresh; each request clears
+only its own loading markers. Settings loading state stays observed only by its
+library detail pages.
 
 The iPhone/iPad shell (also used by the iPad app on Mac) includes discovered,
 enabled video libraries as native tab/sidebar destinations. Its navigation

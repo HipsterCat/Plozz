@@ -137,7 +137,8 @@ final class PlozziOSAppModel {
         let scope = navigationLibrariesScopeKey
         let currentSettings = settings
         let accountIDs = Set(accountsProviders.navigationAccounts.map(\.id))
-        currentSettings.discoveredLibraries.beginRefresh(accountIDs: accountIDs)
+        let request = currentSettings.discoveredLibraries.beginRefresh(accountIDs: accountIDs)
+        defer { currentSettings.discoveredLibraries.cancelRefresh(request) }
         guard let discovered = await navigationLibraryDiscovery.refresh(
             from: accountsProviders.homeAccounts,
             expectedAccountIDs: accountIDs,
@@ -147,7 +148,8 @@ final class PlozziOSAppModel {
         currentSettings.discoveredLibraries.finishRefresh(
             with: discovered.libraries,
             unreachableAccountIDs: discovered.unreachableAccountIDs,
-            failures: discovered.failures
+            failures: discovered.failures,
+            request: request
         )
         return true
     }

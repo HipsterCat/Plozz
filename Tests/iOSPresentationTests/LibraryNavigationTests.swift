@@ -135,6 +135,26 @@ final class LibraryNavigationTests: XCTestCase {
         XCTAssertNil(app.settings.discoveredLibraries.state.value)
     }
 
+    func testCancelledSettingsRefreshPreservesPendingMobileDiscovery() async throws {
+        let fixture = LibraryNavigationFixture()
+        let app = try makeApp(fixture: fixture)
+        let started = expectation(description: "Shell library request started")
+        await fixture.pause(started: started)
+        let shell = Task { await app.refreshNavigationLibraries() }
+        await fulfillment(of: [started], timeout: 5)
+        let settings = Task { await app.refreshNavigationLibraries() }
+        settings.cancel()
+        let settingsPublished = await settings.value
+        XCTAssertFalse(settingsPublished)
+        XCTAssertTrue(app.settings.discoveredLibraries.state.isLoading)
+        await fixture.resume()
+        let shellPublished = await shell.value
+        XCTAssertTrue(shellPublished)
+        XCTAssertTrue(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.library("plex:library")))
+        XCTAssertEqual(app.settings.discoveredLibraries.state.value, app.settings.navigation.contentLibraries)
+        XCTAssertTrue(app.settings.discoveredLibraries.refreshingAccountIDs.isEmpty)
+    }
+
     func testLibraryIdentityAndDiagnosticsRemainSeparate() {
         let first = PlozziOSDestination.library("plex:library")
         let second = PlozziOSDestination.library("jellyfin:library")
