@@ -32,7 +32,28 @@ struct PresentationHostApp: App {
         if ProcessInfo.processInfo.arguments.contains("--sync-breakdown-fixture") {
             Self.seedSyncBreakdown()
         }
-        let model = PlozziOSAppModel()
+        let model: PlozziOSAppModel
+        if ProcessInfo.processInfo.arguments.contains("--libraries-in-more") {
+            let accounts = AccountStore(secureStore: InMemorySecureStore())
+            let provider = CollectionSettingsProvider()
+            let account = Account(id: "navigation-library", from: provider.session)
+            let defaults = UserDefaults(suiteName: "MoreNavigationFixture.\(UUID().uuidString)")!
+            model = PlozziOSAppModel(accountStore: accounts, profileStore: ProfileStore(defaults: defaults))
+            let profile = model.profiles.add(name: "Navigation", isAwaitingSetup: false)
+            model.profiles.select(profile.id)
+            model.refreshActiveProfileSettings()
+            model.accountsProviders.registry.register(.plex) { _ in provider }
+            do {
+                try accounts.add(account, token: "fixture")
+            } catch {
+                fatalError("Could not prepare the library navigation fixture: \(error)")
+            }
+            model.profiles.setActiveAccountIDs([account.id], for: model.profiles.activeProfileID)
+            model.accountsProviders.tokenResolver = { _ in "fixture" }
+            model.accountsProviders.reloadAccounts()
+        } else {
+            model = PlozziOSAppModel()
+        }
         if ProcessInfo.processInfo.arguments.contains("--settings-interaction-fixture") {
             var profile = model.profiles.activeProfile
             profile.isKids = ProcessInfo.processInfo.arguments.contains("--kids-settings")
@@ -72,9 +93,17 @@ struct PresentationHostApp: App {
         model.settings.subtitleStyle.usesSeparateLiveTVStyle = false
         model.settings.nightShift.settings = .default
         if ProcessInfo.processInfo.arguments.contains("--navigation-interaction-fixture") {
-            let available = NavigationDestinationDefaults.iOS
+            var available = NavigationDestinationDefaults.iOS
             let enabled: [String]
-            if ProcessInfo.processInfo.arguments.contains("--content-in-more") {
+            if ProcessInfo.processInfo.arguments.contains("--libraries-in-more") {
+                let libraryKey = "navigation-library:movies"
+                available.append(libraryKey)
+                enabled = [
+                    NavigationLibraryLayout.homeKey, NavigationLibraryLayout.downloadsKey,
+                    NavigationLibraryLayout.watchlistKey, NavigationLibraryLayout.liveTVKey,
+                    NavigationLibraryLayout.searchKey, libraryKey
+                ]
+            } else if ProcessInfo.processInfo.arguments.contains("--content-in-more") {
                 enabled = [
                     NavigationLibraryLayout.homeKey, NavigationLibraryLayout.liveTVKey,
                     NavigationLibraryLayout.settingsKey, NavigationLibraryLayout.watchlistKey,
@@ -554,7 +583,18 @@ private struct SettingsInteractionFixture: View {
                 .environment(heroTrailers)
                 .task {
                     let arguments = ProcessInfo.processInfo.arguments
-                    if let index = arguments.firstIndex(of: "--navigation-destination"),
+                    if arguments.contains("--libraries-in-more") {
+                        await appModel.refreshNavigationLibraries()
+                        precondition(!appModel.visibleNavigationLibraries.isEmpty, "The library fixture must discover Movies")
+                    }
+                    if let index = arguments.firstIndex(of: "--navigation-more-row"),
+                       arguments.indices.contains(index + 1) {
+                        do {
+                            try await OverflowNavigationCapture.openRow(named: arguments[index + 1])
+                        } catch {
+                            fatalError("Could not open the native More row: \(error)")
+                        }
+                    } else if let index = arguments.firstIndex(of: "--navigation-destination"),
                        arguments.indices.contains(index + 1) {
                         appModel.screenshotDirector.tab = arguments[index + 1]
                     }

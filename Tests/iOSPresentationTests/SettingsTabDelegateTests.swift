@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class SettingsTabDelegateTests: XCTestCase {
+    func testNativeTabsIdentifyOverflowWhenLegacyControllersAreEmpty() async throws {
+        let root = UIViewController()
+        let tabs = NativeOnlyTabs()
+        let pages = (0..<6).map { _ in UIViewController() }
+        tabs.tabs = pages.enumerated().map { index, page in
+            UITab(title: "Page \(index)", image: nil, identifier: "\(index)") { _ in page }
+        }
+        root.addChild(tabs)
+        let more = tabs.moreNavigationController
+        let moreRoot = try XCTUnwrap(more.viewControllers.first)
+        let controller = bridge(in: root)
+        let overflow = PlozziOSOverflowNavigation()
+        controller.overflowNavigation = overflow
+        defer { controller.restore() }
+        controller.install()
+
+        more.setViewControllers([moreRoot, pages[5]], animated: false)
+        controller.navigationController(more, didShow: pages[5], animated: false)
+        await Task.yield()
+
+        XCTAssertTrue(tabs.viewControllers?.isEmpty == true)
+        XCTAssertTrue(more.isNavigationBarHidden)
+        XCTAssertEqual(overflow.destinationIndex, 5)
+        var actions = 0
+        controller.action = { actions += 1 }
+        XCTAssertFalse(controller.tabBarController(tabs, shouldSelect: pages[1]))
+        XCTAssertEqual(actions, 1)
+    }
+
     func testOverflowUsesOneBarAndRestoresMoreWithoutReplacingTheTabStack() async throws {
         let root = UIViewController()
         let tabs = UITabBarController()
@@ -183,6 +212,13 @@ final class SettingsTabDelegateTests: XCTestCase {
             _ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool
         ) {
             didShowCount += 1
+        }
+    }
+
+    private final class NativeOnlyTabs: UITabBarController {
+        override var viewControllers: [UIViewController]? {
+            get { [] }
+            set { super.viewControllers = newValue }
         }
     }
 }

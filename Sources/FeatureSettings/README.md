@@ -563,6 +563,11 @@ watch history and planning-list behavior are documented in
   an inline title, and page actions share one row. The outer More bar is hidden
   only while showing a destination and restored on return. Direct tabs keep their
   normal title styles; deeper pages keep their own back navigation.
+  The bridge resolves destinations from native `UITab` objects when present:
+  newer iOS versions leave the legacy `viewControllers` array empty. More-row
+  interception and destination matching must use the same controller inventory.
+  Downloads composes the shared Back item inside its page toolbar so its actions
+  do not displace the shell's root navigation control.
   Library tabs use the same content-kind icons as tvOS and library names without
   server suffixes. Same-named libraries remain separate destinations; the
   arrangement editor identifies their servers on a second line.

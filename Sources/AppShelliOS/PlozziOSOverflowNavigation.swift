@@ -5,6 +5,19 @@ import UIKit
 
 extension EnvironmentValues {
     @Entry var plozziOSIsOverflowDestination = false
+    @Entry var plozziOSOverflowNavigation: PlozziOSOverflowNavigation?
+}
+
+struct PlozziOSOverflowBackToolbarItem: ToolbarContent {
+    let action: () -> Void
+
+    var body: some ToolbarContent {
+        ToolbarItem(id: "more-navigation-back", placement: .topBarLeading) {
+            Button("Back", systemImage: "chevron.backward", action: action)
+                .labelStyle(.iconOnly)
+                .accessibilityIdentifier("more-navigation-back")
+        }
+    }
 }
 
 @MainActor

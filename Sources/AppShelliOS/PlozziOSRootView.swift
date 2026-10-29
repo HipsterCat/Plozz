@@ -1055,17 +1055,12 @@ struct PlozziOSTabShell: View {
         return NavigationStack {
             destinationContent(for: destination, keepsNavigationBar: isOverflow)
                 .toolbar {
-                    if isOverflow {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Back", systemImage: "chevron.backward") {
-                                overflowNavigation.returnToMore()
-                            }
-                            .labelStyle(.iconOnly)
-                            .accessibilityIdentifier("more-navigation-back")
-                        }
+                    if isOverflow, destination != .downloads {
+                        PlozziOSOverflowBackToolbarItem(action: overflowNavigation.returnToMore)
                     }
                 }
                 .environment(\.plozziOSIsOverflowDestination, isOverflow)
+                .environment(\.plozziOSOverflowNavigation, overflowNavigation)
         }
         .id(destination == .downloads ? downloadNavigationID : nil)
     }
@@ -1709,6 +1704,11 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
             return nil
         }
 
+        private func tabControllers(in tabs: UITabBarController) -> [UIViewController?] {
+            // Native UITab-backed controllers need not populate the legacy array.
+            tabs.tabs.isEmpty ? (tabs.viewControllers ?? []) : tabs.tabs.map(\.viewController)
+        }
+
         func restore() {
             if owner?.moreNavigationController.delegate === self {
                 owner?.moreNavigationController.delegate = previousMoreDelegate
@@ -1792,7 +1792,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         ) {
             guard let owner, let overflowNavigation,
                   navigationController === owner.moreNavigationController else { return }
-            let index = owner.viewControllers?.firstIndex { $0 === viewController }
+            let index = tabControllers(in: owner).firstIndex { $0 === viewController }
             // More wraps the tab's existing SwiftUI NavigationStack. Only the
             // inner bar should draw chrome while a destination is on screen.
             let hidesOuterBar = index != nil || previousMoreNavigationBarHidden == true
@@ -1821,15 +1821,17 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
 
         func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
             // Native More bypasses the tab-selection delegate when it pushes a row.
-            if let owner, let tabIndex, let controllers = owner.viewControllers,
-               controllers.indices.contains(tabIndex), indexPath.section == 0 {
+            if let owner, let tabIndex, indexPath.section == 0 {
+                let controllers = tabControllers(in: owner)
                 let visibleItems = owner.tabBar.items ?? []
-                let overflow = controllers.filter { controller in
-                    !visibleItems.contains { $0 === controller.tabBarItem }
+                let overflow = controllers.indices.filter { index in
+                    guard let controller = controllers[index] else { return true }
+                    return !visibleItems.contains { $0 === controller.tabBarItem }
                 }
                 if overflow.count == tableView.numberOfRows(inSection: 0),
+                   controllers.indices.contains(tabIndex),
                    overflow.indices.contains(indexPath.row),
-                   overflow[indexPath.row] === controllers[tabIndex] {
+                   overflow[indexPath.row] == tabIndex {
                     action?()
                     return nil
                 }
@@ -1874,8 +1876,8 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         }
 
         func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
-            if let tabIndex, let controllers = tabBarController.viewControllers,
-               controllers.indices.contains(tabIndex), controllers[tabIndex] === viewController {
+            let controllers = tabControllers(in: tabBarController)
+            if let tabIndex, controllers.indices.contains(tabIndex), controllers[tabIndex] === viewController {
                 action?()
                 return false
             }

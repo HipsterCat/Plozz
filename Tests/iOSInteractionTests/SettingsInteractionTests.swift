@@ -156,6 +156,32 @@ final class SettingsInteractionTests: XCTestCase {
         }
     }
 
+    func testLibraryFromMoreKeepsItsTitleAndProfileBesideBack() throws {
+        launchNavigation(arguments: ["--libraries-in-more"])
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 600, "Regular-width iPad has direct tabs.")
+        let more = app.tabBars.buttons["More"]
+        XCTAssertTrue(more.waitForExistence(timeout: 5), app.debugDescription)
+        more.tap()
+        let row = app.tables.cells.containing(.staticText, identifier: "Movies").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        row.tap()
+        let back = app.buttons["more-navigation-back"]
+        XCTAssertTrue(back.wait(for: \.isHittable, toEqual: true, timeout: 5), app.debugDescription)
+        let bar = app.navigationBars["Movies"]
+        let heading = bar.staticTexts["Movies"]
+        let avatar = bar.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Settings for "
+        )).firstMatch
+        XCTAssertTrue(heading.exists, app.debugDescription)
+        XCTAssertTrue(avatar.isHittable, app.debugDescription)
+        XCTAssertEqual(app.navigationBars.allElementsBoundByIndex.filter(\.isHittable).count, 1)
+        XCTAssertEqual(heading.frame.midY, back.frame.midY, accuracy: 6)
+        XCTAssertEqual(avatar.frame.midY, back.frame.midY, accuracy: 6)
+        capture("more-single-header-Movies")
+        back.tap()
+        XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 5))
+    }
+
     func testAdaptiveNavigationPageCaptures() {
         launchNavigation(settingsInMore: true)
         for title in ["Home", "Watchlist", "Live TV", "Downloads", "Search", "Settings"] {
