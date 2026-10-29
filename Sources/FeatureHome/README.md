@@ -814,6 +814,10 @@ under the top safe area; a rows-only Home keeps its first row below navigation.
 The Home artwork, legibility scrim, and dissolve mask share window-wide bounds,
 including behind native side chrome. The title, actions, paging, and touch targets
 retain their safe-area layout; extending the artwork does not extend hit testing.
+On devices using a native vertical toolbar, root pages keep the profile/settings
+avatar in that rail, including Search and Live TV. The system's toolbar-edge
+environment selects this layout; ordinary iPhone and iPad placement is unchanged.
+The titleless Home hero explicitly keeps that native rail visible.
 
 Library cards preserve server-supplied cover artwork. Missing covers use a stable,
 locally composed poster collage from that exact library, with a provider-colored

@@ -90,6 +90,7 @@ struct PlozziOSHomeView: View {
     @Environment(\.homeLiveTVSnapshot) private var liveTV
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
     @Environment(\.plozziOSHeroContainerHeight) private var heroContainerHeight
     @Environment(\.plozziOSHomeIsFrontmost) private var homeIsFrontmost
     @Environment(\.scenePhase) private var scenePhase
@@ -284,6 +285,7 @@ struct PlozziOSHomeView: View {
         .navigationTitle(Text(verbatim: ""))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar(usesVerticalToolbar ? .visible : .automatic, for: .navigationBar)
         .toolbar {
             if trailerController.isPlaying {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -293,9 +295,7 @@ struct PlozziOSHomeView: View {
                     )
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings)
-            }
+            PlozziOSSettingsToolbarItem(action: onShowSettings)
         }
         .task(
             id: PlozziOSHomeLoadID(

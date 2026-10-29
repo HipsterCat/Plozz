@@ -80,6 +80,8 @@ final class HomeHeroInteractionTests: XCTestCase {
         XCTAssertTrue(artwork.waitForExistence(timeout: 15), app.debugDescription)
         let play = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play")).firstMatch
         XCTAssertTrue(play.wait(for: \.isHittable, toEqual: true, timeout: 5), app.debugDescription)
+        let profile = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Settings for ")).firstMatch
+        XCTAssertTrue(profile.wait(for: \.isHittable, toEqual: true, timeout: 5), app.debugDescription)
         capture("native-home-hero")
         for (index, screen) in XCUIScreen.screens.enumerated() {
             let attachment = XCTAttachment(screenshot: screen.screenshot())

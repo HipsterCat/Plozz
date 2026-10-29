@@ -68,6 +68,7 @@ struct FeaturedCardInteractionFixture: View {
 }
 
 struct HomeHeroInteractionFixture: View {
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
     private var colorScheme: ColorScheme {
         ProcessInfo.processInfo.arguments.contains("--hero-light") ? .light : .dark
     }
@@ -185,11 +186,10 @@ struct HomeHeroInteractionFixture: View {
             .navigationTitle(usesNativeChrome ? "" : "Home fixture")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbar(usesVerticalToolbar ? .visible : .automatic, for: .navigationBar)
             .toolbar {
                 if usesNativeChrome {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Settings", systemImage: "gearshape") {}
-                    }
+                    PlozziOSSettingsToolbarItem {}
                 }
             }
         }

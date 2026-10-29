@@ -848,6 +848,7 @@ private struct PlozziOSScreenshotTabRouter: View {
 
 struct PlozziOSTabShell: View {
     @Environment(\.themePalette) private var palette
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
     @Environment(PlozziOSSidebarGeometryModel.self)
     private var sidebarGeometry
     @Environment(HeroTrailerController.self)
@@ -1154,10 +1155,8 @@ struct PlozziOSTabShell: View {
                 .id(homeContentIdentity)
                 .plozziOSItemNavigation(appModel: appModel)
                 .toolbar {
-                    if !hasVisibleSettingsNavigationEntry {
-                        ToolbarItem(placement: .primaryAction) {
-                            PlozziOSSettingsAvatarButton(action: showSettings)
-                        }
+                    if usesVerticalToolbar || !hasVisibleSettingsNavigationEntry {
+                        PlozziOSSettingsToolbarItem(horizontalPlacement: .primaryAction, action: showSettings)
                     }
                 }
                 .background { AppBackground(palette: palette) }
@@ -1980,9 +1979,7 @@ private struct PlozziOSWatchlistLandingView: View {
         .environment(\.plozzCardCaptionView, .watchlist)
         .toolbarTitleDisplayMode(.large)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                PlozziOSSettingsAvatarButton(action: onShowSettings)
-            }
+            PlozziOSSettingsToolbarItem(action: onShowSettings)
         }
     }
 
@@ -2063,9 +2060,7 @@ private struct PlozziOSHomeLandingView: View {
             .navigationTitle("Home")
             .toolbarTitleDisplayMode(.large)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    PlozziOSSettingsAvatarButton(action: onShowSettings)
-                }
+                PlozziOSSettingsToolbarItem(action: onShowSettings)
             }
             .plozzFullScreenCover(isPresented: $showingReceive) {
                 PlozziOSSyncSetupReceiveView(appModel: appModel) { showingReceive = false }

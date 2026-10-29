@@ -6,6 +6,7 @@ import CoreUI
 
 struct PlozziOSSearchView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
     @State private var viewModel: SearchViewModel
     private let appModel: PlozziOSAppModel
     private let onShowSettings: () -> Void
@@ -50,9 +51,14 @@ struct PlozziOSSearchView: View {
         // Regular-width iPad keeps the bar so the system sidebar toggle remains
         // reachable when the adaptable tab sidebar is collapsed.
         .toolbar(
-            horizontalSizeClass == .compact && !keepsNavigationBar ? .hidden : .visible,
+            horizontalSizeClass == .compact && !keepsNavigationBar && !usesVerticalToolbar ? .hidden : .visible,
             for: .navigationBar
         )
+        .toolbar {
+            if usesVerticalToolbar {
+                PlozziOSSettingsToolbarItem(action: onShowSettings)
+            }
+        }
         .navigationTitle(horizontalSizeClass == .compact ? Text(verbatim: "") : Text("Search"))
         .toolbarTitleDisplayMode(.large)
         .environment(\.plozzCardCaptionView, .search)
@@ -140,6 +146,7 @@ struct PlozziOSSearchView: View {
 private struct PlozziOSSearchHeader: View {
     @Environment(\.themePalette) private var palette
     @Environment(\.hasVisibleSettingsNavigationEntry) private var hasVisibleSettingsNavigationEntry
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
     @Binding var query: String
     let onShowSettings: () -> Void
 
@@ -176,7 +183,7 @@ private struct PlozziOSSearchHeader: View {
             .plozzSurface(.raised, cornerRadius: PlozzTheme.Metrics.Radius.card)
             .frame(maxWidth: .infinity)
 
-            if !hasVisibleSettingsNavigationEntry {
+            if !hasVisibleSettingsNavigationEntry && !usesVerticalToolbar {
                 PlozziOSSettingsAvatarButton(action: onShowSettings)
                     .accessibilityIdentifier("search-settings-avatar")
             }
