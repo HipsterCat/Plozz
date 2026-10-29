@@ -1332,6 +1332,226 @@
         }
       }
     },
+    "%@ (Default)" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (الافتراضي)"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (По подразбиране)"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Per defecte)"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Výchozí)"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Standard)"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Standard)"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Προεπιλογή)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Predeterminado)"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (پیش‌فرض)"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Oletus)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Par défaut)"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (ברירת מחדל)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (डिफ़ॉल्ट)"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Zadano)"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Alapértelmezett)"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Bawaan)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Predefinito)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@（デフォルト）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (기본값)"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Lalai)"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Standard)"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Standaard)"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Domyślne)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Padrão)"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Implicit)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (По умолчанию)"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Predvolené)"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Privzeto)"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Podrazumevano)"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Standard)"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (ค่าเริ่มต้น)"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Varsayılan)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (За замовчуванням)"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@ (Mặc định)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@（默认）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "%@（預設）"
+          }
+        }
+      }
+    },
     "%@ (default)" : {
       "localizations" : {
         "ar" : {
@@ -240392,6 +240612,7 @@
       }
     },
     "Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy)." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -271464,6 +271685,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "DTS-HD 需要 Plozzigen 解碼或直通輸出路徑"
+          }
+        }
+      }
+    },
+    "DTS:X heights require 7.1.4 or 9.1.6." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "قنوات الارتفاع في DTS:X تتطلب 7.1.4 أو 9.1.6."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Височинните канали на DTS:X изискват 7.1.4 или 9.1.6."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Els canals d’altura de DTS:X requereixen 7.1.4 o 9.1.6."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Výškové kanály DTS:X vyžadují 7.1.4 nebo 9.1.6."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X-højdekanaler kræver 7.1.4 eller 9.1.6."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X-Höhenkanäle erfordern 7.1.4 oder 9.1.6."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Τα κανάλια ύψους DTS:X απαιτούν 7.1.4 ή 9.1.6."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Los canales de altura DTS:X requieren 7.1.4 o 9.1.6."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "کانال‌های ارتفاعی DTS:X به 7.1.4 یا 9.1.6 نیاز دارند."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X-korkeuskanavat vaativat kanava-asettelun 7.1.4 tai 9.1.6."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Les canaux de hauteur DTS:X nécessitent 7.1.4 ou 9.1.6."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ערוצי הגובה של DTS:X דורשים 7.1.4 או 9.1.6."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X के ऊँचाई वाले चैनलों के लिए 7.1.4 या 9.1.6 ज़रूरी है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za visinske kanale DTS:X potreban je raspored 7.1.4 ili 9.1.6."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A DTS:X magassági csatornáihoz 7.1.4 vagy 9.1.6 szükséges."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Saluran ketinggian DTS:X memerlukan 7.1.4 atau 9.1.6."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "I canali di altezza DTS:X richiedono 7.1.4 o 9.1.6."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:Xのハイトチャンネルには7.1.4または9.1.6が必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X 높이 채널에는 7.1.4 또는 9.1.6이 필요합니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Saluran ketinggian DTS:X memerlukan 7.1.4 atau 9.1.6."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X-høydekanaler krever 7.1.4 eller 9.1.6."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hoogtekanalen voor DTS:X vereisen 7.1.4 of 9.1.6."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kanały wysokościowe DTS:X wymagają układu 7.1.4 lub 9.1.6."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Os canais de altura DTS:X exigem 7.1.4 ou 9.1.6."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Canalele de înălțime DTS:X necesită 7.1.4 sau 9.1.6."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Для высотных каналов DTS:X требуется 7.1.4 или 9.1.6."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Výškové kanály DTS:X vyžadujú 7.1.4 alebo 9.1.6."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Višinski kanali DTS:X zahtevajo 7.1.4 ali 9.1.6."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Visinski kanali DTS:X zahtevaju 7.1.4 ili 9.1.6."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Höjdkanaler för DTS:X kräver 7.1.4 eller 9.1.6."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ช่องเสียงด้านบนของ DTS:X ต้องใช้ 7.1.4 หรือ 9.1.6."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X yükseklik kanalları için 7.1.4 veya 9.1.6 gerekir."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Для висотних каналів DTS:X потрібна схема 7.1.4 або 9.1.6."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kênh âm thanh trên cao của DTS:X cần cấu hình 7.1.4 hoặc 9.1.6."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X 高度声道需要 7.1.4 或 9.1.6。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "DTS:X 高度聲道需要 7.1.4 或 9.1.6。"
           }
         }
       }
@@ -637213,6 +637654,446 @@
         }
       }
     },
+    "Rendered to PCM" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تم تصيير الصوت إلى PCM"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Рендирано в PCM"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderitzat a PCM"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderováno do PCM"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderet til PCM"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "In PCM gerendert"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αποδόθηκε σε PCM"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderizado a PCM"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "رندرشده به PCM"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderöity PCM-muotoon"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rendu en PCM"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "רונדר ל-PCM"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "PCM में रेंडर किया गया"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderirano u PCM"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "PCM-re renderelve"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dirender ke PCM"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderizzato in PCM"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "PCMにレンダリング"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "PCM으로 렌더링됨"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dirender ke PCM"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gjengitt som PCM"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gerenderd naar PCM"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wyrenderowano do PCM"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderizado em PCM"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Randat în PCM"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Рендеринг в PCM"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderované do PCM"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prostorsko obdelano v PCM"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderovano u PCM"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderat till PCM"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เรนเดอร์เป็น PCM"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "PCM olarak işlendi"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Відрендерено в PCM"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Đã kết xuất sang PCM"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已渲染为 PCM"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已渲染為 PCM"
+          }
+        }
+      }
+    },
+    "Rendering layout" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "توزيع قنوات الصوت"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Разположение на каналите"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Disposició de canals"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rozložení kanálů"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kanallayout"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kanallayout"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Διάταξη απόδοσης ήχου"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Distribución de canales"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "چیدمان رندر صدا"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderöinnin kanava-asettelu"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Configuration de rendu audio"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "פריסת ערוצים לרינדור"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "रेंडरिंग के लिए चैनल विन्यास"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Raspored kanala za renderiranje"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Renderelési csatornakiosztás"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Susunan saluran untuk perenderan"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Configurazione dei canali"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "レンダリング用チャンネル構成"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "렌더링 채널 구성"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Susunan saluran audio"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kanaloppsett for gjengivelse"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kanaalindeling voor rendering"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Układ renderowania dźwięku"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Layout de canais de áudio"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Configurație de randare"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Схема рендеринга"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rozloženie kanálov"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Razporeditev kanalov"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Raspored kanala"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kanaluppsättning"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "รูปแบบช่องเสียงสำหรับเรนเดอร์"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İşleme için kanal düzeni"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Схема каналів для рендерингу"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cấu hình kênh kết xuất"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "渲染声道布局"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "渲染聲道配置"
+          }
+        }
+      }
+    },
     "Rent" : {
       "localizations" : {
         "ar" : {
@@ -927121,6 +928002,226 @@
         }
       }
     },
+    "Used when Spatial audio is on. Applies to this device." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يُستخدم عند تشغيل الصوت المكاني. يسري على هذا الجهاز."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Използва се, когато е включено пространственото аудио. Прилага се за това устройство."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "S’utilitza quan l’àudio espacial està activat. S’aplica a aquest dispositiu."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Používá se při zapnutém prostorovém zvuku. Platí pro toto zařízení."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bruges, når rumlig lyd er slået til. Gælder for denne enhed."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wird bei aktiviertem räumlichem Audio verwendet. Gilt für dieses Gerät."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Χρησιμοποιείται όταν ο χωρικός ήχος είναι ενεργός. Ισχύει για αυτή τη συσκευή."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Se usa cuando el audio espacial está activado. Se aplica a este dispositivo."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "وقتی صدای فضایی روشن است، استفاده می‌شود. برای این دستگاه اعمال می‌شود."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Käytössä, kun tilaääni on päällä. Koskee tätä laitetta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Utilisée lorsque l’audio spatial est activé. S’applique à cet appareil."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "משמשת כשהשמע המרחבי פועל. חלה על מכשיר זה."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "स्थानिक ऑडियो चालू होने पर उपयोग होता है। इस डिवाइस पर लागू होता है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koristi se kad je prostorni zvuk uključen. Vrijedi za ovaj uređaj."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bekapcsolt térbeli hang esetén használatos. Erre az eszközre érvényes."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Digunakan saat audio spasial aktif. Berlaku untuk perangkat ini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usata quando l’audio spaziale è attivo. Si applica a questo dispositivo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "空間オーディオがオンのときに使用します。このデバイスに適用されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "공간 음향이 켜져 있을 때 사용됩니다. 이 기기에 적용됩니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Digunakan apabila audio ruang dihidupkan. Terpakai pada peranti ini."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Brukes når romtilpasset lyd er på. Gjelder denne enheten."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wordt gebruikt wanneer ruimtelijke audio is ingeschakeld. Geldt voor dit apparaat."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Używany, gdy dźwięk przestrzenny jest włączony. Dotyczy tego urządzenia."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usado quando o áudio espacial está ativado. Aplica-se a este dispositivo."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Se utilizează când funcția Audio spațial este activată. Se aplică acestui dispozitiv."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Используется, когда включено пространственное аудио. Применяется к этому устройству."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Používa sa, keď je zapnutý priestorový zvuk. Platí pre toto zariadenie."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Uporablja se, ko je vklopljen prostorski zvok. Velja za to napravo."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koristi se kada je uključen prostorni zvuk. Važi za ovaj uređaj."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Används när rumsligt ljud är på. Gäller den här enheten."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ใช้เมื่อเปิดเสียงเชิงพื้นที่ มีผลกับอุปกรณ์นี้"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Uzamsal ses açıkken kullanılır. Bu cihaz için geçerlidir."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Використовується, коли ввімкнено просторове аудіо. Діє на цьому пристрої."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Được dùng khi bật âm thanh không gian. Áp dụng cho thiết bị này."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "开启空间音频时使用。适用于此设备。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "開啟空間音訊時使用。適用於此裝置。"
+          }
+        }
+      }
+    },
     "User" : {
       "comment" : "Field label in the iOS Account details screen in Settings. Shows the signed-in username for that server account.",
       "localizations" : {
@@ -928882,6 +929983,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "依該列顯示的位置，沿用「首頁分類列」或「推薦」的設定。"
+          }
+        }
+      }
+    },
+    "Uses PCM for supported TrueHD Atmos and DTS:X tracks; lossy audio over AirPlay." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يستخدم PCM لمسارات TrueHD Atmos وDTS:X المدعومة؛ وترميزًا مع فقدان البيانات عبر AirPlay."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Използва PCM за поддържаните аудиописти TrueHD Atmos и DTS:X; звук със загуби през AirPlay."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Utilitza PCM per a les pistes TrueHD Atmos i DTS:X compatibles; àudio amb pèrdues per AirPlay."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Používá PCM pro podporované stopy TrueHD Atmos a DTS:X; přes AirPlay je zvuk ztrátový."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bruger PCM til understøttede TrueHD Atmos- og DTS:X-lydspor; lyd med tab via AirPlay."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Verwendet PCM für unterstützte TrueHD Atmos- und DTS:X-Spuren; verlustbehaftetes Audio über AirPlay."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Χρησιμοποιεί PCM για υποστηριζόμενα ηχητικά κομμάτια TrueHD Atmos και DTS:X· ήχος με απώλειες μέσω AirPlay."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usa PCM para las pistas TrueHD Atmos y DTS:X compatibles; audio con pérdidas por AirPlay."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "برای ترک‌های پشتیبانی‌شدهٔ TrueHD Atmos و DTS:X از PCM استفاده می‌کند؛ صدا از طریق AirPlay با اتلاف منتقل می‌شود."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Käyttää PCM-muotoa tuetuille TrueHD Atmos- ja DTS:X-ääniraidoille; AirPlay-ääni on häviöllistä."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Utilise le PCM pour les pistes TrueHD Atmos et DTS:X prises en charge ; audio avec perte via AirPlay."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "משתמש ב-PCM לרצועות TrueHD Atmos ו-DTS:X נתמכות; שמע עם אובדן נתונים דרך AirPlay."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "समर्थित TrueHD Atmos और DTS:X ट्रैकों के लिए PCM का उपयोग करता है; AirPlay पर डेटा हानि के साथ संपीड़ित ऑडियो।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koristi PCM za podržane zapise TrueHD Atmos i DTS:X; AirPlay prenosi zvuk s gubicima."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A támogatott TrueHD Atmos és DTS:X hangsávokhoz PCM-et használ; AirPlay esetén a hang veszteséges."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Menggunakan PCM untuk trek TrueHD Atmos dan DTS:X yang didukung; audio melalui AirPlay dikompresi dengan kehilangan data."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usa PCM per le tracce TrueHD Atmos e DTS:X supportate; audio compresso con perdita tramite AirPlay."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "対応するTrueHD AtmosとDTS:XのトラックにPCMを使用します。AirPlay経由の音声は非可逆圧縮です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "지원되는 TrueHD Atmos 및 DTS:X 트랙에 PCM을 사용하며, AirPlay에서는 손실 압축 오디오를 사용합니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Menggunakan PCM untuk trek TrueHD Atmos dan DTS:X yang disokong; audio dimampatkan dengan kehilangan data melalui AirPlay."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bruker PCM for støttede TrueHD Atmos- og DTS:X-spor; tapskomprimert lyd via AirPlay."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gebruikt PCM voor ondersteunde TrueHD Atmos- en DTS:X-tracks; audio met verlies via AirPlay."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Używa PCM dla obsługiwanych ścieżek TrueHD Atmos i DTS:X; dźwięk stratny przez AirPlay."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usa PCM para faixas TrueHD Atmos e DTS:X compatíveis; áudio com perdas via AirPlay."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Folosește PCM pentru pistele TrueHD Atmos și DTS:X compatibile; sunet cu pierderi prin AirPlay."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Использует PCM для поддерживаемых дорожек TrueHD Atmos и DTS:X; звук с потерями через AirPlay."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pre podporované zvukové stopy TrueHD Atmos a DTS:X používa PCM; cez AirPlay je zvuk stratový."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za podprte zvočne sledi TrueHD Atmos in DTS:X uporablja PCM; prek AirPlay je zvok z izgubami."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koristi PCM za podržane TrueHD Atmos i DTS:X audio-zapise; zvuk sa gubicima preko AirPlay veze."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Använder PCM för ljudspår i TrueHD Atmos och DTS:X som stöds; ljud med förlust via AirPlay."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ใช้ PCM สำหรับแทร็ก TrueHD Atmos และ DTS:X ที่รองรับ ส่วนเสียงผ่าน AirPlay เป็นแบบสูญเสียข้อมูล"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Desteklenen TrueHD Atmos ve DTS:X ses parçaları için PCM, AirPlay üzerinden ise kayıplı ses kullanır."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Використовує PCM для підтримуваних доріжок TrueHD Atmos і DTS:X; звук через AirPlay — із втратами."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dùng PCM cho các bản âm thanh TrueHD Atmos và DTS:X được hỗ trợ; âm thanh qua AirPlay có tổn hao."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "对支持的 TrueHD Atmos 和 DTS:X 音轨使用 PCM；通过 AirPlay 传输时使用有损音频。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "針對支援的 TrueHD Atmos 和 DTS:X 音軌使用 PCM；透過 AirPlay 傳輸時使用有損音訊。"
           }
         }
       }
