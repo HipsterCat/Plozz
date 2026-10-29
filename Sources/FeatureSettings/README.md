@@ -513,8 +513,10 @@ watch history and planning-list behavior are documented in
   groups Theme, Cards, Artwork, Spoiler Protection, and Circadian Mode; Display
   Size is last inside Cards. Screens & Navigation groups Customize Home,
   Navigation, and Detail Page; Music Player remains TV-only because mobile does
-  not implement those presentation choices. Mobile navigation editing still
-  excludes unsupported individual library tabs and Music/All Libraries entries.
+  not implement those presentation choices. Mobile navigation editing includes
+  every enabled video library from the shared discovery inventory; Music and
+  All Libraries remain TV-only. Refreshing Libraries updates native navigation
+  without resetting saved hide/order choices.
   The mobile app shell uses native adaptive tabs, sidebar, and system More
   overflow. Destination declarations and their navigation stacks stay mounted
   across width changes; profile-scoped ordering and visibility remain authoritative.

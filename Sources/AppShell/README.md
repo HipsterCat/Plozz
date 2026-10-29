@@ -280,6 +280,16 @@ refreshes publish through one `LibraryDiscoveryModel` path to both navigation
 and Settings. Superseded, cancelled, or changed-profile/credential results cannot
 publish. Settings loading state stays observed only by its library detail pages.
 
+The iPhone/iPad shell (also used by the iPad app on Mac) includes discovered,
+enabled video libraries as native tab/sidebar destinations. Its navigation
+editor uses the same inventory and profile-scoped hide/order preferences.
+Library routes keep account-qualified identity and use the existing library
+browser; long lists use native overflow rather than dropping destinations.
+Mobile Libraries settings and navigation refresh through the same scoped
+discovery path, using `FeatureHomeCore.NavigationLibraryDiscovery` for the
+same supersession/cancellation protection as Apple TV. Disabled or removed
+accounts cannot contribute shortcuts, and refreshes preserve explicit hides.
+
 An untouched Watchlist appears when the profile's hydrated local/native union
 has items. Removing its last item does not evict its open page: it hides after
 leaving, or on the next launch. Show and Hide are durable overrides; reordering

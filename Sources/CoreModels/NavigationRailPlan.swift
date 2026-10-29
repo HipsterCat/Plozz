@@ -123,6 +123,15 @@ public enum NavigationDestinationDefaults {
         ]
     }
 
+    public static func iOS(visibleLibraries: [AggregatedLibrary]) -> [String] {
+        var keys = iOS
+        keys.insert(
+            contentsOf: NavigationRailPlan.browsableLibraries(visibleLibraries).map(\.key),
+            at: keys.count - 2
+        )
+        return keys
+    }
+
     /// The profile button opens Settings; its optional tab must not force a
     /// sixth default destination into More.
     public static let iOSAutomaticallyHiddenKeys: Set<String> = [NavigationLibraryLayout.settingsKey]

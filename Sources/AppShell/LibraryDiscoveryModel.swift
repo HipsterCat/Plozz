@@ -17,7 +17,7 @@ final class LibraryDiscoveryModel {
 
     private let aggregator = HomeAggregator()
     private var loadGeneration = UUID()
-    private var navigationRefreshGeneration = UUID()
+    private let navigationDiscovery = NavigationLibraryDiscovery()
 
     /// Settings and navigation consume the same current-scope answer, without
     /// making the Settings root observe the detail pages' loading state.
@@ -28,19 +28,11 @@ final class LibraryDiscoveryModel {
         changedAccountID: String? = nil,
         isCurrent: () -> Bool
     ) async -> Bool {
-        let generation = UUID()
-        navigationRefreshGeneration = generation
         let accountIDs = Set(accounts.map(\.account.id))
         settings.beginRefresh(accountIDs: changedAccountID.map { Set([$0]) } ?? accountIDs)
-        await Task.yield()
-        guard !Task.isCancelled, generation == navigationRefreshGeneration, isCurrent() else { return false }
-        let discovered = await aggregator.libraryDiscovery(from: accounts)
-        guard !Task.isCancelled, generation == navigationRefreshGeneration, isCurrent() else { return false }
-        navigation.updateContentLibraries(
-            discovered.libraries, accountIDs: accountIDs,
-            unreachableAccountIDs: discovered.unreachableAccountIDs,
-            failures: discovered.failures
-        )
+        guard let discovered = await navigationDiscovery.refresh(
+            from: accounts, navigation: navigation, isCurrent: isCurrent
+        ) else { return false }
         settings.finishRefresh(
             with: discovered.libraries,
             unreachableAccountIDs: discovered.unreachableAccountIDs,

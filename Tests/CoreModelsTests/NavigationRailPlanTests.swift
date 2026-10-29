@@ -215,6 +215,20 @@ final class NavigationRailPlanTests: XCTestCase {
         XCTAssertEqual(Array(layout.visibleKeys(available: available).prefix(2)), first)
     }
 
+    func testMobileNavigationIncludesEveryVideoLibraryAndPreservesBuiltinOrder() {
+        let libraries = (0..<20).map { library("\($0)", title: "Library \($0)", account: "server") }
+        let music = library("music", title: "Music", account: "server", isMusic: true)
+        let keys = NavigationDestinationDefaults.iOS(visibleLibraries: libraries + [music])
+        XCTAssertEqual(keys.filter { !Set(libraries.map(\.key)).contains($0) }, NavigationDestinationDefaults.iOS)
+        XCTAssertEqual(keys.filter { $0.hasPrefix("server:") }, libraries.map(\.key))
+        XCTAssertEqual(keys.last, NavigationLibraryLayout.searchKey)
+        let layout = NavigationLibraryLayout(order: ["server:19", "server:0"], hiddenKeys: ["server:1"])
+        let visible = layout.sections(available: keys, requiredEnabled: []).enabled
+        XCTAssertFalse(visible.contains("server:1"))
+        XCTAssertLessThan(visible.firstIndex(of: "server:19")!, visible.firstIndex(of: "server:0")!)
+        XCTAssertTrue(NavigationDestinationDefaults.iPhoneOverflowKeys(visible: visible).contains("server:18"))
+    }
+
 
     private func library(
         _ id: String,

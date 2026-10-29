@@ -63,7 +63,9 @@ public struct NavigationLibrariesDetailView: View {
     private func content(for all: [AggregatedLibrary]) -> some View {
         let visible = all.filter { scope.homeVisibility.isEnabled($0.key) }
         #if os(iOS)
-        let keys = NavigationDestinationDefaults.iOS
+        let keys = NavigationDestinationDefaults.iOS(
+            visibleLibraries: includesIndividualLibraries ? visible : []
+        )
         let automaticallyHiddenDestinations = NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
         #else
         let keys = NavigationRailPlan.customizableKeys(
