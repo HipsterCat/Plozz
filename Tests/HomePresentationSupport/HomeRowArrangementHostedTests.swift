@@ -1857,7 +1857,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             let text = lines.map(\.0).joined(separator: " ")
             XCTAssertTrue(text.contains("Basement is offline."), text)
             XCTAssertTrue(text.contains("Sign in to Cinema again."), text)
-            XCTAssertTrue(text.contains("load sections from Loft."), text)
+            XCTAssertTrue(text.contains("load rows from Loft."), text)
             XCTAssertFalse(text.contains("Cinema is offline"), text)
             XCTAssertFalse(text.contains("Loft is offline"), text)
             XCTAssertFalse(text.contains("Available server is offline"), text)
@@ -1870,7 +1870,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             let recoveredText = recovered.map(\.0).joined(separator: " ")
             XCTAssertFalse(recoveredText.contains("Basement is offline"), recoveredText)
             XCTAssertTrue(recoveredText.contains("Sign in to Cinema again."), recoveredText)
-            XCTAssertTrue(recoveredText.contains("load sections from Loft."), recoveredText)
+            XCTAssertTrue(recoveredText.contains("load rows from Loft."), recoveredText)
         }
     }
 
@@ -1993,7 +1993,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         }
     }
 
-    func testSourceFailuresAppearOnlyOnTheMainEditor() async throws {
+    func testSourceFailuresAppearOnInventoryPagesButNotRowAppearance() async throws {
         let suite = "HomeRootFailures.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -2027,8 +2027,8 @@ final class HomeRowArrangementHostedTests: XCTestCase {
                 try self.scrollToBottom(window)
                 let lines = try await self.capture(window, name: "Home source error placement \(page)")
                 let text = lines.map(\.0).joined(separator: " ")
-                XCTAssertEqual(text.contains("Basement is offline."), page == 0, text)
-                XCTAssertEqual(lines.filter { $0.0.contains("Retry") }.count, page == 0 ? 1 : 0, text)
+                XCTAssertEqual(text.contains("Basement is offline."), page != 1, text)
+                XCTAssertEqual(lines.filter { $0.0.contains("Retry") }.count, page != 1 ? 1 : 0, text)
             }
         }
     }
