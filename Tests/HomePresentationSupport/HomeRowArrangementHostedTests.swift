@@ -1386,6 +1386,39 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         }
     }
 
+    func testMobileRecentlyAddedSwitchPersistsWithoutChangingPreset() async throws {
+        let suite = "MobileRecentlyAdded.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = HomeLibraryVisibilityStore(defaults: defaults, namespace: "viewer")
+        let visibility = HomeLibraryVisibilityModel(store: store)
+        visibility.useRowDefaults(.combined)
+        try await withWindow {
+            NavigationStack {
+                HomeSectionsSettingsView(libraries: [], accounts: [], visibility: visibility)
+            }
+        } inspect: { window in
+            let before = try await self.capture(window, name: "Recently Added filtering off")
+            XCTAssertTrue(before.contains { $0.0.contains("Hide watched in Recently Added") })
+            func switches(_ view: UIView) -> [UISwitch] {
+                (view as? UISwitch).map { [$0] } ?? view.subviews.flatMap(switches)
+            }
+            let control = try XCTUnwrap(switches(window).first)
+            XCTAssertFalse(control.isOn)
+            control.setOn(true, animated: false)
+            control.sendActions(for: .valueChanged)
+            _ = try await self.capture(window, name: "Recently Added filtering on")
+            XCTAssertTrue(store.load().hideWatchedRecentlyAdded)
+            XCTAssertEqual(visibility.visibility.rowCustomization?.defaults, .combined)
+            XCTAssertFalse(HomeLibraryVisibilityStore(defaults: defaults, namespace: "other").load()
+                .hideWatchedRecentlyAdded)
+            control.setOn(false, animated: false)
+            control.sendActions(for: .valueChanged)
+            _ = try await self.capture(window, name: "Recently Added filtering restored")
+            XCTAssertFalse(store.load().hideWatchedRecentlyAdded)
+        }
+    }
+
     func testMobileSectionMergeSwitchPersistsWithoutChangingPreset() async throws {
         let suite = "MobileHomeRowsNextUp.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

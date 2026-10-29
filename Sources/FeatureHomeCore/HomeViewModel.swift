@@ -166,6 +166,8 @@ public final class HomeViewModel {
     public struct Content: Equatable, Sendable, Codable {
         public var continueWatching: [MediaItem]
         public var latest: [MediaItem]
+        /// Unfiltered overflow for Home only; hero and Top Shelf keep `latest`.
+        public var recentlyAddedCandidates: [MediaItem]?
         /// The unified Watchlist row, merged across `WatchlistProviding` accounts.
         public var watchlist: [MediaItem]
         /// Every discovered library (unfiltered), tagged with its owning account.
@@ -190,7 +192,8 @@ public final class HomeViewModel {
             mergeLibraries: Bool = true,
             librarySections: [HomeLibrarySectionGroup] = [],
             serverRows: [HomeServerRow] = [],
-            collectionRows: [HomeCollectionRow] = []
+            collectionRows: [HomeCollectionRow] = [],
+            recentlyAddedCandidates: [MediaItem]? = nil
         ) {
             self.continueWatching = continueWatching
             self.latest = latest
@@ -200,6 +203,7 @@ public final class HomeViewModel {
             self.librarySections = librarySections
             self.serverRows = serverRows
             self.collectionRows = collectionRows
+            self.recentlyAddedCandidates = recentlyAddedCandidates
         }
 
         // The launch snapshot persists only the merged-mode rows plus the merge
@@ -209,7 +213,7 @@ public final class HomeViewModel {
         // them within the first appearance. The instant paint still shows the global
         // rows, the Libraries tiles, and the correct merged/unmerged layout.
         private enum CodingKeys: String, CodingKey {
-            case continueWatching, latest, watchlist, libraries, mergeLibraries
+            case continueWatching, latest, watchlist, libraries, mergeLibraries, recentlyAddedCandidates
         }
 
         public var isEmpty: Bool {
@@ -249,6 +253,9 @@ public final class HomeViewModel {
                     var row = row
                     row.items = Array(row.items.prefix(perRow))
                     return row
+                },
+                recentlyAddedCandidates: recentlyAddedCandidates.map {
+                    Array($0.prefix(HomeRecentlyAddedPolicy.candidateLimit))
                 }
             )
         }
@@ -293,7 +300,8 @@ public final class HomeViewModel {
                     var row = row
                     row.items = row.items.map { $0.sanitizingArtworkCredentials() }
                     return row
-                }
+                },
+                recentlyAddedCandidates: recentlyAddedCandidates?.map { $0.sanitizingArtworkCredentials() }
             )
         }
     }
@@ -563,6 +571,9 @@ public final class HomeViewModel {
                     mediaItemActionHandler.rehydratePersistedArtwork(
                         cached.latest
                     )
+                cached.recentlyAddedCandidates = cached.recentlyAddedCandidates.map {
+                    mediaItemActionHandler.rehydratePersistedArtwork($0)
+                }
                 cached.librarySections = cached.librarySections.map { group in
                     var group = group
                     group.sections = group.sections.map { section in
@@ -599,6 +610,7 @@ public final class HomeViewModel {
             if accounts.isEmpty {
                 cached.continueWatching = []
                 cached.latest = []
+                cached.recentlyAddedCandidates = nil
                 cached.libraries = []
                 cached.librarySections = []
                 scheduleSnapshotClear()
@@ -902,7 +914,8 @@ public final class HomeViewModel {
                 continueWatching: reconciledCW,
                 latest: merged.latest,
                 watchlist: durableWatchlist,
-                libraries: merged.libraries
+                libraries: merged.libraries,
+                recentlyAddedCandidates: merged.recentlyAddedCandidates
             )
         } else {
             // Unmerged: global Continue Watching + Watchlist stay at the top, the
@@ -956,7 +969,8 @@ public final class HomeViewModel {
                 mergeLibraries: false,
                 librarySections: unmerged.librarySections,
                 serverRows: unmerged.serverRows,
-                collectionRows: unmerged.collectionRows
+                collectionRows: unmerged.collectionRows,
+                recentlyAddedCandidates: unmerged.recentlyAddedCandidates
             )
         }
         // A SILENT background refresh that came back empty must not blank out good
@@ -1146,7 +1160,10 @@ public final class HomeViewModel {
         )
         content.collectionRows = progress.content.collectionRows
         if let resume { content.continueWatching = resume }
-        if newlyReady.contains(.recentlyAdded) { content.latest = progress.content.latest }
+        if newlyReady.contains(.recentlyAdded) {
+            content.latest = progress.content.latest
+            content.recentlyAddedCandidates = progress.content.recentlyAddedCandidates
+        }
         if newlyReady.contains(.libraries) { content.libraries = progress.content.libraries }
         if newlyReady.contains(.watchlist) {
             let resolved = Self.resolvedWatchlist(
@@ -1210,6 +1227,7 @@ public final class HomeViewModel {
                 return apply(mutation, to: item)
             }
             content.latest = content.latest.map { apply(mutation, to: $0) }
+            content.recentlyAddedCandidates = content.recentlyAddedCandidates?.map { apply(mutation, to: $0) }
             content.serverRows = applying(mutation, to: content.serverRows)
             content.collectionRows = applying(mutation, to: content.collectionRows)
             content.watchlist = updatedWatchlist(content.watchlist, mutation: mutation, in: content)
@@ -1412,6 +1430,7 @@ public final class HomeViewModel {
             content.continueWatching = content.continueWatching.map { apply(mutation, to: $0) }
         }
         content.latest = content.latest.map { apply(mutation, to: $0) }
+        content.recentlyAddedCandidates = content.recentlyAddedCandidates?.map { apply(mutation, to: $0) }
         content.serverRows = applying(mutation, to: content.serverRows)
         content.collectionRows = applying(mutation, to: content.collectionRows)
         content.watchlist = updatedWatchlist(content.watchlist, mutation: mutation, in: content)
@@ -2627,6 +2646,9 @@ public final class HomeViewModel {
                 updated.latest = MediaItemMerger.merge(
                     current.latest, serverInfo: resolve, identitySources: sources
                 )
+                updated.recentlyAddedCandidates = current.recentlyAddedCandidates.map {
+                    MediaItemMerger.merge($0, serverInfo: resolve, identitySources: sources)
+                }
                 guard !Task.isCancelled else { return nil }
                 updated.watchlist = MediaItemMerger.merge(
                     current.watchlist, serverInfo: resolve, identitySources: sources

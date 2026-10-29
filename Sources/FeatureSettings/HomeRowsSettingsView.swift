@@ -153,6 +153,15 @@ struct HomeSectionsSettingsView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home-section-controls")
 
+            SettingsSectionGroup {
+                Toggle("Hide watched in Recently Added", isOn: Binding(
+                    get: { visibility.visibility.hideWatchedRecentlyAdded },
+                    set: { visibility.setHideWatchedRecentlyAdded($0) }
+                ))
+                .accessibilityIdentifier("home-hide-watched-recently-added")
+                .disabled(isReordering)
+            }
+
             addSectionButton(identifier: "home-section-add")
 
             let catalog = reorderSession?.catalog ?? currentCatalog

@@ -267,6 +267,9 @@ final class JellyfinHomeLayoutTests: XCTestCase {
           {"Id":"resume","Query":{"IsResumable":true},"IncludeNextUpInResume":true},
           {"Id":"live","CollectionType":"livetv"},
           {"Id":"libraries","ItemTypes":["CollectionFolder"]},
+          {"Id":"latestmedia_movies","SectionType":"latestmedia","Name":"Latest Movies",
+           "CustomName":"Fresh picks","CollectionType":"movies","ParentId":"movies",
+           "ItemTypes":[],"Query":{"IsPlayed":false}},
           {"Id":"another","SectionType":"AnotherFutureValue","Name":"Recently Added"}
         ]
         """)
@@ -275,13 +278,15 @@ final class JellyfinHomeLayoutTests: XCTestCase {
         let layout = try XCTUnwrap(response)
         XCTAssertEqual(layout.source, .server)
         XCTAssertEqual(layout.sections.map(\.id), [
-            "emby:mystery", "emby:resume", "emby:live", "emby:libraries", "emby:another"
+            "emby:mystery", "emby:resume", "emby:live", "emby:libraries", "emby:latestmedia_movies", "emby:another"
         ])
         XCTAssertEqual(layout.sections.map(\.kind), [
-            .recommendations, .continueWatching, .liveTV, .libraries, .recommendations
+            .recommendations, .continueWatching, .liveTV, .libraries, .recentlyAdded, .recommendations
         ])
         XCTAssertEqual(layout.sections.first?.title, "My selection")
         XCTAssertEqual(layout.sections.first?.libraryID, "movies")
+        XCTAssertEqual(layout.sections[4].title, "Fresh picks")
+        XCTAssertEqual(layout.sections[4].libraryID, "movies")
         XCTAssertTrue(layout.sections[1].includesNextUp)
         XCTAssertTrue(layout.omitsMusic)
         XCTAssertTrue(layout.omitsReading)

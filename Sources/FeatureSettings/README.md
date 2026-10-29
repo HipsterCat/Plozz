@@ -310,6 +310,9 @@ watch history and planning-list behavior are documented in
   Presets and reordering never change page appearance. Showcase's fixed Discovery
   row links back to Home layout rather than pretending to be reorderable.
   Shared Continue Watching settings remain accessible when its Home row is hidden.
+  Home rows also owns the profile-scoped **Hide watched in Recently Added** toggle
+  (off by default). It applies to combined, library, and server Recently Added rows,
+  not Continue Watching, Next Up, Watchlist, collections, or the hero.
   Detail Page keeps hero controls together and places its label editor under Cards.
   These destinations preserve the existing profile-scoped stores. See CoreUI's
   row-geometry guidance; the deprecated text-height focus strip must not return.
