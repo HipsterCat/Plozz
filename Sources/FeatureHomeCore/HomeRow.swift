@@ -193,7 +193,10 @@ public extension HomeRow {
         }
         if isGlobalRowEnabled(.recentlyAdded) {
             let latest = content.latest.filter { $0.isVisibleOnHome(isLibraryVisible: isLibraryVisible) }
-            if !latest.isEmpty || isPending(.recentlyAdded) {
+            let hasCandidates = content.recentlyAddedCandidates?.contains {
+                $0.isVisibleOnHome(isLibraryVisible: isLibraryVisible)
+            } == true
+            if !latest.isEmpty || hasCandidates || isPending(.recentlyAdded) {
                 rows.append(makeRow(.recentlyAdded, items: latest))
             }
         }

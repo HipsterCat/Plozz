@@ -901,6 +901,8 @@ public struct SettingsView: View {
                 librariesScope: context.librariesScope, settingsNavigation: navigation,
                 theme: theme, nightShift: nightShift, spoilers: spoilers, section: .screensNavigation
             )
+        case .allScreens:
+            AllScreensDetailView(spoilers: spoilers)
         case .about:
             ScrollView {
                 VStack(alignment: .leading, spacing: SettingsFormMetrics.controlSpacing) {

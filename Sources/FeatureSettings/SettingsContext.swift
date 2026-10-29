@@ -97,6 +97,7 @@ struct SettingsContext {
 public enum SettingsRoute: Hashable {
     case language
     case screensNavigation
+    case allScreens
     case about
     case artwork
     case navigationLayout

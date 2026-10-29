@@ -721,6 +721,11 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   reflections without changing the surrounding page's card policy.
   Shared hero/reflection first-paint results are qualified by source and provider
   policy so changing those settings cannot reuse a previous provider's winner.
+  A pinned show identity keeps its current image visible during hydration, not
+  permanently selected. New artwork references or source preferences resolve
+  again before replacing it at full quality, so an early poster fallback cannot
+  remain stretched across "Go to Show" after the proper backdrop arrives.
+  Unchanged inputs reuse the existing result without another lookup.
   Library-first and metadata-provider-first
   presets initialize source choices for Home, Continue Watching, Browse,
   Search, Watchlist, Details, Episodes, Playback, Music, Top Shelf, and Downloads

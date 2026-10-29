@@ -35,6 +35,16 @@ public struct HomePresentationRow: Identifiable, Equatable, Sendable {
     ) -> [Self] {
         let shared = HomeRowChoice.shared
         func entry(_ row: HomeRow) -> Self? {
+            var row = row
+            if row.kind == .recentlyAdded, row.loadingPlaceholderCount == 0 {
+                let candidates = visibility.hideWatchedRecentlyAdded
+                    ? content.recentlyAddedCandidates ?? row.items : row.items
+                row.items = HomeRecentlyAddedPolicy.items(
+                    candidates.filter { $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled) },
+                    hideWatched: visibility.hideWatchedRecentlyAdded
+                )
+                guard !row.isEmptyOnHome else { return nil }
+            }
             let id: HomeRowID
             if row.kind == .libraries {
                 id = .libraries
@@ -56,7 +66,17 @@ public struct HomePresentationRow: Identifiable, Equatable, Sendable {
         }
         if visibility.usesIndividualHomeRows {
             for group in content.librarySections where visibility.isEnabled(group.library.key) {
-                for row in group.rows {
+                for var row in group.rows {
+                    if row.id == LibraryHomeRowKind.recentlyAdded.rawValue {
+                        var section = row.section
+                        section.items = HomeRecentlyAddedPolicy.items(
+                            section.items, hideWatched: visibility.hideWatchedRecentlyAdded
+                        )
+                        row = .init(
+                            section: section, isLoading: row.isLoading, failure: row.failure,
+                            browseItem: row.browseItem, issue: row.issue, collectionCardStyle: row.collectionCardStyle
+                        )
+                    }
                     guard !row.section.items.isEmpty || row.isLoading || row.failure != nil else { continue }
                     if row.id == "pending-hubs" {
                         let known = (visibility.rowCustomization?.order ?? []).filter {
@@ -86,6 +106,11 @@ public struct HomePresentationRow: Identifiable, Equatable, Sendable {
                    !visibility.isEnabled("\(row.definition.accountID):\(libraryID)") { continue }
                 if !row.definition.section.isAccountWideHistory {
                     row.items = row.items.filter { $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled) }
+                }
+                if row.definition.section.kind == .recentlyAdded {
+                    row.items = HomeRecentlyAddedPolicy.items(
+                        row.items, hideWatched: visibility.hideWatchedRecentlyAdded
+                    )
                 }
                 guard !row.items.isEmpty || row.isLoading || row.failure != nil else { continue }
                 available.append(Self(
