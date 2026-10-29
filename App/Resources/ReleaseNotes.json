@@ -2,6 +2,90 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/067",
+      "version": "2026.10.29",
+      "marketingVersion": "2026.10.24",
+      "build": 67,
+      "releasedAt": "2026-10-29",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            {
+              "text": "With Automatically Sign In off, returning to browsing shows the profile picker immediately if any profile has a PIN, or after five minutes away with multiple profiles.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Choose a spatial audio layout for this Apple TV in Playback > Advanced (tvOS 26 or later).",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Open individual libraries directly from the app's tabs or sidebar, and choose their order and visibility in Navigation settings.",
+              "platforms": ["iOS"]
+            }
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            {
+              "text": "Automatically Sign In has its own section above the profile list.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Spatial audio avoids an extra lossy conversion on supported outputs; AirPlay remains lossy (tvOS 26 or later).",
+              "platforms": ["tvOS"]
+            },
+            "Enable sharing directly from Send Diagnostics, with privacy details available from the information button.",
+            "More detailed diagnostic reports for search, Jellyfin and Emby connections, and playback problems.",
+            "Image-based subtitle history is trimmed to limit memory growth during long playback."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Fixed some Jellyfin and Emby videos failing to start.",
+              "platforms": ["tvOS"]
+            },
+            "Removed the unintended bitrate limit on Jellyfin and Emby playback at Original quality.",
+            "Fixed Silo searches and library lists failing while loading more results.",
+            {
+              "text": "Fixed libraries missing from navigation after leaving Settings during a refresh.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Fixed a jump when opening or closing title details from Search with pinned navigation.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Fixed screen brightness changing when scrubbing through a video or Live TV.",
+              "platforms": ["iOS"]
+            },
+            "Improved recovery from frozen pictures or lost sound, including temporary video-decoder failures.",
+            "Fixed playback advancing after pausing during startup.",
+            "Fixed delayed buffering indicators during playback.",
+            "Fixed incorrect buffer readings while seeking.",
+            "Fixed buffer display and seeking within buffered sections of some AVI videos.",
+            "Fixed Live TV falling further behind after interruptions when using a fixed buffer duration.",
+            {
+              "text": "Corrected Match Frame Rate for true 24 fps videos.",
+              "platforms": ["tvOS"]
+            },
+            "Corrected frame timing in some Matroska videos.",
+            "Fixed out-of-order frames in some MP4 videos.",
+            "Automatic language selection now prefers the main soundtrack over equally matched commentary or audio-description tracks.",
+            "Fixed stretched HDR previews and outdated images when scrubbing quickly.",
+            "Fixed unnecessary startup waits on connection-limited servers and delayed recovery after dropped connections.",
+            "Fixed repeated buffering in some MP4 videos with many subtitle tracks.",
+            "Fixed missing pictures after some seeks in hardware-decoded VP9 videos.",
+            "Corrected picture metadata in hardware-decoded AV1 Dolby Vision playback.",
+            "Fixed stalls, brightness inconsistencies, edge-color errors and picture-alignment issues with Dolby Vision FEL enabled."
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/066",
       "version": "2026.10.28",
       "marketingVersion": "2026.10.24",
