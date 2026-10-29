@@ -2,6 +2,48 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/067.3",
+      "version": "2026.10.29",
+      "marketingVersion": "2026.10.24",
+      "build": "67.3",
+      "releasedAt": "2026-10-29",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Hide watch marks and card progress bars independently.",
+            "Choose labels for Home's Libraries row separately, or follow Home's default."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Home's Libraries row follows the library order in Navigation settings.",
+            "Server names appear below library names in Navigation settings.",
+            "Clearer label previews and row overrides in card settings.",
+            {
+              "text": "More compact card previews and native menus on smaller screens.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Shorter library tab names with icons matching each library's content.",
+              "platforms": ["iOS"]
+            },
+            "Playback errors suggest turning off Force transcoding when a forced conversion fails."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Fixed library names remaining visible when card labels are turned off.",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/067.2",
       "version": "2026.10.29",
       "marketingVersion": "2026.10.24",
