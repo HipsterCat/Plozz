@@ -566,9 +566,15 @@ final class ArtworkSettingsHostedTests: XCTestCase {
                 .sorted { $0.minY < $1.minY }
             XCTAssertGreaterThanOrEqual(frames.count, 9)
             let rowHeight = SettingsRowMetrics.minHeight(.primary) + 2 * SettingsRowMetrics.verticalPadding(.primary)
-            for frame in frames.prefix(9) {
+            let singleLineRows = frames.prefix(9).filter { $0.height <= rowHeight + 1 }
+            let libraryRows = frames.prefix(9).filter { $0.height > rowHeight + 1 }
+            XCTAssertEqual(singleLineRows.count, 7)
+            XCTAssertEqual(libraryRows.count, 2, "Library rows reserve a second line for their server.")
+            for frame in singleLineRows {
                 XCTAssertEqual(frame.height, rowHeight, accuracy: 1)
             }
+            XCTAssertEqual(try XCTUnwrap(libraryRows.first).height,
+                           try XCTUnwrap(libraryRows.last).height, accuracy: 1)
             for (previous, next) in zip(frames.prefix(8), frames.dropFirst().prefix(8)) {
                 XCTAssertEqual(next.minY - previous.maxY, SettingsRowMetrics.formRowSpacing, accuracy: 1)
             }

@@ -146,6 +146,8 @@ final class PlayerVersionMenuHostedTests: XCTestCase {
             versions: [version, .init(id: "other", height: 1080)], selectedVersionID: version.id,
             actions: [], onSelectSource: { _ in }, onSelectVersion: { _ in }, onPerformAction: { _ in }
         )
+        XCTAssertEqual(MediaVersion.PickerPresentation(version).releaseName,
+                       "Movie.Extended.2160p.REMUX.HEVC.TrueHD-GROUP.mkv")
         window.rootViewController = UIHostingController(rootView:
             panel.environment(\.locale, Locale(identifier: "en_US"))
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black)

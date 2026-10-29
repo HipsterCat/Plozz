@@ -343,9 +343,10 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 store.save(layout)
                 try await Task.sleep(for: .milliseconds(200))
                 let text = try visibleText(in: window, attachment: "Spatial-layout-\(layout.rawValue)-\(typeSize)")
+                let normalizedText = text.replacingOccurrences(of: ": ", with: ":")
                 for label in ["Rendering layout", layout.rawValue, "Applies to this device.",
                               "DTS:X heights require 7.1.4 or 9.1.6."] {
-                    XCTAssertTrue(text.contains(label), text)
+                    XCTAssertTrue(normalizedText.contains(label), text)
                 }
                 XCTAssertFalse(text.contains("…"), text)
                 XCTAssertEqual(store.load(), layout)
