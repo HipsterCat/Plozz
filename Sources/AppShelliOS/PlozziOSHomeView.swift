@@ -2086,6 +2086,16 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
     @ViewBuilder let backdrop: (CGFloat) -> Backdrop
 
     var body: some View {
+        // The image and its dissolve must share the window-wide bounds; masking
+        // only the safe-area column cuts off artwork underneath side chrome.
+        PlozziOSFullWidthHeroStage(height: heroHeight) {
+            composite
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var composite: some View {
         let pullDistance = model.distance
         let pullScale = 1 + (pullDistance / max(heroHeight, 1))
         let upwardScaleGrowth = (pullScale - 1) * heroHeight / 2
@@ -2102,7 +2112,7 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
         // background. The bottom of the hero came out greyer and flatter than
         // tvOS's, and no amount of re-tuning the gradients could close the gap,
         // because the compositing - not the curve - was what differed.
-        ZStack {
+        return ZStack {
             // The backdrop's EXTRA travel only. The shared `-pullDistance` is
             // applied to the masked composite below, so the two still land at
             // -pullOffset and -pullDistance respectively.

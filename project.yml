@@ -585,6 +585,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.PresentationTests
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
+        # Spatial layout tests call the dynamic engine directly, not only through the app umbrella.
+        OTHER_LDFLAGS: "$(inherited) -framework AetherEngine"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PlozziOSPresentationHost.app/PlozziOSPresentationHost"
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:

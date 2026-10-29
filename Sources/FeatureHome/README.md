@@ -803,6 +803,9 @@ On iPhone and iPad, the loading and loaded Home layouts share the hero visibilit
 gate. Disabling the hero or deselecting all its sources removes both the carousel
 and its placeholder, including the reserved height. Only an active hero extends
 under the top safe area; a rows-only Home keeps its first row below navigation.
+The Home artwork, legibility scrim, and dissolve mask share window-wide bounds,
+including behind native side chrome. The title, actions, paging, and touch targets
+retain their safe-area layout; extending the artwork does not extend hit testing.
 
 Library cards preserve server-supplied cover artwork. Missing covers use a stable,
 locally composed poster collage from that exact library, with a provider-colored
