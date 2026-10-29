@@ -878,6 +878,13 @@ than waiting behind speculative prefetch. The raw Browse Files root uses the sam
 account's indexed latest media, never a recursive filesystem walk. Library names
 are not drawn over artwork. Provider badges sit beside the library name in the caption below the
 artwork on TV and mobile, never on the cover or collage; no logo scrim is applied.
+The Home Libraries row has a card-label override, like Continue Watching: Use default
+inherits Home's label setting (including Showcase), while On or Off affects only
+library cards and their loading placeholders. Hiding them removes the caption space
+but preserves accessible library and server names. Library directories continue to
+follow the global label preset. The Home Libraries row follows the profile's navigation order,
+including its discovery-order fallback, without inheriting navigation visibility:
+Home's own library visibility still decides which tiles appear.
 They use `ProviderBrandMark`'s standard provider-tinted circular background and
 optically balanced internal padding, including its existing Plex size adjustment.
 Native captions center the badge and short title together, keep the badge fixed

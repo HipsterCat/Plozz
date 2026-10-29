@@ -88,6 +88,11 @@ public final class NavigationStyleSettingsModel {
         libraryLayout.resolvingAutomaticVisibility(hidden: automaticallyHiddenKeys)
     }
 
+    /// Ordering hints for library cards outside navigation; their visibility remains independent.
+    public var libraryOrderingKeys: [String] {
+        libraryLayout.order + contentLibraries.map(\.key)
+    }
+
     public var showsWatchlist: Bool {
         get { resolvedLibraryLayout.isVisible(NavigationLibraryLayout.watchlistKey) }
         set { setDestination(newValue, key: NavigationLibraryLayout.watchlistKey) }

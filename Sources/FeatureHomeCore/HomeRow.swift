@@ -151,6 +151,7 @@ public extension HomeRow {
     /// contributing library. Watchlist retains its explicit-save policy below.
     static func rows(
         for content: HomeViewModel.Content,
+        libraryOrder: [String] = [],
         isLibraryVisible: (String) -> Bool,
         isLibraryTileVisible: (AggregatedLibrary) -> Bool = { HomeLibraryVisibility.default.isVisibleOnHome($0) },
         isGlobalRowEnabled: (HomeGlobalRow) -> Bool = { _ in true },
@@ -203,7 +204,11 @@ public extension HomeRow {
 
         let visibleLibraries = content.libraries.filter { isLibraryVisible($0.key) && isLibraryTileVisible($0) }
         if !visibleLibraries.isEmpty || isPending(.libraries) {
-            rows.append(makeRow(.libraries, libraries: visibleLibraries))
+            let byKey = Dictionary(visibleLibraries.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+            let keys = OrderedVisibilityList.resolving(
+                available: visibleLibraries.map(\.key), order: libraryOrder, hidden: []
+            ).enabled
+            rows.append(makeRow(.libraries, libraries: keys.compactMap { byKey[$0] }))
         }
 
         return rows

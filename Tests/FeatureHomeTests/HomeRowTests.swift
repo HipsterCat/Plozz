@@ -56,6 +56,47 @@ final class HomeRowTests: XCTestCase {
         XCTAssertTrue(rows.isEmpty)
     }
 
+    func testLibraryTilesFollowNavigationOrderWithoutChangingHomeVisibility() {
+        let first = library(account: "plex", id: "movies")
+        let second = library(account: "jellyfin", id: "movies")
+        let homeHidden = library(account: "plex", id: "hidden")
+        let newLibrary = library(account: "jellyfin", id: "new")
+        let layout = NavigationLibraryLayout(
+            order: [NavigationLibraryLayout.homeKey, second.key, "offline:movies",
+                    homeHidden.key, first.key, second.key],
+            hiddenKeys: [second.key]
+        )
+        let source = content(
+            latest: [item("latest")], libraries: [first, homeHidden, newLibrary, second]
+        )
+        let rows = HomeRow.rows(
+            for: source, libraryOrder: layout.order,
+            isLibraryVisible: { _ in true }, isLibraryTileVisible: { $0.key != homeHidden.key }
+        )
+        XCTAssertEqual(rows.first(where: { $0.kind == .libraries })?.libraries.map(\.key),
+                       [second.key, first.key, newLibrary.key])
+        XCTAssertEqual(rows.first(where: { $0.kind == .recentlyAdded })?.items.map(\.id), ["latest"])
+        XCTAssertTrue(layout.hiddenKeys.contains(second.key), "Navigation hiding is independent of Home.")
+        let reordered = HomeRow.rows(
+            for: source, libraryOrder: [newLibrary.key, first.key, second.key],
+            isLibraryVisible: { $0 != homeHidden.key }
+        )
+        XCTAssertEqual(reordered.first(where: { $0.kind == .libraries })?.libraries.map(\.key),
+                       [newLibrary.key, first.key, second.key])
+        XCTAssertEqual(source.libraries.map(\.key), [first.key, homeHidden.key, newLibrary.key, second.key])
+    }
+
+    func testLibraryTilesUseNavigationDiscoveryOrderBeforeHomeOnlyDiscoveries() {
+        let first = library(account: "a", id: "1")
+        let second = library(account: "a", id: "2")
+        let latest = library(account: "a", id: "3")
+        let rows = HomeRow.rows(
+            for: content(libraries: [latest, second, first]),
+            libraryOrder: [first.key, second.key], isLibraryVisible: { _ in true }
+        )
+        XCTAssertEqual(rows.first?.libraries.map(\.key), [first.key, second.key, latest.key])
+    }
+
     func testEmptyCollectionTileAppearsOnlyAfterContentOrManualEnable() {
         var directory = library(account: "a", id: "collections", title: "Collections")
         directory.library.kind = .collection

@@ -39,6 +39,82 @@ final class NativeSettingsToggleTests: XCTestCase {
         try await verifyNativeSwitch(grouped: false)
     }
 
+    func testAdaptiveCardSettingsKeepLabelsAndIndicatorsInFirstViewport() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "CompactCardSettings.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let cards = CardStyleSettingsModel(store: CardStyleSettingsStore(defaults: defaults))
+        let indicators = WatchStatusIndicatorSettingsModel(store: WatchStatusIndicatorSettingsStore(defaults: defaults))
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        window.rootViewController = UIHostingController(rootView:
+            NavigationStack {
+                CardAppearanceControls(cards: cards, watchIndicator: indicators)
+            }
+            .environment(\.themePalette, .dark)
+            .environment(\.colorScheme, .dark)
+            .environment(\.locale, Locale(identifier: "en_US"))
+        )
+        window.makeKeyAndVisible()
+        for width: CGFloat in [390, 600, 834, 600] {
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 900)
+            for mode in WatchStatusIndicator.allCases {
+                indicators.indicator = mode
+                try await settle(window)
+                let text = try captureText(window, name: "adaptive-cards-\(Int(width))-\(mode)")
+                for label in ["Labels", "Customize labels", "Watch indicators", "Show unwatched episode count"] {
+                    XCTAssertTrue(text.localizedCaseInsensitiveContains(label), text)
+                }
+                for label in ["Show labels everywhere", "Hide labels everywhere"] {
+                    XCTAssertEqual(text.contains(label), width == 834, text)
+                }
+                XCTAssertEqual(text.contains("Hidden"), width == 834 || mode == .hidden, text)
+                XCTAssertEqual(text.contains("Color"), mode != .hidden)
+                XCTAssertTrue(indicators.showsUnwatchedEpisodeCount)
+            }
+        }
+    }
+
+    func testCardPickerUsesAvailableWidthAndAccessibilityFallback() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 900)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for size in [DynamicTypeSize.large, .accessibility1] {
+            for width: CGFloat in [631, 632, 900, 400] {
+                window.rootViewController = UIHostingController(rootView:
+                    AdaptiveCardSettingsPicker {
+                        Text("Side by side")
+                    } compact: {
+                        Text("Compact menu")
+                    }
+                    .frame(width: width)
+                    .environment(\.dynamicTypeSize, size)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                )
+                window.makeKeyAndVisible()
+                try await settle(window)
+                let text = try captureText(window, name: "card-picker-fit-\(Int(width))-\(size)")
+                let showsChoices = width >= 632 && !size.isAccessibilitySize
+                XCTAssertEqual(text.contains("Side by side"), showsChoices, text)
+                XCTAssertEqual(text.contains("Compact menu"), !showsChoices, text)
+            }
+        }
+    }
+
     func testSkipToggleRevealsOnlySettingsLinkAndRetainsProfileChoices() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })

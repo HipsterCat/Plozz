@@ -629,16 +629,32 @@ watch history and planning-list behavior are documented in
   saved for later use outside Kids mode; this restriction is not synced as an
   editable setting. Connected server-user restrictions still govern library
   content—Plozz does not infer maturity from incomplete external catalog ratings.
-- `CardAppearanceControls` — the independent **Show unwatched episode count**
-  toggle lives beside Watched Indicator on both platforms. It defaults on,
+- `CardAppearanceControls` — **Watch indicators** offers Watched, Unwatched,
+  and Hidden. Hidden removes only watch marks, preserving episode counts,
+  playback progress, download badges, and library/request status. The saved
+  color is retained while its control is hidden. TV keeps side-by-side previews;
+  iOS also shows side-by-side choices when the settings content fits three
+  200-point cards plus spacing (scaled with text size). Narrow windows and
+  accessibility text sizes use one compact live preview and a native menu for
+  both Labels and Watch indicators. This responds to available width, including
+  iPad multitasking, rather than device type. Custom label overrides leave the
+  visual presets unselected and show Custom in the menu until a preset replaces them.
+  The independent **Show unwatched episode count** toggle defaults on,
   persists per profile, and transfers/syncs with that profile without changing
   its watched/unwatched style. Both previews show a sample count on the
   in-progress series when enabled; toggling it updates the previews immediately
   without removing the separate watched check or unwatched flag examples.
-  **Episode count style** offers Attached or Floating while counts are enabled;
-  it is profile-scoped, transfers with the profile, and never changes watch marks.
+  **Episode count style** offers Attached or Floating while counts are enabled.
+  Mobile uses the same native menu picker as Watch indicators, with a trailing
+  selected value and the system menu affordance.
+  The choice is profile-scoped, transfers with the profile, and never changes watch marks.
   Turning counts off retains the style. Existing profiles keep their previous
   placement on upgrade; both previews then follow this independent choice.
+  **Show progress bars** is a separate default-on, profile-scoped toggle below
+  the count controls. It hides viewing-progress bars on media and episode cards,
+  including Continue Watching and live previews, without removing episode/time
+  text, download indicators, or changing player timelines and play-button progress.
+  The preference transfers/syncs with the profile.
   The eight watch-mark colors appear as one horizontal swatch row below the
   indicator previews. White remains the default; changes update the previews
   immediately and persist/transfer per profile. Narrow mobile layouts scroll
@@ -953,7 +969,12 @@ watch history and planning-list behavior are documented in
   caption bars on only one half. Show labels everywhere and Hide labels everywhere
   govern all media captions; App default owns Showcase and title-artwork exceptions.
   Explicit per-view choices, including Episodes, last until a preset replaces them.
-  Library navigation names and on-artwork information are not captions.
+  Home's Libraries row has a Use default / On / Off override alongside Continue Watching.
+  Use default inherits Home's label setting, including Showcase; explicit choices
+  affect only the Home library-card caption, not the library directory. Library-directory
+  captions continue to follow the global preset. All label editors place page defaults
+  first, then the live preview, then any Overrides section on TV and mobile. Library
+  names in navigation bars, sidebars, menus, and on-artwork information remain visible.
   Per-view help states whether labels are visible or hidden; Mixed explains
   the Showcase and series-artwork exceptions. It follows the focused setting
   and updates when that setting changes.
