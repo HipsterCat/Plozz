@@ -1,5 +1,6 @@
 import CoreModels
 import CoreUI
+import FeatureProfiles
 import Observation
 import SwiftUI
 import UIKit
@@ -9,6 +10,72 @@ import XCTest
 
 @MainActor
 final class PlaybackSettingsHostedTests: XCTestCase {
+    func testProfileSettingsKeepAutomaticSignInSeparateFromProfiles() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let model = ProfileSettingsControlModel()
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            ProfileSettingsControlFixture(model: model)
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await Task.sleep(for: .milliseconds(350))
+        let automatic = try visibleText(in: window, attachment: "profile-settings-sign-in-off")
+        for label in ["Automatically Sign In", "Alex", "Family", "Add Profile"] {
+            XCTAssertTrue(automatic.contains(label), automatic)
+        }
+        for removed in ["Show Profiles on Return", "Each profile keeps", "Sign in to the last-used", "Open players are unaffected"] {
+            XCTAssertFalse(automatic.contains(removed), automatic)
+        }
+        XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+        let frames = profileFocusFrames(in: window)
+        XCTAssertEqual(frames.count, 4, "Only automatic sign-in, two profiles, and Add Profile remain focusable.")
+        let signIn = try XCTUnwrap(frames.first)
+        let firstProfile = try XCTUnwrap(frames.dropFirst().first)
+        let addProfile = try XCTUnwrap(frames.last)
+        let expectedHeight = SettingsRowMetrics.minHeight(.primary)
+            + 2 * SettingsRowMetrics.verticalPadding(.primary)
+        for frame in [signIn, addProfile] {
+            XCTAssertEqual(frame.height, expectedHeight, accuracy: 1)
+            XCTAssertEqual(frame.minX, signIn.minX, accuracy: 1)
+            XCTAssertEqual(frame.width, signIn.width, accuracy: 1)
+        }
+        XCTAssertEqual(
+            firstProfile.minY - signIn.maxY,
+            2 * SettingsFormMetrics.groupInset + SettingsFormMetrics.sectionSpacing,
+            accuracy: 1,
+            "Automatic sign-in stays in its own standard section above the profile list."
+        )
+        model.automaticallySignIn = true
+        try await Task.sleep(for: .milliseconds(200))
+        let enabled = try visibleText(in: window, attachment: "profile-settings-sign-in-on")
+        XCTAssertTrue(enabled.contains("On"), enabled)
+        XCTAssertFalse(enabled.contains("Show Profiles on Return"), enabled)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 4)
+        model.automaticallySignIn = false
+        try await Task.sleep(for: .milliseconds(200))
+        let disabled = try visibleText(in: window, attachment: "profile-settings-sign-in-off-again")
+        XCTAssertTrue(disabled.contains("Off"), disabled)
+        XCTAssertFalse(disabled.contains("Show Profiles on Return"), disabled)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 4)
+        model.signInError = "Could not save automatic sign-in."
+        try await Task.sleep(for: .milliseconds(200))
+        let error = try visibleText(in: window, attachment: "profile-settings-sign-in-error")
+        XCTAssertTrue(error.contains("Could not save automatic sign-in"), error)
+    }
+
     func testAudioOutputSettingsShareOneGroup() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -481,6 +548,31 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         return text
     }
 
+    private func profileFocusFrames(in window: UIWindow) -> [CGRect] {
+        var containers: [any UIFocusItemContainer] = [window]
+        var visited = Set<ObjectIdentifier>()
+        var items: [ObjectIdentifier: any UIFocusItem] = [:]
+        while let container = containers.popLast() {
+            guard visited.insert(ObjectIdentifier(container)).inserted else { continue }
+            for item in container.focusItems(in: container.coordinateSpace.convert(window.bounds, from: window)) {
+                if let child = item.focusItemContainer { containers.append(child) }
+                if let view = item as? UIView { containers.append(view) }
+                if item.canBecomeFocused, !(item is UIScrollView) { items[ObjectIdentifier(item)] = item }
+            }
+        }
+        return items.values.compactMap { item in
+            var environment: (any UIFocusEnvironment)? = item
+            while let current = environment {
+                if let container = current.focusItemContainer {
+                    return container.coordinateSpace.convert(item.frame, to: window)
+                }
+                environment = current.parentFocusEnvironment
+            }
+            XCTFail("The profile control must have a native focus coordinate space.")
+            return nil
+        }.sorted { $0.minY < $1.minY }
+    }
+
     private func visibleText(in window: UIWindow, attachment name: String) throws -> String {
         window.layoutIfNeeded()
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
@@ -495,6 +587,39 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         request.recognitionLanguages = ["en-US"]
         try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+    }
+}
+
+@MainActor @Observable
+final class ProfileSettingsControlModel {
+    var automaticallySignIn = false
+    var signInError: LocalizedStringResource?
+}
+
+private struct ProfileSettingsControlFixture: View {
+    var model: ProfileSettingsControlModel
+
+    var body: some View {
+        NavigationStack {
+            ProfileSettingsContent(
+                profiles: [
+                    Profile(id: "alex", name: "Alex"),
+                    Profile(id: "family", name: "Family", avatarSymbol: "person.2.fill", colorIndex: 1)
+                ],
+                activeProfileID: "alex",
+                automaticSignIn: AutomaticSignInSettings(
+                    isEnabled: Binding(
+                        get: { model.automaticallySignIn },
+                        set: { model.automaticallySignIn = $0 }
+                    ),
+                    error: model.signInError
+                ),
+                onAddProfile: {}
+            )
+            .navigationDestination(for: SettingsRoute.self) { _ in
+                Text("Profile settings")
+            }
+        }
     }
 }
 

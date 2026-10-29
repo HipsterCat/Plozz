@@ -35,6 +35,14 @@ public final class ProfileFlowModel {
     /// mandatory launch picker; true when opened from Settings behind an active
     /// profile).
     public private(set) var isProfileSelectionCancelable = false
+    public private(set) var foregroundLockedProfileID: String?
+    public var isForegroundLocked: Bool { foregroundLockedProfileID != nil }
+    public var foregroundReturnDelay: TimeInterval? {
+        ProfileReturnPolicy.delay(
+            for: profilesModel.profiles,
+            automaticallySignIn: plexHomeUsers.automaticallySignIn
+        )
+    }
     /// One-shot Settings entry, scoped to the profile whose admission authorized it.
     public private(set) var pendingSettingsProfileID: String?
     @ObservationIgnored private var settingsSelectionProfileID: String?
@@ -148,15 +156,51 @@ public final class ProfileFlowModel {
     /// Opens the profile picker (from Settings → "Switch Profile").
     public func requestProfileSelection() {
         clearSettingsEntry()
-        isProfileSelectionCancelable = true
+        isProfileSelectionCancelable = !isForegroundLocked
         isChoosingProfile = true
     }
 
     /// Dismisses the profile picker without changing the active profile (only
     /// allowed when a profile is already active behind it).
     public func cancelProfileSelection() {
+        guard isProfileSelectionCancelable, !isForegroundLocked else { return }
         clearSettingsEntry()
         isChoosingProfile = false
+    }
+
+    /// Called only by the tvOS browsing lifecycle, never by an inactive-only interruption.
+    public func lockForForegroundIfNeeded() {
+        if isForegroundLocked {
+            cancelForegroundProfileSelection()
+            return
+        }
+        guard !isChoosingProfile || isProfileSelectionCancelable,
+              pendingSetupProfile == nil, !hasResumableSetup,
+              foregroundReturnDelay != nil else { return }
+        foregroundLockedProfileID = profilesModel.activeProfileID
+        cancelForegroundProfileSelection()
+    }
+
+    public var canFinishForegroundUnlock: Bool {
+        isForegroundLocked && !isChoosingProfile
+            && pendingLockedProfile == nil && pendingParentalSwitch == nil
+            && plexHomeUsers.pendingPlexPINRequest == nil
+            && !activeProfileAwaitsUnlock
+    }
+
+    public func finishForegroundUnlockIfReady() {
+        guard canFinishForegroundUnlock else { return }
+        foregroundLockedProfileID = nil
+    }
+
+    public func cancelForegroundProfileSelection() {
+        guard isForegroundLocked else { return }
+        profilesModel.forgetProfileUnlock(profilesModel.activeProfileID)
+        cancelProfileLockPrompt()
+        cancelParentalSwitch()
+        plexHomeUsers.suspendProfileAccessForForeground()
+        isChoosingProfile = true
+        isProfileSelectionCancelable = false
     }
 
     public func requestSettingsFromProfileSelection() {
@@ -166,7 +210,7 @@ public final class ProfileFlowModel {
         }
         clearSettingsEntry()
         let id = profilesModel.activeProfileID
-        if isProfileSelectionCancelable, !activeProfileAwaitsUnlock, parentalFallThrough == nil {
+        if isProfileSelectionCancelable, !isForegroundLocked, !activeProfileAwaitsUnlock, parentalFallThrough == nil {
             pendingSettingsProfileID = id
             isChoosingProfile = false
         } else {
@@ -340,6 +384,13 @@ public final class ProfileFlowModel {
         clearSettingsEntry()
         let onboarding = plexOnboardingSelection?.id == id ? plexOnboardingSelection : nil
         plexOnboardingSelection = nil
+        if foregroundLockedProfileID == id, profilesModel.activeProfileID == id, onboarding == nil {
+            if let lock, profilesModel.activeProfile.lock == lock { profilesModel.noteProfileUnlocked(id) }
+            plexHomeUsers.resumeProfileAccessAfterForegroundSelection()
+            isChoosingProfile = false
+            if opensSettings { pendingSettingsProfileID = id }
+            return
+        }
         let before = profilesModel.activeProfileID
         profilesModel.select(id)
         HandoffDiagnostics.emit(
@@ -433,6 +484,7 @@ public final class ProfileFlowModel {
         plexOnboardingSelection = nil
         pendingLockedProfile = nil
         profileLockError = nil
+        if isForegroundLocked { isChoosingProfile = true }
     }
 
     /// Whether the active profile is locked and unproven for this activation.

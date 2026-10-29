@@ -6,6 +6,16 @@ instead of inheriting the page's monochrome navigation tint.
 
 The Settings screen and its detail pages. Profile-aware and integration-aware.
 
+On tvOS, Everyone > Profiles keeps **Automatically Sign In** in its own
+`SettingsControlGroup` above the profile list, using the shared native switch.
+This is a device-wide choice, not a setting belonging to the profile being edited.
+Return timing is automatic, with no separate preference or saved override.
+The profile list is a separate
+`SettingsControlGroup` using `SettingsRowLabel` and contained native focus.
+The page omits the introductory paragraph and redundant sign-in description.
+The return defaults, PIN boundaries, and playback
+exemptions are documented in `FeatureProfiles/README.md`. Mobile is unchanged.
+
 **Appearance** owns global visual styling: theme, cards, artwork, display size,
 and Circadian Mode. **Screens & Navigation → All screens** contains shared
 visibility and navigation preferences, including Spoiler Protection and the
