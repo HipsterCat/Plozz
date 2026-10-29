@@ -302,6 +302,10 @@ public struct ShareProvider: MediaLibraryQueryProviding, MediaFileBrowsing {
         return await watchState.stamp(items)
     }
 
+    public func recentlyAddedWatchState(_ items: [MediaItem]) async throws -> [MediaItem] {
+        try await watchState.stampRecentlyAdded(items)
+    }
+
     /// Titles on this share featuring a person, answered entirely from the local
     /// catalog.
     ///

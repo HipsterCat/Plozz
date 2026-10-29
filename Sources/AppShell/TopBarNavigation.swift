@@ -84,10 +84,11 @@ private struct TopBarNavigationContent: View {
     @State private var destinationFocus = NavigationDestinationFocusHandoff()
     @State private var scroll = TopNavigationScroll()
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var contentInsets: EdgeInsets {
         EdgeInsets(
-            top: chrome.isChromeHidden ? 0 : TopBarNavigationMetrics.topMargin + TopBarNavigationMetrics.panelHeight,
+            // Settings retains its root scroll view beneath subpages.
+            top: chrome.isChromeHidden && current != .settings
+                ? 0 : TopBarNavigationMetrics.topMargin + TopBarNavigationMetrics.panelHeight,
             leading: safeAreaInsets.leading + PlozzTheme.Metrics.screenPadding,
             bottom: 0,
             trailing: safeAreaInsets.trailing + PlozzTheme.Metrics.screenPadding
@@ -139,14 +140,11 @@ private struct TopBarNavigationContent: View {
                 .padding(.leading, contentInsets.leading)
                 .padding(.trailing, contentInsets.trailing)
                 .padding(.top, TopBarNavigationMetrics.topMargin)
-                .opacity(chrome.isChromeHidden ? 0 : 1)
-                .offset(y: chrome.isChromeHidden && !reduceMotion ? -NavigationChromeMotion.distance : 0)
-                .animation(
-                    chrome.transitionSuppressesFocus ? nil : NavigationChromeMotion.animation,
-                    value: chrome.isChromeHidden
-                )
                 .disabled(!isShellActive || chrome.isChromeHidden || chrome.transitionSuppressesFocus)
-                .modifier(TopBarScrollPosition(scroll: scroll, chromeHidden: chrome.isChromeHidden))
+                .modifier(TopBarScrollPosition(
+                    scroll: scroll, chromeHidden: chrome.isChromeHidden,
+                    suppressesFocus: chrome.transitionSuppressesFocus
+                ))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
@@ -275,9 +273,18 @@ private struct TopBarNavigationContent: View {
 private struct TopBarScrollPosition: ViewModifier {
     let scroll: TopNavigationScroll
     let chromeHidden: Bool
+    let suppressesFocus: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
+            .opacity(chromeHidden ? 0 : 1)
+            .offset(y: chromeHidden && !reduceMotion ? -NavigationChromeMotion.distance : 0)
+            .animation(
+                suppressesFocus || scroll.offset >= TopBarNavigationMetrics.topMargin + TopBarNavigationMetrics.panelHeight
+                    ? nil : NavigationChromeMotion.animation,
+                value: chromeHidden
+            )
             .offset(y: -scroll.offset)
             .disabled(scroll.offset >= TopBarNavigationMetrics.foregroundTop)
             .accessibilityHidden(chromeHidden || scroll.offset >= TopBarNavigationMetrics.foregroundTop)

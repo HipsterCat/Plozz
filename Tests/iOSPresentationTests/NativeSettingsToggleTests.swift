@@ -608,7 +608,7 @@ final class NativeSettingsToggleTests: XCTestCase {
                 SettingsPageList {
                     HeroSettingsControls(libraries: [], accounts: [])
                 }
-                .navigationTitle("Customize Home")
+                .navigationTitle("Home")
             }
             .environment(hero)
             .environment(background)
@@ -616,32 +616,32 @@ final class NativeSettingsToggleTests: XCTestCase {
             .environment(\.colorScheme, .dark))
             window.makeKeyAndVisible()
             try await settle(window)
-            let root = try captureText(window, name: "hero-root-mobile-\(Int(width))")
-            for label in ["Hero content sources", "Hide watched content", "Items to show",
+            let root = try await captureScrollableText(window, name: "hero-root-mobile-\(Int(width))")
+            for label in ["Hero content sources", "Items to show",
                           "Advance automatically", "Ratings", "Off", "Trailers"] {
                 XCTAssertTrue(root.contains(label), root)
             }
-            for label in ["Appearance", "Rotation", "Titles shown in hero", "Show ratings", "Seconds per item",
+            for label in ["Hide watched content", "Appearance", "Rotation", "Titles shown in hero", "Show ratings", "Seconds per item",
                           "Play trailer behind the hero", "Start muted"] {
                 XCTAssertFalse(root.contains(label), root)
             }
             let controls = listedSwitches(in: window).sorted {
                 $0.convert($0.bounds, to: window).minY < $1.convert($1.bounds, to: window).minY
             }
-            XCTAssertEqual(controls.count, 3, "Only enable, watched, and automatic changes are switches on the root.")
-            let automatic = try XCTUnwrap(controls.indices.contains(2) ? controls[2] : nil)
+            XCTAssertEqual(controls.count, 2, "Only enable and automatic changes are switches on the root.")
+            let automatic = try XCTUnwrap(controls.indices.contains(1) ? controls[1] : nil)
             automatic.setOn(true, animated: false)
             automatic.sendActions(for: .valueChanged)
             try await settle(window)
             XCTAssertTrue(hero.settings.autoAdvance)
-            let advanced = try captureText(window, name: "hero-automatic-mobile-\(Int(width))")
+            let advanced = try await captureScrollableText(window, name: "hero-automatic-mobile-\(Int(width))")
             XCTAssertTrue(advanced.contains("Seconds per item"), advanced)
             XCTAssertFalse(advanced.localizedCaseInsensitiveContains("Automatic changes"), advanced)
 
             hero.settings.showsRatings = true
             background.settings.homeTrailerEnabled = true
             try await settle(window)
-            let expanded = try captureText(window, name: "hero-expanded-mobile-\(Int(width))")
+            let expanded = try await captureScrollableText(window, name: "hero-expanded-mobile-\(Int(width))")
             XCTAssertFalse(expanded.contains("Start muted"), expanded)
             XCTAssertTrue(expanded.contains("On"), expanded)
             XCTAssertFalse(expanded.contains("Show ratings"), expanded)
@@ -1010,6 +1010,26 @@ final class NativeSettingsToggleTests: XCTestCase {
         request.customWords = technicalWords
         try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+    }
+
+    private func captureScrollableText(_ window: UIWindow, name: String) async throws -> String {
+        func list(in view: UIView) -> UICollectionView? {
+            if let list = view as? UICollectionView { return list }
+            return view.subviews.lazy.compactMap { list(in: $0) }.first
+        }
+        let scroll = try XCTUnwrap(list(in: window))
+        let original = scroll.contentOffset
+        let top = try captureText(window, name: "\(name)-top")
+        scroll.setContentOffset(CGPoint(
+            x: original.x,
+            y: max(-scroll.adjustedContentInset.top,
+                   scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        ), animated: false)
+        try await settle(window)
+        let bottom = try captureText(window, name: "\(name)-bottom")
+        scroll.setContentOffset(original, animated: false)
+        try await settle(window)
+        return top + " " + bottom
     }
 }
 #endif

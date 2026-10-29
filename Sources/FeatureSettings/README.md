@@ -17,9 +17,11 @@ The return defaults, PIN boundaries, and playback
 exemptions are documented in `FeatureProfiles/README.md`. Mobile is unchanged.
 
 **Appearance** owns global visual styling: theme, cards, artwork, display size,
-and Circadian Mode. **Screens & Navigation → All screens** contains shared
-visibility and navigation preferences, including Spoiler Protection and the
+and Circadian Mode. **Screens & Navigation → All screens** is a destination for shared
+visibility preferences, including Spoiler Protection and the
 profile-wide **Show content ratings** switch, on by default.
+Spoiler controls appear inline below content ratings on both platforms, without
+another subpage.
 Its label includes small, noninteractive PG-13 and R examples using the actual
 classification badge style; the examples stay visible when the switch is off.
 The label adapts to narrow widths and accessibility text sizes. This controls
@@ -28,17 +30,17 @@ and exported Top Shelf classifications, not review scores or parental restrictio
 On tvOS, the example lettering and outlines follow the native row's focus
 foreground so they remain visible on its inverted focused surface.
 
-Home, Libraries, and Detail Page expose the same card-label choices as
+Home, Libraries, and Movie & show details expose the same card-label choices as
 Appearance → Cards → Customize by view. These are additional controls over the
 existing profile-scoped `CardCaptionSettings`, not independent preferences.
 Home exposes Home rows and Continue Watching; Libraries exposes Recommended,
 Browse, collections, playlists, and the shared Continue Watching choice.
-Detail Page exposes episodes, related titles, and extras. Central presets still
+Movie & show details exposes episodes, related titles, and extras. Central presets still
 replace all overrides; contextual edits preserve other views. Screen-specific
 sizing stays with its screen, while overall display size stays in Appearance.
 
 Collection-cover layout is a presentation setting, not a browse filter.
-Customize Libraries lists collection directories alongside video libraries and
+Libraries lists collection directories alongside video libraries and
 owns each library's Auto/Posters/Landscape choice. Collection-only directories
 do not request or display a Recommended-page editor. Home and Recommended rows
 retain their separate cover-layout choices in their settings editors.
@@ -109,7 +111,7 @@ Title navigation uses native page opening and closing. The former
 The hero's staged content reveal remains, without waiting for backdrop artwork,
 and still respects Reduce Motion.
 
-Home hero, Showcase (TV), Recommended Page (TV), and Detail Page have independent
+Home hero, Showcase (TV), Recommended Page (TV), and Movie & show details have independent
 profile-scoped **Logo size** controls. Thirteen stops span 0.5x to 1.5x, with finer
 adjustments around the unchanged 1x default, marked at the center. Previously
 saved intermediate sizes keep their exact scale until adjusted.
@@ -130,7 +132,7 @@ Labels, ticks, and adjustment glyphs share a vertical center; there is no Defaul
 caption or Reset button. VoiceOver still announces the default value.
 Long labels can wrap rather than shrink. Home and Showcase update their existing
 layout-choice previews live instead of adding a second preview to the control.
-Recommended retains its 320-point-wide preview. Detail Page uses a 400-by-300
+Recommended retains its 320-point-wide preview. Movie & show details uses a 400-by-300
 preview showing the hero, right-side credits, and episode captions scaling
 together. Both retain the shared group inset and inner corner radius.
 The complete preview-and-controls group is one native tvOS focus section, so
@@ -140,7 +142,7 @@ while Home and detail previews use edge-to-edge artwork.
 Mobile Home keeps native sliders beside their labels and one stacked preview.
 No artwork lookup is needed for these fictional previews.
 
-Detail Page theme music uses the shared `ThemeMusicVolumeControl` on TV and mobile:
+Movie & show details theme music uses the shared `ThemeMusicVolumeControl` on TV and mobile:
 0–100%, with native touch sliders and the shared remote-adjustable Settings stepper.
 TV shows the current percentage instead of notches, so each 1% Left/Right press
 has visible numeric feedback. This control opts into the shared fast hold-repeat:
@@ -317,9 +319,12 @@ watch history and planning-list behavior are documented in
 ## Responsibility
 
 - **Screen customization hierarchy** follows task boundaries. Screens & Navigation presents
-  App navigation before shared screen preferences and individual screen editors.
+  App navigation and All screens before Home, Libraries, Movie & show details,
+  and Music player (TV only). Shared and screen-specific destinations are separated
+  without an extra category heading. Navigation labels name destinations;
+  explanatory copy uses "screen" for destinations and "view" for grid/list presentation.
   The App navigation entry and destination share that title on TV and mobile.
-  Customize Home opens Layout/Hero, Card labels, or Rows through matching
+  Home opens Layout/Hero, Card labels, Rows, or Filtering through matching
   full-height navigation rows, without redundant subtitles. TV shows the current
   layout as a secondary value. Home rows owns Preset, one Add row action, the
   row list, and Edit/Done. Mobile uses a native toolbar editing action; TV places
@@ -328,7 +333,13 @@ watch history and planning-list behavior are documented in
   Presets and reordering never change page appearance. Showcase's fixed Discovery
   row links back to Home layout rather than pretending to be reorderable.
   Shared Continue Watching settings remain accessible when its Home row is hidden.
-  Detail Page keeps hero controls together and places its label editor under Cards.
+  Home → Filtering groups two independent switches under **Hide watched content**:
+  **Recently Added** (off by default) and **Hero & discovery** (on by default).
+  Filtering stays available when the hero is off. These controls are moved, not
+  duplicated in the row or hero editors, and retain their existing profile-scoped stores.
+  Recently Added applies to combined, library, and server Recently Added rows,
+  not Continue Watching, Next Up, Watchlist, collections, or the hero.
+  Movie & show details keeps hero controls together and places its label editor under Cards.
   These destinations preserve the existing profile-scoped stores. See CoreUI's
   row-geometry guidance; the deprecated text-height focus strip must not return.
 - **Customize labels** uses one shared, page-organized visual editor from
@@ -350,7 +361,7 @@ watch history and planning-list behavior are documented in
   at a distance. Mixed has a visible, platform-specific explanation; Home and
   Recommended explicitly distinguish per-page inheritance from their shared
   Continue Watching On/Off override.
-- **Customize Libraries** lives in Screens & Navigation on TV and mobile.
+- **Libraries customization** lives in Screens & Navigation on TV and mobile.
   Library Navigation comes first, including the first Down move from Back on TV.
   Page appearance follows it, containing Recommended Page sizing on TV and the
   separate label editor for all library tabs. Recommended rows lists libraries
@@ -383,7 +394,7 @@ watch history and planning-list behavior are documented in
   and discovery pipeline through AppRuntime, without a feature-to-feature
   dependency. Identity changes cancel pending discovery and replace row editors.
   These choices never disable a library or alter its Home rows.
-- **Libraries** owns profile-wide library availability. Mobile Customize Home
+- **Libraries** owns profile-wide library availability. Mobile Home customization
   does not duplicate its Enabled controls: the Home editor manages section presentation,
   and Hero source selection uses the enabled library inventory. Discovering
   libraries for those controls must not restore a separate management list.
@@ -528,9 +539,9 @@ watch history and planning-list behavior are documented in
   Appearance, Screens & Navigation, Trackers, Language. Compact mobile windows
   use native push navigation; regular-width windows use a sidebar and detail stack.
   Both mobile layouts share their category section and destinations. Appearance
-  groups Theme, Cards, Artwork, Spoiler Protection, and Circadian Mode; Display
-  Size is last inside Cards. Screens & Navigation groups Customize Home,
-  Navigation, and Detail Page; Music Player remains TV-only because mobile does
+  groups Theme, Cards, Artwork, and Circadian Mode; Display
+  Size is last inside Cards. Screens & Navigation groups App navigation,
+  All screens, Home, Libraries, and Movie & show details; Music player remains TV-only because mobile does
   not implement those presentation choices. Mobile navigation editing includes
   every enabled video library from the shared discovery inventory; Music and
   All Libraries remain TV-only. Refreshing Libraries updates native navigation
@@ -654,9 +665,9 @@ watch history and planning-list behavior are documented in
   and Circadian location the same whole-row focus and native menu presentation.
   A setting's label and current value form one control, not a detached value pill.
   Appearance contains Theme (including gradient backgrounds and Liquid Glass),
-  Cards (with Display Size last), Artwork, Spoiler Protection and Circadian Mode.
-  Screens & Navigation contains Customize Home, Navigation, Detail Page and
-  Music Player. Moving these controls does not change their profile-scoped stores.
+  Cards (with Display Size last), Artwork and Circadian Mode.
+  Screens & Navigation contains App navigation, All screens, Home, Libraries,
+  Movie & show details and Music player. Moving these controls does not change their profile-scoped stores.
   Playback groups
   audio, autoplay/Up Next, marker skipping, seeking and display fades.
   **Skip intros, credits & more** has one inline toggle and a conditional **Customize**
@@ -793,7 +804,7 @@ watch history and planning-list behavior are documented in
   Success means SDK handoff, not server acknowledgment; inactive reporting or a
   rejected event returns failure. Feedback is not submitted when its diagnostic
   event is rejected. Both events pass through the same privacy hook before upload.
-- `HeroCollectionPickerView` — Customize Home's opt-in **Collections** hero source
+- `HeroCollectionPickerView` — Home's opt-in **Collections** hero source
   chooses multiple collections across enabled movie and TV libraries, or from accounts'
   personal collections when its provider advertises that capability. The native picker
   is shared by TV, iPhone and iPad, scopes requests to the active account and
@@ -856,6 +867,12 @@ watch history and planning-list behavior are documented in
   child path throughout the Settings visit; the new chrome takes effect on exit.
   Settings columns remain centered and subpage headers keep their full-height
   layout; only root foreground reserves space below the top bar.
+  That reservation remains constant while subpages cover the retained root, so
+  its scroll viewport and offset do not change as navigation hides or returns.
+  Settings pages retain their horizontal slide/fade transitions without resizing
+  their scroll viewports. Parent pages retain their scroll positions and return
+  focus to the originating row. Navigation chrome animates independently, only
+  while visible.
   The top bar scrolls away with root content, without a foreground fade.
   Root Back restores the page top and navigation; subpage Back remains one level.
   The profile action reserves a stable 100-point height: native focus shifts the

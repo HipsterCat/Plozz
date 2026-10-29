@@ -2,6 +2,51 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/067.1",
+      "version": "2026.10.29",
+      "marketingVersion": "2026.10.24",
+      "build": "67.1",
+      "releasedAt": "2026-10-29",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Hide watched items from Recently Added in Home > Filtering."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Screen settings are organized into All screens, Home, Libraries, and Movie & show details."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Fixed shows taking too long to open from Home or staying stuck after a loading error.",
+            "Fixed blurry, overly zoomed artwork when using Go to Show.",
+            "Fixed subtitle text being clipped when its layout changes.",
+            {
+              "text": "Fixed Settings shifting vertically when opening or leaving subpages with Top Bar navigation.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Fixed the profile picker focusing Settings instead of your profile when returning to the app.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Fixed Home artwork being cut off beside side navigation or in landscape.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Fixed missing or misplaced profile buttons with side toolbars on iOS/iPadOS 27.1.",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/067",
       "version": "2026.10.29",
       "marketingVersion": "2026.10.24",

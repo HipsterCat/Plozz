@@ -17,6 +17,7 @@ public struct HomeAggregator: Sendable {
     public struct Content: Equatable, Sendable {
         public var continueWatching: [MediaItem]
         public var latest: [MediaItem]
+        public var recentlyAddedCandidates: [MediaItem]?
         /// The unified Watchlist row, merged across every `WatchlistProviding`
         /// account (Jellyfin Favorites today). Empty when nothing is saved or no
         /// active account supports a watchlist — the UI then hides the row.
@@ -28,12 +29,14 @@ public struct HomeAggregator: Sendable {
             continueWatching: [MediaItem] = [],
             latest: [MediaItem] = [],
             watchlist: [MediaItem] = [],
-            libraries: [AggregatedLibrary] = []
+            libraries: [AggregatedLibrary] = [],
+            recentlyAddedCandidates: [MediaItem]? = nil
         ) {
             self.continueWatching = continueWatching
             self.latest = latest
             self.watchlist = watchlist
             self.libraries = libraries
+            self.recentlyAddedCandidates = recentlyAddedCandidates
         }
     }
 
@@ -73,7 +76,8 @@ public struct HomeAggregator: Sendable {
         )
         return Content(
             continueWatching: result.continueWatching, latest: result.latest,
-            watchlist: result.watchlist, libraries: result.libraries
+            watchlist: result.watchlist, libraries: result.libraries,
+            recentlyAddedCandidates: result.recentlyAddedCandidates
         )
     }
 
@@ -166,6 +170,7 @@ public struct HomeAggregator: Sendable {
         /// that row enabled (independent of the opt-in per-library "Recently Added
         /// in X" rows).
         public var latest: [MediaItem]
+        public var recentlyAddedCandidates: [MediaItem]?
         /// Global, cross-server merged Watchlist.
         public var watchlist: [MediaItem]
         /// Full (Home-eligible, music-excluded) library inventory — feeds the
@@ -184,7 +189,8 @@ public struct HomeAggregator: Sendable {
             libraries: [AggregatedLibrary] = [],
             librarySections: [HomeLibrarySectionGroup] = [],
             serverRows: [HomeServerRow] = [],
-            collectionRows: [HomeCollectionRow] = []
+            collectionRows: [HomeCollectionRow] = [],
+            recentlyAddedCandidates: [MediaItem]? = nil
         ) {
             self.continueWatching = continueWatching
             self.latest = latest
@@ -193,6 +199,7 @@ public struct HomeAggregator: Sendable {
             self.librarySections = librarySections
             self.serverRows = serverRows
             self.collectionRows = collectionRows
+            self.recentlyAddedCandidates = recentlyAddedCandidates
         }
 
         public var isEmpty: Bool {
@@ -241,6 +248,7 @@ public struct HomeAggregator: Sendable {
     private struct AccountContent: Sendable {
         var continueWatching: [MediaItem] = []
         var latest: [MediaItem] = []
+        var recentlyAddedCandidates: [MediaItem]?
         var watchlist: [MediaItem] = []
         var libraries: [AggregatedLibrary] = []
         var completed: Set<HomeRowKind> = []
@@ -364,9 +372,14 @@ public struct HomeAggregator: Sendable {
         }
     }
 
+    private struct FeedItems: Sendable {
+        let items: [MediaItem]
+        var recentlyAddedCandidates: [MediaItem]? = nil
+    }
+
     private enum Response: Sendable {
         case libraries(Int, Result<[MediaLibrary], AppError>)
-        case feed(Int, Feed, Result<[MediaItem], AppError>, LibraryLoadDiagnostic?)
+        case feed(Int, Feed, Result<FeedItems, AppError>, LibraryLoadDiagnostic?)
         case library(String, LibraryHomeRowKind, Result<[LibrarySection], AppError>)
         case server([HomeRowID: Result<[MediaItem], AppError>])
         case collection(String, Result<[MediaItem], AppError>)
@@ -559,11 +572,13 @@ public struct HomeAggregator: Sendable {
                             perAccount[index].continueWatchingDiagnostic = diagnostic
                         }
                         switch result {
-                        case let .success(items):
+                        case let .success(payload):
                             switch feed {
-                            case .continueWatching: perAccount[index].continueWatching = items
-                            case .latest: perAccount[index].latest = items
-                            case .watchlist: perAccount[index].watchlist = items
+                            case .continueWatching: perAccount[index].continueWatching = payload.items
+                            case .latest:
+                                perAccount[index].latest = payload.items
+                                perAccount[index].recentlyAddedCandidates = payload.recentlyAddedCandidates
+                            case .watchlist: perAccount[index].watchlist = payload.items
                             }
                         case let .failure(error):
                             perAccount[index].failures[feed.row] = error
@@ -637,6 +652,19 @@ public struct HomeAggregator: Sendable {
                                 from: groups, limit: latestLimit,
                                 serverInfo: { serverInfo[$0] }, identitySources: identitySources
                             )
+                            if visibility.hideWatchedRecentlyAdded {
+                                let candidates = perAccount.map { account in
+                                    let music = Set(account.libraries.filter(\.library.isMusic).map(\.library.id))
+                                    return (account.recentlyAddedCandidates ?? account.latest).filter {
+                                        $0.libraryID.map { !music.contains($0) } ?? true
+                                    }
+                                }
+                                content.recentlyAddedCandidates = mergedRow(
+                                    from: candidates,
+                                    limit: HomeRecentlyAddedPolicy.requestLimit(latestLimit, hideWatched: true),
+                                    serverInfo: { serverInfo[$0] }, identitySources: identitySources
+                                )
+                            }
                         case .watchlist:
                             content.watchlist = mergedRow(
                                 from: groups, limit: watchlistLimit,
@@ -707,9 +735,10 @@ public struct HomeAggregator: Sendable {
         case let .feed(index, feed, libraryIDs):
             let resolved = accounts[index]
             let provider = resolved.provider
-            let operation: @Sendable () async -> Result<[MediaItem], AppError> = {
+            let operation: @Sendable () async -> Result<FeedItems, AppError> = {
                 await fetch(feed.row.rawValue, from: resolved) {
                     let items: [MediaItem]
+                    var candidates: [MediaItem]?
                     switch feed {
                     case .continueWatching:
                         if visibility.mergesNextUpRows {
@@ -741,17 +770,30 @@ public struct HomeAggregator: Sendable {
                             policy.curated(playable.map { $0.taggingSource(resolved.account.id) })
                         )
                     case .latest:
-                        items = try await provider.latest(limit: latestLimit, inLibraries: libraryIDs)
+                        let latest = try await provider.latest(
+                            limit: HomeRecentlyAddedPolicy.requestLimit(
+                                latestLimit, hideWatched: visibility.hideWatchedRecentlyAdded
+                            ), inLibraries: libraryIDs
+                        )
+                        items = Array(latest.prefix(latestLimit))
+                        if visibility.hideWatchedRecentlyAdded {
+                            candidates = try await provider.recentlyAddedWatchState(latest)
+                        }
                     case .watchlist:
                         items = try await (provider as? any WatchlistProviding)?.watchlist() ?? []
                     }
                     try Task.checkCancellation()
                     let identities = feed == .watchlist
                         ? [:]
-                        : await seriesIdentities[index].resolve(items, provider: provider)
-                    return stampSeriesProviderIDs(identities, onto: items).map {
-                        $0.taggingSource(resolved.account.id)
-                    }
+                        : await seriesIdentities[index].resolve(candidates ?? items, provider: provider)
+                    return FeedItems(
+                        items: stampSeriesProviderIDs(identities, onto: items).map {
+                            $0.taggingSource(resolved.account.id)
+                        },
+                        recentlyAddedCandidates: candidates.map {
+                            stampSeriesProviderIDs(identities, onto: $0).map { $0.taggingSource(resolved.account.id) }
+                        }
+                    )
                 }
             }
             guard feed == .continueWatching else {
@@ -794,14 +836,18 @@ public struct HomeAggregator: Sendable {
                     let page = try await resolved.provider.items(
                         in: library.library.id, kind: library.library.kind,
                         page: PageRequest(
-                            startIndex: 0, limit: perLibraryLimit,
+                            startIndex: 0, limit: HomeRecentlyAddedPolicy.requestLimit(
+                                perLibraryLimit, hideWatched: visibility.hideWatchedRecentlyAdded
+                            ),
                             sort: SortDescriptor(field: .dateAdded, direction: .descending)
                         )
                     )
-                    sections = page.items.isEmpty ? [] : [LibrarySection(
+                    let items = visibility.hideWatchedRecentlyAdded
+                        ? try await resolved.provider.recentlyAddedWatchState(page.items) : page.items
+                    sections = items.isEmpty ? [] : [LibrarySection(
                         id: "recentlyAdded", title: "Recently Added in \(library.library.title)",
                         localizedTitle: "Recently Added in \(library.library.title)",
-                        style: .poster, items: page.items
+                        style: .poster, items: items
                     )]
                 case .hubs:
                     if let customization = visibility.rowCustomization {
@@ -852,7 +898,12 @@ public struct HomeAggregator: Sendable {
                 return cancelled ? .cancelled : .succeeded
             }) {
                 await resolved.provider.serverHomeItems(
-                    sections: definitions.map(\.section), limit: perLibraryLimit,
+                    sections: definitions.map(\.section),
+                    limit: HomeRecentlyAddedPolicy.requestLimit(
+                        perLibraryLimit,
+                        hideWatched: visibility.hideWatchedRecentlyAdded
+                            && definitions.contains { $0.section.kind == .recentlyAdded }
+                    ),
                     excludingLibraryIDs: definitions.allSatisfy { $0.section.isAccountWideHistory }
                         ? [] : excludedLibraries(visibility, accountID: resolved.account.id)
                 )
@@ -866,7 +917,10 @@ public struct HomeAggregator: Sendable {
                     PlozzLog.app.error("Home server section failed: provider=\(resolved.provider.kind)")
                 }
                 let scoped = result.map { items in
-                    items.map { item in
+                    let candidates = visibility.hideWatchedRecentlyAdded
+                        && definition.section.kind == .recentlyAdded
+                        ? items : Array(items.prefix(perLibraryLimit))
+                    return candidates.map { item in
                         let tagged = item.taggingSource(resolved.account.id)
                         return tagged.taggingLibrary(item.libraryID ?? definition.section.libraryID)
                     }.filter {
