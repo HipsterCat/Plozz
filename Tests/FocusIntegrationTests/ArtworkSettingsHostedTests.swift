@@ -1616,6 +1616,29 @@ final class ArtworkSettingsHostedTests: XCTestCase {
         }
     }
 
+    func testWatchIndicatorPickerShowsThreeNativePreviewChoices() async throws {
+        let suite = "WatchChoicesHosted.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = WatchStatusIndicatorSettingsModel(store: WatchStatusIndicatorSettingsStore(defaults: defaults))
+        try await withScreen(content: SettingsSplitLayout(title: "Watch indicators", rows: [
+            SettingsSplitRow(id: "watch-indicators", title: "Watch indicators") {
+                CompactWatchIndicatorPicker(
+                    selection: Binding(get: { model.indicator }, set: { model.indicator = $0 }),
+                    swatchHeight: 150
+                )
+            }
+        ])) { window in
+            for mode in WatchStatusIndicator.allCases {
+                model.indicator = mode
+                let text = try await self.capture(window, name: "watch-choices-\(mode)", includeMaster: true)
+                for label in ["Watched", "Unwatched", "Hidden"] {
+                    XCTAssertTrue(text.contains(label), text)
+                }
+            }
+        }
+    }
+
     func testCardsDetailScrollsThroughWatchedIndicatorsAndTheLastStyleRow() async throws {
         let suite = "CardsViewportHosted.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

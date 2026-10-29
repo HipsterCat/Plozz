@@ -346,7 +346,7 @@ enum NativePosterIndicators: View, Equatable {
                 showsEpisodeCount: showsEpisodeCount, seerConnected: seerConnected
             ) != nil
         case let .episode(isWatched, hasProgress, isVisible, style, _, _):
-            return isVisible && (style == .watched ? isWatched : !isWatched && !hasProgress)
+            return isVisible && style != .hidden && (style == .watched ? isWatched : !isWatched && !hasProgress)
         }
     }
 
@@ -367,6 +367,8 @@ enum NativePosterIndicators: View, Equatable {
                         if !isWatched && !hasProgress {
                             MediaUnwatchedCorner(size: flagSize)
                         }
+                    case .hidden:
+                        EmptyView()
                     }
                 }
             }
@@ -562,6 +564,8 @@ enum MediaPlaybackIndicatorPresentation {
             return showsWatchedBadge(for: item, hidesStatus: hidesStatus) ? .watched : nil
         case .unwatched:
             return showsUnwatchedFlag(for: item, hidesStatus: hidesStatus) ? .unwatched : nil
+        case .hidden:
+            return nil
         }
     }
 

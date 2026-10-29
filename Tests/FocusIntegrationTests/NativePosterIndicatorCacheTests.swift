@@ -94,7 +94,7 @@ final class NativePosterIndicatorCacheTests: XCTestCase {
     }
 
     func testWatchColorsInvalidateNativeRowAndLibraryCachesAndChangePixels() throws {
-        for mode in WatchStatusIndicator.allCases {
+        for mode in WatchStatusIndicator.allCases where mode != .hidden {
             let item = MediaItem(id: "movie", title: "Movie", kind: .movie, isPlayed: mode == .watched)
             let inputs = NativePosterIndicators.playback(MediaCardPlaybackIndicators(item: item, badgeInset: 12).bitmapInputs)
             var environment = environment()
@@ -141,6 +141,33 @@ final class NativePosterIndicatorCacheTests: XCTestCase {
             XCTAssertNotEqual(
                 NativeLibraryPosterBitmap.Presentation(item: item, spoilerSettings: .default, environment: attached),
                 NativeLibraryPosterBitmap.Presentation(item: item, spoilerSettings: .default, environment: floating)
+            )
+        }
+    }
+
+    func testHiddenClearsCachedWatchMarksWithoutHidingCountsOrProgress() throws {
+        purge()
+        for mode in [WatchStatusIndicator.watched, .unwatched] {
+            let item = MediaItem(id: "movie", title: "Movie", kind: .movie, isPlayed: mode == .watched)
+            let inputs = NativePosterIndicators.media(MediaCardPlaybackIndicators(item: item, badgeInset: 12))
+            var visible = environment()
+            visible.plozzWatchStatusIndicator = mode
+            var hidden = visible
+            hidden.plozzWatchStatusIndicator = .hidden
+            let visibleKey = Key(inputs, environment: visible)
+            let hiddenKey = Key(inputs, environment: hidden)
+            XCTAssertNotEqual(visibleKey, hiddenKey)
+            XCTAssertNotEqual(try render(visibleKey, environment: visible).pngData(),
+                              try render(hiddenKey, environment: hidden).pngData())
+            let suppressed = NativePosterIndicators.media(
+                MediaCardPlaybackIndicators(item: item, hidesStatus: true, badgeInset: 12)
+            )
+            XCTAssertEqual(try render(hiddenKey, environment: hidden).pngData(),
+                           try render(Key(suppressed, environment: visible), environment: visible).pngData())
+            let countAndProgress = indicators(progress: 0.4, downloaded: true)
+            XCTAssertEqual(
+                try render(Key(countAndProgress, environment: visible), environment: visible).pngData(),
+                try render(Key(countAndProgress, environment: hidden), environment: hidden).pngData()
             )
         }
     }

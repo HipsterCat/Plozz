@@ -8,20 +8,32 @@ import CoreUI
 /// detail pane's width, mirroring `CompactThemePicker`. Tapping a card selects
 /// that indicator; the active one carries the same accent wash/ring the theme and
 /// music-player pickers use.
-///
-/// With only two choices there's plenty of horizontal room, so each card's
-/// preview is given a taller swatch (via `PreviewCard`'s `swatchHeight`) than the
-/// three/four-up theme and music pickers use — the mock poster row reads clearly.
 struct CompactWatchIndicatorPicker: View {
     @Binding var selection: WatchStatusIndicator
-    /// Preview swatch height. Defaults to the tall two-up illustration; pass a
-    /// smaller value when the picker shares a pane with another (e.g. the combined
-    /// Cards settings row) so both fit without heavy scrolling.
+    /// Height of the TV option illustrations; mobile uses one compact preview.
     var swatchHeight: CGFloat = 248
     @Environment(\.themePalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        #if os(iOS)
+        VStack(spacing: 12) {
+            WatchStatusIndicatorSwatch(indicator: selection)
+                .frame(height: 96)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Watch indicator preview")
+                .accessibilityValue(Text(selection.displayName))
+                .accessibilityIdentifier("watch-indicator-preview")
+            Picker("Watch indicators", selection: $selection) {
+                ForEach(WatchStatusIndicator.allCases) { indicator in
+                    Text(indicator.displayName).tag(indicator)
+                        .accessibilityIdentifier("watch-indicator-option-\(indicator.rawValue)")
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("watch-indicator-picker")
+        }
+        #else
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(spacing: 16))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
@@ -46,6 +58,7 @@ struct CompactWatchIndicatorPicker: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        #endif
     }
 }
 #endif

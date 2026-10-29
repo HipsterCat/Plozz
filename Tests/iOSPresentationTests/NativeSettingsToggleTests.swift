@@ -39,6 +39,45 @@ final class NativeSettingsToggleTests: XCTestCase {
         try await verifyNativeSwitch(grouped: false)
     }
 
+    func testCompactCardSettingsKeepLabelsAndIndicatorsInFirstViewport() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "CompactCardSettings.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let cards = CardStyleSettingsModel(store: CardStyleSettingsStore(defaults: defaults))
+        let indicators = WatchStatusIndicatorSettingsModel(store: WatchStatusIndicatorSettingsStore(defaults: defaults))
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        for width: CGFloat in [390, 834] {
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 900)
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack {
+                    CardAppearanceControls(cards: cards, watchIndicator: indicators)
+                }
+                .environment(\.themePalette, .dark)
+                .environment(\.colorScheme, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+            )
+            window.makeKeyAndVisible()
+            for mode in WatchStatusIndicator.allCases {
+                indicators.indicator = mode
+                try await settle(window)
+                let text = try captureText(window, name: "compact-cards-\(Int(width))-\(mode)")
+                for label in ["Labels", "Customize labels", "Watch indicators", "Show unwatched episode count"] {
+                    XCTAssertTrue(text.localizedCaseInsensitiveContains(label), text)
+                }
+                XCTAssertEqual(text.contains("Color"), mode != .hidden)
+                XCTAssertTrue(indicators.showsUnwatchedEpisodeCount)
+            }
+        }
+    }
+
     func testSkipToggleRevealsOnlySettingsLinkAndRetainsProfileChoices() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })

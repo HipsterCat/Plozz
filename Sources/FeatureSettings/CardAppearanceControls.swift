@@ -33,9 +33,11 @@ public struct CardAppearanceControls: View {
             SettingsDetailGroup(title: "Labels", illustrated: true) {
                 CardLabelControls(settings: $cards.captions, style: cards.style, visibility: visibility)
             }
-            SettingsDetailGroup(title: "Watched Indicator", illustrated: true) {
+            SettingsDetailGroup(title: "Watch indicators", illustrated: true) {
                 CompactWatchIndicatorPicker(selection: $watchIndicator.indicator, swatchHeight: 150)
-                WatchIndicatorColorPicker(selection: $watchIndicator.color)
+                if watchIndicator.indicator != .hidden {
+                    WatchIndicatorColorPicker(selection: $watchIndicator.color)
+                }
                 episodeCountToggle
                 if watchIndicator.showsUnwatchedEpisodeCount { episodeCountStyleMenu }
             }
@@ -64,9 +66,11 @@ public struct CardAppearanceControls: View {
             SettingsSectionGroup("Labels") {
                 CardLabelControls(settings: $cards.captions, style: cards.style, visibility: visibility)
             }
-            SettingsSectionGroup("Watched Indicator") {
+            SettingsSectionGroup("Watch indicators") {
                 CompactWatchIndicatorPicker(selection: $watchIndicator.indicator, swatchHeight: 112)
-                WatchIndicatorColorPicker(selection: $watchIndicator.color)
+                if watchIndicator.indicator != .hidden {
+                    WatchIndicatorColorPicker(selection: $watchIndicator.color)
+                }
                 episodeCountToggle
                 if watchIndicator.showsUnwatchedEpisodeCount { episodeCountStyleMenu }
             }
@@ -150,6 +154,32 @@ private struct CardCaptionPicker: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
+        #if os(iOS)
+        VStack(spacing: 12) {
+            CardStyleSwatch(
+                style: style,
+                showsCaptions: previewVisibility.contains(true),
+                showsMixedCaptions: previewVisibility.contains(true) && previewVisibility.contains(false)
+            )
+            .frame(height: 96)
+            .accessibilityHidden(true)
+            Picker("Labels", selection: Binding<CardCaptionPreference?>(
+                get: { settings.selectedPreset },
+                set: { if let preset = $0 { settings.applyPreset(preset) } }
+            )) {
+                if settings.selectedPreset == nil {
+                    Text("Custom").tag(Optional<CardCaptionPreference>.none)
+                }
+                ForEach(CardCaptionPreference.allCases) { preference in
+                    Text(preference.displayName).tag(Optional(preference))
+                        .accessibilityIdentifier(preference == .recommended ? "card-labels-recommended"
+                                                 : preference == .show ? "card-labels-on" : "card-labels-off")
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("card-label-picker")
+        }
+        #else
         let layout = dynamicTypeSize.isAccessibilitySize || horizontalSizeClass == .compact
             ? AnyLayout(VStackLayout(spacing: 16))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
@@ -177,6 +207,7 @@ private struct CardCaptionPicker: View {
                                          : preference == .show ? "card-labels-on" : "card-labels-off")
             }
         }
+        #endif
     }
 
     private var swatchHeight: CGFloat {
@@ -185,6 +216,12 @@ private struct CardCaptionPicker: View {
         #else
         112
         #endif
+    }
+
+    private var previewVisibility: [Bool] {
+        CardCaptionView.customizableCases.flatMap { view in
+            [false, true].map { settings.showsLabels(in: view, hasArtworkTitle: $0) }
+        }
     }
 }
 

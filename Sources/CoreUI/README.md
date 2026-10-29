@@ -477,6 +477,10 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   the group's full-width row-button style. Place a standalone native action in
   a layout container so its accessibility bounds do not include the row's
   noninteractive space.
+- **Hidden watch indicators** suppress watched badges and unwatched flags in
+  shared media chrome and native episode cards, not episode counts, progress,
+  download badges, or library/request status. The existing profile-scoped
+  indicator value also invalidates native bitmap caches when it changes.
 - **Unwatched episode counts** — a default-on profile preference replaces the
   top-right watch-status mark with a number on series/season cards.
   Episode counts use charcoal tiles with white digits so they stay quieter than

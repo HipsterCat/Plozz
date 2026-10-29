@@ -889,7 +889,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(app.buttons["Default"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.staticTexts["DISPLAY SIZE"].waitForExistence(timeout: 5), app.debugDescription)
-        let cardHeadings = ["Labels", "Watched Indicator", "Focus", "Style", "Display Size"].map {
+        let cardHeadings = ["Labels", "Watch indicators", "Focus", "Style", "Display Size"].map {
             app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", $0)).firstMatch
         }
         XCTAssertTrue(cardHeadings.allSatisfy(\.exists))
