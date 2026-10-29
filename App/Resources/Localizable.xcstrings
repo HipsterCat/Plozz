@@ -215609,6 +215609,7 @@
       }
     },
     "Choose what plays behind the hero on a movie or show's detail page. Trailer and theme music never play together." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -215824,6 +215825,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "選擇電影或影集詳細資料頁面主視覺後方要播放的內容。預告片與主題音樂不會同時播放。"
+          }
+        }
+      }
+    },
+    "Choose what plays behind the hero on a movie or show's details screen. Trailer and theme music never play together." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "اختر ما يُشغَّل خلف العرض الرئيسي على شاشة تفاصيل الفيلم أو المسلسل. لا يُشغَّل الإعلان الدعائي وموسيقى السمة معًا أبدًا."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Изберете какво да се възпроизвежда зад водещия банер на екрана с детайли за филм или сериал. Трейлърът и тематичната музика никога не се възпроизвеждат едновременно."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tria què es reprodueix darrere de l'element destacat a la pantalla de detalls d'una pel·lícula o sèrie. El tràiler i la música temàtica mai no es reprodueixen alhora."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vyberte, co se přehrává za hlavním bannerem na obrazovce detailu filmu nebo seriálu. Trailer a hudební motiv se nikdy nepřehrávají současně."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vælg, hvad der afspilles bag banneret på detaljeskærmen for en film eller serie. Trailer og temamusik afspilles aldrig samtidig."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lege fest, was in der Detailansicht eines Films oder einer Serie hinter der Titelbühne läuft. Trailer und Titelmusik laufen nie gleichzeitig."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Επιλέξτε τι παίζει πίσω από την κεντρική προβολή στην οθόνη λεπτομερειών μιας ταινίας ή σειράς. Το τρέιλερ και η μουσική θέματος δεν παίζουν ποτέ μαζί."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Elige qué se reproduce detrás de la portada en la pantalla de detalles de una película o serie. El tráiler y la música temática nunca se reproducen a la vez."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "محتوای پس‌زمینه بنر اصلی در صفحه جزئیات فیلم یا سریال را انتخاب کنید. تریلر و موسیقی تم هرگز هم‌زمان پخش نمی‌شوند."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Valitse, mitä toistetaan elokuvan tai sarjan tietosivun noston taustalla. Traileria ja tunnusmusiikkia ei koskaan toisteta yhtä aikaa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Choisissez ce qui se lance derrière la bannière sur la page de détails d’un film ou d’une série. La bande-annonce et le thème musical ne sont jamais lus en même temps."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "בחר מה מתנגן מאחורי הבאנר הראשי במסך הפרטים של סרט או סדרה. טריילר ומוזיקת נושא לעולם לא מתנגנים יחד."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "फ़िल्म या सीरीज़ के विवरण वाली स्क्रीन पर मुख्य चित्र के पीछे क्या चलेगा, यह चुनें। ट्रेलर और थीम संगीत कभी एक साथ नहीं चलते।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odaberite što se reproducira iza istaknutog bannera na zaslonu pojedinosti filma ili serije. Najava i tematska glazba nikad se ne reproduciraju istodobno."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Válassza ki, mit játsszon le az alkalmazás a főkép mögött a film vagy sorozat részleteit megjelenítő képernyőn. Az előzetes és a témazene nem játszható le egyszerre."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pilih yang diputar di belakang banner utama pada layar detail film atau serial. Trailer dan musik tema tidak pernah diputar bersamaan."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Scegli cosa riprodurre dietro la sezione in evidenza nella schermata dei dettagli di un film o una serie TV. Il trailer e il tema musicale non vengono mai riprodotti insieme."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "映画やテレビシリーズの詳細画面で、メインビジュアルの背景に何を再生するかを選びます。トレーラーとテーマ音楽が同時に再生されることはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "영화나 시리즈의 상세 화면에서 대표 배너의 배경으로 재생할 항목을 선택하세요. 예고편과 테마 음악은 동시에 재생되지 않습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pilih apa yang dimainkan di belakang sorotan utama pada skrin butiran filem atau siri. Treler dan muzik tema tidak pernah dimainkan serentak."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Velg hva som spilles bak banneret på detaljsiden for en film eller serie. Trailer og temamusikk spilles aldri samtidig."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kies wat er achter de uitgelichte banner wordt afgespeeld op de detailpagina van een film of serie. De trailer en themamuziek worden nooit tegelijk afgespeeld."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wybierz, co ma się odtwarzać za banerem głównym na ekranie szczegółów filmu lub serialu. Zwiastun i motyw muzyczny nigdy nie są odtwarzane jednocześnie."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Escolha o que será reproduzido ao fundo do destaque na tela de detalhes de um filme ou série. Trailer e música-tema nunca são reproduzidos juntos."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Alege ce se redă în fundalul bannerului principal pe ecranul de detalii al unui film sau serial. Trailerul și muzica tematică nu se redau niciodată simultan."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Выберите, что будет воспроизводиться за баннером на экране подробностей фильма или сериала. Трейлер и музыкальная тема никогда не воспроизводятся одновременно."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vyberte, čo sa prehráva za hlavným bannerom na obrazovke s podrobnosťami o filme alebo seriáli. Ukážka a tematická hudba sa nikdy neprehrávajú súčasne."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Izberite, kaj se predvaja za glavnim pasom na zaslonu s podrobnostmi filma ali serije. Napovednik in tematska glasba se nikoli ne predvajata hkrati."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Izaberite šta se reprodukuje u pozadini istaknutog banera na ekranu sa detaljima filma ili serije. Najava i tematska muzika se nikada ne reprodukuju istovremeno."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Välj vad som spelas bakom huvudbilden på detaljskärmen för en film eller serie. Trailer och temamusik spelas aldrig samtidigt."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เลือกสิ่งที่จะเล่นด้านหลังแบนเนอร์เด่นในหน้ารายละเอียดภาพยนตร์หรือซีรีส์ ตัวอย่างและเพลงธีมจะไม่เล่นพร้อมกัน"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Film veya dizinin ayrıntı ekranındaki vitrinin arkasında ne oynatılacağını seçin. Fragman ile tema müziği aynı anda oynatılmaz."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Виберіть, що відтворюватиметься на тлі головного банера на екрані деталей фільму або серіалу. Трейлер і тематична музика не відтворюються одночасно."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chọn nội dung phát phía sau hình ảnh chính trên màn hình chi tiết phim hoặc phim bộ. Trailer và nhạc chủ đề không bao giờ phát cùng lúc."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "选择电影或剧集详情页面主横幅背景播放的内容。预告片和主题音乐不会同时播放。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "選擇電影或影集詳細資料頁面焦點區後方要播放的內容。預告片與主題音樂不會同時播放。"
           }
         }
       }
@@ -268827,6 +269048,7 @@
     },
     "Customize Home" : {
       "comment" : "Settings row and page title for controls that customize Home screen sections, hero behavior, and library visibility.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -269047,6 +269269,7 @@
       }
     },
     "Customize Libraries" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -269707,6 +269930,7 @@
       }
     },
     "Customize individual screens" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -279192,6 +279416,7 @@
     },
     "Detail Page" : {
       "comment" : "Settings row and page title for options that control the hero area on a movie or show detail page.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -345642,6 +345867,226 @@
         }
       }
     },
+    "Filtering" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "التصفية"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Филтриране"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtratge"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrování"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrering"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filterung"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Φιλτράρισμα"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrado"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "فیلترها"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Suodatus"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrage"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "סינון"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "फ़िल्टर"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtriranje"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Szűrés"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Penyaringan"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtri"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "絞り込み"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "필터링"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Penapisan"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrering"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filteren"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrowanie"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtros"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrare"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Фильтрация"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrovanie"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtriranje"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtriranje"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtrering"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "การกรอง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filtreleme"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Фільтрування"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bộ lọc"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "筛选"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "篩選"
+          }
+        }
+      }
+    },
     "Filters" : {
       "localizations" : {
         "ar" : {
@@ -378227,6 +378672,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "焦點"
+          }
+        }
+      }
+    },
+    "Hero & discovery" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "العرض الرئيسي والاستكشاف"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Водещ банер и откриване"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Element destacat i descoberta"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hlavní banner a objevování"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Banner og Opdag"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Titelbühne und Entdecken"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Κεντρική προβολή και ανακάλυψη"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Portada y descubrimiento"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "بنر اصلی و کشف محتوا"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nosto ja löydettävää"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bannière et découverte"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "באנר ראשי וגילוי תוכן"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "मुख्य चित्र और डिस्कवरी"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Istaknuti banner i otkrivanje sadržaja"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Főkép és tartalomfelfedezés"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Banner utama & jelajah"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "In evidenza e Scopri"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "メインビジュアルとディスカバリー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "대표 배너 및 둘러보기"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sorotan utama dan penerokaan"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Banner og utforsking"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Uitgelichte banner en ontdekken"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Baner główny i odkrywanie"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Destaque e descobertas"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Banner principal și descoperire"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Баннер и открытия"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hlavný banner a objavovanie"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Glavni pas in odkrivanje"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Istaknuti baner i otkrivanje"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Huvudbild och utforskning"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "แบนเนอร์เด่นและการค้นพบ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vitrin ve keşif"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Головний банер і відкриття"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nổi bật và khám phá"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "主横幅与发现"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "焦點與探索"
           }
         }
       }
@@ -474388,6 +475053,226 @@
         }
       }
     },
+    "Movie & show details" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تفاصيل الأفلام والمسلسلات"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Детайли за филми и сериали"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detalls de pel·lícules i sèries"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detaily filmů a seriálů"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Film- og seriedetaljer"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Film- und Seriendetails"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Λεπτομέρειες ταινιών και σειρών"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detalles de películas y series"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "جزئیات فیلم و سریال"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Elokuvien ja sarjojen tiedot"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Détails des films et séries"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "פרטי סרטים וסדרות"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "फ़िल्म और सीरीज़ का विवरण"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pojedinosti filma i serije"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Filmek és sorozatok részletei"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detail film & serial"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dettagli di film e serie TV"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "映画とテレビシリーズの詳細"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "영화 및 시리즈 상세 화면"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Butiran filem dan siri"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detaljsider for filmer og serier"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detailpagina’s van films en series"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Szczegóły filmów i seriali"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detalhes de filmes e séries"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detalii despre filme și seriale"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Подробности о фильмах и сериалах"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podrobnosti filmov a seriálov"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podrobnosti filmov in serij"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detalji filmova i serija"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Detaljer om filmer och serier"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "รายละเอียดภาพยนตร์และซีรีส์"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Film ve dizi ayrıntıları"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Деталі фільмів і серіалів"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chi tiết phim và phim bộ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "电影与剧集详情"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "電影與影集詳細資料"
+          }
+        }
+      }
+    },
     "Movie and show backgrounds, logos, and related-title posters." : {
       "localizations" : {
         "ar" : {
@@ -478355,6 +479240,7 @@
     },
     "Music Player" : {
       "comment" : "Section header and row title in Settings for customizing the music now-playing screen.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -478504,6 +479390,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "Ecran de redare muzicală"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Музыкальный плеер"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prehrávač hudby"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Glasbeni predvajalnik"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Muzički reproduktor"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Musikspelare"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เครื่องเล่นเพลง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Müzik çalar"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Музичний програвач"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Máy nghe nhạc"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "音乐播放器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "音樂播放器"
+          }
+        }
+      }
+    },
+    "Music player" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "مشغّل الموسيقى"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Музикален плейър"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Reproductor de música"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hudební přehrávač"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Musikafspiller"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Musikplayer"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αναπαραγωγέας μουσικής"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Reproductor de música"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "پخش‌کننده موسیقی"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Musiikkisoitin"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lecteur de musique"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "נגן מוזיקה"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "म्यूज़िक प्लेयर"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Glazbeni reproduktor"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zenelejátszó"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pemutar Musik"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Player musicale"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "音楽プレーヤー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "음악 플레이어"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pemain muzik"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Musikkspiller"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Muziekspeler"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odtwarzacz muzyki"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Reprodutor de música"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Player muzical"
           }
         },
         "ru" : {
@@ -481661,6 +482767,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "導覽媒體庫"
+          }
+        }
+      }
+    },
+    "Navigation and screen preferences" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تفضيلات التنقل والشاشات"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Предпочитания за навигация и екрани"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preferències de navegació i pantalles"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Předvolby navigace a obrazovek"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indstillinger for navigation og skærme"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Einstellungen für Navigation und Ansichten"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Προτιμήσεις πλοήγησης και οθόνης"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preferencias de navegación y pantalla"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تنظیمات ناوبری و نمایش"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigointi- ja näyttöasetukset"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Préférences de navigation et d’affichage"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "העדפות ניווט ותצוגה"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "नेविगेशन और स्क्रीन की सेटिंग"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Postavke navigacije i zaslona"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigációs és képernyőbeállítások"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preferensi navigasi dan layar"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preferenze di navigazione e visualizzazione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ナビゲーションと画面の設定"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "탐색 및 화면 설정"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Keutamaan navigasi dan skrin"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigasjons- og skjerminnstillinger"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigatie- en schermvoorkeuren"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ustawienia nawigacji i ekranu"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preferências de navegação e tela"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Preferințe de navigare și afișare"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Настройки навигации и экранов"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavenia navigácie a obrazoviek"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavitve krmarjenja in zaslonov"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podešavanja navigacije i ekrana"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Inställningar för navigering och skärmar"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "การตั้งค่าการนำทางและหน้าจอ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gezinme ve ekran tercihleri"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Налаштування навігації та екрана"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tùy chọn điều hướng và màn hình"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "导航与界面设置"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "導覽與畫面偏好設定"
           }
         }
       }
@@ -727197,6 +728523,7 @@
       }
     },
     "Shared settings, Home, libraries, and detail pages" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -727417,6 +728744,7 @@
       }
     },
     "Shared settings, Home, libraries, detail pages, and music" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -1049753,223 +1051081,223 @@
         "ar" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "يمكن إخفاء عناوين الحلقات والملخصات والرسوم التوضيحية حتى تشاهدها. تكون التقييمات المخفية مموّهة في صفحة العنوان — المسها لكشفها."
+            "value" : "يمكن إخفاء عناوين الحلقات وملخصاتها وصورها حتى تشاهد الحلقات. اضغط على التقييمات المموّهة على شاشة التفاصيل لإظهارها."
           }
         },
         "bg" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Заглавията, описанията и обложките на епизодите могат да бъдат скрити, докато не ги гледате. Скритите оценки са размазани на страницата на заглавието — докоснете, за да ги разкриете."
+            "value" : "Заглавията, описанията и изображенията на епизодите могат да бъдат скрити, докато не ги изгледате. Докоснете размазаните оценки на екрана с детайли, за да ги разкриете."
           }
         },
         "ca" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Els títols, resums i cartells dels episodis es poden amagar fins que els vegis. Les valoracions amagades es difuminen a la pàgina del títol — toca-les per mostrar-les."
+            "value" : "Els títols, resums i imatges dels episodis es poden amagar fins que els vegis. Toca les valoracions difuminades a la pantalla de detalls per mostrar-les."
           }
         },
         "cs" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Názvy dílů, shrnutí a grafika mohou zůstat skryté, dokud je nezhlédnete. Skryté hodnocení je na stránce titulu rozmazané – klepnutím ho odhalíte."
+            "value" : "Názvy, shrnutí a obrázky dílů mohou zůstat skryté, dokud díly nezhlédnete. Klepnutím na rozmazaná hodnocení na obrazovce detailu je zobrazíte."
           }
         },
         "da" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Episodetitler, resuméer og coverbilleder kan skjules, indtil du har set episoderne. Skjulte bedømmelser er slørede på titlens side – berør dem for at vise dem."
+            "value" : "Episodetitler, resuméer og billeder kan skjules, indtil du har set episoderne. Tryk på slørede bedømmelser på detaljeskærmen for at vise dem."
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Titel, Zusammenfassungen und Bilder von Folgen können ausgeblendet werden, bis du sie gesehen hast. Ausgeblendete Bewertungen werden auf der Seite eines Titels weichgezeichnet – tippe darauf, um sie anzuzeigen."
+            "value" : "Titel, Zusammenfassungen und Bilder von Folgen können ausgeblendet werden, bis du sie gesehen hast. Tippe in der Detailansicht auf weichgezeichnete Bewertungen, um sie anzuzeigen."
           }
         },
         "el" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Οι τίτλοι, οι περιλήψεις και τα γραφικά των επεισοδίων μπορούν να κρύβονται μέχρι να τα παρακολουθήσετε. Οι κρυμμένες βαθμολογίες εμφανίζονται θολές στη σελίδα ενός τίτλου — αγγίξτε τις για να τις αποκαλύψετε."
+            "value" : "Οι τίτλοι, οι περιλήψεις και οι εικόνες των επεισοδίων μπορούν να κρύβονται μέχρι να τα παρακολουθήσετε. Αγγίξτε τις θολωμένες βαθμολογίες στην οθόνη λεπτομερειών για να τις εμφανίσετε."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Episode titles, summaries, and artwork can be hidden until you watch them. Hidden ratings are blurred on a title's page — tap to reveal them."
+            "value" : "Episode titles, summaries, and artwork can be hidden until you watch them. Tap blurred ratings on the details screen to reveal them."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Los títulos, resúmenes e imágenes de los episodios se pueden ocultar hasta que los veas. Las puntuaciones ocultas aparecen difuminadas en la página de un título — toca para mostrarlas."
+            "value" : "Los títulos, resúmenes e imágenes de los episodios se pueden ocultar hasta que los veas. Toca las puntuaciones difuminadas en la pantalla de detalles para mostrarlas."
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "عناوین قسمت‌ها، خلاصه‌ها و هنرهای گرافیکی تا زمانی که آن‌ها را تماشا نکرده باشید پنهان خواهند ماند. امتیازهای پنهان در صفحهٔ عنوان به‌صورت غیر واضح نمایش داده می‌شوند. برای آشکار کردن آن‌ها ضربه بزنید."
+            "value" : "عنوان، خلاصه و تصاویر قسمت‌ها را می‌توان تا زمان تماشای آن‌ها پنهان کرد. روی امتیازهای تارشده در صفحه جزئیات بزنید تا نمایش داده شوند."
           }
         },
         "fi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Jaksojen nimet, kuvaukset ja kuvitus voidaan piilottaa, kunnes olet katsonut ne. Piilotetut arviot näytetään sumennettuina nimikkeen sivulla – paljasta ne napauttamalla."
+            "value" : "Jaksojen nimet, kuvaukset ja kuvitus voidaan piilottaa, kunnes olet katsonut jaksot. Näytä sumennetut arviot napauttamalla niitä tietosivulla."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Les titres, résumés et illustrations des épisodes peuvent être masqués jusqu’à ce que vous les regardiez. Les notes masquées apparaissent floutées sur la fiche d’un titre — touchez-les pour les afficher."
+            "value" : "Les titres, résumés et illustrations des épisodes peuvent être masqués jusqu’à ce que vous les regardiez. Touchez les notes floutées sur la page de détails pour les afficher."
           }
         },
         "he" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "ניתן להסתיר כותרות פרקים, תקצירים ותמונות עד שתצפה בהם. דירוגים מוסתרים מטושטשים בעמוד הכותרת. הקש כדי להציג אותם."
+            "value" : "ניתן להסתיר שמות פרקים, תקצירים ותמונות עד שתצפה בפרקים. הקש על הציונים המטושטשים במסך הפרטים כדי להציג אותם."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "एपिसोड के शीर्षक, सारांश और आर्टवर्क को आपके देखने तक छिपाया जा सकता है. छिपाई गई रेटिंग किसी टाइटल के पेज पर धुंधली दिखती हैं — उन्हें दिखाने के लिए टैप करें."
+            "value" : "एपिसोड देखने तक उनके शीर्षक, सारांश और आर्टवर्क छिपाए जा सकते हैं। विवरण स्क्रीन पर धुंधली रेटिंग साफ़ देखने के लिए उन पर टैप करें।"
           }
         },
         "hr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Naslovi epizoda, sažeci i grafika mogu se sakriti dok ih ne pogledate. Skrivene ocjene zamućene su na stranici naslova — dodirnite ih da biste ih otkrili."
+            "value" : "Naslovi epizoda, sažeci i grafika mogu se sakriti dok ne pogledate epizode. Dodirnite zamućene ocjene na zaslonu pojedinosti da biste ih otkrili."
           }
         },
         "hu" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Az epizódcímek, összefoglalók és borítóképek elrejthetők, amíg meg nem nézi őket. A rejtett értékelések el vannak mosva a cím oldalán — koppintson rájuk a felfedésükhöz."
+            "value" : "Az epizódcímek, összefoglalók és borítóképek elrejthetők az epizódok megtekintéséig. A részleteket megjelenítő képernyőn az elmosott értékelésekre koppintva felfedheti őket."
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Judul, ringkasan, dan gambar episode dapat disembunyikan sampai Anda menontonnya. Penilaian yang disembunyikan tampil buram di halaman judul — ketuk untuk menampilkannya."
+            "value" : "Judul, ringkasan, dan gambar episode dapat disembunyikan hingga Anda menontonnya. Ketuk penilaian yang diburamkan di layar detail untuk menampilkannya."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Titoli, riepiloghi e immagini degli episodi possono essere nascosti fino a quando non li guardi. Le valutazioni nascoste sono sfocate nella pagina di un titolo — tocca per rivelarle."
+            "value" : "Titoli, riepiloghi e immagini degli episodi possono essere nascosti finché non li guardi. Tocca le valutazioni sfocate nella schermata dei dettagli per rivelarle."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "エピソードのタイトル、あらすじ、アートワークは視聴するまで非表示にできます。非表示にした評価はタイトルのページでぼかされ、タップすると表示されます。"
+            "value" : "エピソードのタイトル、あらすじ、アートワークは視聴するまで非表示にできます。詳細画面でぼかされた評価をタップすると表示されます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "에피소드 제목, 요약 및 아트워크는 시청할 때까지 숨겨질 수 있습니다. 숨겨진 평점은 작품 페이지에서 흐리게 표시되며, 탭하면 나타납니다."
+            "value" : "에피소드를 시청할 때까지 제목, 요약, 아트워크를 숨길 수 있습니다. 상세 화면에서 흐리게 표시된 평점을 탭하면 볼 수 있습니다."
           }
         },
         "ms" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Tajuk episod, ringkasan, dan karya seni boleh disembunyikan sehingga anda menontonnya. Penilaian tersembunyi dikaburkan pada halaman tajuk — ketik untuk mendedahkannya."
+            "value" : "Tajuk episod, ringkasan dan karya seni boleh disembunyikan sehingga episod ditonton. Ketik skor penilaian yang dikaburkan pada skrin butiran untuk melihatnya."
           }
         },
         "nb" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Episodetitler, sammendrag og omslagsbilder kan skjules til du har sett episodene. Skjulte vurderinger vises uskarpt på tittelsiden – trykk for å vise dem."
+            "value" : "Episodetitler, sammendrag og omslagsbilder kan skjules til du har sett episodene. Trykk på uskarpe vurderinger på detaljsiden for å vise dem."
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Titels, samenvattingen en afbeeldingen van afleveringen kunnen verborgen blijven totdat je ze kijkt. Verborgen beoordelingen worden vervaagd op de pagina van een titel – tik om ze te onthullen."
+            "value" : "Titels, samenvattingen en afbeeldingen van afleveringen kunnen verborgen blijven totdat je ze hebt bekeken. Tik op vervaagde beoordelingen op de detailpagina om ze te tonen."
           }
         },
         "pl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Tytuły odcinków, opisy i grafiki mogą być ukryte do czasu obejrzenia. Ukryte oceny są rozmyte na stronie tytułu – stuknij, aby je odsłonić."
+            "value" : "Tytuły odcinków, opisy i grafiki można ukryć do czasu obejrzenia odcinków. Stuknij rozmyte oceny na ekranie szczegółów, aby je odsłonić."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Títulos, resumos e imagens dos episódios podem ficar ocultos até você assisti-los. As avaliações ocultas ficam desfocadas na página de um título — toque para revelá-las."
+            "value" : "Títulos, resumos e imagens dos episódios podem ficar ocultos até você assistir aos episódios. Toque nas avaliações desfocadas na tela de detalhes para revelá-las."
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Titlurile, rezumatele și ilustrațiile episoadelor pot fi ascunse până când le vizionezi. Evaluările ascunse sunt estompate pe pagina unui titlu — atinge pentru a le dezvălui."
+            "value" : "Titlurile, rezumatele și ilustrațiile episoadelor pot fi ascunse până când le vizionezi. Atinge evaluările estompate de pe ecranul de detalii pentru a le dezvălui."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Названия эпизодов, описания и изображения можно скрывать, пока вы их не посмотрите. Скрытые рейтинги отображаются размытыми на странице — коснитесь, чтобы показать их."
+            "value" : "Названия, описания и изображения эпизодов можно скрывать до просмотра. Коснитесь размытых оценок на экране подробностей, чтобы показать их."
           }
         },
         "sk" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Názvy dielov, zhrnutia a grafika môžu zostať skryté, kým si ich nepozriete. Skryté hodnotenia sú na stránke titulu rozmazané – ťuknutím ich odkryjete."
+            "value" : "Názvy dielov, zhrnutia a grafika môžu zostať skryté, kým si diely nepozriete. Ťuknutím na rozmazané hodnotenia na obrazovke s podrobnosťami ich zobrazíte."
           }
         },
         "sl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Naslovi epizod, povzetki in grafika so lahko skriti, dokler jih ne pogledate. Skrite ocene so na strani naslova zamegljene – tapnite, da jih razkrijete."
+            "value" : "Naslovi epizod, povzetki in slike so lahko skriti, dokler si epizod ne ogledate. Tapnite zamegljene ocene na zaslonu s podrobnostmi, da jih razkrijete."
           }
         },
         "sr-Latn" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Naslovi epizoda, sažeci i slike mogu da budu skriveni dok ih ne odgledate. Skrivene ocene su zamućene na stranici naslova – dodirnite da biste ih otkrili."
+            "value" : "Naslovi epizoda, sažeci i slike mogu da budu skriveni dok ne odgledate epizode. Dodirnite zamućene ocene na ekranu sa detaljima da biste ih otkrili."
           }
         },
         "sv" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Avsnittstitlar, sammanfattningar och bilder kan döljas tills du har sett dem. Dolda betyg visas suddiga på en titels sida – tryck för att visa dem."
+            "value" : "Avsnittstitlar, sammanfattningar och bilder kan döljas tills du har sett avsnitten. Tryck på suddiga betyg på detaljskärmen för att visa dem."
           }
         },
         "th" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "สามารถซ่อนชื่อตอน เรื่องย่อ และภาพประกอบได้จนกว่าคุณจะรับชม คะแนนที่ซ่อนไว้จะถูกเบลอในหน้าของเรื่อง แตะเพื่อแสดงคะแนน"
+            "value" : "ซ่อนชื่อตอน เรื่องย่อ และภาพประกอบได้จนกว่าจะรับชม แตะคะแนนที่เบลอไว้ในหน้ารายละเอียดเพื่อแสดงคะแนน"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Bölüm başlıkları, özetleri ve görselleri siz izleyene kadar gizlenebilir. Gizli puanlar bir yapımın sayfasında bulanıklaştırılır — görüntülemek için dokunun."
+            "value" : "Bölüm başlıkları, özetleri ve görselleri siz izleyene kadar gizlenebilir. Ayrıntı ekranında bulanıklaştırılan puanları görmek için üzerlerine dokunun."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Назви епізодів, описи й обкладинки можна приховати, доки ви їх не переглянете. Приховані оцінки розмиваються на сторінці твору — торкніться, щоб показати їх."
+            "value" : "Назви епізодів, описи й зображення можна приховати до перегляду. Торкніться розмитих оцінок на екрані деталей, щоб показати їх."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Tiêu đề tập phim, tóm tắt, và tác phẩm nghệ thuật có thể được che giấu cho đến khi bạn xem chúng. Xếp hạng bị ẩn sẽ được làm mờ trên trang của tựa đề — chạm để hiện chúng."
+            "value" : "Có thể ẩn tiêu đề tập phim, tóm tắt và hình ảnh cho đến khi bạn xem. Chạm vào điểm đánh giá bị làm mờ trên màn hình chi tiết để hiện điểm."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "剧集标题、简介和图片可在观看前隐藏。隐藏的评分会在作品页面上模糊显示，轻点即可显示。"
+            "value" : "观看前可隐藏单集标题、简介和图片。轻点详情页面中模糊显示的评分即可查看。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "集數標題、簡介與圖像可在觀看前先隱藏。隱藏的評分會在作品頁面上模糊顯示，輕點即可顯示。"
+            "value" : "觀看前可隱藏單集標題、簡介與圖像。輕點詳細資料頁面上模糊顯示的評分即可查看。"
           }
         }
       }

@@ -473,6 +473,11 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         XCTAssertEqual(profile.value as? String, "Alex")
         try focus(profile, in: app)
         XCUIRemote.shared.press(.select)
+        let activeProfile = app.buttons.matching(NSPredicate(format: "label == %@", "Alex")).firstMatch
+        let profileFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.hasFocus(activeProfile) }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [profileFocused], timeout: 5), .completed, app.debugDescription)
         try openProfilePickerSettings(in: app)
         XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 10))
         XCTAssertEqual(profile.value as? String, "Alex")
@@ -2840,6 +2845,11 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
         }
         try completeAppearanceChoices(in: app)
         if settingsFromStartupPicker {
+            let activeProfile = app.buttons.matching(NSPredicate(format: "label == %@", profile)).firstMatch
+            let focused = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in self.hasFocus(activeProfile) }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed, app.debugDescription)
             try openProfilePickerSettings(in: app)
             XCTAssertTrue(section("playback", in: app).waitForExistence(timeout: 20), app.debugDescription)
             try focus(section("playback", in: app), in: app)

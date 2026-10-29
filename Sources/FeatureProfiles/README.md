@@ -13,6 +13,15 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   the reduced-transparency fallback. A full-width focus section lets Up from
   the profile tiles reach it. The shell owns authentication and profile-scoped
   routing; the picker never bypasses a PIN or activates another profile itself.
+  Initial native focus selects the active profile, falling back to the first
+  available profile. A presentation anchor waits for visible layout in the
+  active scene's key window, then crosses the presentation commit before handing
+  off focus. Background mounting and disabled input do not consume the request.
+  Entry does not depend on a timed focus assignment.
+  Other tiles, Cancel, and the Settings cog become focusable after the entry
+  profile receives native focus. They cannot win entry, but normal navigation
+  is available afterward, including Up to Settings. An empty picker leaves its
+  available actions enabled.
   Mobile uses `AppShelliOS.PlozziOSProfileSelectionView` and its touch picker.
 - `ProfileEditorView` — create / rename / restyle a profile (name,
   `avatarSymbol` SF Symbol, color from `ProfileTileColor` palette,
