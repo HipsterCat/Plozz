@@ -2889,9 +2889,7 @@ final class SettingsWorkspaceRemoteTests: XCTestCase {
                 XCUIRemote.shared.press(.menu)
                 waitForEnabled(settings)
             }
-            let sidebarCell = app.collectionViews["Sidebar"].cells
-                .containing(.button, identifier: settings.identifier).firstMatch
-            try focus(sidebarCell.exists ? sidebarCell : settings, in: app, stoppingWhen: { playback.exists })
+            try focus(settings, in: app, stoppingWhen: { playback.exists })
             if !playback.waitForExistence(timeout: 2) { XCUIRemote.shared.press(.select) }
         }
         XCTAssertTrue(playback.waitForExistence(timeout: 20), app.debugDescription)

@@ -30,7 +30,8 @@ struct SettingsWorkspace<Sidebar: View, Detail: View>: View {
             onRootBack: nil,
             fullWidthDestination: \.usesFullScreenDetail,
             presentsSubpagesFullScreen: navigationStyle == .sidebar,
-            onSubpagesDismiss: navigation.returnToSidebar
+            onSubpagesDismiss: navigation.returnToSidebar,
+            animatesPages: navigationStyle != .tabBar
         ) {
             sidebar()
                 .padding(.top, topNavigationInsets.top)
