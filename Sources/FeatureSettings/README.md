@@ -362,6 +362,14 @@ watch history and planning-list behavior are documented in
   Recommended has Default and a separate Continue Watching override; the other
   pages each have one Card labels control. TV focus and mobile value changes
   highlight the affected captions on that page, without a duplicate status table.
+- **App navigation** automatically includes enabled, discovered library shortcuts.
+  Top Bar scrolls horizontally without an item cap, beside a fixed profile
+  button. Settings opens from the profile picker instead. Both sidebars retain
+  all items and Settings.
+  Manual hides and ordering stay
+  profile-scoped. Refreshing Libraries also updates the main navigation inventory;
+  unchanged results must not invalidate the navigation chrome during Settings entry.
+  Mobile retains its existing built-in destinations rather than adding library tabs.
   VoiceOver retains the equivalent state description.
   Use default retains the existing inheritance; On/Off remains
   one shared override, explicitly noted as also affecting Home.
@@ -523,8 +531,10 @@ watch history and planning-list behavior are documented in
   groups Theme, Cards, Artwork, Spoiler Protection, and Circadian Mode; Display
   Size is last inside Cards. Screens & Navigation groups Customize Home,
   Navigation, and Detail Page; Music Player remains TV-only because mobile does
-  not implement those presentation choices. Mobile navigation editing still
-  excludes unsupported individual library tabs and Music/All Libraries entries.
+  not implement those presentation choices. Mobile navigation editing includes
+  every enabled video library from the shared discovery inventory; Music and
+  All Libraries remain TV-only. Refreshing Libraries updates native navigation
+  without resetting saved hide/order choices.
   The mobile app shell uses native adaptive tabs, sidebar, and system More
   overflow. Destination declarations and their navigation stacks stay mounted
   across width changes; profile-scoped ordering and visibility remain authoritative.
@@ -763,7 +773,16 @@ watch history and planning-list behavior are documented in
   auto-download) lives here; the subtitle *look* is now adjusted in the
   player while watching.
 - **Send Diagnostics** on TV and mobile uses the existing crash-reporting consent.
-  Send remains disabled until a nonblank message is entered. The shared submission
+  The setting is labeled **Share Diagnostics** because it covers more than crashes.
+  When sharing is off, the native **Enable Sharing** action opens the existing
+  consent prompt; confirming only enables sharing, without submitting or clearing
+  the message. Declining or dismissing does not enable sharing. Unconfigured builds
+  explain their limitation and cannot offer an opt-in action.
+  Detailed automatic/manual data disclosures and the privacy policy are behind
+  the native information button, which remains available while Send is disabled.
+  The main page retains only the message privacy reminder and actionable states.
+  Send uses native button/disabled styling and remains disabled until a nonblank
+  message is entered. The shared submission
   path also rejects missing or whitespace-only messages before collecting or
   submitting any diagnostics; automatic crash reports are unchanged.
   Each submission appears in Sentry's User Feedback inbox with the required message,
@@ -827,12 +846,22 @@ watch history and planning-list behavior are documented in
   fallback. Their native focus behavior stays unchanged.
 - **TV navigation ownership.** Focusing a category selects its row; Select
   or Right opens the equally sized category page.
-  Back pops a child, then returns to categories, then leaves Settings for the
-  previous available app destination. MainTabView presents the workspace outside
-  the navigation-style shell, retaining the hidden shell while excluding it from
-  focus and accessibility. This prevents native sidebar adaptation from resizing
-  the Settings page. Changing navigation style retains
-  the Settings section and typed child path; all three styles restore on exit.
+  Back pops a child, then returns to categories, then focuses app navigation.
+  MainTabView presents the workspace as a normal destination in all three shells.
+  Categories and nested pages report their full page depth, including return
+  transitions, to custom chrome. Native Sidebar uses a full-screen subpage stack
+  because its indicator ignores toolbar visibility; dismissal restores category
+  focus after the native presentation completes. Root categories keep navigation available.
+  Changing navigation style retains the mounted shell, Settings section and typed
+  child path throughout the Settings visit; the new chrome takes effect on exit.
+  Settings columns remain centered and subpage headers keep their full-height
+  layout; only root foreground reserves space below the top bar.
+  The top bar scrolls away with root content, without a foreground fade.
+  Root Back restores the page top and navigation; subpage Back remains one level.
+  The profile action reserves a stable 100-point height: native focus shifts the
+  name upward and reveals "Switch profile" below it at the normal helper size.
+  The avatar, Edit action, and following rows stay anchored; Reduce Motion
+  removes the text movement animation.
   Focus requests are separate from native focus arrival: competing controls stay
   gated until `NativeFocusRegionObserver` confirms ownership.
 - **Profile and parental scope.** Switching profile or changing Kids/PIN status

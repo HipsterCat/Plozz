@@ -58,6 +58,114 @@ final class ProfileFlowModelTests: XCTestCase {
         XCTAssertFalse(model.isChoosingProfile)
     }
 
+    func testPickerSettingsReturnsToCurrentProfileWithoutReactivatingIt() {
+        let (model, profiles) = makeModel()
+        let selection = profiles.selectionGeneration
+        model.requestProfileSelection()
+        model.requestSettingsFromProfileSelection()
+        XCTAssertFalse(model.isChoosingProfile)
+        XCTAssertEqual(model.pendingSettingsProfileID, profiles.activeProfileID)
+        XCTAssertEqual(profiles.selectionGeneration, selection)
+        model.consumeSettingsEntry(for: profiles.activeProfileID)
+        XCTAssertNil(model.pendingSettingsProfileID)
+    }
+
+    func testStartupSettingsRequiresProfilePINAndCancellationDropsIntent() async {
+        let (model, profiles) = makeModel()
+        var active = profiles.activeProfile
+        active.replaceLock(with: ProfileLock.make(pin: "2468", iterations: 1))
+        profiles.update(active)
+        model.prepareLaunchPicker()
+        model.requestSettingsFromProfileSelection()
+        XCTAssertTrue(model.isChoosingProfile)
+        XCTAssertEqual(model.pendingLockedProfile?.id, active.id)
+        XCTAssertNil(model.pendingSettingsProfileID)
+        let rejected = await model.submitProfileLockPIN("1111")
+        XCTAssertFalse(rejected)
+        XCTAssertNil(model.pendingSettingsProfileID)
+        model.cancelProfileLockPrompt()
+        model.switchProfile(to: active.id)
+        let accepted = await model.submitProfileLockPIN("2468")
+        XCTAssertTrue(accepted)
+        XCTAssertNil(model.pendingSettingsProfileID, "Cancelling Settings must not reroute a later ordinary profile selection.")
+
+        model.forgetUnlock(for: active.id)
+        model.prepareLaunchPicker()
+        model.requestSettingsFromProfileSelection()
+        let settingsAccepted = await model.submitProfileLockPIN("2468")
+        XCTAssertTrue(settingsAccepted)
+        XCTAssertFalse(model.isChoosingProfile)
+        XCTAssertEqual(model.pendingSettingsProfileID, active.id)
+    }
+
+    func testForegroundSettingsRequiresFreshPINAndPreservesCurrentProfile() async throws {
+        let env = try makeEnv()
+        var profile = env.profiles.activeProfile
+        profile.lock = Self.lock(pin: "4821")
+        env.profiles.update(profile)
+        env.profiles.noteProfileUnlocked(profile.id)
+        let generation = env.profiles.selectionGeneration
+        env.flow.lockForForegroundIfNeeded()
+        env.flow.requestSettingsFromProfileSelection()
+        XCTAssertEqual(env.flow.pendingLockedProfile?.id, profile.id)
+        XCTAssertNil(env.flow.pendingSettingsProfileID)
+        env.flow.cancelProfileSelection()
+        XCTAssertTrue(env.flow.isChoosingProfile)
+        XCTAssertTrue(env.flow.isForegroundLocked)
+        XCTAssertFalse(env.flow.canFinishForegroundUnlock)
+
+        let accepted = await env.flow.submitProfileLockPIN("4821")
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(env.flow.pendingSettingsProfileID, profile.id)
+        XCTAssertTrue(env.flow.canFinishForegroundUnlock)
+        env.flow.finishForegroundUnlockIfReady()
+        XCTAssertFalse(env.flow.isForegroundLocked)
+        XCTAssertEqual(env.profiles.selectionGeneration, generation)
+        env.flow.consumeSettingsEntry(for: profile.id)
+        XCTAssertNil(env.flow.pendingSettingsProfileID)
+    }
+
+    func testForegroundSettingsIntentExpiresOnAnotherDeparture() async throws {
+        let env = try makeEnv()
+        var profile = env.profiles.activeProfile
+        profile.lock = Self.lock(pin: "4821")
+        env.profiles.update(profile)
+        env.profiles.noteProfileUnlocked(profile.id)
+        env.flow.lockForForegroundIfNeeded()
+        env.flow.requestSettingsFromProfileSelection()
+        let accepted = await env.flow.submitProfileLockPIN("4821")
+        XCTAssertTrue(accepted)
+        env.flow.finishForegroundUnlockIfReady()
+        XCTAssertEqual(env.flow.pendingSettingsProfileID, profile.id)
+
+        env.flow.lockForForegroundIfNeeded()
+        XCTAssertNil(env.flow.pendingSettingsProfileID)
+        env.flow.switchProfile(to: profile.id)
+        let acceptedAgain = await env.flow.submitProfileLockPIN("4821")
+        XCTAssertTrue(acceptedAgain)
+        XCTAssertTrue(env.flow.canFinishForegroundUnlock)
+        XCTAssertNil(env.flow.pendingSettingsProfileID, "An ordinary return must not reopen an expired Settings request.")
+    }
+
+    func testSettingsIntentCannotCrossProfileSwitchOrParentalFallThrough() {
+        let (model, profiles) = makeModel()
+        let parent = profiles.activeProfile
+        var child = profiles.add(name: "Child")
+        child.replaceKidsProfile(with: true)
+        profiles.update(child)
+        profiles.setParentalPIN(ParentalPIN.make(pin: "1357", iterations: 1))
+        XCTAssertTrue(model.enforceLockOnActiveProfile(leaving: child))
+        model.requestSettingsFromProfileSelection()
+        XCTAssertEqual(model.pendingParentalSwitch?.id, parent.id)
+        XCTAssertNil(model.pendingSettingsProfileID)
+        XCTAssertFalse(model.submitParentalPIN("0000"))
+        XCTAssertTrue(model.isChoosingProfile)
+        XCTAssertTrue(model.submitParentalPIN("1357"))
+        XCTAssertEqual(model.pendingSettingsProfileID, parent.id)
+        model.switchProfile(to: child.id)
+        XCTAssertNil(model.pendingSettingsProfileID)
+    }
+
     func testImportedOnboardingSelectionKeepsExistingLocksAndCompletesOnlyAfterActivation() async {
         let (model, profiles) = makeModel()
         let original = profiles.activeProfileID

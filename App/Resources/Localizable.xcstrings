@@ -110812,6 +110812,226 @@
         }
       }
     },
+    "About Diagnostic Sharing" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "حول إرسال بيانات التشخيص"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "За изпращането на диагностични данни"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sobre l’enviament de dades de diagnòstic"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "O odesílání diagnostiky"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Om afsendelse af diagnostik"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Über das Senden von Diagnosedaten"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Πληροφορίες για την αποστολή διαγνωστικών"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Acerca del envío de datos de diagnóstico"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "دربارهٔ ارسال اطلاعات عیب‌یابی"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tietoja diagnostiikkatietojen lähettämisestä"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "À propos de l’envoi de données de diagnostic"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "מידע על שליחת נתוני אבחון"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "डायग्नोस्टिक्स साझा करने के बारे में"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "O dijeljenju dijagnostike"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A diagnosztika megosztásáról"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tentang Berbagi Diagnostik"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Informazioni sulla condivisione dei dati diagnostici"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "診断データの共有について"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "진단 정보 공유 안내"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Perihal Perkongsian Diagnostik"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Om deling av diagnostikk"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Over het delen van diagnostische gegevens"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Informacje o udostępnianiu danych diagnostycznych"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Sobre o compartilhamento de dados de diagnóstico"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Despre trimiterea datelor de diagnosticare"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Об отправке данных диагностики"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "O odosielaní diagnostických údajov"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "O pošiljanju diagnostičnih podatkov"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "O slanju dijagnostičkih podataka"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Om delning av diagnostik"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เกี่ยวกับการส่งข้อมูลวินิจฉัย"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tanılama verisi paylaşımı hakkında"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Про надсилання діагностичних даних"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Về việc gửi dữ liệu chẩn đoán"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "关于共享诊断数据"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "關於分享診斷資料"
+          }
+        }
+      }
+    },
     "About Plozz. Version %@, build %@. Bring all of your media together into one unified experience. Free forever and open source. Scan the on-screen code to view the GitHub repository." : {
       "comment" : "Accessibility label for the Settings > About section on tvOS, describing the app and the QR code that opens the GitHub repository. The first %@ is the app version, and the second %@ is the build number.",
       "extractionState" : "stale",
@@ -154485,6 +154705,226 @@
         }
       }
     },
+    "Automatic Reports" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "التقارير التلقائية"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматични отчети"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Informes automàtics"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatická hlášení"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatiske rapporter"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatische Berichte"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αυτόματες αναφορές"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Informes automáticos"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های خودکار"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automaattiset raportit"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rapports automatiques"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "דוחות אוטומטיים"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "स्वचालित रिपोर्ट"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatska izvješća"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatikus jelentések"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Laporan Otomatis"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Report automatici"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "自動レポート"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "자동 보고서"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Laporan Automatik"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatiske rapporter"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatische rapporten"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Raporty automatyczne"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Relatórios automáticos"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rapoarte automate"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматические отчёты"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatické hlásenia"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Samodejna poročila"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatski izveštaji"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatiska rapporter"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "รายงานอัตโนมัติ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otomatik raporlar"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматичні звіти"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Báo cáo tự động"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "自动报告"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "自動報告"
+          }
+        }
+      }
+    },
     "Automatic channel" : {
       "localizations" : {
         "ar" : {
@@ -155804,6 +156244,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "自動下載"
+          }
+        }
+      }
+    },
+    "Automatically share crash reports, technical errors, app and device information, screen categories, and performance diagnostics with the developer through Sentry." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "إرسال تقارير الأعطال والأخطاء التقنية ومعلومات التطبيق والجهاز وفئات شاشات التطبيق وبيانات تشخيص الأداء تلقائيًا إلى المطور عبر Sentry."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Изпращай автоматично на разработчика чрез Sentry отчети за сривове, технически грешки, информация за приложението и устройството, категории екрани в приложението и диагностични данни за производителността."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envia automàticament al desenvolupador, a través de Sentry, informes de fallades, errors tècnics, informació de l’app i del dispositiu, categories de pantalles de l’app i dades de diagnòstic del rendiment."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automaticky odesílat vývojáři prostřednictvím Sentry hlášení o pádech, technické chyby, informace o aplikaci a zařízení, kategorie obrazovek aplikace a diagnostiku výkonu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send automatisk nedbrudsrapporter, tekniske fejl, oplysninger om appen og enheden, kategorier af skærme i appen og diagnostik af ydeevne til udvikleren via Sentry."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Absturzberichte, technische Fehler, App- und Geräteinformationen, Kategorien von App-Ansichten und Leistungsdiagnosedaten automatisch über Sentry an den Entwickler senden."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αυτόματη αποστολή αναφορών κατάρρευσης, τεχνικών σφαλμάτων, πληροφοριών για την εφαρμογή και τη συσκευή, κατηγοριών οθονών της εφαρμογής και διαγνωστικών απόδοσης στον προγραμματιστή μέσω του Sentry."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envía automáticamente informes de cierres inesperados, errores técnicos, información de la app y del dispositivo, categorías de pantallas de la app y datos de diagnóstico de rendimiento al desarrollador a través de Sentry."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های خرابی، خطاهای فنی، اطلاعات برنامه و دستگاه، انواع صفحه‌های برنامه و اطلاعات عیب‌یابی عملکرد را به‌طور خودکار از طریق Sentry برای توسعه‌دهنده ارسال کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lähetä automaattisesti kaatumisraportteja, teknisiä virheitä, sovellus- ja laitetietoja, sovelluksen näkymätyyppejä ja suorituskyvyn diagnostiikkatietoja kehittäjälle Sentryn kautta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envoyez automatiquement au développeur via Sentry les rapports de plantage, les erreurs techniques, les informations sur l’app et l’appareil, les catégories d’écrans de l’app et les données de diagnostic des performances."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שליחה אוטומטית של דוחות קריסה, שגיאות טכניות, מידע על היישום והמכשיר, קטגוריות של מסכי היישום ונתוני אבחון ביצועים למפתח דרך Sentry."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "क्रैश रिपोर्ट, तकनीकी त्रुटियाँ, ऐप और डिवाइस की जानकारी, ऐप की स्क्रीन की श्रेणियाँ और प्रदर्शन से जुड़े डायग्नोस्टिक्स Sentry के ज़रिए अपने-आप डेवलपर को भेजें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatski šaljite izvješća o rušenju, tehničke pogreške, podatke o aplikaciji i uređaju, kategorije zaslona aplikacije te dijagnostičke podatke o performansama razvojnom programeru putem servisa Sentry."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Összeomlási jelentések, technikai hibák, alkalmazás- és eszközinformációk, az alkalmazás képernyőinek kategóriái és teljesítménydiagnosztikai adatok automatikus megosztása a fejlesztővel a Sentry szolgáltatáson keresztül."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bagikan laporan crash, kesalahan teknis, informasi aplikasi dan perangkat, kategori layar aplikasi, serta diagnostik kinerja secara otomatis kepada pengembang melalui Sentry."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Condividi automaticamente con lo sviluppatore, tramite Sentry, report sugli arresti anomali, errori tecnici, informazioni sull’app e sul dispositivo, categorie delle schermate dell’app e dati diagnostici sulle prestazioni."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "クラッシュレポート、技術的なエラー、アプリとデバイスの情報、アプリ画面のカテゴリ、パフォーマンスの診断データを、Sentryを通じて開発者に自動送信します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "충돌 보고서, 기술적 오류, 앱 및 기기 정보, 앱 화면 유형, 성능 진단 정보를 Sentry를 통해 개발자에게 자동으로 보냅니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hantar laporan ranap, ralat teknikal, maklumat app dan peranti, kategori skrin app serta diagnostik prestasi secara automatik kepada pembangun melalui Sentry."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send automatisk krasjrapporter, tekniske feil, informasjon om appen og enheten, skjermkategorier i appen og ytelsesdiagnostikk til utvikleren via Sentry."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Verstuur automatisch crashrapporten, technische fouten, app- en apparaatinformatie, categorieën van appschermen en diagnostische prestatiegegevens naar de ontwikkelaar via Sentry."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatycznie wysyłaj deweloperowi przez Sentry raporty o awariach, błędy techniczne, informacje o aplikacji i urządzeniu, kategorie ekranów aplikacji oraz dane diagnostyczne dotyczące wydajności."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envie automaticamente relatórios de falhas, erros técnicos, informações do app e do dispositivo, categorias de telas do app e dados de diagnóstico de desempenho para o desenvolvedor pelo Sentry."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimite automat dezvoltatorului, prin Sentry, rapoarte despre închideri neașteptate, erori tehnice, informații despre aplicație și dispozitiv, categorii de ecrane ale aplicației și date de diagnosticare a performanței."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматически отправлять разработчику через Sentry отчёты о сбоях, технические ошибки, сведения о приложении и устройстве, категории экранов приложения и данные диагностики производительности."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automaticky posielať vývojárovi cez Sentry hlásenia o pádoch, technické chyby, informácie o aplikácii a zariadení, kategórie obrazoviek aplikácie a diagnostické údaje o výkone."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Samodejno pošiljaj razvijalcu prek storitve Sentry poročila o sesutjih, tehnične napake, podatke o aplikaciji in napravi, kategorije zaslonov aplikacije ter diagnostične podatke o zmogljivosti."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Automatski šalji programeru putem servisa Sentry izveštaje o padovima aplikacije, tehničke greške, informacije o aplikaciji i uređaju, kategorije ekrana aplikacije i dijagnostičke podatke o performansama."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skicka automatiskt kraschrapporter, tekniska fel, information om appen och enheten, kategorier av appvyer och prestandadiagnostik till utvecklaren via Sentry."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งรายงานแอปขัดข้อง ข้อผิดพลาดทางเทคนิค ข้อมูลแอปและอุปกรณ์ หมวดหมู่หน้าจอของแอป และข้อมูลวินิจฉัยประสิทธิภาพให้นักพัฒนาโดยอัตโนมัติผ่าน Sentry"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Çökme raporlarını, teknik hataları, uygulama ve cihaz bilgilerini, uygulama ekranı kategorilerini ve performans tanılama verilerini Sentry aracılığıyla geliştiriciyle otomatik olarak paylaşın."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Автоматично надсилати розробнику через Sentry звіти про аварійні завершення роботи, технічні помилки, відомості про застосунок і пристрій, категорії екранів застосунку та діагностичні дані про продуктивність."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tự động gửi báo cáo sự cố, lỗi kỹ thuật, thông tin ứng dụng và thiết bị, các loại màn hình trong ứng dụng và dữ liệu chẩn đoán hiệu năng cho nhà phát triển qua Sentry."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "通过 Sentry 自动向开发者发送崩溃报告、技术错误、应用和设备信息、应用界面类别及性能诊断数据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "透過 Sentry 自動將當機報告、技術錯誤、App 與裝置資訊、App 畫面類別及效能診斷資料傳送給開發者。"
           }
         }
       }
@@ -250746,7 +251406,228 @@
         }
       }
     },
+    "Couldn't submit diagnostics. Check that Share Diagnostics is on and try again." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تعذّر إرسال بيانات التشخيص. تأكد من تفعيل «إرسال بيانات التشخيص» وحاول مجددًا."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Неуспешно изпращане на диагностичните данни. Провери дали „Изпращане на диагностични данни“ е включено и опитай отново."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No s’han pogut enviar les dades de diagnòstic. Comprova que l’opció «Envia dades de diagnòstic» estigui activada i torna-ho a provar."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostiku se nepodařilo odeslat. Zkontrolujte, zda je zapnutá volba „Odesílat diagnostiku“, a zkuste to znovu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostikken kunne ikke sendes. Kontrollér, at »Send diagnostik« er slået til, og prøv igen."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnosedaten konnten nicht gesendet werden. Prüfe, ob „Diagnosedaten senden“ aktiviert ist, und versuche es erneut."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Δεν ήταν δυνατή η αποστολή διαγνωστικών. Βεβαιωθείτε ότι η «Αποστολή διαγνωστικών» είναι ενεργή και δοκιμάστε ξανά."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No se pudieron enviar los datos de diagnóstico. Comprueba que la opción «Enviar datos de diagnóstico» esté activada e inténtalo de nuevo."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "اطلاعات عیب‌یابی ارسال نشد. بررسی کنید که «ارسال اطلاعات عیب‌یابی» روشن باشد و دوباره تلاش کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostiikkatietojen lähetys epäonnistui. Varmista, että ”Lähetä diagnostiikkatietoja” on käytössä, ja yritä uudelleen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Impossible d’envoyer les données de diagnostic. Vérifiez que l’option « Envoyer des données de diagnostic » est activée, puis réessayez."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שליחת נתוני האבחון נכשלה. יש לוודא שהאפשרות ״שליחת נתוני אבחון״ מופעלת ולנסות שוב."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "डायग्नोस्टिक्स नहीं भेजे जा सके। जाँचें कि “डायग्नोस्टिक्स भेजें” चालू है और फिर से कोशिश करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dijagnostiku nije moguće poslati. Provjerite je li uključena opcija „Pošalji dijagnostiku” i pokušajte ponovno."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nem sikerült elküldeni a diagnosztikai adatokat. Ellenőrizze, hogy a „Diagnosztika küldése” be van-e kapcsolva, majd próbálja újra."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostik tidak dapat dikirim. Pastikan “Kirim Diagnostik” aktif, lalu coba lagi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Impossibile inviare i dati diagnostici. Verifica che l’opzione “Invia dati diagnostici” sia attiva e riprova."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "診断データを送信できませんでした。「診断データを送信」がオンになっていることを確認して、もう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "진단 정보를 보내지 못했습니다. ‘진단 정보 보내기’가 켜져 있는지 확인한 후 다시 시도하세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostik tidak dapat dihantar. Pastikan “Hantar Diagnostik” dihidupkan dan cuba lagi."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kunne ikke sende diagnostikk. Kontroller at «Send diagnostikk» er slått på, og prøv igjen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De diagnostische gegevens konden niet worden verstuurd. Controleer of ‘Diagnostische gegevens versturen’ is ingeschakeld en probeer het opnieuw."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nie udało się wysłać danych diagnostycznych. Sprawdź, czy opcja „Wysyłaj dane diagnostyczne” jest włączona, i spróbuj ponownie."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Não foi possível enviar os dados de diagnóstico. Verifique se “Enviar dados de diagnóstico” está ativado e tente novamente."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nu s-au putut trimite datele de diagnosticare. Verifică dacă opțiunea „Trimite date de diagnosticare” este activată și încearcă din nou."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Не удалось отправить данные диагностики. Убедитесь, что параметр «Отправлять данные диагностики» включён, и повторите попытку."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostické údaje sa nepodarilo odoslať. Skontrolujte, či je možnosť „Posielať diagnostické údaje“ zapnutá, a skúste to znova."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostičnih podatkov ni bilo mogoče poslati. Preveri, ali je možnost »Pošiljaj diagnostične podatke« vklopljena, in poskusi znova."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slanje dijagnostičkih podataka nije uspelo. Proveri da li je uključena opcija „Šalji dijagnostičke podatke“ i pokušaj ponovo."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Det gick inte att skicka diagnostiken. Kontrollera att ”Skicka diagnostik” är aktiverat och försök igen."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งข้อมูลวินิจฉัยไม่สำเร็จ ตรวจสอบว่าเปิด “ส่งข้อมูลวินิจฉัย” แล้วลองอีกครั้ง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tanılama verileri gönderilemedi. “Tanılama verilerini gönder” seçeneğinin açık olduğunu kontrol edip tekrar deneyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Не вдалося надіслати діагностичні дані. Переконайтеся, що параметр «Надсилати діагностичні дані» ввімкнено, і спробуйте ще раз."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Không thể gửi dữ liệu chẩn đoán. Hãy kiểm tra xem “Gửi dữ liệu chẩn đoán” đã bật chưa rồi thử lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "无法提交诊断数据。请确认已开启“发送诊断数据”，然后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "無法提交診斷資料。請確認已開啟「傳送診斷資料」，然後再試一次。"
+          }
+        }
+      }
+    },
     "Couldn't submit diagnostics. Check that crash reporting is enabled and try again." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -260659,6 +261540,7 @@
     },
     "Crash Reports" : {
       "comment" : "Section title in Diagnostics settings for crash-reporting controls and information.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -260879,6 +261761,7 @@
       }
     },
     "Crash reporting is unavailable in this build." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -282058,6 +282941,446 @@
         }
       }
     },
+    "Diagnostic Sharing" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "إرسال بيانات التشخيص"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Изпращане на диагностични данни"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Enviament de dades de diagnòstic"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odesílání diagnostiky"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Afsendelse af diagnostik"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Senden von Diagnosedaten"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αποστολή διαγνωστικών"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envío de datos de diagnóstico"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ارسال اطلاعات عیب‌یابی"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostiikkatietojen lähetys"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envoi de données de diagnostic"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שליחת נתוני אבחון"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "डायग्नोस्टिक्स साझा करना"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dijeljenje dijagnostike"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnosztika megosztása"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Berbagi Diagnostik"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Condivisione dei dati diagnostici"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "診断データの共有"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "진단 정보 공유"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Perkongsian Diagnostik"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deling av diagnostikk"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostische gegevens delen"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Udostępnianie danych diagnostycznych"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Compartilhamento de dados de diagnóstico"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimiterea datelor de diagnosticare"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отправка данных диагностики"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odosielanie diagnostických údajov"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošiljanje diagnostičnih podatkov"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slanje dijagnostičkih podataka"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Delning av diagnostik"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "การส่งข้อมูลวินิจฉัย"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tanılama verisi paylaşımı"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Надсилання діагностичних даних"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gửi dữ liệu chẩn đoán"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "共享诊断数据"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "分享診斷資料"
+          }
+        }
+      }
+    },
+    "Diagnostic sharing is unavailable in this build." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "إرسال بيانات التشخيص غير متاح في هذا الإصدار."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Изпращането на диагностични данни не е достъпно в тази компилация."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’enviament de dades de diagnòstic no està disponible en aquesta compilació."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odesílání diagnostiky není v tomto sestavení dostupné."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Afsendelse af diagnostik er ikke tilgængelig i dette build."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Das Senden von Diagnosedaten ist in diesem Build nicht verfügbar."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η αποστολή διαγνωστικών δεν είναι διαθέσιμη σε αυτή την έκδοση."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "El envío de datos de diagnóstico no está disponible en esta compilación."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ارسال اطلاعات عیب‌یابی در این نسخه در دسترس نیست."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnostiikkatietojen lähetys ei ole käytettävissä tässä koontiversiossa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’envoi de données de diagnostic n’est pas disponible dans cette version."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שליחת נתוני אבחון אינה זמינה בגרסה זו."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "इस बिल्ड में डायग्नोस्टिक्स साझा करना उपलब्ध नहीं है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dijeljenje dijagnostike nije dostupno u ovoj verziji aplikacije."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A diagnosztika megosztása ebben a buildben nem érhető el."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Berbagi diagnostik tidak tersedia dalam build ini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La condivisione dei dati diagnostici non è disponibile in questa build."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このビルドでは診断データの共有を利用できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "이 빌드에서는 진단 정보 공유를 사용할 수 없습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Perkongsian diagnostik tidak tersedia dalam binaan ini."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deling av diagnostikk er ikke tilgjengelig i denne versjonen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Het delen van diagnostische gegevens is niet beschikbaar in deze build."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Udostępnianie danych diagnostycznych jest niedostępne w tej kompilacji."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "O compartilhamento de dados de diagnóstico não está disponível nesta compilação."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimiterea datelor de diagnosticare nu este disponibilă în această versiune."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отправка данных диагностики недоступна в этой сборке."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odosielanie diagnostických údajov nie je v tejto zostave dostupné."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošiljanje diagnostičnih podatkov v tej različici ni na voljo."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slanje dijagnostičkih podataka nije dostupno u ovoj verziji."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Delning av diagnostik är inte tillgänglig i den här versionen."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "บิลด์นี้ไม่รองรับการส่งข้อมูลวินิจฉัย"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bu derlemede tanılama verisi paylaşımı kullanılamıyor."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "У цій збірці надсилання діагностичних даних недоступне."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tính năng gửi dữ liệu chẩn đoán không khả dụng trong bản dựng này."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此构建版本不支持共享诊断数据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此建置版本無法分享診斷資料。"
+          }
+        }
+      }
+    },
     "Diagnostic tools are now shown at the bottom of Settings. Turn them off again from the Developer Mode row." : {
       "localizations" : {
         "ar" : {
@@ -292871,6 +294194,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "請勿在此範本中包含密碼或存取權杖。"
+          }
+        }
+      }
+    },
+    "Don't include passwords or personal information." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لا تُضمّن كلمات مرور أو معلومات شخصية."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Не включвай пароли или лична информация."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No incloguis contrasenyes ni informació personal."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Neuvádějte hesla ani osobní údaje."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Medtag ikke adgangskoder eller personlige oplysninger."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Keine Passwörter oder persönlichen Informationen angeben."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Μην συμπεριλαμβάνετε κωδικούς πρόσβασης ή προσωπικά στοιχεία."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No incluyas contraseñas ni información personal."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گذرواژه‌ها یا اطلاعات شخصی را درج نکنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Älä sisällytä salasanoja tai henkilötietoja."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "N’incluez pas de mots de passe ni d’informations personnelles."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "אין לכלול סיסמאות או מידע אישי."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "पासवर्ड या निजी जानकारी शामिल न करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nemojte uključivati lozinke ni osobne podatke."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ne adjon meg jelszavakat vagy személyes adatokat."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jangan sertakan kata sandi atau informasi pribadi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Non includere password o informazioni personali."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "パスワードや個人情報を含めないでください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "비밀번호나 개인 정보를 포함하지 마세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jangan sertakan kata laluan atau maklumat peribadi."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ikke ta med passord eller personopplysninger."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Voeg geen wachtwoorden of persoonlijke informatie toe."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nie dołączaj haseł ani danych osobowych."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Não inclua senhas nem informações pessoais."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nu include parole sau informații personale."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Не указывайте пароли или личную информацию."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Neuvádzajte heslá ani osobné údaje."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ne vključuj gesel ali osebnih podatkov."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ne unosi lozinke ni lične podatke."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ta inte med lösenord eller personuppgifter."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "อย่าใส่รหัสผ่านหรือข้อมูลส่วนบุคคล"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Parola veya kişisel bilgi eklemeyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Не додавайте паролі чи особисту інформацію."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Không đưa mật khẩu hoặc thông tin cá nhân vào báo cáo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "请勿包含密码或个人信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "請勿包含密碼或個人資訊。"
           }
         }
       }
@@ -315905,6 +317448,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "啟用個人檔案"
+          }
+        }
+      }
+    },
+    "Enable Sharing" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تفعيل الإرسال"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Разреши изпращането"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activa l’enviament"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Povolit odesílání"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktivér afsendelse"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Senden aktivieren"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ενεργοποίηση αποστολής"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activar envío"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "فعال‌کردن ارسال"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ota lähetys käyttöön"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activer l’envoi"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "הפעלת השליחה"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "शेयरिंग चालू करें"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Omogući dijeljenje"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Megosztás engedélyezése"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktifkan Berbagi"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Attiva condivisione"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "共有を有効にする"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "공유 켜기"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dayakan Perkongsian"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slå på deling"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Delen inschakelen"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Włącz udostępnianie"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ativar compartilhamento"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activează trimiterea"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Включить отправку"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zapnúť odosielanie"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vklopi pošiljanje"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Omogući slanje"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktivera delning"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปิดใช้งานการแชร์"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Paylaşımı etkinleştir"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Увімкнути надсилання"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bật chia sẻ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "启用共享"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "啟用分享"
           }
         }
       }
@@ -453792,6 +455555,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "手動"
+          }
+        }
+      }
+    },
+    "Manual Reports" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "التقارير اليدوية"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ръчни отчети"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Informes manuals"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ruční hlášení"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Manuelle rapporter"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Manuelle Berichte"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Μη αυτόματες αναφορές"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Informes manuales"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزارش‌های دستی"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Manuaaliset raportit"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rapports manuels"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "דוחות ידניים"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "मैनुअल रिपोर्ट"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ručna izvješća"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kézi jelentések"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Laporan Manual"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Report manuali"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "手動レポート"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "수동 보고서"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Laporan Manual"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Manuelle rapporter"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Handmatige rapporten"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Raporty wysyłane ręcznie"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Relatórios manuais"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rapoarte manuale"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ручная отправка отчётов"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Manuálne hlásenia"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ročna poročila"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ručno slanje izveštaja"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Manuella rapporter"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "รายงานที่ส่งด้วยตนเอง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Manuel raporlar"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Звіти, що надсилаються вручну"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Báo cáo thủ công"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "手动报告"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "手動報告"
           }
         }
       }
@@ -708873,6 +710856,7 @@
       }
     },
     "Send Recent Activity to Developer" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -709312,6 +711296,226 @@
         }
       }
     },
+    "Send recent activity, search, playback and connection diagnostics, and your message to the developer through Sentry. Don't include passwords or personal information." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "أرسل بيانات تشخيص النشاط الأخير والبحث والتشغيل والاتصال ورسالتك إلى المطور عبر Sentry. لا تُضمّن كلمات مرور أو معلومات شخصية."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Изпрати диагностични данни за скорошната активност, търсенето, възпроизвеждането и връзката, както и съобщението си, на разработчика чрез Sentry. Не включвай пароли или лична информация."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envia al desenvolupador, a través de Sentry, dades de diagnòstic de l’activitat recent, de la cerca, de la reproducció i de la connexió, i el teu missatge. No incloguis contrasenyes ni informació personal."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odeslat vývojáři prostřednictvím Sentry diagnostiku nedávné aktivity, vyhledávání, přehrávání a připojení a svou zprávu. Neuvádějte hesla ani osobní údaje."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send diagnostik om seneste aktivitet, søgning, afspilning og forbindelse samt din besked til udvikleren via Sentry. Medtag ikke adgangskoder eller personlige oplysninger."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diagnosedaten zu den letzten Aktivitäten, zur Suche, Wiedergabe und Verbindung sowie deine Nachricht über Sentry an den Entwickler senden. Keine Passwörter oder persönlichen Informationen angeben."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Στείλτε στον προγραμματιστή μέσω του Sentry την πρόσφατη δραστηριότητα, διαγνωστικά αναζήτησης, αναπαραγωγής και σύνδεσης, καθώς και το μήνυμά σας. Μην συμπεριλαμβάνετε κωδικούς πρόσβασης ή προσωπικά στοιχεία."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envía al desarrollador, a través de Sentry, la actividad reciente, los datos de diagnóstico de búsqueda, reproducción y conexión, y tu mensaje. No incluyas contraseñas ni información personal."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "فعالیت اخیر، اطلاعات عیب‌یابی جست‌وجو، پخش و اتصال، و پیام خود را از طریق Sentry برای توسعه‌دهنده ارسال کنید. گذرواژه‌ها یا اطلاعات شخصی را درج نکنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Lähetä tiedot viimeaikaisesta toiminnasta, haun, toiston ja yhteyksien diagnostiikkatiedot sekä viestisi kehittäjälle Sentryn kautta. Älä sisällytä salasanoja tai henkilötietoja."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envoyez au développeur via Sentry votre activité récente, les données de diagnostic de recherche, de lecture et de connexion, ainsi que votre message. N’incluez pas de mots de passe ni d’informations personnelles."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "שליחת הפעילות האחרונה, נתוני אבחון של חיפוש, הפעלת מדיה וחיבור וההודעה שלך למפתח דרך Sentry. אין לכלול סיסמאות או מידע אישי."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "हाल की गतिविधि का विवरण, खोज, प्लेबैक और कनेक्शन से जुड़े डायग्नोस्टिक्स और अपना संदेश Sentry के ज़रिए डेवलपर को भेजें। पासवर्ड या निजी जानकारी शामिल न करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošaljite podatke o nedavnoj aktivnosti, dijagnostičke podatke o pretraživanju, reprodukciji i vezi te svoju poruku razvojnom programeru putem servisa Sentry. Nemojte uključivati lozinke ni osobne podatke."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Küldje el a legutóbbi tevékenység adatait, a keresési, lejátszási és kapcsolati diagnosztikai adatokat, valamint az üzenetét a fejlesztőnek a Sentry szolgáltatáson keresztül. Ne adjon meg jelszavakat vagy személyes adatokat."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Kirim aktivitas terbaru, diagnostik pencarian, pemutaran, dan koneksi, serta pesan Anda kepada pengembang melalui Sentry. Jangan sertakan kata sandi atau informasi pribadi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Invia allo sviluppatore tramite Sentry i dati sulle attività recenti, i dati diagnostici su ricerca, riproduzione e connessione e il tuo messaggio. Non includere password o informazioni personali."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "最近のアクティビティ、検索・再生・接続の診断データ、およびメッセージを、Sentryを通じて開発者に送信します。パスワードや個人情報を含めないでください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "최근 활동, 검색·재생·연결 진단 정보와 메시지를 Sentry를 통해 개발자에게 보냅니다. 비밀번호나 개인 정보를 포함하지 마세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hantar aktiviti terkini, diagnostik carian, main balik dan sambungan serta mesej anda kepada pembangun melalui Sentry. Jangan sertakan kata laluan atau maklumat peribadi."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Send nylig aktivitet, diagnostikk for søk, avspilling og tilkobling samt meldingen din til utvikleren via Sentry. Ikke ta med passord eller personopplysninger."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Verstuur recente activiteit, diagnostische gegevens over zoeken, afspelen en verbindingen en je bericht naar de ontwikkelaar via Sentry. Voeg geen wachtwoorden of persoonlijke informatie toe."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wyślij deweloperowi przez Sentry ostatnią aktywność, dane diagnostyczne wyszukiwania, odtwarzania i połączeń oraz swoją wiadomość. Nie dołączaj haseł ani danych osobowych."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Envie atividades recentes, dados de diagnóstico de busca, reprodução e conexão e sua mensagem para o desenvolvedor pelo Sentry. Não inclua senhas nem informações pessoais."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trimite dezvoltatorului, prin Sentry, date despre activitatea recentă, date de diagnosticare pentru căutare, redare și conexiune, precum și mesajul tău. Nu include parole sau informații personale."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отправить разработчику через Sentry данные о недавних действиях, диагностические данные поиска, воспроизведения и подключения, а также ваше сообщение. Не указывайте пароли или личную информацию."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Poslať vývojárovi cez Sentry údaje o nedávnej aktivite, diagnostické údaje o vyhľadávaní, prehrávaní a pripojení a vašu správu. Neuvádzajte heslá ani osobné údaje."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošlji razvijalcu prek storitve Sentry podatke o nedavni dejavnosti, diagnostične podatke o iskanju, predvajanju in povezavi ter svoje sporočilo. Ne vključuj gesel ali osebnih podatkov."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pošalji programeru putem servisa Sentry podatke o nedavnim aktivnostima, dijagnostičke podatke o pretrazi, reprodukciji i vezi, kao i svoju poruku. Ne unosi lozinke ni lične podatke."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skicka uppgifter om den senaste aktiviteten, diagnostik för sökning, uppspelning och anslutning samt ditt meddelande till utvecklaren via Sentry. Ta inte med lösenord eller personuppgifter."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ส่งข้อมูลวินิจฉัยเกี่ยวกับกิจกรรมล่าสุด การค้นหา การเล่น และการเชื่อมต่อ พร้อมข้อความของคุณให้นักพัฒนาผ่าน Sentry อย่าใส่รหัสผ่านหรือข้อมูลส่วนบุคคล"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Son etkinlik, arama, oynatma ve bağlantı tanılama verilerini ve mesajınızı Sentry aracılığıyla geliştiriciye gönderin. Parola veya kişisel bilgi eklemeyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Надішліть розробнику через Sentry діагностичні дані про нещодавню активність, пошук, відтворення й з’єднання, а також своє повідомлення. Не додавайте паролі чи особисту інформацію."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gửi dữ liệu chẩn đoán về hoạt động gần đây, tìm kiếm, phát lại và kết nối cùng lời nhắn của bạn cho nhà phát triển qua Sentry. Không đưa mật khẩu hoặc thông tin cá nhân vào báo cáo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "通过 Sentry 向开发者发送近期活动、搜索、播放和连接的诊断数据，以及您的留言。请勿包含密码或个人信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "透過 Sentry 將近期活動、搜尋、播放和連線的診斷資料，以及您的訊息傳送給開發者。請勿包含密碼或個人資訊。"
+          }
+        }
+      }
+    },
     "Send recent app logs to help diagnose a problem. Logins, servers, and media titles are excluded." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -709534,6 +711738,7 @@
       }
     },
     "Send recent logs, technical playback and connection diagnostics, and your message to the developer through Sentry. Don't include passwords or personal information." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -722342,6 +724547,7 @@
       }
     },
     "Share Crash Reports" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -723223,6 +725429,7 @@
       }
     },
     "Share technical errors, app and device information, screen categories, and performance diagnostics with the developer through Sentry." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -789899,6 +792106,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "在播放時間與時鐘時間之間切換"
+          }
+        }
+      }
+    },
+    "Switch profile" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تبديل الملف الشخصي"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Смяна на профил"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Canvia de perfil"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Přepnout profil"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Skift profil"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profil wechseln"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αλλαγή προφίλ"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cambiar de perfil"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تعویض نمایه"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vaihda profiilia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Changer de profil"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "החלפת פרופיל"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "प्रोफ़ाइल बदलें"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Promijeni profil"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profilváltás"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ganti profil"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cambia profilo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "プロファイルを切り替える"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "프로필 전환"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tukar profil"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bytt profil"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profiel wisselen"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Przełącz profil"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trocar perfil"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Schimbă profilul"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Сменить профиль"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prepnúť profil"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zamenjaj profil"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Promeni profil"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Byt profil"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "สลับโปรไฟล์"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Profil değiştir"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Змінити профіль"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chuyển hồ sơ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "切换个人资料"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "切換個人檔案"
           }
         }
       }
@@ -857775,6 +860202,7 @@
       }
     },
     "This build has no crash-reporting endpoint configured, so nothing can be sent. Crash reporting is available in TestFlight and release builds." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -902013,6 +904441,7 @@
       }
     },
     "Turn on Share Crash Reports below to send recent app logs." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -902454,6 +904883,7 @@
       }
     },
     "Turn on Share Crash Reports in Help & Diagnostics to send logs and technical diagnostics." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -902669,6 +905099,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "在「說明與診斷」中開啟「分享當機報告」，即可傳送記錄和技術診斷資訊。"
+          }
+        }
+      }
+    },
+    "Turn on Share Diagnostics to send a report." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "فعّل «إرسال بيانات التشخيص» لإرسال تقرير."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Включи „Изпращане на диагностични данни“, за да изпратиш отчет."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activa «Envia dades de diagnòstic» per enviar un informe."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pro odeslání hlášení zapněte volbu „Odesílat diagnostiku“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slå »Send diagnostik« til for at sende en rapport."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktiviere „Diagnosedaten senden“, um einen Bericht zu senden."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ενεργοποιήστε την «Αποστολή διαγνωστικών» για να στείλετε αναφορά."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activa «Enviar datos de diagnóstico» para enviar un informe."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "برای ارسال گزارش، «ارسال اطلاعات عیب‌یابی» را روشن کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ota ”Lähetä diagnostiikkatietoja” käyttöön, jotta voit lähettää raportin."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activez « Envoyer des données de diagnostic » pour envoyer un rapport."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "כדי לשלוח דוח, יש להפעיל את ״שליחת נתוני אבחון״."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "रिपोर्ट भेजने के लिए “डायग्नोस्टिक्स भेजें” चालू करें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Uključite opciju „Pošalji dijagnostiku” za slanje izvješća."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jelentés küldéséhez kapcsolja be a „Diagnosztika küldése” beállítást."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktifkan “Kirim Diagnostik” untuk mengirim laporan."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Attiva “Invia dati diagnostici” per inviare un report."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "レポートを送信するには、「診断データを送信」をオンにしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "보고서를 보내려면 ‘진단 정보 보내기’를 켜세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hidupkan “Hantar Diagnostik” untuk menghantar laporan."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Slå på «Send diagnostikk» for å sende en rapport."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Schakel ‘Diagnostische gegevens versturen’ in om een rapport te versturen."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Włącz opcję „Wysyłaj dane diagnostyczne”, aby wysłać raport."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ative “Enviar dados de diagnóstico” para enviar um relatório."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Activează „Trimite date de diagnosticare” pentru a trimite un raport."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Включите «Отправлять данные диагностики», чтобы отправить отчёт."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ak chcete poslať hlásenie, zapnite možnosť „Posielať diagnostické údaje“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za pošiljanje poročila vklopi možnost »Pošiljaj diagnostične podatke«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Uključi opciju „Šalji dijagnostičke podatke“ da pošalješ izveštaj."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aktivera ”Skicka diagnostik” för att skicka en rapport."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปิด “ส่งข้อมูลวินิจฉัย” เพื่อส่งรายงาน"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Rapor göndermek için “Tanılama verilerini gönder” seçeneğini açın."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Щоб надіслати звіт, увімкніть параметр «Надсилати діагностичні дані»."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bật “Gửi dữ liệu chẩn đoán” để gửi báo cáo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "请开启“发送诊断数据”以发送报告。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "請開啟「傳送診斷資料」以傳送報告。"
           }
         }
       }
@@ -1014361,6 +1017011,234 @@
         }
       }
     },
+    "navigationArrangement.footnote.horizontal" : {
+      "comment" : "Instructions for arranging the scrolling horizontal navigation.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "اضغط مطولًا لإخفاء العناصر أو إظهارها أو تغيير ترتيبها. تبقى الإعدادات ثابتة حتى تنقلها. يمكنك أيضًا الوصول إلى الإعدادات من قائمة اختيار الملف الشخصي."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Натиснете и задръжте, за да скриете, покажете или преместите елемент. „Настройки“ остават фиксирани, докато не ги преместите. Достъпни са и от менюто за избор на профил."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mantén premut per amagar, mostrar o reordenar. «Configuració» es manté fixa fins que la moguis. També hi pots accedir des del selector de perfils."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Stisknutím a podržením můžete položky skrýt, zobrazit nebo přesunout. Nastavení zůstává připnuté, dokud ho nepřesunete. Najdete ho také v nabídce pro výběr profilu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tryk og hold nede for at skjule, vise eller flytte. Indstillinger forbliver fastgjort, indtil du flytter dem. Du finder også Indstillinger i profilvælgeren."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zum Ausblenden, Einblenden oder Verschieben gedrückt halten. „Einstellungen“ bleiben angeheftet, bis du sie verschiebst. Du findest sie auch in der Profilauswahl."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Πατήστε παρατεταμένα για απόκρυψη, εμφάνιση ή μετακίνηση. Οι Ρυθμίσεις μένουν σταθερές μέχρι να τις μετακινήσετε. Οι Ρυθμίσεις είναι επίσης διαθέσιμες στην επιλογή προφίλ."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Press and hold to hide, show, or move. Settings stays fixed until moved. Settings is also in the profile picker."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mantén pulsado para ocultar, mostrar o mover. Ajustes permanece fijo hasta que lo muevas. También puedes acceder a Ajustes desde el selector de perfiles."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "برای پنهان کردن، نمایش یا جابه‌جایی، فشار دهید و نگه دارید. تنظیمات تا زمانی که آن را جابه‌جا نکنید، ثابت می‌ماند. تنظیمات در بخش انتخاب نمایه نیز در دسترس است."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Piilota, näytä tai siirrä painamalla pitkään. Asetukset pysyvät paikallaan, kunnes siirrät niitä. Asetukset ovat myös profiilinvalitsimessa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Appuyez longuement pour masquer, afficher ou déplacer. La rubrique Réglages reste fixe jusqu’à ce que vous la déplaciez. Elle est aussi accessible depuis le sélecteur de profil."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "לחצו לחיצה ארוכה כדי להסתיר, להציג או להזיז. ההגדרות נשארות קבועות עד שתזיזו אותן. אפשר לגשת להגדרות גם דרך בורר הפרופילים."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "छिपाने, दिखाने या क्रम बदलने के लिए रिमोट का बटन दबाकर रखें। सेटिंग्स अपनी जगह पर स्थिर रहती हैं, जब तक आप उन्हें दूसरी जगह नहीं ले जाते। सेटिंग्स प्रोफ़ाइल चुनने के मेनू में भी मिलती हैं।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za skrivanje, prikaz ili promjenu redoslijeda pritisnite i držite tipku na daljinskom upravljaču. Postavke ostaju na istom mjestu dok ih ne premjestite. Postavke su dostupne i u izborniku profila."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Elrejtéshez, megjelenítéshez vagy átrendezéshez tartsa lenyomva a távirányító gombját. A Beállítások menü rögzítve marad, amíg át nem helyezi. A profilválasztóból is elérhető."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tekan dan tahan tombol remote untuk menyembunyikan, menampilkan, atau mengubah urutan. Pengaturan tetap di tempatnya sampai Anda memindahkannya. Pengaturan juga tersedia di pemilih profil."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tieni premuto per nascondere, mostrare o riordinare. La voce Impostazioni resta fissa finché non la sposti. Puoi aprire Impostazioni anche dal selettore dei profili."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "リモコンのボタンを長押しすると、非表示・表示・並べ替えができます。「設定」は移動するまで固定されます。「設定」はプロファイル選択メニューからも開けます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "길게 눌러 항목을 숨기거나 표시하거나 이동하세요. 설정은 직접 옮기기 전까지 고정됩니다. 프로필 선택 화면에서도 설정을 열 수 있습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tekan dan tahan untuk menyembunyikan, memaparkan atau mengalihkan item. Tetapan kekal di tempatnya sehingga anda mengalihkannya. Tetapan juga tersedia dalam pemilih profil."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Trykk og hold for å skjule, vise eller flytte elementer. Innstillinger er festet til du flytter menypunktet. Du finner også Innstillinger i profilvelgeren."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Houd ingedrukt om items te verbergen, te tonen of te verplaatsen. Het item Instellingen blijft op zijn plek totdat je het verplaatst. Je kunt Instellingen ook openen via de profielkiezer."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Naciśnij i przytrzymaj, aby ukryć, pokazać lub przenieść pozycję. Ustawienia są przypięte, dopóki ich nie przeniesiesz. Ustawienia są też dostępne w menu wyboru profilu."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mantenha pressionado para ocultar, mostrar ou mover itens. O item Ajustes fica fixo até você movê-lo. Você também pode acessar Ajustes pelo seletor de perfis."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Apasă și ține apăsat pentru a ascunde, afișa sau muta. Setările rămân fixe până când le muți. Setările sunt disponibile și în selectorul de profiluri."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Нажмите и удерживайте, чтобы скрыть, показать или переместить. Настройки закреплены, пока вы их не переместите. Настройки также доступны в меню выбора профиля."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Stlačením a podržaním môžete položky skryť, zobraziť alebo presunúť. Nastavenia zostanú pripnuté, kým ich nepresuniete. Nastavenia nájdete aj vo výbere profilu."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pritisnite in pridržite za skrivanje, prikaz ali premikanje. Nastavitve ostanejo pripete, dokler jih ne premaknete. Nastavitve so na voljo tudi v izbirniku profilov."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pritisnite i zadržite da biste sakrili, prikazali ili premestili stavke. Podešavanja ostaju na istom mestu dok ih ne premestite. Podešavanja su dostupna i u meniju za izbor profila."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tryck och håll ned för att dölja, visa eller flytta. Inställningar ligger kvar på samma plats tills du flyttar menyalternativet. Inställningar finns också i profilväljaren."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "กดค้างเพื่อซ่อน แสดง หรือย้ายรายการ การตั้งค่าจะตรึงอยู่กับที่จนกว่าจะย้าย และยังเข้าถึงได้จากเมนูเลือกโปรไฟล์"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gizlemek, göstermek veya taşımak için basılı tutun. Ayarlar, siz taşıyana kadar sabit kalır. Ayarlara profil seçicisinden de erişebilirsiniz."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Натисніть і утримуйте кнопку пульта, щоб приховати, показати або перемістити. Налаштування закріплено, доки ви їх не перемістите. Вони також доступні у вікні вибору профілю."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nhấn và giữ để ẩn, hiện hoặc di chuyển. Cài đặt được ghim cho đến khi bạn di chuyển mục này. Bạn cũng có thể mở Cài đặt từ trình chọn hồ sơ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "长按遥控器按键可隐藏、显示或移动项目。设置会固定在原位，直至手动移动。也可从个人资料选择器打开设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "長按遙控器按鍵即可隱藏、顯示或移動項目。設定會固定在原位，直到手動移動為止。也可從個人檔案選擇器開啟設定。"
+          }
+        }
+      }
+    },
     "navigationArrangement.footnote.iOS" : {
       "comment" : "Instructions for arranging iPhone and iPad navigation tabs.",
       "extractionState" : "extracted_with_value",
@@ -1019605,6 +1022483,234 @@
         }
       }
     },
+    "navigationStyle.detail.horizontal" : {
+      "comment" : "One-line explanation shown under the navigation-style picker.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يمكن تمرير شريط التنقل أفقيًا في الأعلى."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Навигационната лента се превърта хоризонтално в горната част."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La barra de navegació es desplaça horitzontalment a la part superior."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigační lišta se posouvá vodorovně v horní části obrazovky."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigationslinjen ruller vandret øverst."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Die Navigationsleiste scrollt horizontal am oberen Bildschirmrand."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η πλοήγηση κυλά οριζόντια στο επάνω μέρος."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Navigation scrolls across the top."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La navegación se desplaza horizontalmente en la parte superior."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "نوار ناوبری در بالای صفحه به‌صورت افقی پیمایش می‌شود."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigointipalkki vierii vaakasuunnassa näytön yläreunassa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La barre de navigation défile horizontalement en haut."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "סרגל הניווט נגלל לרוחב בחלק העליון."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "नेविगेशन बार ऊपर दाएँ-बाएँ स्क्रॉल होता है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigacija se vodoravno pomiče pri vrhu zaslona."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A navigációs sáv felül, vízszintesen görgethető."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigasi bergulir secara horizontal di bagian atas."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La navigazione scorre orizzontalmente nella parte superiore dello schermo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ナビゲーションは画面上部で横にスクロールします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "탐색 메뉴가 화면 상단에서 가로로 스크롤됩니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bar navigasi menatal secara mendatar di bahagian atas."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigasjonen ruller vannrett øverst på skjermen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De navigatiebalk scrolt horizontaal boven in beeld."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pasek nawigacji przewija się poziomo u góry ekranu."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A barra de navegação rola horizontalmente no topo da tela."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigarea se derulează orizontal în partea de sus."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Панель навигации прокручивается по горизонтали вверху."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigácia sa posúva vodorovne v hornej časti."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigacija se pomika vodoravno na vrhu."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigacija se pomera vodoravno pri vrhu."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Navigeringsfältet rullas i sidled längst upp."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "แถบนำทางเลื่อนในแนวนอนที่ด้านบน"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gezinme çubuğu üstte yatay olarak kaydırılır."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Панель навігації прокручується горизонтально вгорі екрана."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Thanh điều hướng cuộn ngang ở phía trên."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "导航栏在顶部横向滚动。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "導覽列在頂端橫向捲動。"
+          }
+        }
+      }
+    },
     "navigationStyle.detail.rail" : {
       "comment" : "One-line explanation shown under the navigation-style picker.",
       "extractionState" : "extracted_with_value",
@@ -1020063,7 +1023169,7 @@
     },
     "navigationStyle.detail.tabBar" : {
       "comment" : "One-line explanation shown under the navigation-style picker.",
-      "extractionState" : "extracted_with_value",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

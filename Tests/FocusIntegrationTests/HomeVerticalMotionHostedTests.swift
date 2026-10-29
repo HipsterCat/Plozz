@@ -914,6 +914,10 @@ final class HomeVerticalMotionHostedTests: XCTestCase {
         let scroll = UIScrollView(frame: CGRect(x: 100, y: 100, width: 800, height: 700))
         scroll.contentSize = CGSize(width: 800, height: 2400)
         let position = FocusHeroNativeScrollPosition.PositionView()
+        let navigation = TopNavigationScroll()
+        var returnedToTop = false
+        position.navigation = navigation
+        position.onReturnToTop = { returnedToTop = true }
         position.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
         scroll.addSubview(position)
         window.rootViewController?.view.addSubview(scroll)
@@ -932,6 +936,9 @@ final class HomeVerticalMotionHostedTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.y, 480)
         XCTAssertGreaterThan(before, 1)
         XCTAssertLessThan(before, 479)
+        XCTAssertGreaterThan(navigation.offset, 0)
+        XCTAssertLessThan(navigation.offset, 479, "Navigation must follow the painted spring, not its final target.")
+        XCTAssertEqual(navigation.offset, before, accuracy: 60, "Allow one display-frame sampling interval.")
         XCTAssertFalse((scroll.layer.animationKeys() ?? []).isEmpty)
         var previousVelocity: CGFloat = 0
         for (row, destination) in [("third", CGFloat(960)), ("fourth", CGFloat(1440))] {
@@ -960,6 +967,15 @@ final class HomeVerticalMotionHostedTests: XCTestCase {
         try await Task.sleep(for: .seconds(1))
         XCTAssertEqual(scroll.contentOffset.y, 0)
         XCTAssertEqual(try XCTUnwrap(scroll.layer.presentation()).bounds.minY, 0, accuracy: 0.5)
+        XCTAssertEqual(navigation.offset, 0)
+        position.move(to: 480, rowID: "second")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(navigation.scrollToTop())
+        XCTAssertTrue(returnedToTop)
+        XCTAssertEqual(scroll.contentOffset.y, 0)
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(navigation.offset, 0, "The old compositor must not resume after Back.")
+        XCTAssertEqual(scroll.contentOffset.y, 0)
     }
 
     func testNativeShowcaseColumnMatchesPaintedOffsetAfterRelayoutAndReversal() async throws {

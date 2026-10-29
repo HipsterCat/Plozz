@@ -183,10 +183,8 @@ extension SettingsRoute {
 
 /// Settings navigation state that survives a top-bar/sidebar/rail shell swap.
 ///
-/// MainTabView owns this model's identity but never reads `path`. SettingsView is
-/// the only observer, so a push/pop invalidates the Settings stack alone instead
-/// of re-running the app's large root tab body. This mirrors NavigationChromeModel:
-/// shared identity, narrow observation.
+/// MainTabView owns this model's identity but never reads its path. The Settings
+/// workspace observes depth without invalidating the app's large root tab body.
 @MainActor
 @Observable
 public final class SettingsNavigationModel {

@@ -632,7 +632,7 @@ public struct RootView: View {
                     // what makes it recoverable: the tab bar stays, Home shows
                     // its own empty state, and Settings - which lists every
                     // household server regardless of what is switched on - is
-                    // still one press away.
+                    // still reachable through the profile picker.
                     let accounts = appState.accountsProviders.homeAccounts
                     let detailCache = detailCacheFactory.cache(
                         for: DetailSnapshotCacheScope(
@@ -800,6 +800,11 @@ public struct RootView: View {
                         },
                         onConfiguredIPTVPlaylist: {
                             _ = appState.recordSuccessfulIPTVSetup()
+                        },
+                        settingsEntryRequested: appState.profileFlow.pendingSettingsProfileID
+                            == appState.profilesModel.activeProfileID,
+                        onConsumeSettingsEntry: {
+                            appState.profileFlow.consumeSettingsEntry(for: appState.profilesModel.activeProfileID)
                         }
                     )
                     .id(rootScopeIdentity)

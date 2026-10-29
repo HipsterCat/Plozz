@@ -1773,15 +1773,23 @@ private struct PlozziOSNavigationSettingsView: View {
 
     private var navigationLibrariesScope: ProfileLibrariesScope {
         let profile = appModel.profiles.activeProfile
+        let discovery = appModel.settings.discoveredLibraries
+        let libraries = appModel.visibleNavigationLibraries
+        let state: LoadState<[AggregatedLibrary]> = if !libraries.isEmpty {
+            .loaded(libraries)
+        } else if let failure = discovery.failures.values.first {
+            .failed(failure)
+        } else {
+            discovery.state
+        }
         return ProfileLibrariesScope(
             accounts: appModel.accounts,
             activeProfile: profile,
-            // Individual library tabs are not supported by the iOS tab bar, so
-            // this shared editor needs only its always-available built-ins.
-            discoveredLibraries: .loaded([]),
-            refreshingLibraryAccountIDs: [],
-            unreachableLibraryAccountIDs: [],
-            reloadLibraries: {},
+            discoveredLibraries: state,
+            refreshingLibraryAccountIDs: discovery.refreshingAccountIDs,
+            unreachableLibraryAccountIDs: discovery.unreachableAccountIDs,
+            libraryFailures: discovery.failures,
+            reloadLibraries: { await appModel.refreshNavigationLibraries() },
             homeVisibility: appModel.settings.homeVisibility,
             isAccountIncludedInActiveProfile: {
                 appModel.activeAccountIDs(for: profile.id).contains($0)
@@ -1808,13 +1816,12 @@ private struct PlozziOSNavigationSettingsView: View {
                 NavigationLibrariesDetailView(
                     scope: navigationLibrariesScope,
                     navigation: appModel.settings.navigation,
-                    includesIndividualLibraries: false,
                     excludedKeys: [
                         NavigationLibraryLayout.musicKey,
                         NavigationLibraryLayout.allLibrariesKey,
                     ]
                 )
-                .id(appModel.profiles.activeProfileID)
+                .id(appModel.navigationLibrariesScopeKey)
             }
         }
         .settingsPageSurface()

@@ -124,13 +124,15 @@ public final class NavigationStyleSettingsModel {
         unreachableAccountIDs: Set<String>,
         failures: [String: AppError] = [:]
     ) {
-        contentLibraries = NavigationContentAvailability.reconcileLibraries(
+        let libraries = NavigationContentAvailability.reconcileLibraries(
             discovered: discovered,
             unreachableAccountIDs: unreachableAccountIDs,
             remembered: contentLibraries
         ).filter { accountIDs.contains($0.accountID) }
-        discoveredAccountIDs.formIntersection(accountIDs)
-        discoveredAccountIDs.formUnion(accountIDs.subtracting(unreachableAccountIDs))
+        if contentLibraries != libraries { contentLibraries = libraries }
+        let discoveredIDs = discoveredAccountIDs.intersection(accountIDs)
+            .union(accountIDs.subtracting(unreachableAccountIDs))
+        if discoveredAccountIDs != discoveredIDs { discoveredAccountIDs = discoveredIDs }
         let offline = unreachableAccountIDs.intersection(accountIDs).filter {
             failures[$0] == nil || failures[$0] == .serverUnreachable
         }
@@ -142,7 +144,7 @@ public final class NavigationStyleSettingsModel {
         #if os(iOS)
         []
         #else
-        [NavigationLibraryLayout.settingsKey]
+        style == .tabBar ? [] : [NavigationLibraryLayout.settingsKey]
         #endif
     }
 
@@ -166,6 +168,14 @@ public final class NavigationStyleSettingsModel {
             sections, available: available, requiredEnabled: requiredNavigationKeys,
             automaticallyHiddenKeys: automaticallyHiddenKeys.union(additionalHiddenKeys)
         )
+        guard next != libraryLayout else { return }
+        libraryLayout = next
+        layoutStore.save(next)
+    }
+
+    public func recordNavigationMove(of key: String) {
+        var next = libraryLayout
+        next.recordMove(of: key)
         guard next != libraryLayout else { return }
         libraryLayout = next
         layoutStore.save(next)

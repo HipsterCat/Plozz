@@ -9,6 +9,10 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   household's profile tiles (avatar + name), focusable, with an "add
   profile" tile that opens the editor. `AppShell.ProfileSelectionView`
   hosts this for both the launch flow and Settings → Switch Profile.
+  Its upper-right Settings cog uses the shared native glass button, including
+  the reduced-transparency fallback. A full-width focus section lets Up from
+  the profile tiles reach it. The shell owns authentication and profile-scoped
+  routing; the picker never bypasses a PIN or activates another profile itself.
   Mobile uses `AppShelliOS.PlozziOSProfileSelectionView` and its touch picker.
 - `ProfileEditorView` — create / rename / restyle a profile (name,
   `avatarSymbol` SF Symbol, color from `ProfileTileColor` palette,
@@ -65,7 +69,9 @@ household multi-user UI on top of `CoreModels.ProfileStore`.
   Selecting the same profile restores that context after successful PIN entry;
   choosing another profile uses normal identity/settings rescoping. Cancellation
   stays at the mandatory picker, including when leaving from a previously
-  cancelable profile picker or in-app account setup. Top Shelf links wait for
+  cancelable profile picker or in-app account setup. The picker's Settings
+  shortcut also requires fresh authorization on return, and another departure
+  clears any unconsumed Settings request. Top Shelf links wait for
   authorization, and a late async result cannot start a new player behind the
   gate. Pending PIN attempts are revoked on another departure even within the
   return delay. Configured Plex PINs affect the return default, but disabled

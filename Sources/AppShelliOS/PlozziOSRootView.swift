@@ -761,15 +761,47 @@ private struct PendingPairing: Identifiable {
     var id: String { invite }
 }
 
-private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
+enum PlozziOSDestination: Identifiable, Hashable {
     case home
     case watchlist
     case liveTV
     case downloads
     case search
     case settings
+    case library(String)
 
     var id: Self { self }
+
+    var rawValue: String {
+        switch self {
+        case .home: "home"
+        case .watchlist: "watchlist"
+        case .liveTV: "liveTV"
+        case .downloads: "downloads"
+        case .search: "search"
+        case .settings: "settings"
+        case let .library(key): "library:\(key)"
+        }
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "home": self = .home
+        case "watchlist": self = .watchlist
+        case "liveTV": self = .liveTV
+        case "downloads": self = .downloads
+        case "search": self = .search
+        case "settings": self = .settings
+        default:
+            guard rawValue.hasPrefix("library:") else { return nil }
+            self = .library(String(rawValue.dropFirst("library:".count)))
+        }
+    }
+
+    var diagnosticCategory: String {
+        if case .library = self { return "library" }
+        return rawValue
+    }
 
     var title: LocalizedStringResource {
         switch self {
@@ -779,6 +811,7 @@ private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
         case .downloads: "Downloads"
         case .search: "Search"
         case .settings: "Settings"
+        case .library: "Libraries"
         }
     }
 
@@ -790,6 +823,7 @@ private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
         case .downloads: "arrow.down.circle"
         case .search: "magnifyingglass"
         case .settings: "gearshape"
+        case .library: "rectangle.stack"
         }
     }
 }
@@ -897,18 +931,20 @@ struct PlozziOSTabShell: View {
         _lastContentDestination = State(initialValue: initial)
     }
 
-    private static func configuredDestinations(
+    static func configuredDestinations(
         appModel: PlozziOSAppModel,
         retainingWatchlist: Bool = false
     ) -> [PlozziOSDestination] {
         let navigation = appModel.settings.navigation
+        let libraries = appModel.visibleNavigationLibraries
+        let libraryKeys = Set(libraries.map(\.key))
         return navigation.libraryLayout.resolvingAutomaticVisibility(
             hidden: navigationAvailability(appModel: appModel).automaticallyHiddenKeys
                 .union(NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys),
             retainingWatchlist: retainingWatchlist
         )
             .sections(
-                available: NavigationDestinationDefaults.iOS,
+                available: NavigationDestinationDefaults.iOS(visibleLibraries: libraries),
                 requiredEnabled: navigation.requiredNavigationKeys
             ).enabled
             .compactMap { key -> PlozziOSDestination? in
@@ -919,7 +955,7 @@ struct PlozziOSTabShell: View {
                 case NavigationLibraryLayout.searchKey: return .search
                 case NavigationLibraryLayout.downloadsKey: return .downloads
                 case NavigationLibraryLayout.settingsKey: return .settings
-                default: return nil
+                default: return libraryKeys.contains(key) ? .library(key) : nil
                 }
             }
     }
@@ -1109,6 +1145,23 @@ struct PlozziOSTabShell: View {
             .plozziOSItemNavigation(appModel: appModel)
             .toolbarBackground(.hidden, for: .navigationBar)
             .background { AppBackground(palette: palette) }
+        case let .library(key):
+            if let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) {
+                PlozziOSLibraryDestinationView(
+                    appModel: appModel,
+                    route: PlozziOSLibraryRoute(library: library.library, accountID: library.accountID)
+                )
+                .id(homeContentIdentity)
+                .plozziOSItemNavigation(appModel: appModel)
+                .toolbar {
+                    if !hasVisibleSettingsNavigationEntry {
+                        ToolbarItem(placement: .primaryAction) {
+                            PlozziOSSettingsAvatarButton(action: showSettings)
+                        }
+                    }
+                }
+                .background { AppBackground(palette: palette) }
+            }
         case .settings:
             VStack(spacing: 24) {
                 Label("Settings", systemImage: "gearshape")
@@ -1119,6 +1172,19 @@ struct PlozziOSTabShell: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { AppBackground(palette: palette) }
         }
+    }
+
+    private func destinationTitle(_ destination: PlozziOSDestination) -> Text {
+        guard case let .library(key) = destination,
+              let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) else {
+            return Text(destination.title)
+        }
+        let hasDuplicateName = appModel.visibleNavigationLibraries.contains {
+            $0.key != key && $0.library.title == library.library.title
+        }
+        return hasDuplicateName
+            ? library.library.displayName + Text(verbatim: " · \(library.serverName)")
+            : library.library.displayName
     }
 
     private static func makeHomeViewModel(
@@ -1175,7 +1241,7 @@ struct PlozziOSTabShell: View {
                         tabContent(for: destination)
                     } label: {
                         Label {
-                            Text(destination.title)
+                            destinationTitle(destination)
                         } icon: {
                             if destination == .settings {
                                 ProfileAvatarView(
@@ -1224,14 +1290,8 @@ struct PlozziOSTabShell: View {
         let resolvesInitialCatalogue = !accountIDs.isEmpty
             && accounts.allSatisfy { $0.account.server.provider == .iptv }
             && !navigation.discoveredAccountIDs.isSuperset(of: accountIDs)
-        let discovered = await HomeAggregator().libraryDiscovery(from: accounts)
-        guard !Task.isCancelled, appModel.settings.navigation === navigation else { return }
-        navigation.updateContentLibraries(
-            discovered.libraries,
-            accountIDs: accountIDs,
-            unreachableAccountIDs: discovered.unreachableAccountIDs,
-            failures: discovered.failures
-        )
+        guard await appModel.refreshNavigationLibraries(),
+              appModel.settings.navigation === navigation else { return }
         if resolvesInitialCatalogue, !hasChosenNavigationDestination,
            navigation.discoveredAccountIDs.isSuperset(of: accountIDs) {
             selectDestination(AppAdmissionNavigation.initialSelection(
@@ -1283,7 +1343,7 @@ struct PlozziOSTabShell: View {
         }
         .onDisappear { onLiveTVActivityChanged(false) }
         .onChange(of: selectedDestination, initial: true) { _, destination in
-            MainThreadStallProbe.context = destination.rawValue
+            MainThreadStallProbe.context = destination.diagnosticCategory
             if destination == .settings {
                 showSettings()
             } else {
@@ -1341,7 +1401,7 @@ struct PlozziOSTabShell: View {
         // and from the root when it isn't — see `ProfileOnboardingOrigin`. That
         // decision reads this.
         .onChange(of: showingSettings) { _, presented in
-            MainThreadStallProbe.context = presented ? "settings" : selectedDestination.rawValue
+            MainThreadStallProbe.context = presented ? "settings" : selectedDestination.diagnosticCategory
             // Only the RISING edge here. Dismissal is animated, and publishing
             // false the moment Close is tapped lets the root ask for the identity
             // sheet while Settings is still covering it — SwiftUI drops that, and
@@ -1445,14 +1505,7 @@ struct PlozziOSTabShell: View {
     /// The retained Home model is profile/account scoped. Watchlist shares it
     /// within that scope, then a real profile or credential change replaces it.
     private var homeContentIdentity: String {
-        let credentials = appModel.accounts
-            .map(\.connectionScopeKey)
-            .sorted()
-            .joined(separator: "|")
-        let active = appModel.accountsProviders.activeAccountIDs
-            .sorted()
-            .joined(separator: ",")
-        return "\(appModel.profiles.activeProfileID)#\(credentials)#\(active)#\(appModel.plexHomeUsers.plexIdentityGeneration)"
+        appModel.navigationLibrariesScopeKey
     }
 
     private func showSettings() {
@@ -1813,7 +1866,7 @@ private struct PlozziOSDestinationView: View {
                 viewModel: sharedHomeViewModel,
                 onShowSettings: onShowSettings
             )
-        case .liveTV:
+        case .liveTV, .library:
             EmptyView()
         case .search:
             PlozziOSSearchView(

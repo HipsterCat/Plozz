@@ -31,6 +31,10 @@ language every other module speaks.
   Send diagnostics action includes this local journal, without enabling
   automatic on-demand failure uploads or claiming confirmed backend delivery.
 - Shared decode/encode helpers: `JSONDecoder.plozz`, `JSONEncoder.plozz`.
+- `SearchDiagnosticJournal` retains consent-scoped per-source search outcomes and
+  typed request/page evidence for manual reports, separately from general
+  performance timings. It holds no query or account content and clears on opt-out;
+  see [retention and coverage](../FeatureSearch/README.md#diagnostic-submissions).
 - `HTTPDate` shares HTTP timestamp parsing/formatting and strict `Retry-After`
   interpretation across HTTP media transports and IPTV. Consumers convert
   finite retry delays to monotonic deadlines; malformed headers remain unknown,
