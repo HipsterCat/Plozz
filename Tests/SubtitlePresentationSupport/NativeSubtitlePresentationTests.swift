@@ -876,16 +876,27 @@ final class NativeSubtitlePresentationTests: XCTestCase {
         XCTAssertFalse(engine.isPaused)
         XCTAssertFalse(controls.controlsVisible)
         XCTAssertTrue(controls.subtitleLayout.frames.isEmpty)
+        let line = try XCTUnwrap(paintedCaptionLines(in: window).first)
+        let builds = line.layoutBuildCountForTesting
+        let draws = line.drawCountForTesting
+        let time = engine.currentTime
+        try await waitUntil { engine.currentTime >= time + 0.5 }
+        XCTAssertEqual(line.layoutBuildCountForTesting, builds, "Clock ticks must not reshape an unchanged cue")
+        XCTAssertEqual(line.drawCountForTesting, draws, "Clock ticks must not redraw an unchanged cue")
     }
 
     private func paintedCaptionTexts(in view: UIView) -> [String] {
+        paintedCaptionLines(in: view).compactMap(\.drawnTextForTesting)
+    }
+
+    private func paintedCaptionLines(in view: UIView) -> [SubtitleLineView] {
         guard !view.isHidden, view.alpha > 0 else { return [] }
         if let line = view as? SubtitleLineView {
             guard line.bounds.width > 0, line.bounds.height > 0,
-                  line.layer.contents != nil, let text = line.drawnTextForTesting else { return [] }
-            return [text]
+                  line.layer.contents != nil, line.drawnTextForTesting != nil else { return [] }
+            return [line]
         }
-        return view.subviews.flatMap { paintedCaptionTexts(in: $0) }
+        return view.subviews.flatMap { paintedCaptionLines(in: $0) }
     }
     #endif
 
