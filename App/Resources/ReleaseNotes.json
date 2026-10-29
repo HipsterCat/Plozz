@@ -35,6 +35,7 @@
         {
           "category": "Fixed",
           "items": [
+            "Fixed missing file names in version menus for some streaming sources.",
             {
               "text": "Fixed library names remaining visible when card labels are turned off.",
               "platforms": ["iOS"]
