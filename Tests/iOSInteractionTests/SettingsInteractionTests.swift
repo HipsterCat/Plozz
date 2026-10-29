@@ -167,7 +167,10 @@ final class SettingsInteractionTests: XCTestCase {
             XCTAssertTrue(field.waitForExistence(timeout: 5), app.debugDescription)
             XCTAssertTrue(field.isHittable)
             let settingsTab = app.buttons["Settings"].firstMatch
-            if settingsTab.exists, settingsTab.isHittable {
+            let toolbarAvatar = app.navigationBars.buttons.matching(
+                NSPredicate(format: "label BEGINSWITH %@", "Settings for ")
+            ).firstMatch
+            if (settingsTab.exists && settingsTab.isHittable) || toolbarAvatar.exists {
                 XCTAssertTrue(app.buttons["search-settings-avatar"].waitForNonExistence(timeout: 5))
             } else {
                 XCTAssertTrue(app.buttons["search-settings-avatar"].exists)

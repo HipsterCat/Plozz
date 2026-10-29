@@ -26,6 +26,7 @@ public struct ProfilePickerView: View {
     /// than after a trip through Settings.
     private let onAddKidsProfile: (() -> Void)?
     private let onCancel: (() -> Void)?
+    private let onOpenSettings: (() -> Void)?
     private let showsPINLock: (Profile) -> Bool
 
     @Environment(\.themePalette) private var palette
@@ -39,6 +40,7 @@ public struct ProfilePickerView: View {
         onEditProfile: ((Profile) -> Void)? = nil,
         onAddKidsProfile: (() -> Void)? = nil,
         onCancel: (() -> Void)? = nil,
+        onOpenSettings: (() -> Void)? = nil,
         showsPINLock: @escaping (Profile) -> Bool = { $0.showsPINLock }
     ) {
         self.profiles = profiles
@@ -49,6 +51,7 @@ public struct ProfilePickerView: View {
         self.onEditProfile = onEditProfile
         self.onAddKidsProfile = onAddKidsProfile
         self.onCancel = onCancel
+        self.onOpenSettings = onOpenSettings
         self.showsPINLock = showsPINLock
     }
 
@@ -211,6 +214,23 @@ public struct ProfilePickerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 80)
+        .overlay(alignment: .topTrailing) {
+            if let onOpenSettings {
+                HStack {
+                    Spacer()
+                    Button(action: onOpenSettings) {
+                        Label("Settings", systemImage: "gearshape")
+                            .labelStyle(.iconOnly)
+                    }
+                    .plozzGlassPillButton(shape: .circle)
+                    .buttonBorderShape(.circle)
+                    .accessibilityIdentifier("profile-picker-settings")
+                }
+                .padding(.horizontal, ProfilePickerLayout.rowPadding)
+                .padding(.top, 32)
+                .focusSection()
+            }
+        }
         .backgroundPreferenceValue(TileCentersKey.self) { centers in
             GeometryReader { proxy in
                 ProfileBackgroundGradient(

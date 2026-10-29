@@ -38,6 +38,7 @@ public struct WatchlistBrowseView: View {
                 HStack {
                     Text("Watchlist")
                         .font(.largeTitle.bold())
+                        .accessibilityIdentifier("watchlist-title")
                     Spacer(minLength: PlozzTheme.Spacing.large)
                     WatchlistBrowseControls(preferences: $browse.preferences)
                 }
@@ -65,6 +66,7 @@ public struct WatchlistBrowseView: View {
             .padding(.top, PlozzTheme.Spacing.large)
         }
         .scrollClipDisabled()
+        .scrollsTopNavigation()
         .environment(\.plozzCardCaptionView, .watchlist)
         .task(id: visibility) {
             await viewModel.loadIfNeeded(for: visibility)
@@ -135,6 +137,7 @@ public struct WatchlistBrowseView: View {
                         ) {
                             onSelect(item)
                         }
+                        .navigationEntryFocus(.content)
                     case .loadingPlaceholder:
                         SkeletonCardView(style: .poster)
                     }

@@ -11,6 +11,51 @@ import XCTest
 
 @MainActor
 final class SettingsDetailNavigationHostedTests: XCTestCase {
+    func testDiscoveredLibrariesRenderAsEnabledNavigationRowsInEveryTVStyle() async throws {
+        let suite = "NavigationLibraryEditorHosted.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let libraries: [AggregatedLibrary] = [
+            .init(accountID: "plex", accountName: "Viewer", serverName: "Plex",
+                  providerKind: .plex, library: .init(id: "movies", title: "Plex Movies", kind: .movie)),
+            .init(accountID: "jellyfin", accountName: "Viewer", serverName: "Jellyfin",
+                  providerKind: .jellyfin, library: .init(id: "shows", title: "Jellyfin Shows", kind: .series))
+        ]
+        let scope = ProfileLibrariesScope(
+            accounts: [], activeProfile: Profile(id: "viewer", name: "Viewer"),
+            discoveredLibraries: .loaded(libraries),
+            refreshingLibraryAccountIDs: [], unreachableLibraryAccountIDs: [],
+            reloadLibraries: {},
+            homeVisibility: HomeLibraryVisibilityModel(store: HomeLibraryVisibilityStore(defaults: defaults)),
+            isAccountIncludedInActiveProfile: { _ in true },
+            onSetAccountIncluded: { _, _ in }, onAddAccount: {},
+            plexHomeUsersFetcher: { _ in [] }, onSelectPlexHomeUser: { _, _ in }
+        )
+        let navigation = NavigationStyleSettingsModel(
+            store: NavigationStyleSettingsStore(defaults: defaults),
+            layoutStore: NavigationLibraryLayoutStore(defaults: defaults)
+        )
+        let builtIns = Set(NavigationDestinationDefaults.compact(hasMusic: true))
+            .union([NavigationLibraryLayout.allLibrariesKey])
+        for style in NavigationStyle.allCases {
+            navigation.style = style
+            try await withProfileDestination(.navigationLayout, direction: .leftToRight) {
+                NavigationLibrariesDetailView(
+                    scope: scope, navigation: navigation, excludedKeys: builtIns
+                )
+            } inspect: { window in
+                let labels = try self.captureLabels(window, name: "navigation-libraries-\(style.rawValue)")
+                let hidden = try self.label("HIDDEN", in: labels)
+                for title in ["Plex Movies", "Jellyfin Shows"] {
+                    let row = try XCTUnwrap(
+                        labels.first { $0.text.contains(title) }, "Missing library row: \(title)"
+                    ).frame
+                    XCTAssertLessThan(row.maxY, hidden.minY, "New libraries belong above Hidden.")
+                }
+            }
+        }
+    }
+
     func testDialogDismissDoesNotPopItsPresentingSettingsPage() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),

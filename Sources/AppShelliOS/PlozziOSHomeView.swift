@@ -90,6 +90,7 @@ struct PlozziOSHomeView: View {
     @Environment(\.homeLiveTVSnapshot) private var liveTV
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
     @Environment(\.plozziOSHeroContainerHeight) private var heroContainerHeight
     @Environment(\.plozziOSHomeIsFrontmost) private var homeIsFrontmost
     @Environment(\.scenePhase) private var scenePhase
@@ -284,6 +285,7 @@ struct PlozziOSHomeView: View {
         .navigationTitle(Text(verbatim: ""))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar(usesVerticalToolbar ? .visible : .automatic, for: .navigationBar)
         .toolbar {
             if trailerController.isPlaying {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -293,9 +295,7 @@ struct PlozziOSHomeView: View {
                     )
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings)
-            }
+            PlozziOSSettingsToolbarItem(action: onShowSettings)
         }
         .task(
             id: PlozziOSHomeLoadID(
@@ -2086,6 +2086,16 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
     @ViewBuilder let backdrop: (CGFloat) -> Backdrop
 
     var body: some View {
+        // The image and its dissolve must share the window-wide bounds; masking
+        // only the safe-area column cuts off artwork underneath side chrome.
+        PlozziOSFullWidthHeroStage(height: heroHeight) {
+            composite
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var composite: some View {
         let pullDistance = model.distance
         let pullScale = 1 + (pullDistance / max(heroHeight, 1))
         let upwardScaleGrowth = (pullScale - 1) * heroHeight / 2
@@ -2102,7 +2112,7 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
         // background. The bottom of the hero came out greyer and flatter than
         // tvOS's, and no amount of re-tuning the gradients could close the gap,
         // because the compositing - not the curve - was what differed.
-        ZStack {
+        return ZStack {
             // The backdrop's EXTRA travel only. The shared `-pullDistance` is
             // applied to the masked composite below, so the two still land at
             // -pullOffset and -pullDistance respectively.

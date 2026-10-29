@@ -319,6 +319,8 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
     func testAudioProcessingShowsActualPipelineWithoutClaimingReceiverOutput() throws {
         let cases = [
             ("TRUEHD Atmos → APAC 7.1.4", "Lossy encoding", "APAC"),
+            ("TRUEHD Atmos → PCM 9.1.6", "Rendered to PCM", "PCM"),
+            ("DTS:X → PCM 7.1.4", "Rendered to PCM", "PCM"),
             ("TRUEHD → FLAC bridge", "Lossless encoding", "FLAC"),
             ("TRUEHD → EAC3 bridge", "Lossy encoding", "EAC3"),
             ("DTS → FLAC bridge", "Lossless encoding", "FLAC"),
