@@ -10,8 +10,13 @@ On tvOS, Everyone > Profiles keeps **Show Profiles on Return** beside
 **Automatically Sign In**. This is a device-wide choice, not a setting belonging
 to the profile being edited. Automatic shows its currently resolved interval;
 explicit choices survive household changes. Automatic sign-in disables the
-return control without discarding its saved choice. The native menu shares
-`SettingsMenuRow` with other settings. The policy, PIN boundaries, and playback
+return control without discarding its saved choice. The two controls reuse
+`SettingsConnectedControlGroups` for the narrow gap and smaller facing corners,
+with the shared switch and `SettingsMenuRow` sizing. The profile list is a separate
+`SettingsControlGroup` using `SettingsRowLabel` and contained native focus.
+The page omits the introductory paragraph and redundant sign-in description;
+return help only explains the current restriction or playback exemption.
+The policy, PIN boundaries, and playback
 exemptions are documented in `FeatureProfiles/README.md`. Mobile is unchanged.
 
 **Appearance** owns global visual styling: theme, cards, artwork, display size,

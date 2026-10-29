@@ -1,5 +1,6 @@
 import CoreModels
 import CoreUI
+import FeatureProfiles
 import Observation
 import SwiftUI
 import UIKit
@@ -15,6 +16,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         let previous = scene.windows.first(where: \.isKeyWindow)
         let model = ProfileReturnControlModel()
         let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let settings = ProfileReturnSettings(
             selection: Binding(get: { model.selection }, set: { model.selection = $0 }),
             automaticPolicy: .fiveMinutes
@@ -37,19 +39,50 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         let automatic = try visibleText(in: window, attachment: "profile-return-automatic")
         XCTAssertTrue(automatic.contains("Show Profiles on Return"), automatic)
         XCTAssertTrue(automatic.contains("Automatic (5 minutes)"), automatic)
+        for label in ["Automatically Sign In", "Alex", "Family", "Add Profile"] {
+            XCTAssertTrue(automatic.contains(label), automatic)
+        }
+        for removed in ["Each profile keeps", "Sign in to the last-used", "Open players are unaffected"] {
+            XCTAssertFalse(automatic.contains(removed), automatic)
+        }
         XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+        let frames = profileFocusFrames(in: window)
+        XCTAssertEqual(frames.count, 5, "Two preferences, two profiles, and Add Profile remain focusable.")
+        let signIn = try XCTUnwrap(frames.first)
+        let returnPicker = try XCTUnwrap(frames.dropFirst().first)
+        let addProfile = try XCTUnwrap(frames.last)
+        let expectedHeight = SettingsRowMetrics.minHeight(.primary)
+            + 2 * SettingsRowMetrics.verticalPadding(.primary)
+        for frame in [signIn, returnPicker, addProfile] {
+            XCTAssertEqual(frame.height, expectedHeight, accuracy: 1)
+            XCTAssertEqual(frame.minX, signIn.minX, accuracy: 1)
+            XCTAssertEqual(frame.width, signIn.width, accuracy: 1)
+        }
+        XCTAssertEqual(
+            returnPicker.minY - signIn.maxY,
+            2 * SettingsFormMetrics.groupInset + SettingsFormMetrics.connectedGroupSpacing,
+            accuracy: 1,
+            "Connected controls use the shared insets and narrow inter-group gap."
+        )
         settings.selection.wrappedValue = .never
         model.automaticallySignIn = true
         try await Task.sleep(for: .milliseconds(200))
         let disabled = try visibleText(in: window, attachment: "profile-return-disabled")
-        XCTAssertTrue(disabled.contains("Turn off Automatically Sign In"), disabled)
+        XCTAssertTrue(disabled.contains("Disabled by Automatically Sign In"), disabled)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 4, "Automatic sign-in removes only the return picker from focus.")
         XCTAssertEqual(model.selection, .never)
         model.automaticallySignIn = false
         try await Task.sleep(for: .milliseconds(200))
         let enabled = try visibleText(in: window, attachment: "profile-return-never")
-        XCTAssertFalse(enabled.contains("Turn off Automatically Sign In"), enabled)
+        XCTAssertFalse(enabled.contains("Disabled by Automatically Sign In"), enabled)
         XCTAssertTrue(enabled.contains("Never"), enabled)
+        XCTAssertTrue(enabled.contains("Keeps the current profile unlocked"), enabled)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 5)
         XCTAssertEqual(model.selection, .never)
+        model.signInError = "Could not save automatic sign-in."
+        try await Task.sleep(for: .milliseconds(200))
+        let error = try visibleText(in: window, attachment: "profile-return-error")
+        XCTAssertTrue(error.contains("Could not save automatic sign-in"), error)
     }
 
     func testAudioOutputSettingsShareOneGroup() async throws {
@@ -476,6 +509,31 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         return text
     }
 
+    private func profileFocusFrames(in window: UIWindow) -> [CGRect] {
+        var containers: [any UIFocusItemContainer] = [window]
+        var visited = Set<ObjectIdentifier>()
+        var items: [ObjectIdentifier: any UIFocusItem] = [:]
+        while let container = containers.popLast() {
+            guard visited.insert(ObjectIdentifier(container)).inserted else { continue }
+            for item in container.focusItems(in: container.coordinateSpace.convert(window.bounds, from: window)) {
+                if let child = item.focusItemContainer { containers.append(child) }
+                if let view = item as? UIView { containers.append(view) }
+                if item.canBecomeFocused, !(item is UIScrollView) { items[ObjectIdentifier(item)] = item }
+            }
+        }
+        return items.values.compactMap { item in
+            var environment: (any UIFocusEnvironment)? = item
+            while let current = environment {
+                if let container = current.focusItemContainer {
+                    return container.coordinateSpace.convert(item.frame, to: window)
+                }
+                environment = current.parentFocusEnvironment
+            }
+            XCTFail("The profile control must have a native focus coordinate space.")
+            return nil
+        }.sorted { $0.minY < $1.minY }
+    }
+
     private func visibleText(in window: UIWindow, attachment name: String) throws -> String {
         window.layoutIfNeeded()
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
@@ -497,6 +555,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
 final class ProfileReturnControlModel {
     var selection: ProfileReturnPolicy = .automatic
     var automaticallySignIn = false
+    var signInError: LocalizedStringResource?
 }
 
 private struct ProfileReturnControlFixture: View {
@@ -504,9 +563,26 @@ private struct ProfileReturnControlFixture: View {
     var model: ProfileReturnControlModel
 
     var body: some View {
-        VStack(spacing: 20) {
-            ProfileReturnSettingsControl(settings: settings, automaticallySignIn: model.automaticallySignIn)
-            Button("Done") {}
+        NavigationStack {
+            ProfileSettingsContent(
+                profiles: [
+                    Profile(id: "alex", name: "Alex"),
+                    Profile(id: "family", name: "Family", avatarSymbol: "person.2.fill", colorIndex: 1)
+                ],
+                activeProfileID: "alex",
+                automaticSignIn: AutomaticSignInSettings(
+                    isEnabled: Binding(
+                        get: { model.automaticallySignIn },
+                        set: { model.automaticallySignIn = $0 }
+                    ),
+                    error: model.signInError
+                ),
+                profileReturnSettings: settings,
+                onAddProfile: {}
+            )
+            .navigationDestination(for: SettingsRoute.self) { _ in
+                Text("Profile settings")
+            }
         }
     }
 }

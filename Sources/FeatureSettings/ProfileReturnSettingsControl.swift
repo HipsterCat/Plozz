@@ -14,18 +14,20 @@ public struct ProfileReturnSettings {
 }
 
 public struct ProfileReturnSettingsControl: View {
-    private let settings: ProfileReturnSettings
+    @Binding private var selection: ProfileReturnPolicy
+    private let automaticPolicy: ProfileReturnPolicy
     private let automaticallySignIn: Bool
 
     public init(settings: ProfileReturnSettings, automaticallySignIn: Bool) {
-        self.settings = settings
+        _selection = settings.selection
+        automaticPolicy = settings.automaticPolicy
         self.automaticallySignIn = automaticallySignIn
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
             SettingsMenuRow(title: "Show Profiles on Return", value: summary) {
-                Picker("Show Profiles on Return", selection: settings.selection) {
+                Picker("Show Profiles on Return", selection: $selection) {
                     ForEach(ProfileReturnPolicy.allCases, id: \.self) {
                         Text($0.title).tag($0)
                     }
@@ -34,20 +36,23 @@ public struct ProfileReturnSettingsControl: View {
             .disabled(automaticallySignIn)
             .accessibilityIdentifier("profiles.showOnReturn")
             if automaticallySignIn {
-                Text("Turn off Automatically Sign In to use this setting.")
+                Text("Disabled by Automatically Sign In.")
+                    .settingsHelperText()
+            } else if selection == .never {
+                Text("Keeps the current profile unlocked.")
                     .settingsHelperText()
             } else {
-                Text("Open players are unaffected. Never keeps your profile unlocked when you return.")
+                Text("Not shown during playback.")
                     .settingsHelperText()
             }
         }
     }
 
     private var summary: Text {
-        if settings.selection.wrappedValue == .automatic {
-            Text("Automatic (\(String(localized: settings.automaticPolicy.title)))")
+        if selection == .automatic {
+            Text("Automatic (\(String(localized: automaticPolicy.title)))")
         } else {
-            Text(settings.selection.wrappedValue.title)
+            Text(selection.title)
         }
     }
 }
