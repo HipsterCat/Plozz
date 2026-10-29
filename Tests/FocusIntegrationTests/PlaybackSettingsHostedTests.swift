@@ -10,19 +10,15 @@ import XCTest
 
 @MainActor
 final class PlaybackSettingsHostedTests: XCTestCase {
-    func testProfileReturnControlKeepsItsChoiceWhenAutomaticSignInDisablesIt() async throws {
+    func testProfileSettingsKeepAutomaticSignInSeparateFromProfiles() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first(where: \.isKeyWindow)
-        let model = ProfileReturnControlModel()
+        let model = ProfileSettingsControlModel()
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
-        let settings = ProfileReturnSettings(
-            selection: Binding(get: { model.selection }, set: { model.selection = $0 }),
-            automaticPolicy: .fiveMinutes
-        )
         window.rootViewController = UIHostingController(rootView:
-            ProfileReturnControlFixture(settings: settings, model: model)
+            ProfileSettingsControlFixture(model: model)
                 .environment(\.themePalette, .dark)
                 .environment(\.locale, Locale(identifier: "en_US"))
                 .frame(width: SettingsFormMetrics.pageWidth)
@@ -36,52 +32,47 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
         try await Task.sleep(for: .milliseconds(350))
-        let automatic = try visibleText(in: window, attachment: "profile-return-automatic")
-        XCTAssertTrue(automatic.contains("Show Profiles on Return"), automatic)
-        XCTAssertTrue(automatic.contains("Automatic (5 minutes)"), automatic)
+        let automatic = try visibleText(in: window, attachment: "profile-settings-sign-in-off")
         for label in ["Automatically Sign In", "Alex", "Family", "Add Profile"] {
             XCTAssertTrue(automatic.contains(label), automatic)
         }
-        for removed in ["Each profile keeps", "Sign in to the last-used", "Open players are unaffected"] {
+        for removed in ["Show Profiles on Return", "Each profile keeps", "Sign in to the last-used", "Open players are unaffected"] {
             XCTAssertFalse(automatic.contains(removed), automatic)
         }
         XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
         let frames = profileFocusFrames(in: window)
-        XCTAssertEqual(frames.count, 5, "Two preferences, two profiles, and Add Profile remain focusable.")
+        XCTAssertEqual(frames.count, 4, "Only automatic sign-in, two profiles, and Add Profile remain focusable.")
         let signIn = try XCTUnwrap(frames.first)
-        let returnPicker = try XCTUnwrap(frames.dropFirst().first)
+        let firstProfile = try XCTUnwrap(frames.dropFirst().first)
         let addProfile = try XCTUnwrap(frames.last)
         let expectedHeight = SettingsRowMetrics.minHeight(.primary)
             + 2 * SettingsRowMetrics.verticalPadding(.primary)
-        for frame in [signIn, returnPicker, addProfile] {
+        for frame in [signIn, addProfile] {
             XCTAssertEqual(frame.height, expectedHeight, accuracy: 1)
             XCTAssertEqual(frame.minX, signIn.minX, accuracy: 1)
             XCTAssertEqual(frame.width, signIn.width, accuracy: 1)
         }
         XCTAssertEqual(
-            returnPicker.minY - signIn.maxY,
-            2 * SettingsFormMetrics.groupInset + SettingsFormMetrics.connectedGroupSpacing,
+            firstProfile.minY - signIn.maxY,
+            2 * SettingsFormMetrics.groupInset + SettingsFormMetrics.sectionSpacing,
             accuracy: 1,
-            "Connected controls use the shared insets and narrow inter-group gap."
+            "Automatic sign-in stays in its own standard section above the profile list."
         )
-        settings.selection.wrappedValue = .never
         model.automaticallySignIn = true
         try await Task.sleep(for: .milliseconds(200))
-        let disabled = try visibleText(in: window, attachment: "profile-return-disabled")
-        XCTAssertTrue(disabled.contains("Disabled by Automatically Sign In"), disabled)
-        XCTAssertEqual(profileFocusFrames(in: window).count, 4, "Automatic sign-in removes only the return picker from focus.")
-        XCTAssertEqual(model.selection, .never)
+        let enabled = try visibleText(in: window, attachment: "profile-settings-sign-in-on")
+        XCTAssertTrue(enabled.contains("On"), enabled)
+        XCTAssertFalse(enabled.contains("Show Profiles on Return"), enabled)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 4)
         model.automaticallySignIn = false
         try await Task.sleep(for: .milliseconds(200))
-        let enabled = try visibleText(in: window, attachment: "profile-return-never")
-        XCTAssertFalse(enabled.contains("Disabled by Automatically Sign In"), enabled)
-        XCTAssertTrue(enabled.contains("Never"), enabled)
-        XCTAssertTrue(enabled.contains("Keeps the current profile unlocked"), enabled)
-        XCTAssertEqual(profileFocusFrames(in: window).count, 5)
-        XCTAssertEqual(model.selection, .never)
+        let disabled = try visibleText(in: window, attachment: "profile-settings-sign-in-off-again")
+        XCTAssertTrue(disabled.contains("Off"), disabled)
+        XCTAssertFalse(disabled.contains("Show Profiles on Return"), disabled)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 4)
         model.signInError = "Could not save automatic sign-in."
         try await Task.sleep(for: .milliseconds(200))
-        let error = try visibleText(in: window, attachment: "profile-return-error")
+        let error = try visibleText(in: window, attachment: "profile-settings-sign-in-error")
         XCTAssertTrue(error.contains("Could not save automatic sign-in"), error)
     }
 
@@ -600,15 +591,13 @@ final class PlaybackSettingsHostedTests: XCTestCase {
 }
 
 @MainActor @Observable
-final class ProfileReturnControlModel {
-    var selection: ProfileReturnPolicy = .automatic
+final class ProfileSettingsControlModel {
     var automaticallySignIn = false
     var signInError: LocalizedStringResource?
 }
 
-private struct ProfileReturnControlFixture: View {
-    let settings: ProfileReturnSettings
-    var model: ProfileReturnControlModel
+private struct ProfileSettingsControlFixture: View {
+    var model: ProfileSettingsControlModel
 
     var body: some View {
         NavigationStack {
@@ -625,7 +614,6 @@ private struct ProfileReturnControlFixture: View {
                     ),
                     error: model.signInError
                 ),
-                profileReturnSettings: settings,
                 onAddProfile: {}
             )
             .navigationDestination(for: SettingsRoute.self) { _ in

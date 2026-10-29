@@ -71,7 +71,6 @@ final class AutomaticSignInTests: XCTestCase {
             profilesModel: profiles, accountsProviders: hub, plexHomeUsers: plex,
             profileSettings: ProfileSettingsModel(namespace: profiles.activeNamespace),
             audioController: AudioPlaybackController(),
-            profileReturnPolicyStore: .init(defaults: household.defaults),
             updateTrackersForActiveProfile: {}, discardWatchReconciler: { _ in }
         )
         return Launch(profiles: profiles, hub: hub, plex: plex, flow: flow, switchCache: cache)
@@ -374,7 +373,7 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertEqual(next.profiles.activeProfileID, other.id)
     }
 
-    func testAutomaticSignInOverridesReturnPolicyUntilDisabled() async throws {
+    func testAutomaticSignInBypassesReturnPromptUntilDisabled() async throws {
         let house = try household(provider: .jellyfin)
         let first = launch(house)
         var parent = first.profiles.activeProfile
@@ -388,14 +387,10 @@ final class AutomaticSignInTests: XCTestCase {
         next.flow.prepareLaunchPicker()
         XCTAssertFalse(next.flow.activeProfileAwaitsUnlock)
 
-        for policy in ProfileReturnPolicy.allCases {
-            next.flow.profileReturnPolicy = policy
-            XCTAssertNil(next.flow.foregroundReturnDelay)
-            next.flow.lockForForegroundIfNeeded()
-            XCTAssertFalse(next.flow.isForegroundLocked)
-            XCTAssertFalse(next.flow.activeProfileAwaitsUnlock)
-        }
-        next.flow.profileReturnPolicy = .automatic
+        XCTAssertNil(next.flow.foregroundReturnDelay)
+        next.flow.lockForForegroundIfNeeded()
+        XCTAssertFalse(next.flow.isForegroundLocked)
+        XCTAssertFalse(next.flow.activeProfileAwaitsUnlock)
         next.flow.setAutomaticallySignIn(false)
         XCTAssertEqual(next.flow.foregroundReturnDelay, 0)
         next.flow.lockForForegroundIfNeeded()
@@ -427,18 +422,17 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertTrue(next.flow.isChoosingProfile)
     }
 
-    func testReturnPreferencePersistsAcrossLaunchAndProfileChangesButDoesNotChangeColdStart() throws {
+    func testReturnDefaultsFollowProfilesAcrossLaunchWithoutChangingColdStart() throws {
         let house = try household(provider: .jellyfin)
         let first = launch(house)
-        first.flow.profileReturnPolicy = .never
+        XCTAssertNil(first.flow.foregroundReturnDelay)
         let second = first.profiles.add(name: "Second")
         first.flow.switchProfile(to: second.id)
-        XCTAssertEqual(first.flow.profileReturnPolicy, .never)
+        XCTAssertEqual(first.flow.foregroundReturnDelay, 300)
         let next = launch(house)
-        XCTAssertEqual(next.flow.profileReturnPolicy, .never)
-        XCTAssertNil(next.flow.foregroundReturnDelay)
+        XCTAssertEqual(next.flow.foregroundReturnDelay, 300)
         next.flow.prepareLaunchPicker()
-        XCTAssertTrue(next.flow.isChoosingProfile, "Never affects returns, not the existing cold-start sign-in policy.")
+        XCTAssertTrue(next.flow.isChoosingProfile, "The return grace period does not bypass cold-start selection.")
     }
 
     func testLastSuccessfullySelectedProfileIsRemembered() throws {

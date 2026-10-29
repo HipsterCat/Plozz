@@ -438,7 +438,6 @@ struct MainTabView: View {
     /// changing the profile or the account list.
     let plexIdentityGeneration: Int
     let automaticSignIn: AutomaticSignInSettings
-    var profileReturnSettings: ProfileReturnSettings? = nil
     /// Session-scoped handles for the Home tab, assembled by `RootView`. Stored
     /// rather than computed here on purpose: this view's body is a `TabView`
     /// with four large tabs, and it sits close enough to the Swift
@@ -1143,7 +1142,6 @@ struct MainTabView: View {
                 activeProfile: activeProfile,
                 liveTVPreferencesNamespace: liveTVPreferencesNamespace,
                 automaticSignIn: automaticSignIn,
-                profileReturnSettings: profileReturnSettings,
                 appVersion: AppInfo.version,
                 appBuild: AppInfo.displayBuild,
                 repoURL: AppInfo.repoURLString,

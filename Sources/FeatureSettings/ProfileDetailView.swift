@@ -18,7 +18,6 @@ struct ProfileDetailView: View {
             profiles: context.profiles,
             activeProfileID: context.activeProfile.id,
             automaticSignIn: context.automaticSignIn,
-            profileReturnSettings: context.profileReturnSettings,
             onAddProfile: { showingNewProfile = true }
         )
         .plozzSheet(isPresented: $showingNewProfile) {
@@ -45,17 +44,13 @@ struct ProfileSettingsContent: View {
     let profiles: [Profile]
     let activeProfileID: String
     let automaticSignIn: AutomaticSignInSettings
-    let profileReturnSettings: ProfileReturnSettings?
     let onAddProfile: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: SettingsFormMetrics.sectionSpacing) {
                 SettingsPageHeader("Profiles")
-                ProfileAccessSettingsGroup(
-                    automaticSignIn: automaticSignIn,
-                    profileReturnSettings: profileReturnSettings
-                )
+                ProfileAccessSettingsGroup(automaticSignIn: automaticSignIn)
                 ProfilesSettingsList(
                     profiles: profiles,
                     activeProfileID: activeProfileID,
@@ -72,21 +67,14 @@ struct ProfileSettingsContent: View {
 
 private struct ProfileAccessSettingsGroup: View {
     let automaticSignIn: AutomaticSignInSettings
-    let profileReturnSettings: ProfileReturnSettings?
 
     var body: some View {
-        SettingsConnectedControlGroups {
+        SettingsControlGroup {
             VStack(alignment: .leading, spacing: SettingsFormMetrics.relatedControlSpacing) {
                 AutomaticSignInToggle(settings: automaticSignIn, showsDescription: false)
                     .settingsWorkspaceEntry()
                 AutomaticSignInErrorMessage(settings: automaticSignIn)
                     .settingsHelperText()
-            }
-            if let settings = profileReturnSettings {
-                ProfileReturnSettingsControl(
-                    settings: settings,
-                    automaticallySignIn: automaticSignIn.isEnabled.wrappedValue
-                )
             }
         }
         .tvOSFocusSection()

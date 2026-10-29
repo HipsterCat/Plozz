@@ -37,11 +37,8 @@ public final class ProfileFlowModel {
     public private(set) var isProfileSelectionCancelable = false
     public private(set) var foregroundLockedProfileID: String?
     public var isForegroundLocked: Bool { foregroundLockedProfileID != nil }
-    public var profileReturnPolicy: ProfileReturnPolicy {
-        didSet { profileReturnPolicyStore.save(profileReturnPolicy) }
-    }
     public var foregroundReturnDelay: TimeInterval? {
-        profileReturnPolicy.delay(
+        ProfileReturnPolicy.delay(
             for: profilesModel.profiles,
             automaticallySignIn: plexHomeUsers.automaticallySignIn
         )
@@ -65,7 +62,6 @@ public final class ProfileFlowModel {
     @ObservationIgnored private let plexHomeUsers: PlexHomeUsersModel
     @ObservationIgnored private let profileSettings: ProfileSettingsModel
     @ObservationIgnored private let audioController: AudioPlaybackController
-    @ObservationIgnored private let profileReturnPolicyStore: ProfileReturnPolicyStore
     @ObservationIgnored private let appearanceSetupStore:
         any ProfileAppearanceSetupStoring
     /// Re-points the tracker services (Trakt/Simkl/Seerr/AniList/MAL/Last.fm) +
@@ -86,7 +82,6 @@ public final class ProfileFlowModel {
         plexHomeUsers: PlexHomeUsersModel,
         profileSettings: ProfileSettingsModel,
         audioController: AudioPlaybackController,
-        profileReturnPolicyStore: ProfileReturnPolicyStore = .init(),
         appearanceSetupStore: any ProfileAppearanceSetupStoring =
             ProfileAppearanceSetupStore(),
         updateTrackersForActiveProfile: @escaping @MainActor () async -> Void,
@@ -99,8 +94,6 @@ public final class ProfileFlowModel {
         self.plexHomeUsers = plexHomeUsers
         self.profileSettings = profileSettings
         self.audioController = audioController
-        self.profileReturnPolicyStore = profileReturnPolicyStore
-        self.profileReturnPolicy = profileReturnPolicyStore.load()
         self.appearanceSetupStore = appearanceSetupStore
         self.updateTrackersForActiveProfile = updateTrackersForActiveProfile
         self.discardWatchReconciler = discardWatchReconciler

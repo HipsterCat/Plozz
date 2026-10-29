@@ -309951,6 +309951,7 @@
     },
     "Each profile keeps its own settings — theme, playback, subtitles, spoilers, trackers, and Home layout. Only your servers are shared. Open one to lock it or make it a Kids Profile." : {
       "comment" : "Explains what a profile owns versus what the household shares. 'Home' is the name of the app's main screen.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

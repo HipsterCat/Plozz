@@ -716,13 +716,6 @@ public struct RootView: View {
                             ),
                             error: appState.plexHomeUsers.automaticSignInError
                         ),
-                        profileReturnSettings: ProfileReturnSettings(
-                            selection: Binding(
-                                get: { appState.profileFlow.profileReturnPolicy },
-                                set: { appState.profileFlow.profileReturnPolicy = $0 }
-                            ),
-                            automaticPolicy: .automaticPolicy(for: appState.profilesModel.profiles)
-                        ),
                         homeRuntime: HomeTabRuntime(
                             homeViewModel: homeViewModelBox,
                             // The key that governs the Home VIEW MODEL, which

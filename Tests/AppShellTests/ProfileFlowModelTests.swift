@@ -278,7 +278,6 @@ final class ProfileFlowModelTests: XCTestCase {
             plexHomeUsers: plex,
             profileSettings: settings,
             audioController: AudioPlaybackController(),
-            profileReturnPolicyStore: .init(defaults: makeDefaults()),
             updateTrackersForActiveProfile: updateTrackers,
             discardWatchReconciler: discardReconciler,
             activateUniversalWatchlist: activateWatchlist
@@ -376,7 +375,7 @@ final class ProfileFlowModelTests: XCTestCase {
         XCTAssertEqual(trackerUpdates, 1)
     }
 
-    func testAutomaticReturnUsesConfiguredPINButDisabledPlexSourceDoesNotAskForItsPIN() throws {
+    func testReturnDefaultUsesConfiguredPINButDisabledPlexSourceDoesNotAskForItsPIN() throws {
         let env = try makeEnv(accounts: [("plex", .plex), ("jellyfin", .jellyfin)])
         env.flow.lockForForegroundIfNeeded()
         XCTAssertFalse(env.flow.isForegroundLocked)
@@ -387,7 +386,7 @@ final class ProfileFlowModelTests: XCTestCase {
         env.profiles.setActiveAccountIDs(["jellyfin"], for: profile.id)
         env.hub.reloadAccounts()
         env.flow.lockForForegroundIfNeeded()
-        XCTAssertTrue(env.flow.isForegroundLocked, "Any configured profile PIN makes Automatic immediate.")
+        XCTAssertTrue(env.flow.isForegroundLocked, "Any configured profile PIN requires selection on every return.")
         env.flow.switchProfile(to: profile.id)
         XCTAssertNil(env.plex.pendingPlexPINRequest, "Disabled sources still do not participate in authentication.")
         XCTAssertTrue(env.flow.canFinishForegroundUnlock)
@@ -414,22 +413,23 @@ final class ProfileFlowModelTests: XCTestCase {
         XCTAssertEqual(updates, 0)
     }
 
-    func testNeverPreventsReturnPickerButDoesNotAuthorizeManualPINSelection() async throws {
+    func testReturnDefaultsUpdateWhenProfilesAndPINsChange() throws {
         let env = try makeEnv()
+        XCTAssertNil(env.flow.foregroundReturnDelay)
+        let other = env.profiles.add(name: "Other viewer")
+        XCTAssertEqual(env.flow.foregroundReturnDelay, 300)
         var profile = env.profiles.activeProfile
         profile.lock = Self.lock(pin: "4821")
         env.profiles.update(profile)
-        env.profiles.noteProfileUnlocked(profile.id)
-        env.flow.profileReturnPolicy = .never
-        XCTAssertNil(env.flow.foregroundReturnDelay)
-        env.flow.lockForForegroundIfNeeded()
-        XCTAssertFalse(env.flow.isForegroundLocked)
-        XCTAssertTrue(env.profiles.isProfileUnlocked(profile.id))
-        let other = env.profiles.add(name: "Other viewer")
+        XCTAssertEqual(env.flow.foregroundReturnDelay, 0)
         env.flow.switchProfile(to: other.id)
+        XCTAssertEqual(env.flow.foregroundReturnDelay, 0, "A different profile's PIN still requires selection on return.")
         env.flow.switchProfile(to: profile.id)
         XCTAssertEqual(env.flow.pendingLockedProfile?.id, profile.id)
         XCTAssertEqual(env.profiles.activeProfileID, other.id)
+        profile.lock = nil
+        env.profiles.update(profile)
+        XCTAssertEqual(env.flow.foregroundReturnDelay, 300)
     }
 
     func testForegroundPlexRechecksPINWithoutDiscardingSameViewerIdentity() async throws {
