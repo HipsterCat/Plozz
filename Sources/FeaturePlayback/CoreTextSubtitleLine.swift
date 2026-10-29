@@ -94,9 +94,8 @@ struct CoreTextSubtitleLine: UIViewRepresentable {
 }
 
 /// UIKit view that lays out one subtitle line with Core Text and draws it with a
-/// proper outer outline. Layout (the expensive part — shaping + glyph-path
-/// extraction) is cached and only rebuilt when the config or wrap width changes,
-/// so a 60 fps `TimelineView` redraw just re-fills a cached `CGPath`.
+/// proper outer outline. A bounded, per-cue cache retains shaping and glyph paths
+/// across sizing probes; drawing reuses the layout matching the accepted size.
 final class SubtitleLineView: UIView {
 
     struct Config: Equatable {
@@ -153,10 +152,16 @@ final class SubtitleLineView: UIView {
     }
 
     private var config: Config?
-    private var layout: Layout?
-    private var layoutWidth: CGFloat = -1
+    private struct Measurement {
+        var width: CGFloat
+        var layout: Layout
+    }
+    private var measurements: [Measurement] = []
     #if DEBUG
     private(set) var drawnTextForTesting: String?
+    private(set) var layoutBuildCountForTesting = 0
+    private(set) var drawCountForTesting = 0
+    var cachedLayoutCountForTesting: Int { measurements.count }
     #endif
 
     override init(frame: CGRect) { super.init(frame: frame); commonInit() }
@@ -171,25 +176,42 @@ final class SubtitleLineView: UIView {
     func configure(_ c: Config) {
         guard c != config else { return }
         config = c
-        layout = nil
-        layoutWidth = -1
+        measurements.removeAll(keepingCapacity: true)
         invalidateIntrinsicContentSize()
         setNeedsDisplay()
     }
 
     func measure(maxWidth: CGFloat) -> CGSize {
-        guard let c = config else { return .zero }
-        if let l = layout, layoutWidth == maxWidth || l.totalSize.width == maxWidth {
-            return l.totalSize
+        guard let c = config, maxWidth > 0 else { return .zero }
+        if let index = measurements.lastIndex(where: {
+            $0.width == maxWidth || $0.layout.totalSize.width == maxWidth
+        }) {
+            return reuseMeasurement(at: index).totalSize
         }
-        let l = buildLayout(c, maxWidth: maxWidth)
-        layout = l
-        layoutWidth = maxWidth
-        return l.totalSize
+        return cacheLayout(c, maxWidth: maxWidth).totalSize
+    }
+
+    private func reuseMeasurement(at index: Int) -> Layout {
+        if index != measurements.count - 1 {
+            measurements.append(measurements.remove(at: index))
+        }
+        return measurements[measurements.count - 1].layout
+    }
+
+    private func cacheLayout(_ config: Config, maxWidth: CGFloat) -> Layout {
+        let layout = buildLayout(config, maxWidth: maxWidth)
+        // Keep minimum/ideal/maximum and constrained measurements without
+        // retaining an unbounded set of paths during resizing.
+        if measurements.count == 4 {
+            let eviction = measurements.firstIndex { $0.layout.totalSize != bounds.size } ?? 0
+            measurements.remove(at: eviction)
+        }
+        measurements.append(Measurement(width: maxWidth, layout: layout))
+        return layout
     }
 
     override var intrinsicContentSize: CGSize {
-        layout?.totalSize ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+        measurements.last?.layout.totalSize ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
@@ -202,13 +224,11 @@ final class SubtitleLineView: UIView {
         // SwiftUI gives the view its measured (ink-tight) width, not necessarily
         // the wider wrapping proposal. Re-shaping at that smaller width wraps a
         // second time and draws extra lines above the height we just measured.
-        if let cached = layout,
-           layoutWidth == bounds.width || cached.totalSize.width == bounds.width {
-            l = cached
+        if let index = measurements.lastIndex(where: { $0.layout.totalSize == bounds.size })
+            ?? measurements.lastIndex(where: { $0.width == bounds.width }) {
+            l = reuseMeasurement(at: index)
         } else {
-            l = buildLayout(c, maxWidth: bounds.width)
-            layout = l
-            layoutWidth = bounds.width
+            l = cacheLayout(c, maxWidth: bounds.width)
         }
 
         ctx.saveGState()
@@ -289,6 +309,7 @@ final class SubtitleLineView: UIView {
             }
         }
         #if DEBUG
+        drawCountForTesting += 1
         drawnTextForTesting = l.path.isEmpty && l.colorGlyphs.isEmpty ? nil : c.text
         #endif
     }
@@ -302,6 +323,9 @@ final class SubtitleLineView: UIView {
     }
 
     private func buildLayout(_ c: Config, maxWidth: CGFloat) -> Layout {
+        #if DEBUG
+        layoutBuildCountForTesting += 1
+        #endif
         let font = makeCTFont(c)
         let attr = makeAttributed(c, font: font)
         let fs = CTFramesetterCreateWithAttributedString(attr)

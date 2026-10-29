@@ -79,9 +79,7 @@ struct PlozziOSDownloadsView: View {
                     Label("Download Settings", systemImage: "gearshape")
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings)
-            }
+            PlozziOSSettingsToolbarItem(action: onShowSettings)
         }
         .confirmationDialog(
             pendingBulkDeletion.map { Text($0.title) } ?? Text(verbatim: ""),

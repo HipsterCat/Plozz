@@ -1282,13 +1282,11 @@ struct PlozziOSStationaryHeroScrim: View {
     var extendsArtwork: Bool = false
 
     var body: some View {
-        PlozziOSFullWidthHeroStage(height: height) {
-            PlozziOSHeroLegibilityScrim(
-                style: style,
-                extendsArtwork: extendsArtwork
-            )
-            .frame(height: height)
-        }
+        PlozziOSHeroLegibilityScrim(
+            style: style,
+            extendsArtwork: extendsArtwork
+        )
+        .frame(height: height)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -3117,7 +3115,7 @@ private struct PlozziOSReflectedHeroStage<
     }
 }
 
-private struct PlozziOSFullWidthHeroStage<Content: View>: View {
+struct PlozziOSFullWidthHeroStage<Content: View>: View {
     @State private var windowWidth: CGFloat?
 
     let height: CGFloat

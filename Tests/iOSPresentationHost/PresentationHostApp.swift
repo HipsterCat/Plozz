@@ -74,7 +74,13 @@ struct PresentationHostApp: App {
         if ProcessInfo.processInfo.arguments.contains("--navigation-interaction-fixture") {
             let available = NavigationDestinationDefaults.iOS
             let enabled: [String]
-            if ProcessInfo.processInfo.arguments.contains("--settings-in-more") {
+            if ProcessInfo.processInfo.arguments.contains("--profile-rail-fixture") {
+                enabled = [
+                    NavigationLibraryLayout.homeKey, NavigationLibraryLayout.watchlistKey,
+                    NavigationLibraryLayout.liveTVKey, NavigationLibraryLayout.downloadsKey,
+                    NavigationLibraryLayout.searchKey
+                ]
+            } else if ProcessInfo.processInfo.arguments.contains("--settings-in-more") {
                 enabled = available
             } else if ProcessInfo.processInfo.arguments.contains("--settings-first") {
                 enabled = [
@@ -600,5 +606,20 @@ private struct SettingsInteractionFixture: View {
         ))
         .environment(\.plozzMetrics, .touch(density: .standard))
         .preferredColorScheme(appModel.settings.theme.theme.preferredColorScheme ?? .dark)
+        .overlay(alignment: .bottomLeading) {
+            if ProcessInfo.processInfo.arguments.contains("--profile-rail-fixture") {
+                ProfileToolbarLayoutIndicator()
+            }
+        }
+    }
+}
+
+private struct ProfileToolbarLayoutIndicator: View {
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
+
+    var body: some View {
+        Text(verbatim: usesVerticalToolbar ? "vertical" : "horizontal")
+            .accessibilityIdentifier("profile-toolbar-layout")
+            .allowsHitTesting(false)
     }
 }
