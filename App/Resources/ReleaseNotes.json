@@ -2,6 +2,21 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/067.2",
+      "version": "2026.10.29",
+      "marketingVersion": "2026.10.24",
+      "build": "67.2",
+      "releasedAt": "2026-10-29",
+      "sections": [
+        {
+          "category": "Fixed",
+          "items": [
+            "Fixed unnecessary transcoding from Emby servers at Maximum quality."
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/067.1",
       "version": "2026.10.29",
       "marketingVersion": "2026.10.24",
