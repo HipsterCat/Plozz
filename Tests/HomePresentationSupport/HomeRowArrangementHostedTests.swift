@@ -1912,7 +1912,8 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         } inspect: { window in
             let controls = try await self.capture(window, name: "Home arranger controls")
             XCTAssertFalse(controls.contains { $0.0.contains("Merge Next Up rows") })
-            XCTAssertTrue(controls.contains { $0.0.contains("Hero") })
+            XCTAssertTrue(controls.contains { $0.0.contains("Home rows") }, controls.map(\.0).joined(separator: " "))
+            XCTAssertFalse(controls.contains { $0.0.contains("Hero") })
             try self.scrollToBottom(window)
             let before = try await self.capture(window, name: "Home arranger original order")
             XCTAssertFalse(before.contains { $0.0.contains("Include Next Up") })

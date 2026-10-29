@@ -259,11 +259,21 @@ final class HomeVerticalMotionHostedTests: XCTestCase {
         host.target = seventh
         focus.requestFocusUpdate(to: host)
         focus.updateFocusIfNeeded()
-        try await Task.sleep(for: .milliseconds(800))
-        XCTAssertTrue(focus.focusedItem === seventh)
         var ancestor = seventh.superview
         while let view = ancestor, !(view is UIScrollView) { ancestor = view.superview }
         let scroll = try XCTUnwrap(ancestor as? UIScrollView)
+        let deadline = ContinuousClock.now + .seconds(4)
+        var previousOffset = scroll.contentOffset
+        var stableSamples = 0
+        while stableSamples < 10, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+            let current = scroll.contentOffset
+            stableSamples = abs(current.x - previousOffset.x) < 0.1
+                && abs(current.y - previousOffset.y) < 0.1 ? stableSamples + 1 : 0
+            previousOffset = current
+        }
+        XCTAssertEqual(stableSamples, 10, "The native scroll must settle before measuring slot alignment.")
+        XCTAssertTrue(focus.focusedItem === seventh)
         let position = (scroll.contentOffset.x + scroll.adjustedContentInset.left) / pitch
         XCTAssertGreaterThan(position, 0, "Focusing the partially visible poster must actually scroll the row.")
         XCTAssertEqual(position, position.rounded(), accuracy: 0.01)
