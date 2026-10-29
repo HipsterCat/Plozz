@@ -227,6 +227,40 @@ final class SettingsInteractionTests: XCTestCase {
         capture("watch-count-previews")
     }
 
+    func testWideCardPreviewChoicesStaySideBySideAndSelectIndependently() throws {
+        launch()
+        let orientation = XCUIDevice.shared.orientation
+        defer { XCUIDevice.shared.orientation = orientation }
+        if app.frame.width < 750 {
+            XCUIDevice.shared.orientation = .landscapeLeft
+        }
+        try XCTSkipIf(app.frame.width < 750, "Requires a wide mobile window.")
+        app.buttons["appearance-cards"].tap()
+        XCTAssertTrue(app.navigationBars["Cards"].waitForExistence(timeout: 5))
+        let labelChoices = ["recommended", "on", "off"].map { app.buttons["card-labels-\($0)"] }
+        XCTAssertTrue(labelChoices[0].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.buttons["card-label-picker"].exists)
+        for choice in labelChoices {
+            XCTAssertEqual(choice.frame.midY, labelChoices[0].frame.midY, accuracy: 1)
+            choice.tap()
+            XCTAssertTrue(choice.isSelected)
+            XCTAssertEqual(labelChoices.filter(\.isSelected).count, 1)
+        }
+        let watchChoices = ["watched", "unwatched", "hidden"].map {
+            app.buttons["watch-indicator-preview-\($0)"]
+        }
+        reveal(watchChoices[0], fullyVisible: true)
+        XCTAssertFalse(app.buttons["watch-indicator-picker"].exists)
+        for (index, choice) in watchChoices.enumerated() {
+            XCTAssertEqual(choice.frame.midY, watchChoices[0].frame.midY, accuracy: 1)
+            choice.tap()
+            XCTAssertEqual(app.buttons["watch-indicator-color-white"].exists, index != 2)
+            XCTAssertEqual(app.switches["unwatched-episode-count-toggle"].value as? String, "1")
+            XCTAssertTrue(labelChoices[2].isSelected, "Watch choices must not change labels.")
+        }
+        capture("wide-card-preview-choices")
+    }
+
     func testEpisodeCountStyleChangesWithoutSelectingAnotherWatchIndicator() throws {
         launch()
         app.buttons["appearance-cards"].tap()

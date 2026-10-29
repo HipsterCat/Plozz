@@ -155,6 +155,21 @@ private struct CardCaptionPicker: View {
 
     var body: some View {
         #if os(iOS)
+        AdaptiveCardSettingsPicker {
+            HStack(alignment: .top, spacing: 16) { choices }
+        } compact: {
+            compactPicker
+        }
+        #else
+        let layout = dynamicTypeSize.isAccessibilitySize || horizontalSizeClass == .compact
+            ? AnyLayout(VStackLayout(spacing: 16))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+        layout { choices }
+        #endif
+    }
+
+    #if os(iOS)
+    private var compactPicker: some View {
         VStack(spacing: 12) {
             CardStyleSwatch(
                 style: style,
@@ -179,35 +194,32 @@ private struct CardCaptionPicker: View {
             .pickerStyle(.menu)
             .accessibilityIdentifier("card-label-picker")
         }
-        #else
-        let layout = dynamicTypeSize.isAccessibilitySize || horizontalSizeClass == .compact
-            ? AnyLayout(VStackLayout(spacing: 16))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
-        layout {
-            ForEach(CardCaptionPreference.allCases) { preference in
-                PreviewCard(
-                    title: preference.displayName,
-                    isSelected: settings.selectedPreset == preference,
-                    accent: palette.accent,
-                    compact: true,
-                    swatchHeight: swatchHeight,
-                    titleLineLimit: nil,
-                    titleSizeGroup: CardCaptionPreference.allCases.map(\.displayName),
-                    action: { settings.applyPreset(preference) }
-                ) {
-                    CardStyleSwatch(
-                        style: style,
-                        showsCaptions: preference != .hide,
-                        showsMixedCaptions: preference == .recommended
-                    )
-                        .accessibilityHidden(true)
-                }
-                .accessibilityAddTraits(settings.selectedPreset == preference ? .isSelected : [])
-                .accessibilityIdentifier(preference == .recommended ? "card-labels-recommended"
-                                         : preference == .show ? "card-labels-on" : "card-labels-off")
+    }
+    #endif
+
+    private var choices: some View {
+        ForEach(CardCaptionPreference.allCases) { preference in
+            PreviewCard(
+                title: preference.displayName,
+                isSelected: settings.selectedPreset == preference,
+                accent: palette.accent,
+                compact: true,
+                swatchHeight: swatchHeight,
+                titleLineLimit: nil,
+                titleSizeGroup: CardCaptionPreference.allCases.map(\.displayName),
+                action: { settings.applyPreset(preference) }
+            ) {
+                CardStyleSwatch(
+                    style: style,
+                    showsCaptions: preference != .hide,
+                    showsMixedCaptions: preference == .recommended
+                )
+                    .accessibilityHidden(true)
             }
+            .accessibilityAddTraits(settings.selectedPreset == preference ? .isSelected : [])
+            .accessibilityIdentifier(preference == .recommended ? "card-labels-recommended"
+                                     : preference == .show ? "card-labels-on" : "card-labels-off")
         }
-        #endif
     }
 
     private var swatchHeight: CGFloat {
@@ -224,6 +236,31 @@ private struct CardCaptionPicker: View {
         }
     }
 }
+
+#if os(iOS)
+struct AdaptiveCardSettingsPicker<Choices: View, Compact: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .headline) private var minimumChoiceWidth = 200
+    private let choices: Choices
+    private let compact: Compact
+
+    init(@ViewBuilder choices: () -> Choices, @ViewBuilder compact: () -> Compact) {
+        self.choices = choices()
+        self.compact = compact()
+    }
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            compact
+        } else {
+            ViewThatFits(in: .horizontal) {
+                choices.frame(minWidth: minimumChoiceWidth * 3 + 32)
+                compact
+            }
+        }
+    }
+}
+#endif
 
 public enum CardCaptionSettingsScope: CaseIterable, Sendable {
     case all, home, libraries, detail

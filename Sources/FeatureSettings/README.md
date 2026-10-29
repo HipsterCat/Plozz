@@ -628,8 +628,12 @@ watch history and planning-list behavior are documented in
   and Hidden. Hidden removes only watch marks, preserving episode counts,
   playback progress, download badges, and library/request status. The saved
   color is retained while its control is hidden. TV keeps side-by-side previews;
-  iOS uses one compact live preview and a native menu for both Labels and Watch
-  indicators. Custom label overrides show Custom until a preset replaces them.
+  iOS also shows side-by-side choices when the settings content fits three
+  200-point cards plus spacing (scaled with text size). Narrow windows and
+  accessibility text sizes use one compact live preview and a native menu for
+  both Labels and Watch indicators. This responds to available width, including
+  iPad multitasking, rather than device type. Custom label overrides leave the
+  visual presets unselected and show Custom in the menu until a preset replaces them.
   The independent **Show unwatched episode count** toggle defaults on,
   persists per profile, and transfers/syncs with that profile without changing
   its watched/unwatched style. Both previews show a sample count on the

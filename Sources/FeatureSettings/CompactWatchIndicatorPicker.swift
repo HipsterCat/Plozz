@@ -10,13 +10,29 @@ import CoreUI
 /// music-player pickers use.
 struct CompactWatchIndicatorPicker: View {
     @Binding var selection: WatchStatusIndicator
-    /// Height of the TV option illustrations; mobile uses one compact preview.
+    /// Height of side-by-side option illustrations.
     var swatchHeight: CGFloat = 248
     @Environment(\.themePalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         #if os(iOS)
+        AdaptiveCardSettingsPicker {
+            HStack(alignment: .top, spacing: 16) { choices }
+        } compact: {
+            compactPicker
+        }
+        #else
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 16))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+        layout { choices }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        #endif
+    }
+
+    #if os(iOS)
+    private var compactPicker: some View {
         VStack(spacing: 12) {
             WatchStatusIndicatorSwatch(indicator: selection)
                 .frame(height: 96)
@@ -33,32 +49,28 @@ struct CompactWatchIndicatorPicker: View {
             .pickerStyle(.menu)
             .accessibilityIdentifier("watch-indicator-picker")
         }
-        #else
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(spacing: 16))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
-        layout {
-            ForEach(WatchStatusIndicator.allCases) { indicator in
-                PreviewCard(
-                    title: indicator.displayName,
-                    detail: indicator.detail,
-                    isSelected: selection == indicator,
-                    accent: palette.accent,
-                    compact: true,
-                    swatchHeight: swatchHeight,
-                    action: { selection = indicator }
-                ) {
-                    WatchStatusIndicatorSwatch(
-                        indicator: indicator,
-                        cornerRadius: PlozzTheme.Metrics.Radius.content
-                    )
-                    .accessibilityHidden(true)
-                }
-                .accessibilityIdentifier("watch-indicator-preview-\(indicator.rawValue)")
+    }
+    #endif
+
+    private var choices: some View {
+        ForEach(WatchStatusIndicator.allCases) { indicator in
+            PreviewCard(
+                title: indicator.displayName,
+                detail: indicator.detail,
+                isSelected: selection == indicator,
+                accent: palette.accent,
+                compact: true,
+                swatchHeight: swatchHeight,
+                action: { selection = indicator }
+            ) {
+                WatchStatusIndicatorSwatch(
+                    indicator: indicator,
+                    cornerRadius: PlozzTheme.Metrics.Radius.content
+                )
+                .accessibilityHidden(true)
             }
+            .accessibilityIdentifier("watch-indicator-preview-\(indicator.rawValue)")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        #endif
     }
 }
 #endif
