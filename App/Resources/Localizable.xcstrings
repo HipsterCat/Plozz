@@ -357141,6 +357141,226 @@
         }
       }
     },
+    "Force transcoding is on. Try turning it off in Streaming quality." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "خيار «فرض تحويل الترميز» مفعّل. جرّب إيقافه في «جودة البث»."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "„Принудително транскодиране“ е включено. Опитайте да го изключите в „Качество на стрийминг“."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’opció «Força la transcodificació» està activada. Prova de desactivar-la a «Qualitat de reproducció en continu»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Volba „Vynutit transkódování“ je zapnutá. Zkuste ji vypnout v části „Kvalita streamování“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indstillingen »Gennemtving transkodning« er slået til. Prøv at slå den fra under »Streamingkvalitet«."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "„Transkodierung erzwingen“ ist aktiviert. Versuche, die Option unter „Streamingqualität“ zu deaktivieren."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η «Υποχρεωτική μετακωδικοποίηση» είναι ενεργοποιημένη. Δοκιμάστε να την απενεργοποιήσετε στην ενότητα «Ποιότητα ροής»."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La opción «Forzar transcodificación» está activada. Prueba a desactivarla en «Calidad de streaming»."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزینهٔ «اجبار به کدگذاری مجدد» فعال است. غیرفعال کردن آن را در بخش «کیفیت پخش جریانی» امتحان کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Asetus ”Pakota transkoodaus” on käytössä. Kokeile poistaa se käytöstä kohdassa ”Suoratoiston laatu”."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’option « Forcer le transcodage » est activée. Essayez de la désactiver dans « Qualité de streaming »."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "האפשרות \"כפיית קידוד מחדש\" מופעלת. נסו לכבות אותה ב\"איכות הזרמה\"."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“ट्रांसकोडिंग अनिवार्य करें” चालू है। “स्ट्रीमिंग क्वालिटी” में इसे बंद करके देखें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "„Prisilno transkodiranje” je uključeno. Pokušajte ga isključiti u odjeljku „Kvaliteta streaminga”."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Az „Átkódolás kényszerítése” be van kapcsolva. Próbálja meg kikapcsolni a „Streamelési minőség” beállításai között."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Paksa transkode” aktif. Coba nonaktifkan di “Kualitas streaming”."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’opzione «Forza transcodifica» è attiva. Prova a disattivarla in «Qualità dello streaming»."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「強制的にトランスコード」がオンになっています。「ストリーミング品質」でオフにしてみてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "‘강제 트랜스코딩’이 켜져 있습니다. ‘스트리밍 화질’에서 꺼 보세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Paksa transkod” dihidupkan. Cuba matikannya dalam “Kualiti penstriman”."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "«Tving transkoding» er på. Prøv å slå det av under «Strømmekvalitet»."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "‘Transcodering afdwingen’ staat aan. Probeer dit uit te schakelen onder ‘Streamingkwaliteit’."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Opcja „Wymuś transkodowanie” jest włączona. Spróbuj ją wyłączyć w sekcji „Jakość strumieniowania”."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A opção “Forçar transcodificação” está ativada. Tente desativá-la em “Qualidade de streaming”."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Opțiunea „Forțează transcodarea” este activată. Încercați să o dezactivați în „Calitatea redării în flux”."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Настройка «Принудительное транскодирование» включена. Попробуйте отключить её в разделе «Качество потокового воспроизведения»."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Možnosť „Vynútiť prekódovanie“ je zapnutá. Skúste ju vypnúť v časti „Kvalita streamovania“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Možnost »Vsili prekodiranje« je vklopljena. Poskusite jo izklopiti v razdelku »Kakovost pretočnega predvajanja«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Opcija „Prinudno transkodiranje“ je uključena. Pokušajte da je isključite u odeljku „Kvalitet strimovanja“."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Inställningen ”Tvinga omkodning” är aktiverad. Prova att stänga av den under ”Strömningskvalitet”."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปิดใช้ “บังคับแปลงรหัส” อยู่ ลองปิดใน “คุณภาพการสตรีม”"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Kod dönüştürmeyi zorunlu kıl” ayarı açık. “Akış kalitesi” bölümünden kapatmayı deneyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Увімкнено «Примусове перекодування». Спробуйте вимкнути його в розділі «Якість потокового відтворення»."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Buộc chuyển mã” đang bật. Hãy thử tắt tùy chọn này trong “Chất lượng phát trực tuyến”."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“强制转码”已开启。请尝试在“流媒体画质”中将其关闭。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「強制轉碼」已開啟。請嘗試在「串流畫質」中將其關閉。"
+          }
+        }
+      }
+    },
     "Forced" : {
       "comment" : "Subtitle track qualifier — the track only shows forced (foreign-language-passage) lines.",
       "localizations" : {

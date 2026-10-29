@@ -1285,6 +1285,7 @@
     "For movies and episodes from Plex, Jellyfin, Emby, and Silo. The original plays when it fits the limit; otherwise your server converts it. Available resolutions and codecs depend on the server. Codec preferences may fall back without increasing the quality limit. Downloads, Live TV, and file shares are unchanged.": "b82a9fd495abbb03467eeed058441c8fd47efc07c5c42135a245d5fcea92abf0",
     "For movies and episodes from Plex, Jellyfin, and Emby. The original plays when it fits the limit; otherwise your server converts it. Codec preferences may fall back without increasing the quality limit. Downloads, Live TV, and file shares are unchanged.": "7aff264b06846bd5c2015f7bb842f6ef84c5149935946561627e3750473feccc",
     "Force transcoding": "140d71eac4bfd75ebb617ea4860c039e06afef168fe478fbaab497387f04f3e8",
+    "Force transcoding is on. Try turning it off in Streaming quality.": "c64c929543030e45716c4b048bbba32772b83c132be8d7f87d4fbc082d3dd562",
     "Forced": "41d465ff21d84641dc0f9397feb7fb180d4e5b40e978914e42949c94fa0df357",
     "Forced subtitles": "aa22399d06ba6f03e90cefcc69320965d61abcb3db085dc658e4ead8cf1fa623",
     "Formats": "f699b20c4eb97e2d5411c3eb22d0a41ac9d13eb1e946d7c440ab499f5ba944f9",
