@@ -305,6 +305,7 @@ public struct PlayerView: View {
                     ?? viewModel.streamingQualityError?.userMessage
                     ?? StreamingPlaybackFailure(kind: .unknown).userMessage,
                 report: viewModel.playbackFailureReport,
+                showsForcedTranscodingHint: viewModel.showsForcedTranscodingFailureHint,
                 onRetry: { viewModel.retryPlayback() },
                 onDismiss: { dismissPlayer() }
             )

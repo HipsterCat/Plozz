@@ -306,6 +306,21 @@ public final class PlayerViewModel {
     }
     public var streamingQualityError: StreamingQualityError? { streamingQuality.error }
     public var playbackFailureReport: PlaybackDiagnosticReport? { streamingQuality.failureReport }
+    public var showsForcedTranscodingFailureHint: Bool {
+        guard case .failed = phase, streamingQuality.forceTranscodingSelected,
+              streamingOptions?.forceTranscoding == true else { return false }
+        if let request { return request.isTranscoding }
+        // A conversion can be refused before the server supplies a stream.
+        switch streamingQuality.error {
+        case .unavailable, .unsupported, .noCompatibleStream, .codecUnavailable, .plexDecision:
+            return true
+        case .serverRefusal(_, let reason):
+            return reason == .transcodingDisabled || reason == .conversionToolUnavailable
+                || reason == .hdrTranscodeUnsupported
+        default:
+            return false
+        }
+    }
     public var streamingPreparation: StreamingPreparationPhase { streamingQuality.preparation }
     public var streamingUsedH264Fallback: Bool { streamingQuality.fallbackCodec == .preferH264 }
     public var streamingUsedHEVCFallback: Bool { streamingQuality.fallbackCodec == .preferHEVC }
@@ -745,6 +760,8 @@ public final class PlayerViewModel {
             streamingQuality.options = continuation.streamingOptions
             streamingTrackSnapshot = continuation.tracks
         }
+        streamingQuality.forceTranscodingSelected = streamingOptions != nil
+            && streamingQuality.options?.forceTranscoding == true
 
         // Kick off bring-up now so playbackInfo + engine warm-up run *during* the
         // navigation transition. `load()` (from the view's `.task`) adopts this
@@ -1495,6 +1512,7 @@ public final class PlayerViewModel {
         guard streamingQualityAvailable, !didStop else { return }
         let failed: Bool
         if case .failed = phase { failed = true } else { failed = false }
+        streamingQuality.forceTranscodingSelected = options.forceTranscoding
         guard streamingOptions?.matchesSelection(options) != true || failed else { return }
         streamingQuality.options = options
         streamingQuality.fallbackCodec = nil

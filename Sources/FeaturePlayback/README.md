@@ -1306,6 +1306,11 @@ playback. Cellular and unclassified paths use the cellular policy; Wi-Fi and
 Ethernet retain their local/remote classification even when marked expensive.
 Connection changes reapply the relevant saved default. The player Quality sheet
 changes only the current video's rendition, not the saved preferences.
+When Force transcoding was selected, a failed converted stream or an explicit
+conversion refusal adds a hint to turn it off in Streaming quality. The actual
+error remains visible. Original/offline playback and unrelated preparation
+failures do not show the hint, nor does automatic compatibility recovery alone.
+The hint does not change settings or assert that forcing conversion caused the failure.
 Each picker also offers Custom: an independent resolution ceiling and integer
 total bitrate in Kbps. Plex/Jellyfin/Emby support 240p–2160p and reserve 128 Kbps
 for audio. Silo's native API supports 480p/720p/1080p/4K and H.264 conversion;
