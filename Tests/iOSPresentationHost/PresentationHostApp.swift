@@ -593,6 +593,7 @@ private struct SettingsInteractionFixture: View {
     @State private var sidebarGeometry = PlozziOSSidebarGeometryModel()
     @State private var heroTrailers = HeroTrailerController()
     @State private var homeViewModelBox = LazyViewState<HomeViewModel>()
+    @State private var resumePreviewItem: MediaItem?
 
     var body: some View {
         Group {
@@ -653,6 +654,43 @@ private struct SettingsInteractionFixture: View {
                 }
                 .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility2 : .large)
                 .tint(ThemePalette.dark.primaryText)
+                .resumePrompt(item: $resumePreviewItem) { _, _ in resumePreviewItem = nil }
+                .task {
+                    let arguments = ProcessInfo.processInfo.arguments
+                    do {
+                        if let index = arguments.firstIndex(of: "--playback-scroll-offset"),
+                           arguments.indices.contains(index + 1),
+                           let offset = Double(arguments[index + 1]) {
+                            try await Task.sleep(for: .milliseconds(700))
+                            let window = UIApplication.shared.connectedScenes
+                                .compactMap { $0 as? UIWindowScene }
+                                .flatMap(\.windows).first(where: \.isKeyWindow)
+                            func scrollView(in view: UIView) -> UIScrollView? {
+                                if let scroll = view as? UIScrollView,
+                                   scroll.contentSize.height > scroll.bounds.height { return scroll }
+                                return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+                            }
+                            guard let window, let scroll = scrollView(in: window) else {
+                                preconditionFailure("Playback fixture could not locate its settings list")
+                            }
+                            let maximum = max(0, scroll.contentSize.height - scroll.bounds.height
+                                + scroll.adjustedContentInset.bottom)
+                            scroll.setContentOffset(CGPoint(x: 0, y: min(offset, maximum)), animated: false)
+                        }
+                        if arguments.contains("--resume-prompt-fixture") {
+                            appModel.settings.playback.settings.askBeforeResuming = true
+                            try await Task.sleep(for: .milliseconds(700))
+                            resumePreviewItem = MediaItem(
+                                id: "resume-preview", title: "Big Buck Bunny", kind: .movie,
+                                runtime: 600, resumePosition: 240
+                            )
+                        }
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        preconditionFailure("Playback fixture setup failed: \(error)")
+                    }
+                }
             } else if ProcessInfo.processInfo.arguments.contains("--settings-interaction-fixture") {
                 PlozziOSSettingsView(appModel: appModel, onClose: {}, systemColorScheme: .dark)
                     .transformEnvironment(\.horizontalSizeClass) { sizeClass in

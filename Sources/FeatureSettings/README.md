@@ -6,6 +6,13 @@ instead of inheriting the page's monochrome navigation tint.
 
 The Settings screen and its detail pages. Profile-aware and integration-aware.
 
+Playback > **Ask to resume or start over** is per-profile and off by default, including
+for existing profiles. TV and mobile resume partially watched movies and episodes
+directly unless it is enabled. Enabled profiles get the shared native Resume /
+Start Over dialog before user-initiated playback; explicit restart and
+automatic episode advancement do not gain a confirmation. Rewind on resume
+remains independent. The preference travels with the existing playback settings.
+
 On tvOS, Everyone > Profiles keeps **Automatically Sign In** in its own
 `SettingsControlGroup` above the profile list, using the shared native switch.
 This is a device-wide choice, not a setting belonging to the profile being edited.
@@ -279,13 +286,9 @@ negotiation altogether. Silo's session-bound grants need its built-in lifecycle;
 no speculative external session is opened. Live TV, trailers, and music keep
 their existing runtimes.
 
-On iPhone/iPad, completed movie and episode downloads have a separate **Open in…**
-action in their Downloads row menu. It uses the native document handoff chooser,
-not the external-player URL preference. Only the exact completed regular file
-in the active profile's registry is shared; removed, replaced, missing, or
-incomplete files are rejected. The receiving app may import its own copy.
-Ordinary Play remains in Plozz, and this file handoff does not return watch
-progress or include separately downloaded subtitle sidecars.
+On iPhone/iPad, downloaded movies and episodes play inside Plozz. Downloads
+menus do not export files to other apps, regardless of the external-player
+preference. External playback remains available for supported online sources.
 
 External playback requires directly accessible HTTP(S) media: no app-local
 proxy, downloaded file, private share credentials, separate audio stream, or

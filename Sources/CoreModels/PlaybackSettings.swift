@@ -66,6 +66,12 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
     /// re-establish context. `.five` by default; `.off` restores exact resume.
     public var resumeRewindInterval: ResumeRewindInterval
 
+    public var askBeforeResuming: Bool
+
+    public func shouldAskBeforeResuming(at position: TimeInterval?, fromBeginning: Bool = false) -> Bool {
+        askBeforeResuming && !fromBeginning && (position ?? 0) > 1
+    }
+
     /// iOS only. Keep video audio playing on lock/app background without PiP.
     /// Opt-in so existing profiles retain pause-on-lock behavior.
     public var backgroundAudio: Bool
@@ -200,6 +206,7 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         skipBackwardInterval: SkipInterval = .ten,
         skipForwardInterval: SkipInterval = .ten,
         resumeRewindInterval: ResumeRewindInterval = .five,
+        askBeforeResuming: Bool = false,
         syncWatchAcrossServers: Bool = true,
         seekWithoutPausing: Bool = true,
         autoPlayNextEpisode: Bool = true,
@@ -238,6 +245,7 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         self.skipBackwardInterval = skipBackwardInterval
         self.skipForwardInterval = skipForwardInterval
         self.resumeRewindInterval = resumeRewindInterval
+        self.askBeforeResuming = askBeforeResuming
         self.syncWatchAcrossServers = syncWatchAcrossServers
         self.seekWithoutPausing = seekWithoutPausing
         self.autoPlayNextEpisode = autoPlayNextEpisode
@@ -406,6 +414,7 @@ public extension PlaybackSettings {
         case skipBackwardInterval
         case skipForwardInterval
         case resumeRewindInterval
+        case askBeforeResuming
         case backgroundAudio
         case volumeBrightnessGestures
         case orientation
@@ -508,6 +517,8 @@ public extension PlaybackSettings {
             (try? container.decodeIfPresent(ResumeRewindInterval.self, forKey: .resumeRewindInterval))
             .flatMap { $0 } ?? defaults.resumeRewindInterval
         self.backgroundAudio = try container.decodeIfPresent(Bool.self, forKey: .backgroundAudio) ?? false
+        self.askBeforeResuming = try container.decodeIfPresent(Bool.self, forKey: .askBeforeResuming)
+            ?? defaults.askBeforeResuming
         self.volumeBrightnessGestures =
             try container.decodeIfPresent(Bool.self, forKey: .volumeBrightnessGestures)
             ?? defaults.volumeBrightnessGestures
@@ -599,6 +610,7 @@ public extension PlaybackSettings {
         try container.encode(skipBackwardInterval, forKey: .skipBackwardInterval)
         try container.encode(skipForwardInterval, forKey: .skipForwardInterval)
         try container.encode(resumeRewindInterval, forKey: .resumeRewindInterval)
+        try container.encode(askBeforeResuming, forKey: .askBeforeResuming)
         try container.encode(backgroundAudio, forKey: .backgroundAudio)
         try container.encode(volumeBrightnessGestures, forKey: .volumeBrightnessGestures)
         try container.encode(orientation, forKey: .orientation)

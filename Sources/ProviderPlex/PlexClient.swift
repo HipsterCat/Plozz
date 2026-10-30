@@ -342,7 +342,8 @@ public struct PlexClient: Sendable {
     /// a lost tune response may already have allocated a tuner on the server.
     func liveTVSessionRequest(
         path: String, method: HTTPMethod = .get,
-        query: [URLQueryItem] = [], playbackID: String
+        query: [URLQueryItem] = [], playbackID: String,
+        diagnostic: PlaybackFailureAttempt? = nil
     ) async throws -> Data {
         guard UUID(uuidString: playbackID) != nil,
               query.allSatisfy({
@@ -358,13 +359,36 @@ public struct PlexClient: Sendable {
         var liveHeaders = headers
         liveHeaders["Cache-Control"] = "no-store"
         liveHeaders["X-Plex-Session-Identifier"] = playbackID
-        let (data, response) = try await http.sendRaw(
-            Endpoint(
-                method: method, path: path, queryItems: query, headers: liveHeaders,
-                redirectPolicy: .sameOrigin
-            ),
-            baseURL: await resolvedBaseURL()
-        )
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await http.sendRaw(
+                Endpoint(
+                    method: method, path: path, queryItems: query, headers: liveHeaders,
+                    redirectPolicy: .sameOrigin
+                ),
+                baseURL: await resolvedBaseURL()
+            )
+        } catch {
+            let nsError = error as NSError
+            if !(error is CancellationError), error as? AppError != .cancelled,
+               !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) {
+                diagnostic?.fail(stage: .load, reason: .network,
+                                 domain: .init(nsError.domain), code: nsError.code)
+            }
+            throw error
+        }
+        if !(200..<300).contains(response.statusCode) {
+            let reason: IPTVSetupDiagnostic.Failure.Reason = switch response.statusCode {
+            case 401: .authentication
+            case 402, 403: .accessDenied
+            case 404: .notFound
+            case 429: .rateLimited
+            default: .other
+            }
+            diagnostic?.fail(stage: .response, reason: reason, httpStatus: response.statusCode,
+                             format: .init(mimeType: response.mimeType))
+        }
         switch response.statusCode {
         case 200..<300: return data
         case 401: throw AppError.unauthorized
