@@ -518,6 +518,47 @@ final class TransportIOReaderReadAheadTests: XCTestCase {
         XCTAssertEqual(source.readCount, 2, "One header and one complete bounded index read")
     }
 
+    func testOrdinaryContainerResumesWindowGrowthAfterCachedHeaderReplay() {
+        let chunk = 256 * 1024
+        let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+        let reader = TransportIOReader(source: source, discImageProbeEnabled: false)
+        defer { reader.close() }
+        XCTAssertEqual(read(reader, count: chunk).result, Int32(chunk))
+        let tail = source.byteSize - 4 * 1024 * 1024
+        XCTAssertEqual(reader.seek(offset: tail, whence: SEEK_SET), tail)
+        XCTAssertEqual(read(reader, count: chunk).result, Int32(chunk))
+        XCTAssertEqual(reader.seek(offset: 0, whence: SEEK_SET), 0)
+        XCTAssertEqual(read(reader, count: chunk).result, Int32(chunk))
+        XCTAssertEqual(reader.seek(offset: tail, whence: SEEK_SET), tail)
+        XCTAssertEqual(read(reader, count: chunk).result, Int32(chunk))
+        XCTAssertEqual(reader.seek(offset: 0, whence: SEEK_SET), 0)
+        XCTAssertEqual(read(reader, count: chunk).result, Int32(chunk))
+        for _ in 0..<4 {
+            let result = read(reader, count: chunk)
+            XCTAssertEqual(result.result, Int32(chunk))
+            XCTAssertTrue(result.data.allSatisfy { $0 == 42 })
+        }
+        XCTAssertEqual(source.readLog.map(\.offset), [0, tail, Int64(chunk)])
+        XCTAssertEqual(source.readLog.map(\.length), [chunk, 4 * 1024 * 1024, 4 * chunk])
+    }
+
+    func testOrdinaryRandomSeekAndIndependentReaderStillStartSmall() throws {
+        let chunk = 256 * 1024
+        let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+        let reader = TransportIOReader(source: source, discImageProbeEnabled: false)
+        defer { reader.close() }
+        XCTAssertEqual(read(reader, count: chunk).result, Int32(chunk))
+        let randomOffset: Int64 = 32 * 1024 * 1024
+        XCTAssertEqual(reader.seek(offset: randomOffset, whence: SEEK_SET), randomOffset)
+        XCTAssertEqual(read(reader, count: chunk).result, Int32(chunk))
+        let independent = try XCTUnwrap(reader.makeIndependentReader())
+        defer { independent.close() }
+        XCTAssertEqual(independent.seek(offset: Int64(chunk), whence: SEEK_SET), Int64(chunk))
+        XCTAssertEqual(read(independent, count: chunk).result, Int32(chunk))
+        XCTAssertEqual(source.readLog.map(\.offset), [0, randomOffset, Int64(chunk)])
+        XCTAssertEqual(source.readLog.map(\.length), [chunk, chunk, chunk])
+    }
+
     func testTailCoalescingDoesNotEnlargeDiscOrTinyProbes() {
         for enabled in [true, false] {
             let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)

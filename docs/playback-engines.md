@@ -76,7 +76,11 @@ For known ordinary containers, a demand of at least 256 KiB within the final
 4 MiB coalesces the remaining tail, still capped by the transport's preferred
 request size. This avoids growing through several requests for a trailing MP4
 index. Up to eight 256 KiB probe windows retain the header across that seek,
-avoiding a second header download. Small/disc probes keep the existing policy.
+avoiding a second header download. Resuming at a cached ordinary-container
+window's end continues the existing fourfold read growth, rather than inserting
+another small request after the index seek. Random misses and independent readers
+still start small. This can fetch bytes earlier than needed, but retains the
+existing window limits and cancellation behavior. Small/disc probes keep the existing policy.
 The tradeoff is up to 4 MiB fetched for a partially consumed tail and up to
 1.5 MiB more retained probe payload per ordinary-container reader; cancellation,
 clone independence and validated complete-window delivery remain unchanged.
