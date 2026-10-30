@@ -890,6 +890,10 @@ struct PlaybackDetailView: View {
 
     private var resumeRows: [SettingsSplitRow] {
         [
+            SettingsSplitRow(id: "ask-before-resuming", title: "Ask before resuming") {
+                Toggle("Ask before resuming", isOn: $playback.settings.askBeforeResuming)
+                    .accessibilityIdentifier("playback-ask-before-resuming")
+            },
             SettingsSplitRow(
                 id: "resume-rewind",
                 title: "Rewind on resume",

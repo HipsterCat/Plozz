@@ -2128,6 +2128,8 @@ struct PlozziOSPlaybackSettingsView: View {
             }
 
             SettingsSectionGroup("Playback") {
+                Toggle("Ask before resuming", isOn: $model.settings.askBeforeResuming)
+                    .accessibilityIdentifier("playback-ask-before-resuming")
                 PlaybackVersionPreferencePicker(model: model)
                 Toggle("Remember series version choices", isOn: $model.settings.rememberVersionPerSeries)
                     .accessibilityIdentifier("playback-remember-series-version")
