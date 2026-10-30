@@ -498,6 +498,62 @@ final class TransportIOReaderReadAheadTests: XCTestCase {
         XCTAssertEqual(source.readLog.map(\.offset), expectedOffsets)
     }
 
+    func testOrdinaryContainerTailCoalescesWithoutRefetchingHeader() {
+        let payload = Data((0..<(5 * 1024 * 1024)).map { UInt8($0 % 251) })
+        let source = CappedTransportByteSource(
+            payload, perReadCap: 32 * 1024 * 1024, preferredReadSize: 32 * 1024 * 1024
+        )
+        let reader = TransportIOReader(source: source, discImageProbeEnabled: false)
+        defer { reader.close() }
+        let chunk = 256 * 1024
+        XCTAssertEqual(read(reader, count: chunk).data, payload.prefix(chunk))
+        let tail = 1024 * 1024
+        XCTAssertEqual(reader.seek(offset: Int64(tail), whence: SEEK_SET), Int64(tail))
+        var index = Data()
+        for _ in 0..<16 { index.append(read(reader, count: chunk).data) }
+        XCTAssertEqual(index, payload.suffix(4 * 1024 * 1024))
+        XCTAssertEqual(read(reader, count: 1).result, 0)
+        XCTAssertEqual(reader.seek(offset: 48, whence: SEEK_SET), 48)
+        XCTAssertEqual(read(reader, count: 16).data, payload.subdata(in: 48..<64))
+        XCTAssertEqual(source.readCount, 2, "One header and one complete bounded index read")
+    }
+
+    func testTailCoalescingDoesNotEnlargeDiscOrTinyProbes() {
+        for enabled in [true, false] {
+            let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+            let reader = TransportIOReader(source: source, discImageProbeEnabled: enabled)
+            defer { reader.close() }
+            let offset = source.byteSize - 4 * 1024 * 1024
+            XCTAssertEqual(reader.seek(offset: offset, whence: SEEK_SET), offset)
+            XCTAssertEqual(read(reader, count: 2).result, 2)
+            XCTAssertEqual(source.readLog.map(\.length), [64 * 1024])
+        }
+        let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+        let reader = TransportIOReader(source: source)
+        defer { reader.close() }
+        XCTAssertEqual(reader.seek(offset: source.byteSize - 4 * 1024 * 1024, whence: SEEK_SET),
+                       source.byteSize - 4 * 1024 * 1024)
+        XCTAssertEqual(read(reader, count: 256 * 1024).result, 256 * 1024)
+        XCTAssertEqual(source.readLog.map(\.length), [256 * 1024])
+    }
+
+    func testOrdinaryContainerHeaderCacheRemainsBoundedToEightWindows() {
+        let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+        let reader = TransportIOReader(source: source, discImageProbeEnabled: false)
+        defer { reader.close() }
+        for index in 0..<9 {
+            let offset = Int64(index * 512 * 1024)
+            XCTAssertEqual(reader.seek(offset: offset, whence: SEEK_SET), offset)
+            XCTAssertEqual(read(reader, count: 256 * 1024).result, 256 * 1024)
+        }
+        XCTAssertEqual(reader.seek(offset: 512 * 1024, whence: SEEK_SET), 512 * 1024)
+        XCTAssertEqual(read(reader, count: 2).result, 2)
+        XCTAssertEqual(source.readLog.count, 9)
+        XCTAssertEqual(reader.seek(offset: 0, whence: SEEK_SET), 0)
+        XCTAssertEqual(read(reader, count: 2).result, 2)
+        XCTAssertEqual(source.readLog.count, 10, "The ninth window must evict the oldest")
+    }
+
     /// Many small sequential reads within one window collapse to a single
     /// underlying transport round-trip (the cold-start latency win).
     func testSequentialSmallReadsCoalesceIntoOneFetch() {
@@ -692,6 +748,20 @@ final class TransportIOReaderTests: XCTestCase {
         await primary.waitForFinalShutdown()
         XCTAssertEqual(source.closeCount, 1)
         XCTAssertNil(primary.makeIndependentReader())
+    }
+
+    func testOrdinaryMediaReadersSkipDiscRecognitionIncludingClones() async throws {
+        let source = FakeTransportByteSource(payload)
+        let primary = TransportIOReader(source: source, discImageProbeEnabled: false)
+        let independent = try XCTUnwrap(primary.makeIndependentReader())
+        XCTAssertFalse(primary.discImageProbeEnabled)
+        XCTAssertFalse(independent.discImageProbeEnabled)
+        XCTAssertEqual(read(primary, count: 4).data, Data([0, 1, 2, 3]))
+        XCTAssertEqual(read(independent, count: 2).data, Data([0, 1]))
+        primary.close()
+        independent.close()
+        await primary.waitForFinalShutdown()
+        XCTAssertEqual(source.closeCount, 1)
     }
 
     func testCloseWaitsForIndependentInflightReadToDrain() async throws {

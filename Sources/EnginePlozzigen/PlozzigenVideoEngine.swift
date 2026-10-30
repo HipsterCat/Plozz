@@ -531,12 +531,13 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                 let resolvedSource = try await networkFileResolver.resolve(locator)
                 activeResolvedSource = resolvedSource
                 stage = "engine.load"
-                let reader = TransportIOReader(resolvedSource: resolvedSource)
-                activeTransportReader = reader
-                let source = MediaSource.custom(
-                    reader,
-                    formatHint: Self.networkFileFormatHint(for: locator)
+                let formatHint = Self.networkFileFormatHint(for: locator)
+                let reader = TransportIOReader(
+                    resolvedSource: resolvedSource,
+                    discImageProbeEnabled: formatHint == nil
                 )
+                activeTransportReader = reader
+                let source = MediaSource.custom(reader, formatHint: formatHint)
                 try await engine.load(
                     source: source,
                     startPosition: startPosition > 0 ? startPosition : nil,

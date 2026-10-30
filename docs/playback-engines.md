@@ -43,7 +43,8 @@ demuxer. The demand read adopts the pending window instead of requesting it
 again. Sparse probes and default-size transports do not speculate.
 
 The current and pending windows retain at most 64 MiB of logical payload per
-adaptive reader, plus the 512 KiB probe cache. This is not a process/peak-memory
+adaptive reader, plus the probe cache (512 KiB for discs/unknown sources, 2 MiB
+for known ordinary containers). This is not a process/peak-memory
 cap: clones, HTTP, decoder and HLS buffers have their own memory costs. Stopping
 consumption can leave up to one unused 32 MiB window; no further work is started
 until the consumer advances. Seeks within the current or pending window preserve
@@ -64,6 +65,27 @@ separate anonymous delivery origin was throttled.
 The full media-probe budget and default sealed HLS segment delivery remain
 unchanged; shortening analysis without track-completeness checks can lose sparse
 audio/subtitle tracks.
+
+Known ordinary network-file containers (MP4/MOV, Matroska/WebM, MPEG-TS and AVI)
+skip ISO/UDF signature reads through Aether's `discImageProbeEnabled` contract,
+including independent readers and detail probes. ISO and unknown containers
+retain disc recognition. This changes neither container/track analysis nor
+transport identity, range, redirect or credential validation.
+
+For known ordinary containers, a demand of at least 256 KiB within the final
+4 MiB coalesces the remaining tail, still capped by the transport's preferred
+request size. This avoids growing through several requests for a trailing MP4
+index. Up to eight 256 KiB probe windows retain the header across that seek,
+avoiding a second header download. Small/disc probes keep the existing policy.
+The tradeoff is up to 4 MiB fetched for a partially consumed tail and up to
+1.5 MiB more retained probe payload per ordinary-container reader; cancellation,
+clone independence and validated complete-window delivery remain unchanged.
+
+Share sidecar discovery lists the video's parent once and visits only advertised
+`Subs`/`Subtitles` folders, using their actual casing. An unlistable parent retains
+the legacy folder-name probes; ordinary optional-listing failures are logged,
+while cancellation stops discovery. Own-folder exact-stem matching, dedicated
+folder boundary matching and extras' exact-stem rule are unchanged.
 
 Related upstream designs separate request sizing from buffered consumption:
 [FFmpeg HTTP](https://github.com/FFmpeg/FFmpeg/blob/b7e835e06913e4374a4567003fe8c75cebfffb98/libavformat/http.c)
@@ -94,15 +116,20 @@ hdiutil makehybrid -iso -udf -default-volume-name PLOZZ_DISC_FIXTURE \
   -o dvd-test-pattern.iso /tmp/plozz-disc-fixture
 ```
 
-The separate live test is opt-in: set the test process's
+The separate live test is opt-in: pass JSON in the test process's
+`PLOZZ_WEBDAV_PLAYBACK_JSON` environment variable, or set
 `PLOZZ_WEBDAV_PLAYBACK_INPUT` to a private JSON file (or `cache:<filename>` in
 the test host's cache directory) containing `baseURL`, `username`, `password`,
 `relativePath`, and one to three `seekPositions` in seconds. Use a credential-free
-HTTPS base URL, a decrypted ISO the tester is authorized to access, and a file
-owned by the tester with mode `0600`, outside Git. Remove staged simulator
+HTTPS base URL and a media file or decrypted ISO the tester is authorized to
+access. For file input, use a tester-owned file with mode `0600`, outside Git.
+For environment input, load credentials only for `test-without-building`, not
+build commands that could dump their environment. Remove staged simulator
 credentials after the run. Missing configuration skips only that live test;
 it is not evidence of remote playback. Each load/seek has a 120-second deadline
-and frame/progress waits are bounded separately.
+and frame/progress waits are bounded separately. Preparation and engine-load
+timings are reported separately; the combined metric ends after rendered video
+has progressed beyond 0.5 seconds, not at the first decoder output.
 After the final seek, the live test observes another 60 seconds and requires
 more than 58 seconds of playhead advancement. This is a bounded continued-playback
 check, not proof of complete-film playback or physical-device frame smoothness.

@@ -728,10 +728,11 @@ public struct ShareProvider: MediaLibraryQueryProviding, MediaFileBrowsing {
         // Surface any text sidecar subtitles sitting next to the video (and in a
         // sibling Subs/Subtitles folder) as selectable tracks. Best-effort: a
         // listing/read failure just yields no sidecars rather than blocking play.
-        let subtitleTracks = (try? await playbackSource.discoverSidecarSubtitles(
+        let subtitleTracks = try await playbackSource.discoverSidecarSubtitles(
             forVideoRelPath: relPath,
             exactStemOnly: isExtra
-        )) ?? []
+        )
+        try Task.checkCancellation()
         return PlaybackRequest(
             item: playItem,
             playbackSource: .networkFile(locator),

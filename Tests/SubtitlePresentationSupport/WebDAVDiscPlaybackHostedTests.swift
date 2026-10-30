@@ -110,7 +110,9 @@ final class WebDAVDiscPlaybackHostedTests: XCTestCase {
     }
 
     func testExplicitLiveWebDAVISOPlaysAndSeeks() async throws {
-        guard let inputPath = ProcessInfo.processInfo.environment["PLOZZ_WEBDAV_PLAYBACK_INPUT"] else {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PLOZZ_WEBDAV_PLAYBACK_JSON"] != nil
+                || environment["PLOZZ_WEBDAV_PLAYBACK_INPUT"] != nil else {
             throw XCTSkip("Requires an explicitly supplied private WebDAV playback configuration.")
         }
         struct Input: Decodable {
@@ -120,11 +122,18 @@ final class WebDAVDiscPlaybackHostedTests: XCTestCase {
             let relativePath: String
             let seekPositions: [Double]
         }
-        let inputURL = inputPath.hasPrefix("cache:")
-            ? try XCTUnwrap(FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
-                .appendingPathComponent(String(inputPath.dropFirst("cache:".count)))
-            : URL(fileURLWithPath: inputPath)
-        let input = try JSONDecoder().decode(Input.self, from: Data(contentsOf: inputURL))
+        let data: Data
+        if let json = environment["PLOZZ_WEBDAV_PLAYBACK_JSON"] {
+            data = Data(json.utf8)
+        } else {
+            let inputPath = try XCTUnwrap(environment["PLOZZ_WEBDAV_PLAYBACK_INPUT"])
+            let inputURL = inputPath.hasPrefix("cache:")
+                ? try XCTUnwrap(FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
+                    .appendingPathComponent(String(inputPath.dropFirst("cache:".count)))
+                : URL(fileURLWithPath: inputPath)
+            data = try Data(contentsOf: inputURL)
+        }
+        let input = try JSONDecoder().decode(Input.self, from: data)
         guard input.baseURL.scheme == "https", input.baseURL.user == nil,
               input.baseURL.password == nil, input.baseURL.query == nil,
               !input.seekPositions.isEmpty, input.seekPositions.count <= 3,
@@ -180,7 +189,10 @@ final class WebDAVDiscPlaybackHostedTests: XCTestCase {
             catalogCoordinator: ShareCatalogCoordinator(initialWorkScope: .paused)
         )
         addTeardownBlock { await provider.teardown() }
+        let preparationStarted = ContinuousClock.now
         let request = try await provider.playbackInfo(for: item.id, mediaSourceID: nil, forceTranscode: false)
+        let preparationDuration = preparationStarted.duration(to: .now)
+        print("WEBDAV_DISC preparationSeconds=\(preparationDuration)")
         guard case .networkFile = request.playbackSource else {
             return XCTFail("Disc playback must use the production network-file path")
         }
@@ -207,6 +219,7 @@ final class WebDAVDiscPlaybackHostedTests: XCTestCase {
         try await waitForPlayback(engine, after: 0.5)
         XCTAssertGreaterThan(engine.duration, seekPositions.max()! + 1)
         print("WEBDAV_DISC firstFrameSeconds=\(started.duration(to: .now)) duration=\(engine.duration)")
+        print("WEBDAV_DISC preparationAndFirstFrameSeconds=\(preparationDuration + started.duration(to: .now))")
         for target in seekPositions {
             let seekStart = ContinuousClock.now
             try await perform(engine: engine) { await engine.seek(to: target) }
