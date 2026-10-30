@@ -26,6 +26,11 @@ public struct PlaybackAdvancedSettingsView: View {
             SettingsSectionGroup {
                 DolbyVisionFELControl(isOn: $playback.settings.dolbyVisionFELEnabled)
             }
+            if #available(iOS 26.0, *) {
+                SettingsSectionGroup {
+                    SpatialAudioLayoutControl()
+                }
+            }
         }
         .settingsPageSurface()
         .navigationTitle("Advanced")
@@ -61,8 +66,8 @@ private struct DolbyVisionFELControl: View {
     @Binding var isOn: Bool
 
     private var helperText: LocalizedStringResource {
-        #if os(tvOS)
-        if #available(tvOS 26.0, *) {
+        #if os(tvOS) || os(iOS)
+        if #available(tvOS 26.0, iOS 26.0, *) {
             return "May impact performance."
         }
         #endif
