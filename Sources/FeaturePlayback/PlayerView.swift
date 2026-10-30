@@ -189,7 +189,6 @@ public struct PlayerView: View {
                     diagnostics: diagnosticsSampler.latest, presentation: .mobile,
                     streamingError: viewModel.streamingQualityError
                 )
-                    .environment(\.themePalette, themePalette)
                     .navigationTitle("Playback Diagnostics")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {

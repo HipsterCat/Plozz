@@ -9,6 +9,85 @@ import XCTest
 
 @MainActor
 final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
+    func testPlayerDiagnosticsSheetUsesAppPaletteInsteadOfDarkVideoChrome() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for palette in [ThemePalette.light, .dark, .pureBlack] {
+            for gradient in [false, true] {
+                let model = PlayerViewModel(provider: DiagnosticsAppearanceProvider(), itemID: "fixture")
+                let host = UIHostingController(rootView:
+                    PlayerView(viewModel: model, showDiagnostics: true, showsSharedControls: false)
+                        .environment(\.themePalette, palette)
+                        .environment(\.colorScheme, palette.isLight ? .light : .dark)
+                        .environment(\.gradientBackgroundsEnabled, gradient)
+                        .environment(\.locale, Locale(identifier: "en_US"))
+                )
+                window.overrideUserInterfaceStyle = palette.isLight ? .light : .dark
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                let deadline = ContinuousClock.now + .seconds(5)
+                while (host.presentedViewController == nil
+                       || host.presentedViewController?.isBeingPresented == true), ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                let sheet = try XCTUnwrap(host.presentedViewController)
+                try await Task.sleep(for: .milliseconds(200))
+                sheet.view.layoutIfNeeded()
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 2
+                format.preferredRange = .standard
+                let image = UIGraphicsImageRenderer(bounds: sheet.view.bounds, format: format).image { _ in
+                    XCTAssertTrue(sheet.view.drawHierarchy(in: sheet.view.bounds, afterScreenUpdates: true))
+                }
+                let cgImage = try XCTUnwrap(image.cgImage)
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                try VNImageRequestHandler(cgImage: cgImage).perform([request])
+                let engine = try XCTUnwrap(request.results?.first {
+                    $0.topCandidates(1).first?.string.contains("AVPlayer") == true
+                }, "The real player's diagnostics body must be visible.")
+                let box = engine.boundingBox
+                let crop = try XCTUnwrap(cgImage.cropping(to: CGRect(
+                    x: box.minX * CGFloat(cgImage.width), y: (1 - box.maxY) * CGFloat(cgImage.height),
+                    width: box.width * CGFloat(cgImage.width), height: box.height * CGFloat(cgImage.height)
+                ).integral))
+                var pixels = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+                try pixels.withUnsafeMutableBytes { buffer in
+                    let context = try XCTUnwrap(CGContext(
+                        data: buffer.baseAddress, width: crop.width, height: crop.height,
+                        bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                        space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+                    ))
+                    context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+                }
+                let contrastingPixels = stride(from: 0, to: pixels.count, by: 4).filter { offset in
+                    palette.isLight
+                        ? max(pixels[offset], pixels[offset + 1], pixels[offset + 2]) < 70
+                        : min(pixels[offset], pixels[offset + 1], pixels[offset + 2]) > 180
+                }.count
+                XCTAssertGreaterThan(contrastingPixels, 60,
+                                     "Diagnostics text must contrast with the shared sheet, not inherit white video chrome.")
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "Player diagnostics light-\(palette.isLight)-gradient-\(gradient)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                model.controls.diagnosticsEnabled = false
+                await model.stop()
+                host.dismiss(animated: false)
+                window.rootViewController = nil
+            }
+        }
+    }
+
     func testErrorDetailsSheetUsesCenteredInlineTitleAndLeadingCloseIcon() async throws {
         try await assertDetailsHeader(.onDemand(
             error: .noStreams, provider: .jellyfin, engine: nil, stage: .preparation
@@ -567,5 +646,26 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "cs"))
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
+}
+private struct DiagnosticsAppearanceProvider: MediaProvider {
+    let kind = ProviderKind.jellyfin
+    let session = UserSession(
+        server: .init(id: "fixture", name: "Fixture", baseURL: URL(string: "https://fixture.invalid")!,
+                      provider: .jellyfin),
+        userID: "fixture", userName: "Fixture", deviceID: "fixture", accessToken: "fixture"
+    )
+
+    func libraries() async throws -> [MediaLibrary] { [] }
+    func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
+    func latest(limit: Int) async throws -> [MediaItem] { [] }
+    func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
+    }
+    func item(id: String) async throws -> MediaItem { throw AppError.notFound }
+    func children(of itemID: String) async throws -> [MediaItem] { [] }
+    func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
+    func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }
+    func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
+    func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }
 #endif

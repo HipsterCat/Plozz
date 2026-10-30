@@ -880,6 +880,10 @@ playback decisions. **System output** reads `AVAudioSession.renderingMode`, and
 Both refresh while diagnostics is open, on every playback engine. Unreported
 values are omitted, never inferred from the source, channel count, settings, or
 an older sample. No personal device names or route identifiers are collected.
+
+Mobile VOD and Live TV diagnostics inherit the app's shared sheet palette for
+both text and background. The TV video-overlay palette must not override mobile
+sheet content, including when the app is in Light mode.
 Descriptive output labels are localized; format and connection brands such as
 Dolby Atmos and AirPlay remain verbatim in both layouts.
 The system's rendering mode does not detect the physical speaker layout.
