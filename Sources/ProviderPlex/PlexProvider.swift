@@ -14,6 +14,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
     public let credentialRevision: CredentialRevision
     let client: PlexClient
     let liveTVLeases = PlexLiveTVLeaseStore()
+    let playbackFailureDiagnostics: PlaybackFailureDiagnostics
     let libraryGenreCache = PlexLibraryGenreCache()
     private let videoPlaylistCache = VideoPlaylistSnapshotCache()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
@@ -60,6 +61,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         hybridEngineEnabled: Bool = false,
         connectionRefresh: PlexConnectionResolver.Refresh? = nil,
         probe: HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
+        playbackFailureDiagnostics: PlaybackFailureDiagnostics = .shared,
         themeArchiveResolver: @escaping @Sendable (String?) async -> URL? = {
             await ThemeMusicArchive.resolvedURL(tvdbID: $0)
         }
@@ -67,6 +69,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         self.session = session
         self.accountID = accountID ?? session.server.id
         self.credentialRevision = credentialRevision
+        self.playbackFailureDiagnostics = playbackFailureDiagnostics
         self.themeArchiveResolver = themeArchiveResolver
         let deviceProfile = PlexDeviceProfile(clientIdentifier: session.deviceID)
         // Probe the persisted connection list (or the single saved URL) and stay
