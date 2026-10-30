@@ -75,7 +75,7 @@ final class DownloadsInteractionTests: XCTestCase {
         XCTAssertFalse(list.images["chevron.right"].exists)
     }
 
-    func testOpenInAppearsOnCompletedEpisodeMenuWithoutOpeningDetails() {
+    func testCompletedEpisodeMenuKeepsDownloadsInPlozzWithoutOpeningDetails() {
         let show = app.buttons.matching(NSPredicate(
             format: "label BEGINSWITH %@", "Downloaded Show 12"
         )).firstMatch
@@ -84,18 +84,22 @@ final class DownloadsInteractionTests: XCTestCase {
         let menu = app.buttons["More actions for Episode 12"]
         XCTAssertTrue(menu.waitForExistence(timeout: 3), app.debugDescription)
         menu.tap()
-        XCTAssertTrue(app.buttons["download-open-in"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.buttons["Remove"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertFalse(app.buttons["download-open-in"].exists, "Downloaded episodes must not offer file export.")
+        XCTAssertFalse(app.buttons["Open in…"].exists)
         XCTAssertTrue(app.navigationBars["Downloaded Show 12"].exists)
     }
 
-    func testOpenInAppearsOnCompletedMovieMenuWithoutOpeningDetails() {
+    func testCompletedMovieMenuKeepsDownloadsInPlozzWithoutOpeningDetails() {
         app.terminate()
         app.launchArguments = ["--downloads-interaction-fixture", "--download-movie"]
         app.launch()
         let menu = app.buttons["More actions for Downloaded Movie"]
         XCTAssertTrue(menu.waitForExistence(timeout: 10), app.debugDescription)
         menu.tap()
-        XCTAssertTrue(app.buttons["download-open-in"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.buttons["Remove"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertFalse(app.buttons["download-open-in"].exists, "Downloaded movies must not offer file export.")
+        XCTAssertFalse(app.buttons["Open in…"].exists)
         XCTAssertTrue(app.navigationBars["Downloads"].exists)
     }
 

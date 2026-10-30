@@ -6,6 +6,11 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
+`PlaybackResumePrompt` owns the native Resume / Start Over dialog on both
+platforms. It retains the full pending playback request through the choice so
+source, version and playlist context are preserved; cancellation starts nothing.
+Callers apply the profile's opt-in setting before presenting it.
+
 `TopNavigationScroll` connects each root vertical scroll owner to the custom
 top bar. `scrollsTopNavigation()` handles ordinary SwiftUI roots; native grids
 and Showcase report through their existing owners. Source tokens reject late

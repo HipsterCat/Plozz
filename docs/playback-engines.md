@@ -29,7 +29,9 @@ requests no larger than 1 MiB. Range and representation checks are unchanged.
 Demand-only adaptive buffers are released before replacement.
 
 Adaptive readers also retain up to eight previously validated windows no larger
-than 64 KiB each (512 KiB total) for alternating disc-directory probes. Cache hits
+than 256 KiB each (2 MiB total) for alternating disc-directory probes. This also
+retains naturally grown 256 KiB metadata windows instead of rereading smaller
+regions within them; it does not fetch additional bytes. Cache hits
 refresh recency; misses evict the least recently used window when full. Large
 sequential windows are never added to that cache. It is local to the reader and
 its pinned source lease, starts empty in clones, and is released on close.
@@ -43,7 +45,7 @@ demuxer. The demand read adopts the pending window instead of requesting it
 again. Sparse probes and default-size transports do not speculate.
 
 The current and pending windows retain at most 64 MiB of logical payload per
-adaptive reader, plus the 512 KiB probe cache. This is not a process/peak-memory
+adaptive reader, plus up to 2 MiB of probe cache. This is not a process/peak-memory
 cap: clones, HTTP, decoder and HLS buffers have their own memory costs. Stopping
 consumption can leave up to one unused 32 MiB window; no further work is started
 until the consumer advances. Seeks within the current or pending window preserve
@@ -65,13 +67,49 @@ The full media-probe budget and default sealed HLS segment delivery remain
 unchanged; shortening analysis without track-completeness checks can lose sparse
 audio/subtitle tracks.
 
+Known ordinary network-file containers (MP4/MOV, Matroska/WebM, MPEG-TS and AVI)
+skip ISO/UDF signature reads through Aether's `discImageProbeEnabled` contract,
+including independent readers and detail probes. ISO and unknown containers
+retain disc recognition. This changes neither container/track analysis nor
+transport identity, range, redirect or credential validation.
+
+For known ordinary containers, a demand of at least 256 KiB within the final
+4 MiB coalesces the remaining tail, still capped by the transport's preferred
+request size. This avoids growing through several requests for a trailing MP4
+index. Up to eight 256 KiB probe windows retain the header across that seek,
+avoiding a second header download. Resuming at a cached ordinary-container
+window's end continues the existing fourfold read growth, rather than inserting
+another small request after the index seek. Random misses and independent readers
+still start small. This can fetch bytes earlier than needed, but retains the
+existing window limits and cancellation behavior. Small/disc probes keep their existing sizing policy.
+The tradeoff is up to 4 MiB fetched for a partially consumed tail and up to
+1.5 MiB more retained probe payload per reader than the original 64 KiB cache; cancellation,
+clone independence and validated complete-window delivery remain unchanged.
+
+WebDAV playback sources at least 256 KiB combine the mandatory range probe with
+the initial 256 KiB media window. The full prefix is validated and retained by
+the source lease, avoiding another header request; it adds at most 256 KiB per
+source and can fetch unnecessary bytes when opening elsewhere. Small files and
+GET-only identity discovery retain the two-byte probe. Accepted password
+challenges are reused only inside the exact ephemeral account/revision/origin/
+trust/role session; anonymous delivery remains separate. Origin revalidation,
+complete-response validation and server authentication refusals remain enforced.
+
+Share sidecar discovery lists the video's parent once and visits only advertised
+`Subs`/`Subtitles` folders, using their actual casing. An unlistable parent retains
+the legacy folder-name probes; ordinary optional-listing failures are logged,
+while cancellation stops discovery. Own-folder exact-stem matching, dedicated
+folder boundary matching and extras' exact-stem rule are unchanged.
+
 Related upstream designs separate request sizing from buffered consumption:
 [FFmpeg HTTP](https://github.com/FFmpeg/FFmpeg/blob/b7e835e06913e4374a4567003fe8c75cebfffb98/libavformat/http.c)
 supports separate initial/steady request sizes and short-seek read-ahead;
 [VLC prefetch](https://github.com/videolan/vlc/blob/11bcb6f56d59b43cf589556f426c7a5cbd460fdd/modules/stream_filter/prefetch.c)
 uses a bounded producer/consumer buffer; and
 [mpv demux](https://github.com/mpv-player/mpv/blob/dde0671072723c311df874a32dc4e48b5197ca62/demux/demux.c)
-keeps bounded forward/backward packet caches. These are architectural references,
+keeps bounded forward/backward packet caches.
+[Kodi's HTTP reader](https://github.com/xbmc/xbmc/blob/af9ff93d022fedceaff6b5a256b3a8345f4263d5/xbmc/filesystem/CurlFile.cpp#L1482-L1508)
+retains old read state across seeks. These are architectural references,
 not measurements of those players on Plozz's test service or copied implementations.
 
 This does not add CSS/AACS decryption, disc menus, BD-J, multi-angle playback,
@@ -85,6 +123,9 @@ including forward/backward seeks. Its ordinary test serves an original ten-secon
 MPEG-2 test pattern in a DVD ISO over loopback WebDAV. The fixture contains no
 third-party media and was generated with the commands below. A separate MP4
 fixture exercises ordinary-container playback through the same path.
+Matroska and DVD fixtures also open fresh engines at a nonzero start position,
+checking that the first ready video position is near the requested resume point
+before measuring continued progress. These are resume loads, not post-load seeks.
 
 ```sh
 mkdir -p /tmp/plozz-disc-fixture/VIDEO_TS
@@ -94,15 +135,24 @@ hdiutil makehybrid -iso -udf -default-volume-name PLOZZ_DISC_FIXTURE \
   -o dvd-test-pattern.iso /tmp/plozz-disc-fixture
 ```
 
-The separate live test is opt-in: set the test process's
+The separate live test is opt-in: pass JSON in the test process's
+`PLOZZ_WEBDAV_PLAYBACK_JSON` environment variable, or set
 `PLOZZ_WEBDAV_PLAYBACK_INPUT` to a private JSON file (or `cache:<filename>` in
 the test host's cache directory) containing `baseURL`, `username`, `password`,
-`relativePath`, and one to three `seekPositions` in seconds. Use a credential-free
-HTTPS base URL, a decrypted ISO the tester is authorized to access, and a file
-owned by the tester with mode `0600`, outside Git. Remove staged simulator
+`relativePath`, and one to three `seekPositions` in seconds. Optional `startPosition`
+defaults to zero; supply a finite nonnegative position for a fresh-engine resume
+measurement. No server watch state is written. Use a credential-free
+HTTPS base URL and a media file or decrypted ISO the tester is authorized to
+access. For file input, use a tester-owned file with mode `0600`, outside Git.
+For environment input, load credentials only for `test-without-building`, not
+build commands that could dump their environment. Remove staged simulator
 credentials after the run. Missing configuration skips only that live test;
 it is not evidence of remote playback. Each load/seek has a 120-second deadline
-and frame/progress waits are bounded separately.
+and frame/progress waits are bounded separately. Preparation and engine-load
+timings are reported separately; the combined metric ends after rendered video
+has progressed beyond 0.5 seconds after the requested start position, not at the
+first decoder output. Resume coverage also requires the first ready video
+position to fall between one second before and five seconds after that position.
 After the final seek, the live test observes another 60 seconds and requires
 more than 58 seconds of playhead advancement. This is a bounded continued-playback
 check, not proof of complete-film playback or physical-device frame smoothness.
