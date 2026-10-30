@@ -37,9 +37,30 @@ final class SettingsTabDelegateTests: XCTestCase {
     func testOverflowUsesOneBarAndRestoresMoreWithoutReplacingTheTabStack() async throws {
         let root = UIViewController()
         let tabs = UITabBarController()
-        let pages = (0..<6).map { _ in UIViewController() }
-        tabs.viewControllers = pages
+        // Newer runtimes can display more than five tabs without using More.
+        let pages = (0..<12).map { _ in UIViewController() }
+        let destinationIndex = pages.count - 1
+        tabs.tabs = pages.enumerated().map { index, page in
+            UITab(title: "Page \(index)", image: UIImage(systemName: "folder"), identifier: "\(index)") { _ in page }
+        }
         root.addChild(tabs)
+        root.view.addSubview(tabs.view)
+        tabs.view.frame = root.view.bounds
+        tabs.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        tabs.didMove(toParent: root)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        await Task.yield()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
         let more = tabs.moreNavigationController
         let moreRoot = try XCTUnwrap(more.viewControllers.first)
         let original = NavigationDelegate()
@@ -50,22 +71,27 @@ final class SettingsTabDelegateTests: XCTestCase {
         defer { controller.restore() }
         controller.install()
 
-        more.setViewControllers([moreRoot, pages[5]], animated: false)
-        controller.navigationController(more, willShow: pages[5], animated: false)
-        controller.navigationController(more, didShow: pages[5], animated: false)
-        await Task.yield()
+        XCTAssertLessThan(tabs.tabBar.items?.count ?? pages.count, pages.count)
+        XCTAssertFalse((tabs.tabBar.items ?? []).contains { $0 === pages[destinationIndex].tabBarItem })
+        tabs.selectedTab = tabs.tabs[destinationIndex]
+        let deadline = Date().addingTimeInterval(2)
+        while overflow.destinationIndex != destinationIndex, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
 
         XCTAssertTrue(more.isNavigationBarHidden, "The outer bar must not sit above the page's NavigationStack.")
-        XCTAssertEqual(overflow.destinationIndex, 5)
-        XCTAssertTrue(more.topViewController === pages[5], "Keep the original tab controller and its navigation state.")
+        XCTAssertEqual(overflow.destinationIndex, destinationIndex)
+        XCTAssertTrue(more.topViewController === pages[destinationIndex], "Keep the original tab controller and its navigation state.")
         XCTAssertGreaterThan(original.willShowCount, 0)
         XCTAssertGreaterThan(original.didShowCount, 0)
 
-        more.setViewControllers([moreRoot], animated: false)
-        controller.navigationController(more, willShow: moreRoot, animated: false)
-        controller.navigationController(more, didShow: moreRoot, animated: false)
-        await Task.yield()
+        more.popToRootViewController(animated: false)
+        let returnDeadline = Date().addingTimeInterval(2)
+        while overflow.destinationIndex != nil, Date() < returnDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
 
+        XCTAssertTrue(more.topViewController === moreRoot)
         XCTAssertFalse(more.isNavigationBarHidden)
         XCTAssertNil(overflow.destinationIndex)
         controller.restore()

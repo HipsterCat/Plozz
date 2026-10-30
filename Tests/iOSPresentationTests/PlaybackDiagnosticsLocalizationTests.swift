@@ -88,7 +88,7 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         }
     }
 
-    func testErrorDetailsSheetUsesCenteredInlineTitleAndLeadingCloseIcon() async throws {
+    func testErrorDetailsSheetUsesNativeInlineTitleAndCloseIcon() async throws {
         try await assertDetailsHeader(.onDemand(
             error: .noStreams, provider: .jellyfin, engine: nil, stage: .preparation
         ))
@@ -113,34 +113,51 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        let sheet = UIHostingController(rootView: PlaybackDiagnosticDetailsSheet(
-            report: report
-        ).environment(\.locale, Locale(identifier: "en_US")))
-        sheet.modalPresentationStyle = .pageSheet
-        await withCheckedContinuation { continuation in
-            presenter.present(sheet, animated: true) { continuation.resume() }
-        }
-        sheet.view.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(150))
-        func descendants(_ view: UIView) -> [UIView] {
-            [view] + view.subviews.flatMap(descendants)
-        }
-        let bar = try XCTUnwrap(descendants(sheet.view).compactMap { $0 as? UINavigationBar }.first)
-        let item = try XCTUnwrap(bar.topItem)
-        XCTAssertEqual(item.title, "Details")
-        XCTAssertLessThanOrEqual(bar.bounds.height, 64, "The title must remain inline, not a large scrolling heading.")
-        let buttons = (item.leftBarButtonItems ?? []) + item.leadingItemGroups.flatMap(\.barButtonItems)
-        XCTAssertEqual(buttons.count, 1)
-        XCTAssertNotNil(buttons.first?.image)
-        XCTAssertTrue((item.rightBarButtonItems ?? []).isEmpty && item.trailingItemGroups.isEmpty)
-        let title = try XCTUnwrap(descendants(bar).compactMap { $0 as? UILabel }.first { $0.text == "Details" })
-        XCTAssertEqual(title.convert(title.bounds, to: bar).midX, bar.bounds.midX, accuracy: 2)
-        let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        let reference = AnyView(NavigationStack {
+            Color.clear
+                .navigationTitle("Details")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close", systemImage: "xmark") {}
+                            .labelStyle(.iconOnly)
+                    }
+                }
         })
-        attachment.name = "Centered Details title and leading Close"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        var titleCenters: [CGFloat] = []
+        for content in [AnyView(PlaybackDiagnosticDetailsSheet(report: report)), reference] {
+            let sheet = UIHostingController(rootView: content.environment(\.locale, Locale(identifier: "en_US")))
+            sheet.modalPresentationStyle = .pageSheet
+            await withCheckedContinuation { continuation in
+                presenter.present(sheet, animated: true) { continuation.resume() }
+            }
+            sheet.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(150))
+            func descendants(_ view: UIView) -> [UIView] {
+                [view] + view.subviews.flatMap(descendants)
+            }
+            let bar = try XCTUnwrap(descendants(sheet.view).compactMap { $0 as? UINavigationBar }.first)
+            let item = try XCTUnwrap(bar.topItem)
+            XCTAssertEqual(item.title, "Details")
+            XCTAssertLessThanOrEqual(bar.bounds.height, 64, "The title must remain inline, not a large scrolling heading.")
+            let buttons = (item.leftBarButtonItems ?? []) + item.leadingItemGroups.flatMap(\.barButtonItems)
+            XCTAssertEqual(buttons.count, 1)
+            XCTAssertNotNil(buttons.first?.image)
+            XCTAssertTrue((item.rightBarButtonItems ?? []).isEmpty && item.trailingItemGroups.isEmpty)
+            let title = try XCTUnwrap(descendants(bar).compactMap { $0 as? UILabel }.first { $0.text == "Details" })
+            titleCenters.append(title.convert(title.bounds, to: bar).midX / bar.bounds.width)
+            let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+            })
+            attachment.name = "Native Details title and Close \(titleCenters.count)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            await withCheckedContinuation { continuation in
+                presenter.dismiss(animated: false) { continuation.resume() }
+            }
+        }
+        XCTAssertEqual(titleCenters[0], titleCenters[1], accuracy: 0.005,
+                       "Details must follow the OS's native inline title placement.")
     }
 
     private let commonLabelKeys = [
@@ -281,9 +298,13 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
                     .background(.black))
                 renderer.scale = 2
                 let image = try XCTUnwrap(renderer.cgImage)
+                let attachment = XCTAttachment(image: UIImage(cgImage: image))
+                attachment.name = "\(television ? "TV" : "Mobile") \(memory ? "memory" : "disk") read-ahead"
+                attachment.lifetime = .keepAlways
+                add(attachment)
                 if television {
                     let headerImage = try XCTUnwrap(image.cropping(to: CGRect(
-                        x: 0, y: 0, width: image.width, height: min(160, image.height)
+                        x: 0, y: 0, width: min(1280, image.width), height: min(160, image.height)
                     )))
                     let request = VNRecognizeTextRequest()
                     request.recognitionLevel = .accurate
@@ -294,18 +315,14 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
                             $0.topCandidates(1).first?.string.contains(text) == true
                         }, "Missing header \(text)")
                         if text == "Playback Diagnostics" {
-                            XCTAssertEqual(observation.boundingBox.minX * Double(image.width) / 2,
+                            XCTAssertEqual(observation.boundingBox.minX * Double(headerImage.width) / 2,
                                            24, accuracy: 4)
                         } else {
-                            XCTAssertLessThan(observation.boundingBox.maxX * Double(image.width) / 2,
+                            XCTAssertLessThan(observation.boundingBox.maxX * Double(headerImage.width) / 2,
                                               640, "Source and engine must remain grouped on the left.")
                         }
                     }
                 }
-                let attachment = XCTAttachment(image: UIImage(cgImage: image))
-                attachment.name = "\(television ? "TV" : "Mobile") \(memory ? "memory" : "disk") read-ahead"
-                attachment.lifetime = .keepAlways
-                add(attachment)
                 let text = try renderedText(image, locale: "en_US")
                 XCTAssertTrue(text.contains("Cache storage"), text)
                 XCTAssertTrue(text.contains("v7.47.0"), text)
