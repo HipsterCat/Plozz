@@ -433,6 +433,54 @@ final class TransportIOReaderReadAheadTests: XCTestCase {
         XCTAssertTrue(source.readLog.allSatisfy { $0.length == 64 * 1024 })
     }
 
+    func testDiscDirectoryReplayRetainsGrownProbeWindows() {
+        let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+        let reader = TransportIOReader(source: source)
+        defer { reader.close() }
+        let offsets: [Int64] = [
+            524_288, 589_824, 950_272, 94_558_208, 1_015_808, 94_623_744,
+            1_081_344, 94_689_280, 94_754_816, 659_456, 1_310_720,
+            735_232, 911_360, 41_529_344
+        ]
+        for offset in offsets {
+            XCTAssertEqual(reader.seek(offset: offset, whence: SEEK_SET), offset)
+            XCTAssertEqual(read(reader, count: 2).data, Data([42, 42]))
+        }
+        XCTAssertEqual(source.readLog.map(\.offset), offsets.filter { $0 != 659_456 && $0 != 735_232 })
+        XCTAssertEqual(source.readLog.filter { $0.length == 256 * 1024 }.count, 2)
+    }
+
+    func testDiscLargerProbeCachePreservesBytesAndCloneIndependence() throws {
+        let payload = Data((0..<(1024 * 1024)).map { UInt8($0 % 251) })
+        let source = CappedTransportByteSource(
+            payload, perReadCap: 32 * 1024 * 1024, preferredReadSize: 32 * 1024 * 1024
+        )
+        let reader = TransportIOReader(source: source)
+        defer { reader.close() }
+        XCTAssertEqual(read(reader, count: 256 * 1024).data, payload.prefix(256 * 1024))
+        XCTAssertEqual(reader.seek(offset: 512 * 1024, whence: SEEK_SET), 512 * 1024)
+        XCTAssertEqual(read(reader, count: 2).data, payload.subdata(in: (512 * 1024)..<(512 * 1024 + 2)))
+        XCTAssertEqual(reader.seek(offset: 65_530, whence: SEEK_SET), 65_530)
+        XCTAssertEqual(read(reader, count: 16).data, payload.subdata(in: 65_530..<65_546))
+        XCTAssertEqual(source.readCount, 2)
+        let clone = try XCTUnwrap(reader.makeIndependentReader())
+        defer { clone.close() }
+        XCTAssertEqual(read(clone, count: 2).data, payload.prefix(2))
+        XCTAssertEqual(source.readCount, 3)
+    }
+
+    func testDiscCacheDoesNotRetainLargeSequentialWindows() {
+        let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+        let reader = TransportIOReader(source: source)
+        defer { reader.close() }
+        XCTAssertEqual(read(reader, count: 1024 * 1024).result, 1024 * 1024)
+        XCTAssertEqual(reader.seek(offset: 10 * 1024 * 1024, whence: SEEK_SET), 10 * 1024 * 1024)
+        XCTAssertEqual(read(reader, count: 2).result, 2)
+        XCTAssertEqual(reader.seek(offset: 0, whence: SEEK_SET), 0)
+        XCTAssertEqual(read(reader, count: 2).result, 2)
+        XCTAssertEqual(source.readLog.map(\.length), [1024 * 1024, 64 * 1024, 64 * 1024])
+    }
+
     func testAdaptiveWindowPreservesShortReadsAndEOF() {
         let payload = Data((0..<4096).map { UInt8($0 & 0xff) })
         let source = CappedTransportByteSource(
@@ -578,21 +626,23 @@ final class TransportIOReaderReadAheadTests: XCTestCase {
         XCTAssertEqual(source.readLog.map(\.length), [256 * 1024])
     }
 
-    func testOrdinaryContainerHeaderCacheRemainsBoundedToEightWindows() {
-        let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
-        let reader = TransportIOReader(source: source, discImageProbeEnabled: false)
-        defer { reader.close() }
-        for index in 0..<9 {
-            let offset = Int64(index * 512 * 1024)
-            XCTAssertEqual(reader.seek(offset: offset, whence: SEEK_SET), offset)
-            XCTAssertEqual(read(reader, count: 256 * 1024).result, 256 * 1024)
+    func testProbeCacheRemainsBoundedToEightWindows() {
+        for discImageProbeEnabled in [true, false] {
+            let source = SparseTransportByteSource(preferredReadSize: 32 * 1024 * 1024)
+            let reader = TransportIOReader(source: source, discImageProbeEnabled: discImageProbeEnabled)
+            defer { reader.close() }
+            for index in 0..<9 {
+                let offset = Int64(index * 512 * 1024)
+                XCTAssertEqual(reader.seek(offset: offset, whence: SEEK_SET), offset)
+                XCTAssertEqual(read(reader, count: 256 * 1024).result, 256 * 1024)
+            }
+            XCTAssertEqual(reader.seek(offset: 512 * 1024, whence: SEEK_SET), 512 * 1024)
+            XCTAssertEqual(read(reader, count: 2).result, 2)
+            XCTAssertEqual(source.readLog.count, 9)
+            XCTAssertEqual(reader.seek(offset: 0, whence: SEEK_SET), 0)
+            XCTAssertEqual(read(reader, count: 2).result, 2)
+            XCTAssertEqual(source.readLog.count, 10, "The ninth window must evict the oldest")
         }
-        XCTAssertEqual(reader.seek(offset: 512 * 1024, whence: SEEK_SET), 512 * 1024)
-        XCTAssertEqual(read(reader, count: 2).result, 2)
-        XCTAssertEqual(source.readLog.count, 9)
-        XCTAssertEqual(reader.seek(offset: 0, whence: SEEK_SET), 0)
-        XCTAssertEqual(read(reader, count: 2).result, 2)
-        XCTAssertEqual(source.readLog.count, 10, "The ninth window must evict the oldest")
     }
 
     /// Many small sequential reads within one window collapse to a single

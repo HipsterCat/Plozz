@@ -313,8 +313,7 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
                 }
                 state.bufferStart = operation.offset
                 state.bufferData = data
-                let cacheLimit = discImageProbeEnabled ? Self.probeWindowSize : Self.containerProbeWindowSize
-                if maxBackendChunk > Self.defaultBackendChunk, data.count <= cacheLimit {
+                if maxBackendChunk > Self.defaultBackendChunk, data.count <= Self.containerProbeWindowSize {
                     state.probeWindows.removeAll { $0.start == operation.offset }
                     state.probeWindows.append((operation.offset, data))
                     if state.probeWindows.count > Self.maximumProbeWindows {

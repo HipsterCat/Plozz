@@ -29,7 +29,9 @@ requests no larger than 1 MiB. Range and representation checks are unchanged.
 Demand-only adaptive buffers are released before replacement.
 
 Adaptive readers also retain up to eight previously validated windows no larger
-than 64 KiB each (512 KiB total) for alternating disc-directory probes. Cache hits
+than 256 KiB each (2 MiB total) for alternating disc-directory probes. This also
+retains naturally grown 256 KiB metadata windows instead of rereading smaller
+regions within them; it does not fetch additional bytes. Cache hits
 refresh recency; misses evict the least recently used window when full. Large
 sequential windows are never added to that cache. It is local to the reader and
 its pinned source lease, starts empty in clones, and is released on close.
@@ -43,8 +45,7 @@ demuxer. The demand read adopts the pending window instead of requesting it
 again. Sparse probes and default-size transports do not speculate.
 
 The current and pending windows retain at most 64 MiB of logical payload per
-adaptive reader, plus the probe cache (512 KiB for discs/unknown sources, 2 MiB
-for known ordinary containers). This is not a process/peak-memory
+adaptive reader, plus up to 2 MiB of probe cache. This is not a process/peak-memory
 cap: clones, HTTP, decoder and HLS buffers have their own memory costs. Stopping
 consumption can leave up to one unused 32 MiB window; no further work is started
 until the consumer advances. Seeks within the current or pending window preserve
@@ -80,9 +81,9 @@ avoiding a second header download. Resuming at a cached ordinary-container
 window's end continues the existing fourfold read growth, rather than inserting
 another small request after the index seek. Random misses and independent readers
 still start small. This can fetch bytes earlier than needed, but retains the
-existing window limits and cancellation behavior. Small/disc probes keep the existing policy.
+existing window limits and cancellation behavior. Small/disc probes keep their existing sizing policy.
 The tradeoff is up to 4 MiB fetched for a partially consumed tail and up to
-1.5 MiB more retained probe payload per ordinary-container reader; cancellation,
+1.5 MiB more retained probe payload per reader than the original 64 KiB cache; cancellation,
 clone independence and validated complete-window delivery remain unchanged.
 
 WebDAV playback sources at least 256 KiB combine the mandatory range probe with
