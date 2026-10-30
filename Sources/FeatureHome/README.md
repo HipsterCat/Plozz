@@ -14,8 +14,13 @@ card on Apple TV. The TV action is a separate native control, not a synthetic
 media item, and follows the rail's poster, landscape, or featured geometry.
 Both TV Home layouts retain the complete `HomePresentationRow` source when
 opening the shared browser. Libraries and Live TV keep their existing navigation.
-The TV Discovery row browses its current curated snapshot rather than inventing
-an unrelated catalog query.
+Browse actions appear only when the feed confirms additional eligible titles
+beyond the Home preview, not merely because the preview reaches its limit.
+Home requests one lookahead item in the existing bounded fetch; it does not
+probe every shelf again. Complete rows, including single-item shelves and
+uncapped Continue Watching/Watchlist snapshots, have no redundant browse action.
+Sort and filter menus sit at the trailing end of the TV heading and in the
+top-right navigation toolbar on iPhone/iPad.
 
 `HomeRowBrowseModel` preserves source order by default and loads additional
 bounded pages as the grid advances. Library and collection rows use their existing

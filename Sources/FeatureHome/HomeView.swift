@@ -650,10 +650,10 @@ public struct HomeView: View {
                                                 row,
                                                 reservesLoadingFocus: !heroLayoutActive
                                                     && presentation.id == presentationRows.first?.id,
-                                                onBrowse: { rowBrowser = viewModel.browseRow(presentation) }
+                                                onBrowse: browseAction(for: presentation)
                                             )
                                         case let .library(row):
-                                            libraryRowView(row, onBrowse: { rowBrowser = viewModel.browseRow(presentation) })
+                                            libraryRowView(row, onBrowse: browseAction(for: presentation))
                                         case let .liveTV(channels):
                                             MediaRowView(
                                                 title: Text("Live TV"), items: [], style: .landscape,
@@ -1359,6 +1359,10 @@ public struct HomeView: View {
         }
     }
 
+    private func browseAction(for row: HomePresentationRow) -> (() -> Void)? {
+        row.canBrowse ? { rowBrowser = viewModel.browseRow(row) } : nil
+    }
+
     @ViewBuilder
     private func homeRowContent(
         _ row: HomeRow, reservesLoadingFocus: Bool, onBrowse: (() -> Void)?
@@ -1641,7 +1645,7 @@ public struct HomeView: View {
                 onSelect: { _ in }
             )
         case .home(let row, let presentation):
-            let onBrowse: (() -> Void)? = presentation.map { value in { rowBrowser = viewModel.browseRow(value) } }
+            let onBrowse = presentation.flatMap { browseAction(for: $0) }
             if let failure = row.failure, row.items.isEmpty, row.libraries.isEmpty,
                row.kind != .continueWatching || liveTV.recentChannels.isEmpty {
                 rowFailureView(
@@ -1739,11 +1743,8 @@ public struct HomeView: View {
                 reservesLoadingFocus: reservesLoadingFocus,
                 onSelect: onSelectItem
             )
-            .browsingRow(isLoading || items.isEmpty ? nil : {
-                rowBrowser = viewModel.browseDiscovery(items)
-            })
         case .section(let row, let presentation):
-            let onBrowse = { rowBrowser = viewModel.browseRow(presentation) }
+            let onBrowse = browseAction(for: presentation)
             let section = row.section
             let playsOnSelect = row.browseItem == nil && section.style == .landscape
                 && !CollectionCoverLayout.isCollectionGroup(section.items)
@@ -1819,7 +1820,7 @@ public struct HomeView: View {
     /// browse entry points into each library's full grid. Poster rows open detail
     /// on select; a landscape row plays — matching the merged rows' behaviour.
     @ViewBuilder
-    private func libraryRowView(_ row: HomeLibrarySectionGroup.Row, onBrowse: @escaping () -> Void) -> some View {
+    private func libraryRowView(_ row: HomeLibrarySectionGroup.Row, onBrowse: (() -> Void)?) -> some View {
             let section = row.section
             let playsOnSelect = row.browseItem == nil && section.style == .landscape
                 && !CollectionCoverLayout.isCollectionGroup(section.items)
@@ -1845,7 +1846,7 @@ public struct HomeView: View {
     }
 
     private func featuredRow(
-        _ row: HomeLibrarySectionGroup.Row, onBrowse: @escaping () -> Void,
+        _ row: HomeLibrarySectionGroup.Row, onBrowse: (() -> Void)?,
         onFocus: ((MediaItem) -> Void)? = nil
     ) -> some View {
         FeaturedMediaRow(

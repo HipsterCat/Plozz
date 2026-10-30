@@ -91,6 +91,7 @@ public struct HomeRow: Identifiable, Equatable, Sendable {
     public var libraries: [AggregatedLibrary]
     public var loadingPlaceholderCount: Int
     public var failure: AppError?
+    public var hasMore = false
 
     /// True when this row would draw nothing on Home. A row survives the
     /// visibility filter as an empty shell, so "are there any rows" is not the
@@ -128,6 +129,18 @@ public struct HomeRow: Identifiable, Equatable, Sendable {
         self.libraries = libraries
         self.loadingPlaceholderCount = loadingPlaceholderCount
         self.failure = failure
+    }
+}
+
+struct HomeRowPreview: Sendable {
+    var items: [MediaItem]
+    let hasMore: Bool
+
+    init(_ candidates: [MediaItem], limit: Int, retainsCandidates: Bool = false) {
+        var seen = Set<String>()
+        let unique = candidates.filter { seen.insert($0.stablePresentationID).inserted }
+        items = retainsCandidates ? unique : Array(unique.prefix(limit))
+        hasMore = unique.count > limit
     }
 }
 

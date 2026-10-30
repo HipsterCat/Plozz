@@ -261,10 +261,12 @@ public struct MediaRowView: View {
     @PlozzCardFocus private var loadingCardFocused: Bool
     @State private var tracksLoadingFocus: Bool
     private var onBrowse: (() -> Void)?
+    private var usesRowBrowsing = false
 
     public func browsingRow(_ action: (() -> Void)?) -> Self {
         var copy = self
         copy.onBrowse = action
+        copy.usesRowBrowsing = true
         return copy
     }
 
@@ -558,7 +560,7 @@ public struct MediaRowView: View {
             || onSeeAll != nil || onBrowse != nil {
             MediaRowSection(
                 title: title, leadingInset: leadingInset, spacing: layoutMetrics.sectionTitleSpacing,
-                onSeeAll: onBrowse == nil ? onSeeAll : nil, onFocusEntered: onFocusEntered
+                onSeeAll: usesRowBrowsing ? nil : onSeeAll, onFocusEntered: onFocusEntered
             ) {
                 if items.isEmpty && loadingPlaceholderCount == 0 && onSeeAll != nil {
                     Text("No titles in this collection.")

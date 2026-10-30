@@ -29,12 +29,20 @@ public struct HomeRowBrowseView<Card: View>: View {
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 16) {
-                    title.font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
-                    controls
-                }
                 #if os(tvOS)
+                HStack {
+                    heading
+                        .layoutPriority(1)
+                    Spacer(minLength: PlozzTheme.Spacing.large)
+                    BrowseQueryControls {
+                        filterControl
+                        sortControl.fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+                .lineLimit(1)
                 .focusSection()
+                #else
+                heading
                 #endif
                 if model.query == model.appliedQuery {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: metrics.gridSpacing) {
@@ -82,6 +90,12 @@ public struct HomeRowBrowseView<Card: View>: View {
         .onChange(of: model.scopeIsCurrent) { _, current in if !current { model.invalidate() } }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                sortControl.labelStyle(.iconOnly)
+                filterControl.labelStyle(.iconOnly)
+            }
+        }
         #endif
     }
 
@@ -101,29 +115,37 @@ public struct HomeRowBrowseView<Card: View>: View {
         return Text(verbatim: model.title)
     }
 
-    private var controls: some View {
-        BrowseQueryControls {
-            BrowseSortMenu(
-                sort: model.query.sort ?? .default,
-                fields: [.name, .dateAdded, .releaseDate, .runtime],
-                isDefault: model.query.sort == nil,
-                onReset: { model.query.sort = nil },
-                onChange: { model.query.sort = $0 }
-            )
-            BrowseFilterMenu(
-                activeCount: model.query.filters.activeCount + (model.query.media == .all ? 0 : 1),
-                summary: filterSummary
-            ) {
-                Picker("Filter", selection: $model.query.media) {
-                    ForEach(WatchlistMediaFilter.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                Picker("Filter", selection: $model.query.filters.filter) {
-                    Text("All").tag(LibraryFilter.all)
-                    Text("Unwatched").tag(LibraryFilter.unwatched)
-                    Text("In Progress").tag(LibraryFilter.inProgress)
-                }
+    private var heading: some View {
+        title.font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("home-row-browser-title")
+    }
+
+    private var sortControl: some View {
+        BrowseSortMenu(
+            sort: model.query.sort ?? .default,
+            fields: [.name, .dateAdded, .releaseDate, .runtime],
+            isDefault: model.query.sort == nil,
+            onReset: { model.query.sort = nil },
+            onChange: { model.query.sort = $0 }
+        )
+        .accessibilityIdentifier("home-row-sort-menu")
+    }
+
+    private var filterControl: some View {
+        BrowseFilterMenu(
+            activeCount: model.query.filters.activeCount + (model.query.media == .all ? 0 : 1),
+            summary: filterSummary
+        ) {
+            Picker("Filter", selection: $model.query.media) {
+                ForEach(WatchlistMediaFilter.allCases, id: \.self) { Text($0.displayName).tag($0) }
+            }
+            Picker("Filter", selection: $model.query.filters.filter) {
+                Text("All").tag(LibraryFilter.all)
+                Text("Unwatched").tag(LibraryFilter.unwatched)
+                Text("In Progress").tag(LibraryFilter.inProgress)
             }
         }
+        .accessibilityIdentifier("home-row-filter-menu")
     }
 
     private var filterSummary: String {

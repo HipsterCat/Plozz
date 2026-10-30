@@ -596,7 +596,7 @@ struct PlozziOSHomeView: View {
                         watchlistIntentRevision: watchlistIntentRevision,
                         watchlistLoadingPlaceholderCount:
                             viewModel.watchlistLoadingPlaceholderCount,
-                        onBrowse: { rowBrowser = viewModel.browseRow(presentation) }
+                        onBrowse: presentation.canBrowse ? { rowBrowser = viewModel.browseRow(presentation) } : nil
                     )
                 case let .liveTV(channels):
                     PlozziOSHomeMediaRail(
@@ -626,7 +626,7 @@ struct PlozziOSHomeView: View {
                                 row: row, appModel: appModel, scope: ObjectIdentifier(viewModel),
                                 coordinator: featuredTrailers, controller: trailerController,
                                 isActive: homeIsFrontmost && homeHasAppeared && !homeIsScrolling,
-                                onBrowse: { rowBrowser = viewModel.browseRow(presentation) }
+                                onBrowse: presentation.canBrowse ? { rowBrowser = viewModel.browseRow(presentation) } : nil
                             )
                         } else {
                             PlozziOSHomeMediaRail(
@@ -637,7 +637,7 @@ struct PlozziOSHomeView: View {
                                     : .poster,
                                 appModel: appModel,
                                 browseItem: row.browseItem,
-                                onBrowse: { rowBrowser = viewModel.browseRow(presentation) },
+                                onBrowse: presentation.canBrowse ? { rowBrowser = viewModel.browseRow(presentation) } : nil,
                                 onNavigationInteraction:
                                     viewModel.noteHomeNavigationInteraction
                             )
@@ -2419,7 +2419,7 @@ private struct PlozziOSHomeRowView: View {
     let viewModel: HomeViewModel
     let watchlistIntentRevision: Int
     let watchlistLoadingPlaceholderCount: Int
-    let onBrowse: () -> Void
+    let onBrowse: (() -> Void)?
     private var liveChannels: [HomeLiveTVChannel] {
         row.kind == .continueWatching ? liveTV.recentChannels : []
     }
@@ -2553,7 +2553,7 @@ private struct PlozziOSFeaturedCollectionRail: View {
     let coordinator: FeaturedTrailerCoordinator
     let controller: HeroTrailerController
     let isActive: Bool
-    let onBrowse: () -> Void
+    let onBrowse: (() -> Void)?
     @State private var selection: MediaItem?
 
     var body: some View {
@@ -2608,7 +2608,6 @@ struct PlozziOSHomeMediaRail: View {
     var browseItem: MediaItem? = nil
     var onBrowse: (() -> Void)? = nil
     var onNavigationInteraction: () -> Void = {}
-    @State private var isBrowsingCollection = false
     @State private var prefetchedIDs: Set<String> = []
     @State private var prefetchedPreviewIDs: Set<String> = []
     @State private var lastArtworkPrefetchIndex: Int?
@@ -2618,17 +2617,11 @@ struct PlozziOSHomeMediaRail: View {
 
     var body: some View {
         PlozziOSHomeRailLayout { rail(metrics: $0) }
-            .navigationDestination(isPresented: $isBrowsingCollection) {
-                if let browseItem {
-                    PlozziOSHomeCardDetail(item: browseItem, fallbackProvider: provider(for: browseItem))
-                }
-            }
     }
 
     private func rail(metrics: PlozzMetrics) -> some View {
         PlozziOSMediaSection(
             title: title, artworkInset: cardStyle == .framed ? metrics.cardInset : 0,
-            onSeeAll: browseItem == nil ? nil : { isBrowsingCollection = true },
             onBrowse: onBrowse
         ) {
             if browseItem != nil && items.isEmpty && loadingPlaceholderCount == 0 {

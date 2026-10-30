@@ -4,6 +4,53 @@ import XCTest
 
 @MainActor
 final class HomeRowBrowseTests: XCTestCase {
+    func testBrowseActionRequiresConfirmedEligibleOverflow() throws {
+        let id = HomeRowID.global(.recentlyAdded)
+        var visibility = HomeLibraryVisibility(
+            rowCustomization: .init(defaults: .custom, order: [id], shown: [id])
+        )
+        func presentation(_ candidates: [MediaItem]) -> HomePresentationRow? {
+            HomePresentationRow.resolve(
+                rows: [.init(kind: .recentlyAdded, items: Array(candidates.prefix(20)))],
+                content: .init(latest: Array(candidates.prefix(20)), recentlyAddedCandidates: candidates),
+                visibility: visibility
+            ).first
+        }
+        XCTAssertNil(presentation([]))
+        for count in [1, 2, 19, 20, 21, 100] {
+            let row = try XCTUnwrap(presentation(items(count)))
+            XCTAssertEqual(row.canBrowse, count > 20, "Count \(count)")
+            if case let .home(home) = row.source { XCTAssertEqual(home.items.count, min(20, count)) }
+        }
+        XCTAssertFalse(try XCTUnwrap(presentation(items(20) + [items(1)[0]])).canBrowse)
+        visibility.hideWatchedRecentlyAdded = true
+        XCTAssertFalse(try XCTUnwrap(presentation(items(40))).canBrowse, "Watched overflow is not additional content")
+        XCTAssertTrue(try XCTUnwrap(presentation(items(42))).canBrowse)
+        visibility.setEnabled(false, for: "account:hidden")
+        let eligible = items(40) + items(2).map { $0.taggingSource("account").taggingLibrary("hidden") }
+        XCTAssertFalse(try XCTUnwrap(presentation(eligible)).canBrowse, "Hidden-library overflow must not add an action")
+    }
+
+    func testCompleteHistoryWatchlistAndFailedRowsDoNotOfferBrowse() throws {
+        let shared = HomeRowChoice.shared
+        for kind in [HomeRowKind.continueWatching, .watchlist] {
+            let choice = try XCTUnwrap(shared.first { $0.id == .global(HomeGlobalRow(rawValue: kind.rawValue)!) })
+            let row = HomePresentationRow(choice: choice, source: .home(.init(kind: kind, items: items(100))))
+            XCTAssertFalse(row.canBrowse)
+        }
+        let choice = try XCTUnwrap(shared.first { $0.id == .global(.recentlyAdded) })
+        let section = LibrarySection(id: "shelf", title: "Shelf", items: items(20), hasMore: true)
+        for (loading, failure): (Bool, AppError?) in [(true, nil), (false, .serverUnreachable)] {
+            let row = HomePresentationRow(
+                choice: choice, source: .library(.init(section: section, isLoading: loading, failure: failure))
+            )
+            XCTAssertFalse(row.canBrowse)
+        }
+        XCTAssertTrue(HomePresentationRow(
+            choice: choice, source: .library(.init(section: section, isLoading: false, failure: nil))
+        ).canBrowse)
+    }
+
     func testDefaultOrderLoadsBeyondHomePreviewAndStopsAtExhaustion() async {
         let all = items(145)
         let source = Pages(all)

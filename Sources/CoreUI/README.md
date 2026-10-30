@@ -3,7 +3,9 @@
 Home row browsing uses `BrowseRowHeading` for a single accessible title/chevron
 touch target and `MediaRowBrowseCard` for a native TV rail action. Opt a rail in
 with `browsingRow`; existing collection-detail `onSeeAll` headers elsewhere keep
-their behavior. Browse actions carry no media identity or context-menu actions.
+their behavior. Passing `nil` opts into Home browsing without showing an action
+or falling back to the old header action. Browse actions carry no media identity
+or context-menu actions.
 
 Shared, **focusable** UI primitives, the app theme, and the artwork image
 cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind

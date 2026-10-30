@@ -291,9 +291,19 @@ final class HomeRowArrangementHostedTests: XCTestCase {
                 }
             }
         } inspect: { window in
-            let headings = try await self.capture(window, name: "Full Home shelf")
+            let headings = try await self.capture(window, name: "Full Home shelf", scale: 2)
             XCTAssertTrue(headings.contains { $0.0.contains("Library picks") })
+            #if os(tvOS)
             XCTAssertTrue(headings.contains { $0.0.contains("Default") })
+            let title = try XCTUnwrap(headings.first { $0.0.contains("Library picks") }).1
+            let sort = try XCTUnwrap(headings.first { $0.0.contains("Default") }).1
+            let filter = try XCTUnwrap(headings.first { $0.0.hasSuffix("All") }, "\(headings.map(\.0))").1
+            for control in [sort, filter] {
+                XCTAssertGreaterThan(control.minX, title.maxX)
+                XCTAssertGreaterThan(control.midX, 0.5)
+                XCTAssertEqual(control.midY, title.midY, accuracy: 0.02)
+            }
+            #endif
             try self.scrollToBottom(window)
             let bottom = try await self.capture(window, name: "Full Home shelf final item")
             XCTAssertTrue(bottom.contains { $0.0.contains("Shelf title 34") }, bottom.map(\.0).joined(separator: " | "))
@@ -302,6 +312,34 @@ final class HomeRowArrangementHostedTests: XCTestCase {
     }
 
     #if os(iOS)
+    func testHomeBrowseControlsUseTrailingToolbar() async throws {
+        let model = HomeRowBrowseModel(
+            title: "Library picks", snapshot: [MediaItem(id: "one", title: "One", kind: .movie)]
+        )
+        for (width, textSize): (CGFloat, DynamicTypeSize) in [(320, .accessibility3), (1024, .large)] {
+            try await withWindow(size: CGSize(width: width, height: 900)) {
+                NavigationStack {
+                    HomeRowBrowseView(model: model, columns: [GridItem(.flexible())]) { Text($0.title) }
+                }
+                .environment(\.dynamicTypeSize, textSize)
+            } inspect: { window in
+                _ = try await self.snapshot(window, name: "Home browse trailing toolbar \(width)")
+                func views(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(views) }
+                let bar = try XCTUnwrap(views(window).compactMap { $0 as? UINavigationBar }.first)
+                let controls = views(bar).compactMap { $0 as? UIButton }
+                XCTAssertEqual(controls.count, 2, "Both menus must be navigation-bar actions")
+                for control in controls {
+                    let frame = control.convert(control.bounds, to: window)
+                    XCTAssertGreaterThan(frame.midX, window.bounds.midX)
+                    XCTAssertGreaterThan(frame.width, 0)
+                    XCTAssertGreaterThan(frame.height, 0)
+                    XCTAssertLessThanOrEqual(frame.maxX, window.bounds.maxX)
+                    XCTAssertLessThanOrEqual(frame.maxY, bar.convert(bar.bounds, to: window).maxY)
+                }
+            }
+        }
+    }
+
     func testHomeBrowseHeadingHasSingleAccessibleTouchTarget() async throws {
         var headingFrame = CGRect.zero
         try await withWindow(size: CGSize(width: 390, height: 844)) {
@@ -323,6 +361,42 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         }
     }
     #endif
+
+    func testExhaustedRowsHideBothBrowseAndLegacyActions() async throws {
+        let controller = HeroTrailerController()
+        let coordinator = FeaturedTrailerCoordinator()
+        defer { coordinator.stop() }
+        for featured in [false, true] {
+            for count in [0, 1] {
+                let items = (0..<count).map { MediaItem(id: "\($0)", title: "Only title", kind: .movie) }
+                try await withWindow {
+                    ScrollView {
+                        if featured {
+                            FeaturedMediaRow(
+                                title: Text("Complete collection"), items: items, scope: ObjectIdentifier(controller),
+                                coordinator: coordinator, controller: controller, settings: .default,
+                                resolver: { _ in nil }, isActive: false, onSeeAll: {}, onSelect: { _ in }
+                            )
+                            .browsingRow(nil)
+                        } else {
+                            MediaRowView(
+                                title: Text("Complete collection"), items: items, onSeeAll: {}, onSelect: { _ in }
+                            )
+                            .browsingRow(nil)
+                        }
+                    }
+                } inspect: { window in
+                    let lines = try await self.capture(window, name: "Exhausted collection \(featured)-\(count)")
+                    XCTAssertTrue(lines.contains { $0.0.contains("Complete collection") })
+                    XCTAssertFalse(lines.contains { $0.0.localizedCaseInsensitiveContains("See all") })
+                    if count == 0 {
+                        XCTAssertTrue(lines.contains { $0.0.localizedCaseInsensitiveContains("No titles in this collection") },
+                                      "Keep the empty-collection explanation: \(lines.map(\.0))")
+                    }
+                }
+            }
+        }
+    }
 
     func testEveryCardLabelIllustrationRendersAcrossStylesVisibilityAndDirection() throws {
         #if os(tvOS)

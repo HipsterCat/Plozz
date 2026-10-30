@@ -45,12 +45,14 @@ public struct LibrarySection: Identifiable, Equatable, Sendable {
     public var isLegacyHomeDefault: Bool?
     /// Opaque provider identity for this exact shelf, separate from its arranger slot.
     public var browseID: String?
+    public var hasMore: Bool
 
     public init(
         id: String, title: String,  // l10n:content — provider heading or stable fallback
         localizedTitle: LocalizedStringResource? = nil,
         localizedTitleSuffix: String? = nil, style: Style = .poster, items: [MediaItem] = [],
-        isHomeDefault: Bool? = nil, isLegacyHomeDefault: Bool? = nil, browseID: String? = nil
+        isHomeDefault: Bool? = nil, isLegacyHomeDefault: Bool? = nil, browseID: String? = nil,
+        hasMore: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -61,5 +63,6 @@ public struct LibrarySection: Identifiable, Equatable, Sendable {
         self.isHomeDefault = isHomeDefault
         self.isLegacyHomeDefault = isLegacyHomeDefault
         self.browseID = browseID
+        self.hasMore = hasMore
     }
 }

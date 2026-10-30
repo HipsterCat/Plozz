@@ -30,10 +30,12 @@ public struct FeaturedMediaRow: View {
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzRowTitleTightening) private var titleTightening
     private var onBrowse: (() -> Void)?
+    private var usesRowBrowsing = false
 
     public func browsingRow(_ action: (() -> Void)?) -> Self {
         var copy = self
         copy.onBrowse = action
+        copy.usesRowBrowsing = true
         return copy
     }
 
@@ -97,7 +99,7 @@ public struct FeaturedMediaRow: View {
             #if os(tvOS)
             MediaRowHeader(
                 title: title,
-                onSeeAll: onBrowse == nil ? onSeeAll.map { action in {
+                onSeeAll: !usesRowBrowsing ? onSeeAll.map { action in {
                     coordinator.stop()
                     action()
                 } } : nil
@@ -111,7 +113,7 @@ public struct FeaturedMediaRow: View {
                     title.font(.title2.bold())
                 }
                 Spacer()
-                if onBrowse == nil, let onSeeAll {
+                if !usesRowBrowsing, let onSeeAll {
                     Button("See all") {
                         coordinator.stop()
                         onSeeAll()
