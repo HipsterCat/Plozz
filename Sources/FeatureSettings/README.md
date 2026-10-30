@@ -279,6 +279,14 @@ negotiation altogether. Silo's session-bound grants need its built-in lifecycle;
 no speculative external session is opened. Live TV, trailers, and music keep
 their existing runtimes.
 
+On iPhone/iPad, completed movie and episode downloads have a separate **Open in…**
+action in their Downloads row menu. It uses the native document handoff chooser,
+not the external-player URL preference. Only the exact completed regular file
+in the active profile's registry is shared; removed, replaced, missing, or
+incomplete files are rejected. The receiving app may import its own copy.
+Ordinary Play remains in Plozz, and this file handoff does not return watch
+progress or include separately downloaded subtitle sidecars.
+
 External playback requires directly accessible HTTP(S) media: no app-local
 proxy, downloaded file, private share credentials, separate audio stream, or
 server conversion. Mobile quality limits are not bypassed. Links can contain
@@ -547,15 +555,33 @@ watch history and planning-list behavior are documented in
   Size is last inside Cards. Screens & Navigation groups App navigation,
   All screens, Home, Libraries, and Movie & show details; Music player remains TV-only because mobile does
   not implement those presentation choices. Mobile navigation editing includes
-  every enabled video library from the shared discovery inventory; Music and
-  All Libraries remain TV-only. Refreshing Libraries updates native navigation
+  every enabled video library from the shared discovery inventory; Music remains
+  TV-only. Refreshing Libraries updates the available shortcuts
   without resetting saved hide/order choices.
-  The mobile app shell uses native adaptive tabs, sidebar, and system More
-  overflow. Destination declarations and their navigation stacks stay mounted
+  Home, Downloads, and Search are the iPhone/iPad defaults, even before content
+  discovery. Watchlist, Live TV, Settings, All Libraries, and individual libraries
+  are opt-in through App navigation. Discovery never adds tabs automatically.
+  Explicit Show/Hide choices and ordering stay profile-scoped; Reset Navigation
+  restores these three defaults without changing content availability or TV defaults.
+  The mobile app shell uses native adaptive tabs and sidebar, with system More
+  overflow on iPhone only above five enabled pages. Destination declarations and their navigation stacks stay mounted
   across width changes; profile-scoped ordering and visibility remain authoritative.
+  Pages opened from More use their existing stack's single navigation bar: Back,
+  an inline title, and page actions share one row. The outer More bar is hidden
+  only while showing a destination and restored on return. Direct tabs keep their
+  normal title styles; deeper pages keep their own back navigation.
+  The bridge resolves destinations from native `UITab` objects when present:
+  newer iOS versions leave the legacy `viewControllers` array empty. More-row
+  interception and destination matching must use the same controller inventory.
+  Downloads composes the shared Back item inside its page toolbar so its actions
+  do not displace the shell's root navigation control.
   Library tabs use the same content-kind icons as tvOS and library names without
   server suffixes. Same-named libraries remain separate destinations; the
   arrangement editor identifies their servers on a second line.
+  All Libraries is also available on iPhone/iPad when the profile has more than
+  one visible video library. It can be shown, moved, or hidden in App navigation, using
+  the same saved key as tvOS. Hiding an individual navigation shortcut does not
+  exclude that library's content from the combined grid; disabling its content does.
   Settings opens as a sheet from direct tabs or native More without replacing
   the selected page or its navigation history.
   Everyone uses the TV order, with mobile-only Downloads last. Version/build,
@@ -1035,7 +1061,7 @@ watch history and planning-list behavior are documented in
   layout with contained row focus.
 - **Mobile Settings is a presentation action.** The profile button is the default
   entry point. Its navigation shortcut starts hidden on iPhone and iPad, keeping
-  the default navigation at five destinations or fewer even with Watchlist.
+  the default navigation at Home, Downloads, and Search.
   The arranger can explicitly Show it; this profile-scoped override survives
   relaunches, while Reset Navigation restores the hidden default. Automatic
   hiding is not saved as a manual preference and does not hide Settings on TV.

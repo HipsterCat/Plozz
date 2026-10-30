@@ -703,6 +703,33 @@ final class PlozziOSDownloadsModel {
         return item
     }
 
+    func fileURLForExport(_ record: DownloadedMediaRecord) async throws -> URL {
+        try Task.checkCancellation()
+        guard acceptsNewWork else { throw CancellationError() }
+        guard let registry, let storage,
+              let current = await registry.record(forKey: record.identityKey),
+              current.status == .completed, record.status == .completed,
+              current.createdAt == record.createdAt,
+              current.localFileName == record.localFileName,
+              !current.localFileName.isEmpty,
+              !current.localFileName.contains("/"), !current.localFileName.contains("\\"),
+              current.localFileName != ".", current.localFileName != ".." else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        try Task.checkCancellation()
+        guard acceptsNewWork else { throw CancellationError() }
+        let root = try storage.pinnedMediaDirectory().resolvingSymlinksInPath().standardizedFileURL
+        let url = try storage.pinnedFileURL(for: current).standardizedFileURL
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        guard root.isFileURL, url.isFileURL, resolved.path.hasPrefix(root.path + "/") else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              (values.fileSize ?? 0) > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        return url
+    }
+
     /// Finds the downloaded record that a live/reconstructed item refers to,
     /// matching on the portable source id + account captured in the snapshot.
     func downloadedRecord(matching item: MediaItem) -> DownloadedMediaRecord? {
