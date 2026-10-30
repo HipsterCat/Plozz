@@ -188965,6 +188965,226 @@
         }
       }
     },
+    "Changes labels below library cards on Home." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يغيّر النصوص أسفل بطاقات المكتبات في «الرئيسية»."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Променя надписите под картите на медиатеките в „Начало“."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Canvia els textos sota les targetes de les biblioteques a «Inici»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mění popisky pod kartami knihoven na stránce „Domů“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ændrer teksterne under bibliotekskort på Hjem."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ändert die Beschriftungen unter Bibliothekskarten auf „Start“."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αλλάζει τις λεζάντες κάτω από τις κάρτες βιβλιοθηκών στην «Αρχική»."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cambia los textos bajo las tarjetas de bibliotecas en Inicio."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "نوشته‌های زیر کارت‌های کتابخانه را در «خانه» تغییر می‌دهد."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Muuttaa kirjastokorttien alla olevia tekstejä Koti-sivulla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Modifie les libellés sous les cartes de bibliothèques sur la page Accueil."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "משנה את הכיתובים מתחת לכרטיסי הספריות במסך ״בית״."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "होम पर लाइब्रेरी कार्ड के नीचे का पाठ बदलता है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mijenja natpise ispod kartica knjižnica na stranici „Početna“."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Módosítja a Kezdőlap könyvtárkártyái alatti feliratokat."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mengubah teks di bawah kartu pustaka di Beranda."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Modifica le etichette sotto le schede delle librerie in Home."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ホームのライブラリカード下のラベルを変更します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "홈의 미디어 보관함 카드 아래에 표시되는 문구를 변경합니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mengubah teks di bawah kad pustaka pada Laman Utama."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Endrer tekstene under bibliotekkortene på Hjem."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Wijzigt de bijschriften onder bibliotheekkaarten op Start."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zmienia podpisy pod kartami bibliotek na stronie głównej."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Altera os rótulos abaixo dos cartões de bibliotecas em Início."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Schimbă etichetele de sub cardurile bibliotecilor din „Acasă”."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Меняет подписи под карточками медиатек на странице «Главная»."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mení texty pod kartami knižníc na stránke „Domov“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Spremeni napise pod karticami knjižnic na strani »Domov«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Menja natpise ispod kartica biblioteka na stranici „Početna“."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ändrar texterna under bibliotekskorten på Hem."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปลี่ยนข้อความใต้การ์ดไลบรารีในหน้าแรก"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ana Sayfa’daki kitaplık kartlarının altındaki etiketleri değiştirir."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Змінює підписи під картками медіатек на сторінці «Головна»."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Thay đổi nhãn dưới các thẻ thư viện trên Trang chủ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "更改首页媒体库卡片下方的文字。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "更改首頁媒體庫卡片下方的文字。"
+          }
+        }
+      }
+    },
     "Changes labels below playlist covers in all libraries. Titles inside a playlist use Browse." : {
       "localizations" : {
         "ar" : {
@@ -240387,6 +240607,446 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "繼續觀看"
+          }
+        }
+      }
+    },
+    "Continue Watching is shared with Home." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "إعداد «متابعة المشاهدة» مشترك مع «الرئيسية»."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Настройката за „Продължете да гледате“ важи и за „Начало“."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’ajust de «Continua mirant» també s’aplica a «Inici»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavení pro „Pokračovat ve sledování“ platí i na stránce „Domů“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indstillingen for »Se videre« gælder også på Hjem."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Die Einstellung für „Weiterschauen“ gilt auch auf „Start“."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η ρύθμιση για τη «Συνέχεια παρακολούθησης» ισχύει και στην «Αρχική»."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "El ajuste de «Seguir viendo» también se aplica a Inicio."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تنظیم «ادامهٔ تماشا» در «خانه» هم اعمال می‌شود."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jatka katsomista -asetus koskee myös Koti-sivua."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Le réglage de « Reprendre la lecture » s’applique aussi à la page Accueil."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ההגדרה של ״המשך צפייה״ חלה גם במסך ״בית״."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“देखना जारी रखें” की सेटिंग “होम” पर भी लागू होती है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Postavka za „Nastavi gledati“ vrijedi i na stranici „Početna“."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A „Megtekintés folytatása” beállítása a Kezdőlapra is érvényes."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pengaturan Lanjutkan Menonton juga berlaku di Beranda."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’impostazione di «Continua a guardare» vale anche per Home."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「続きを観る」の設定はホームと共通です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "‘시청 중인 콘텐츠’ 설정은 홈에도 적용됩니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tetapan Teruskan Menonton turut digunakan pada Laman Utama."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Innstillingen for «Se videre» gjelder også på Hjem."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De instelling voor ‘Verder kijken’ geldt ook op Start."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ustawienie „Oglądaj dalej” dotyczy też strony głównej."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A configuração de “Continuar assistindo” também se aplica a Início."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Setarea pentru „Continuă vizionarea” se aplică și paginii „Acasă”."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Настройка «Продолжить просмотр» действует и на странице «Главная»."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavenie pre „Pokračovať v sledovaní“ platí aj na stránke „Domov“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavitev za »Nadaljuj z gledanjem« velja tudi na strani »Domov«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podešavanje za „Nastavi gledanje“ važi i na stranici „Početna“."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Inställningen för ”Fortsätt titta” gäller även på Hem."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "การตั้งค่า “ดูต่อ” ใช้กับหน้าแรกด้วย"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“İzlemeye devam et” ayarı Ana Sayfa için de geçerlidir."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Налаштування «Продовжити перегляд» діє і на сторінці «Головна»."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cài đặt của “Xem tiếp” cũng áp dụng cho Trang chủ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“继续观看”的设置也适用于首页。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「繼續觀看」的設定也會套用至首頁。"
+          }
+        }
+      }
+    },
+    "Continue Watching is shared with Recommended." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "إعداد «متابعة المشاهدة» مشترك مع «موصى به»."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Настройката за „Продължете да гледате“ важи и за „Препоръчани“."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’ajust de «Continua mirant» també s’aplica a «Recomanats»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavení pro „Pokračovat ve sledování“ platí i na stránce „Doporučené“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indstillingen for »Se videre« gælder også på Anbefalet."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Die Einstellung für „Weiterschauen“ gilt auch auf „Empfohlen“."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η ρύθμιση για τη «Συνέχεια παρακολούθησης» ισχύει και στα «Προτεινόμενα»."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "El ajuste de «Seguir viendo» también se aplica a Recomendados."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تنظیم «ادامهٔ تماشا» در «پیشنهادها» هم اعمال می‌شود."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jatka katsomista -asetus koskee myös Suositellut-sivua."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Le réglage de « Reprendre la lecture » s’applique aussi à la page Recommandations."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ההגדרה של ״המשך צפייה״ חלה גם במסך ״מומלצים״."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“देखना जारी रखें” की सेटिंग “सुझाव” पर भी लागू होती है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Postavka za „Nastavi gledati“ vrijedi i na stranici „Preporučeno“."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A „Megtekintés folytatása” beállítása az Ajánlott oldalra is érvényes."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pengaturan Lanjutkan Menonton juga berlaku di Rekomendasi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’impostazione di «Continua a guardare» vale anche per Consigliati."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「続きを観る」の設定はおすすめと共通です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "‘시청 중인 콘텐츠’ 설정은 추천에도 적용됩니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tetapan Teruskan Menonton turut digunakan pada Disyorkan."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Innstillingen for «Se videre» gjelder også på Anbefalt."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "De instelling voor ‘Verder kijken’ geldt ook op Aanbevolen."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ustawienie „Oglądaj dalej” dotyczy też strony „Polecane”."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A configuração de “Continuar assistindo” também se aplica a Recomendados."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Setarea pentru „Continuă vizionarea” se aplică și paginii „Recomandate”."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Настройка «Продолжить просмотр» действует и на странице «Рекомендуемое»."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavenie pre „Pokračovať v sledovaní“ platí aj na stránke „Odporúčané“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nastavitev za »Nadaljuj z gledanjem« velja tudi na strani »Priporočeno«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podešavanje za „Nastavi gledanje“ važi i na stranici „Preporučeno“."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Inställningen för ”Fortsätt titta” gäller även på Rekommenderat."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "การตั้งค่า “ดูต่อ” ใช้กับหน้าแนะนำด้วย"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“İzlemeye devam et” ayarı Önerilenler için de geçerlidir."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Налаштування «Продовжити перегляд» діє і на сторінці «Рекомендоване»."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cài đặt của “Xem tiếp” cũng áp dụng cho Đề xuất."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“继续观看”的设置也适用于推荐页。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「繼續觀看」的設定也會套用至推薦頁。"
           }
         }
       }
@@ -329355,6 +330015,226 @@
         }
       }
     },
+    "Episode counts and progress are unchanged." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لا يتغير عدد الحلقات ولا تقدّم التشغيل."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Броят на епизодите и напредъкът на възпроизвеждането остават непроменени."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "El nombre d’episodis i el progrés de reproducció no canvien."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Počty epizod ani průběh přehrávání se nemění."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Antal episoder og fremdrift i afspilningen ændres ikke."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Folgenanzahl und Wiedergabefortschritt bleiben unverändert."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ο αριθμός επεισοδίων και η πρόοδος αναπαραγωγής δεν αλλάζουν."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "El número de episodios y el progreso de reproducción no cambian."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "تعداد قسمت‌ها و پیشرفت پخش تغییری نمی‌کنند."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jaksojen määrät ja toiston edistyminen eivät muutu."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Le nombre d’épisodes et la progression de lecture ne changent pas."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "מספר הפרקים והתקדמות הניגון אינם משתנים."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "एपिसोड की संख्या और प्लेबैक की प्रगति वैसी ही रहती हैं।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Broj epizoda i napredak reprodukcije ostaju nepromijenjeni."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Az epizódok száma és a lejátszás előrehaladása nem változik."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Jumlah episode dan progres pemutaran tidak berubah."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Il numero di episodi e l’avanzamento della riproduzione non cambiano."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "エピソード数と再生の進行状況は変わりません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "에피소드 수와 재생 진행 상황은 바뀌지 않습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bilangan episod dan kemajuan main balik tidak berubah."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Episodeantall og avspillingsfremdrift endres ikke."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Het aantal afleveringen en de afspeelvoortgang blijven ongewijzigd."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Liczba odcinków i postęp odtwarzania pozostają bez zmian."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A contagem de episódios e o progresso da reprodução não mudam."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Numărul de episoade și progresul redării nu se schimbă."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Количество эпизодов и прогресс воспроизведения не меняются."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Počty epizód a priebeh prehrávania sa nemenia."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Število epizod in napredek predvajanja ostaneta nespremenjena."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Broj epizoda i napredak reprodukcije ostaju nepromenjeni."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Antal avsnitt och uppspelningsförlopp ändras inte."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "จำนวนตอนและความคืบหน้าในการเล่นไม่เปลี่ยนแปลง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bölüm sayıları ve oynatma ilerlemesi değişmez."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Кількість епізодів і прогрес відтворення не змінюються."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Số tập và tiến trình phát không thay đổi."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "集数和播放进度保持不变。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "集數和播放進度維持不變。"
+          }
+        }
+      }
+    },
     "Episode numbering differs. Showing library episodes without a coverage count." : {
       "localizations" : {
         "ar" : {
@@ -357137,6 +358017,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "強制轉碼"
+          }
+        }
+      }
+    },
+    "Force transcoding is on. Try turning it off in Streaming quality." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "خيار «فرض تحويل الترميز» مفعّل. جرّب إيقافه في «جودة البث»."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "„Принудително транскодиране“ е включено. Опитайте да го изключите в „Качество на стрийминг“."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’opció «Força la transcodificació» està activada. Prova de desactivar-la a «Qualitat de reproducció en continu»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Volba „Vynutit transkódování“ je zapnutá. Zkuste ji vypnout v části „Kvalita streamování“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indstillingen »Gennemtving transkodning« er slået til. Prøv at slå den fra under »Streamingkvalitet«."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "„Transkodierung erzwingen“ ist aktiviert. Versuche, die Option unter „Streamingqualität“ zu deaktivieren."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Η «Υποχρεωτική μετακωδικοποίηση» είναι ενεργοποιημένη. Δοκιμάστε να την απενεργοποιήσετε στην ενότητα «Ποιότητα ροής»."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La opción «Forzar transcodificación» está activada. Prueba a desactivarla en «Calidad de streaming»."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "گزینهٔ «اجبار به کدگذاری مجدد» فعال است. غیرفعال کردن آن را در بخش «کیفیت پخش جریانی» امتحان کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Asetus ”Pakota transkoodaus” on käytössä. Kokeile poistaa se käytöstä kohdassa ”Suoratoiston laatu”."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’option « Forcer le transcodage » est activée. Essayez de la désactiver dans « Qualité de streaming »."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "האפשרות \"כפיית קידוד מחדש\" מופעלת. נסו לכבות אותה ב\"איכות הזרמה\"."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“ट्रांसकोडिंग अनिवार्य करें” चालू है। “स्ट्रीमिंग क्वालिटी” में इसे बंद करके देखें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "„Prisilno transkodiranje” je uključeno. Pokušajte ga isključiti u odjeljku „Kvaliteta streaminga”."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Az „Átkódolás kényszerítése” be van kapcsolva. Próbálja meg kikapcsolni a „Streamelési minőség” beállításai között."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Paksa transkode” aktif. Coba nonaktifkan di “Kualitas streaming”."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "L’opzione «Forza transcodifica» è attiva. Prova a disattivarla in «Qualità dello streaming»."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「強制的にトランスコード」がオンになっています。「ストリーミング品質」でオフにしてみてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "‘강제 트랜스코딩’이 켜져 있습니다. ‘스트리밍 화질’에서 꺼 보세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Paksa transkod” dihidupkan. Cuba matikannya dalam “Kualiti penstriman”."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "«Tving transkoding» er på. Prøv å slå det av under «Strømmekvalitet»."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "‘Transcodering afdwingen’ staat aan. Probeer dit uit te schakelen onder ‘Streamingkwaliteit’."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Opcja „Wymuś transkodowanie” jest włączona. Spróbuj ją wyłączyć w sekcji „Jakość strumieniowania”."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A opção “Forçar transcodificação” está ativada. Tente desativá-la em “Qualidade de streaming”."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Opțiunea „Forțează transcodarea” este activată. Încercați să o dezactivați în „Calitatea redării în flux”."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Настройка «Принудительное транскодирование» включена. Попробуйте отключить её в разделе «Качество потокового воспроизведения»."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Možnosť „Vynútiť prekódovanie“ je zapnutá. Skúste ju vypnúť v časti „Kvalita streamovania“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Možnost »Vsili prekodiranje« je vklopljena. Poskusite jo izklopiti v razdelku »Kakovost pretočnega predvajanja«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Opcija „Prinudno transkodiranje“ je uključena. Pokušajte da je isključite u odeljku „Kvalitet strimovanja“."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Inställningen ”Tvinga omkodning” är aktiverad. Prova att stänga av den under ”Strömningskvalitet”."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปิดใช้ “บังคับแปลงรหัส” อยู่ ลองปิดใน “คุณภาพการสตรีม”"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Kod dönüştürmeyi zorunlu kıl” ayarı açık. “Akış kalitesi” bölümünden kapatmayı deneyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Увімкнено «Примусове перекодування». Спробуйте вимкнути його в розділі «Якість потокового відтворення»."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“Buộc chuyển mã” đang bật. Hãy thử tắt tùy chọn này trong “Chất lượng phát trực tuyến”."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "“强制转码”已开启。请尝试在“流媒体画质”中将其关闭。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "「強制轉碼」已開啟。請嘗試在「串流畫質」中將其關閉。"
           }
         }
       }
@@ -497988,6 +499088,226 @@
         }
       }
     },
+    "No compatible apps are available for this download." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لا توجد تطبيقات متوافقة لفتح هذا الملف."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Няма съвместими приложения за отваряне на този файл."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No hi ha cap aplicació compatible per obrir aquest fitxer."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pro otevření tohoto souboru nejsou k dispozici žádné kompatibilní aplikace."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Der er ingen kompatible apps til at åbne denne fil."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Für diese Datei sind keine kompatiblen Apps verfügbar."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Δεν υπάρχουν συμβατές εφαρμογές για αυτό το αρχείο."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No hay apps compatibles con este archivo descargado."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "هیچ برنامهٔ سازگاری برای این فایل وجود ندارد."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tälle ladatulle tiedostolle ei ole yhteensopivia sovelluksia."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aucune app compatible n’est disponible pour ce fichier téléchargé."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "אין יישומים תואמים לפתיחת הקובץ שהורד."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "इस फ़ाइल को खोलने के लिए कोई संगत ऐप उपलब्ध नहीं है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nema kompatibilnih aplikacija za ovu datoteku."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nincs kompatibilis alkalmazás ehhez a fájlhoz."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tidak ada aplikasi yang kompatibel untuk file ini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Non ci sono app compatibili con questo file."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このファイルを開けるアプリがありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "다운로드한 파일을 열 수 있는 앱이 없습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tiada app yang serasi untuk fail yang dimuat turun ini."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ingen tilgjengelige apper kan åpne den nedlastede filen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Er zijn geen geschikte apps beschikbaar voor dit gedownloade bestand."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Brak aplikacji obsługujących ten pobrany plik."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Não há apps compatíveis com este arquivo baixado."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nu există aplicații compatibile cu acest fișier descărcat."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Нет приложений, совместимых с этим загруженным файлом."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pre tento stiahnutý súbor nie sú dostupné kompatibilné aplikácie."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za to preneseno datoteko ni na voljo združljivih aplikacij."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nema kompatibilnih aplikacija za ovu preuzetu datoteku."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Det finns inga kompatibla appar för den här nedladdade filen."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ไม่มีแอปที่เปิดไฟล์ที่ดาวน์โหลดมานี้ได้"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İndirilen bu dosyayı açabilecek bir uygulama yok."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Немає сумісних програм для відкриття цього завантаженого файлу."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Không có ứng dụng tương thích để mở tệp đã tải về này."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "没有可打开此下载文件的应用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "沒有可開啟此下載檔案的 App。"
+          }
+        }
+      }
+    },
     "No connected Live TV servers" : {
       "localizations" : {
         "ar" : {
@@ -537013,6 +538333,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "在 Seerr 中開啟並檢視本季"
+          }
+        }
+      }
+    },
+    "Open in…" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "فتح في…"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отвори в…"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Obre amb…"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otevřít v…"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Åbn i…"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Öffnen in…"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Άνοιγμα σε…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Abrir en…"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "باز کردن در…"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Avaa sovelluksessa…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ouvrir dans…"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "פתיחה ב…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "इसमें खोलें…"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otvori u…"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Megnyitás ezzel…"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Buka dengan…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Apri in…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ほかのアプリで開く…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "다른 앱으로 열기…"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Buka dalam…"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Åpne i…"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Open in…"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otwórz w…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Abrir em…"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deschide în…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Открыть в…"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otvoriť v…"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odpri v…"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otvori u…"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Öppna i…"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปิดใน…"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Şununla Aç…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Відкрити в…"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mở bằng…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "用其他应用打开…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "用其他 App 開啟…"
           }
         }
       }
@@ -728965,6 +730505,7 @@
       }
     },
     "Shared with Home." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -729185,6 +730726,7 @@
       }
     },
     "Shared with Recommended." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -736896,6 +738438,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "「顯示」優先於地區篩選。「隱藏」會將該類別從節目表中移除。「自動」依照你選擇的國家和語言。"
+          }
+        }
+      }
+    },
+    "Show progress bars" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "إظهار أشرطة التقدّم"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Показване на ленти за напредък"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mostra les barres de progrés"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zobrazovat ukazatele průběhu"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vis fremdriftslinjer"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Fortschrittsbalken anzeigen"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Εμφάνιση γραμμών προόδου"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mostrar barras de progreso"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "نمایش نوارهای پیشرفت"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Näytä edistymispalkit"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Afficher les barres de progression"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "הצגת פסי התקדמות"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "प्रगति बार दिखाएँ"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prikaži trake napretka"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Folyamatjelző sávok megjelenítése"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tampilkan bilah progres"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mostra barre di avanzamento"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "進行状況バーを表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "재생 진행 막대 표시"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tunjukkan bar kemajuan"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vis fremdriftslinjer"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Voortgangsbalken tonen"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pokazuj paski postępu"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mostrar barras de progresso"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Afișează barele de progres"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Показывать полосы прогресса"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Zobrazovať ukazovatele priebehu"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prikaži vrstice napredka"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prikaži trake napretka"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Visa förloppsstaplar"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "แสดงแถบความคืบหน้า"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İlerleme çubuklarını göster"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Показувати смуги прогресу"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hiện thanh tiến trình"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "显示进度条"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "顯示進度條"
           }
         }
       }
@@ -868312,6 +870074,226 @@
         }
       }
     },
+    "This download is no longer available. Try downloading it again." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لم يعد هذا الملف متاحًا. حاول تنزيله مجددًا."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Този файл вече не е наличен. Опитайте да го изтеглите отново."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aquest fitxer ja no està disponible. Prova de baixar-lo de nou."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tento soubor už není k dispozici. Zkuste ho stáhnout znovu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Denne fil er ikke længere tilgængelig. Prøv at hente den igen."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diese Datei ist nicht mehr verfügbar. Versuche, sie erneut herunterzuladen."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αυτό το αρχείο δεν είναι πλέον διαθέσιμο. Δοκιμάστε να το κατεβάσετε ξανά."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Este archivo descargado ya no está disponible. Prueba a descargarlo de nuevo."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "این فایل دانلودشده دیگر در دسترس نیست. سعی کنید آن را دوباره دانلود کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tämä ladattu tiedosto ei ole enää saatavilla. Kokeile ladata se uudelleen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ce fichier téléchargé n’est plus disponible. Essayez de le télécharger à nouveau."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "הקובץ שהורד כבר לא זמין. נסו להוריד אותו שוב."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "यह फ़ाइल अब उपलब्ध नहीं है। इसे फिर से डाउनलोड करके देखें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ova datoteka više nije dostupna. Pokušajte je ponovno preuzeti."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ez a fájl már nem érhető el. Próbálja meg újra letölteni."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "File ini tidak lagi tersedia. Coba unduh lagi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Questo file non è più disponibile. Prova a scaricarlo di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このファイルは利用できなくなりました。もう一度ダウンロードしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "다운로드한 파일을 더 이상 사용할 수 없습니다. 다시 다운로드해 보세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Fail yang dimuat turun ini tidak lagi tersedia. Cuba muat turun semula."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Den nedlastede filen er ikke lenger tilgjengelig. Prøv å laste den ned på nytt."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dit gedownloade bestand is niet meer beschikbaar. Probeer het opnieuw te downloaden."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ten pobrany plik nie jest już dostępny. Spróbuj pobrać go ponownie."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Este arquivo baixado não está mais disponível. Tente baixá-lo novamente."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Acest fișier descărcat nu mai este disponibil. Încearcă să-l descarci din nou."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Загруженный файл больше недоступен. Попробуйте скачать его снова."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tento stiahnutý súbor už nie je k dispozícii. Skúste ho stiahnuť znova."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ta prenesena datoteka ni več na voljo. Poskusite jo znova prenesti."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ova preuzeta datoteka više nije dostupna. Pokušajte da je ponovo preuzmete."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Den här nedladdade filen är inte längre tillgänglig. Försök ladda ner den igen."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ไฟล์ที่ดาวน์โหลดมานี้ไม่พร้อมใช้งานแล้ว ลองดาวน์โหลดอีกครั้ง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İndirilen bu dosya artık kullanılamıyor. Yeniden indirmeyi deneyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Цей завантажений файл більше недоступний. Спробуйте завантажити його знову."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tệp đã tải về này không còn khả dụng. Hãy thử tải lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此下载文件已不可用。请尝试重新下载。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此下載檔案已無法使用。請嘗試重新下載。"
+          }
+        }
+      }
+    },
     "This downloads all %lld episodes at original quality and can use significant storage and data. You can remove them anytime from Downloads." : {
       "comment" : "Confirmation message when downloading an entire season on iPhone or iPad. %lld is the number of episodes that will be downloaded.",
       "localizations" : {
@@ -933966,6 +935948,226 @@
         }
       }
     },
+    "Uses Home's default." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يستخدم الإعداد الافتراضي لـ«الرئيسية»."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Използва настройката по подразбиране от „Начало“."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Utilitza el valor per defecte d’«Inici»."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Používá výchozí nastavení stránky „Domů“."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bruger standardindstillingen fra Hjem."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Verwendet den Standard von „Start“."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Χρησιμοποιεί την προεπιλογή από την «Αρχική»."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usa el valor predeterminado de Inicio."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "از پیش‌فرض «خانه» استفاده می‌کند."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Käyttää Koti-sivun oletusasetusta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Utilise la valeur par défaut de la page Accueil."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "משתמש בברירת המחדל של ״בית״."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "होम की डिफ़ॉल्ट सेटिंग इस्तेमाल करता है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koristi zadanu postavku stranice „Početna“."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "A Kezdőlap alapbeállítását használja."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Menggunakan pengaturan bawaan Beranda."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usa il valore predefinito di Home."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ホームのデフォルト設定を使用します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "홈의 기본 설정을 사용합니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Menggunakan tetapan lalai Laman Utama."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bruker standardinnstillingen fra Hjem."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Gebruikt de standaardinstelling van Start."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Używa domyślnego ustawienia strony głównej."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Usa a configuração padrão de Início."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Folosește setarea implicită din „Acasă”."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Использует настройку по умолчанию со страницы «Главная»."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Používa predvolené nastavenie stránky „Domov“."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Uporabi privzeto nastavitev strani »Domov«."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Koristi podrazumevano podešavanje stranice „Početna“."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Använder standardinställningen från Hem."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ใช้ค่าเริ่มต้นของหน้าแรก"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ana Sayfa’nın varsayılanını kullanır."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Використовує стандартне налаштування сторінки «Головна»."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dùng cài đặt mặc định của Trang chủ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "使用首页的默认设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "使用首頁的預設設定。"
+          }
+        }
+      }
+    },
     "Uses PCM for supported TrueHD Atmos and DTS:X tracks; lossy audio over AirPlay." : {
       "localizations" : {
         "ar" : {
@@ -949448,6 +951650,446 @@
         }
       }
     },
+    "Watch indicator preview" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "معاينة علامات حالة المشاهدة"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Преглед на маркерите за гледано/негледано"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Previsualització dels indicadors de vist/no vist"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Náhled značek stavu zhlédnutí"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Forhåndsvisning af set/ikke set-markeringer"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vorschau der Markierungen für gesehen/ungesehen"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Προεπισκόπηση ενδείξεων κατάστασης παρακολούθησης"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Vista previa de las marcas de visto/no visto"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "پیش‌نمایش نشان‌های وضعیت تماشا"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Katsottu/katsomaton-merkintöjen esikatselu"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aperçu des indicateurs vu/non vu"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "תצוגה מקדימה של סימוני מצב צפייה"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "देखने की स्थिति के संकेतकों का पूर्वावलोकन"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pretpregled oznaka gledano/negledano"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Megtekintési állapotjelzések előnézete"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pratinjau penanda sudah/belum ditonton"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Anteprima degli indicatori visto/non visto"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "視聴済み・未視聴マークのプレビュー"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "시청 여부 표시 미리보기"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pratonton penanda status tontonan"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Forhåndsvisning av markeringer for sett/ikke sett"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Voorbeeld van markeringen voor bekeken/niet bekeken"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Podgląd oznaczeń stanu obejrzenia"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Prévia dos indicadores de assistido/não assistido"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Previzualizarea marcajelor vizionat/nevizionat"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Предпросмотр меток статуса просмотра"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Náhľad značiek pozreté/nepozreté"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Predogled oznak ogledano/neogledano"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pregled oznaka gledano/negledano"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Förhandsvisning av markeringar för sett/osett"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ตัวอย่างเครื่องหมายสถานะการรับชม"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İzlenme durumu işaretlerinin önizlemesi"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Попередній перегляд позначок стану перегляду"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Xem trước dấu đã xem/chưa xem"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已观看/未观看标记预览"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已看／未看標記預覽"
+          }
+        }
+      }
+    },
+    "Watch indicators" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "علامات حالة المشاهدة"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Маркери за гледано/негледано"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indicadors de vist/no vist"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Značky stavu zhlédnutí"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Markeringer for set/ikke set"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Markierungen für gesehen/ungesehen"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ενδείξεις κατάστασης παρακολούθησης"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Marcas de visto/no visto"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "نشان‌های وضعیت تماشا"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Katsottu/katsomaton-merkinnät"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indicateurs vu/non vu"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "סימוני מצב צפייה"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "देखने की स्थिति के संकेतक"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Oznake gledano/negledano"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Megtekintési állapotjelzések"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Penanda sudah/belum ditonton"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indicatori visto/non visto"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "視聴済み・未視聴マーク"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "시청 여부 표시"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Penanda status tontonan"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Markeringer for sett/ikke sett"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Markeringen voor bekeken/niet bekeken"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Oznaczenia stanu obejrzenia"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Indicadores de assistido/não assistido"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Marcaje vizionat/nevizionat"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Метки статуса просмотра"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Značky pozreté/nepozreté"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Oznake ogledano/neogledano"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Oznake gledano/negledano"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Markeringar för sett/osett"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เครื่องหมายสถานะการรับชม"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İzlenme durumu işaretleri"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Позначки стану перегляду"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dấu đã xem/chưa xem"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已观看/未观看标记"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "已看／未看標記"
+          }
+        }
+      }
+    },
     "Watch on YouTube" : {
       "comment" : "Trailer action that leaves Plozz and opens the video on YouTube.",
       "localizations" : {
@@ -950112,6 +952754,7 @@
     },
     "Watched Indicator" : {
       "comment" : "Section header for the media-card watch badge style controls in the tvOS Appearance settings detail pane. Contains the picker that chooses how watched status is marked on library cards.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -1018574,223 +1021217,223 @@
         "ar" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "اسحب لتغيير الترتيب. اضغط مطولًا للإخفاء أو الإظهار. تُخفى الصفحات التي لم تستخدمها بعد تلقائيًا ما لم تُظهرها يدويًا."
+            "value" : "اسحب لإعادة الترتيب. اضغط مطولًا للإخفاء أو الإظهار."
           }
         },
         "bg" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Плъзнете, за да пренаредите. Задръжте, за да скриете или покажете. Страниците, които още не сте използвали, се скриват автоматично, освен ако не ги покажете ръчно."
+            "value" : "Плъзнете за пренареждане. Натиснете продължително за скриване или показване."
           }
         },
         "ca" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Arrossega per canviar l'ordre. Mantén premut per amagar o mostrar. Les pàgines que encara no has utilitzat s'amaguen automàticament, tret que les mostris manualment."
+            "value" : "Arrossega per reordenar. Mantén premut per ocultar o mostrar."
           }
         },
         "cs" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Pořadí změníte přetažením. Podržením položku skryjete nebo zobrazíte. Dosud nepoužité stránky se automaticky skrývají, pokud je sami nezobrazíte."
+            "value" : "Přetažením změníte pořadí. Podržením skryjete nebo zobrazíte."
           }
         },
         "da" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Træk for at ændre rækkefølgen. Tryk og hold for at skjule eller vise. Sider, du endnu ikke har brugt, skjules automatisk, medmindre du viser dem manuelt."
+            "value" : "Træk for at ændre rækkefølgen. Tryk og hold nede for at skjule eller vise."
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Ziehe die Elemente, um sie neu anzuordnen. Halte sie gedrückt, um sie aus- oder einzublenden. Noch nicht genutzte Seiten werden automatisch ausgeblendet, sofern du sie nicht manuell einblendest."
+            "value" : "Zum Neuanordnen ziehen. Zum Ein- oder Ausblenden gedrückt halten."
           }
         },
         "el" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Σύρετε για αλλαγή σειράς. Πατήστε παρατεταμένα για απόκρυψη ή εμφάνιση. Οι σελίδες που δεν χρησιμοποιούνται αποκρύπτονται αυτόματα, εκτός αν επιλέξετε να τις εμφανίσετε."
+            "value" : "Σύρετε για αναδιάταξη. Πατήστε παρατεταμένα για απόκρυψη ή εμφάνιση."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Drag to reorder. Hold to hide or show. Unused pages hide automatically unless you show them."
+            "value" : "Drag to reorder. Hold to hide or show."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Arrastra para reordenar. Mantén pulsado para ocultar o mostrar. Las páginas que no se usan se ocultan automáticamente, salvo que elijas mostrarlas."
+            "value" : "Arrastra para reordenar. Mantén pulsado para ocultar o mostrar."
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "برای تغییر ترتیب، بکشید. برای پنهان کردن یا نمایش، نگه دارید. صفحه‌های بدون استفاده خودکار پنهان می‌شوند، مگر اینکه نمایش آن‌ها را انتخاب کنید."
+            "value" : "برای تغییر ترتیب، بکشید. برای پنهان یا نمایان کردن، لمس کنید و نگه دارید."
           }
         },
         "fi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Muuta järjestystä vetämällä. Piilota tai näytä painamalla pitkään. Käyttämättömät sivut piilotetaan automaattisesti, ellet valitse niiden näyttämistä."
+            "value" : "Järjestä vetämällä. Piilota tai näytä painamalla pitkään."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Faites glisser pour réorganiser. Appuyez longuement pour masquer ou afficher. Les pages inutilisées sont masquées automatiquement, sauf si vous choisissez de les afficher."
+            "value" : "Faites glisser pour réorganiser. Appuyez longuement pour masquer ou afficher."
           }
         },
         "he" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "גרירה לשינוי הסדר. לחיצה ממושכת להסתרה או להצגה. עמודים שאינם בשימוש מוסתרים אוטומטית, אלא אם בחרת להציג אותם."
+            "value" : "גררו לשינוי הסדר. לחצו לחיצה ארוכה להסתרה או להצגה."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "क्रम बदलने के लिए खींचें। छिपाने या दिखाने के लिए दबाकर रखें। इस्तेमाल न होने वाले पेज अपने-आप छिप जाते हैं, जब तक आप उन्हें मैन्युअल रूप से दिखाना न चुनें।"
+            "value" : "क्रम बदलने के लिए खींचें। छिपाने या दिखाने के लिए दबाकर रखें।"
           }
         },
         "hr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Povucite za promjenu redoslijeda. Dodirnite i držite za skrivanje ili prikaz. Stranice koje ne koristite automatski se skrivaju, osim ako ih ručno postavite kao vidljive."
+            "value" : "Povucite za promjenu redoslijeda. Držite pritisnuto za skrivanje ili prikaz."
           }
         },
         "hu" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Húzással módosíthatja a sorrendet. Hosszan megérintve elrejtheti vagy megjelenítheti az elemet. A nem használt oldalak automatikusan elrejtődnek, kivéve, ha kézzel láthatóra állítja őket."
+            "value" : "Húzással rendezheti át. Hosszan nyomva elrejtheti vagy megjelenítheti."
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Seret untuk mengubah urutan. Tekan dan tahan untuk menyembunyikan atau menampilkan. Halaman yang tidak digunakan otomatis disembunyikan, kecuali Anda memilih untuk menampilkannya secara manual."
+            "value" : "Seret untuk mengubah urutan. Tekan lama untuk menyembunyikan atau menampilkan."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Trascina per riordinare. Tieni premuto per nascondere o mostrare. Le pagine inutilizzate si nascondono automaticamente, a meno che tu non scelga di mostrarle manualmente."
+            "value" : "Trascina per riordinare. Tieni premuto per nascondere o mostrare."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "ドラッグで並べ替え、長押しで表示・非表示を切り替えます。手動で表示を選んだページを除き、使っていないページは自動的に非表示になります。"
+            "value" : "ドラッグして並べ替え。長押しで表示・非表示を切り替え。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "드래그하여 순서를 변경하세요. 길게 눌러 숨기거나 표시하세요. 사용하지 않는 페이지는 직접 표시하도록 설정하지 않으면 자동으로 숨겨집니다."
+            "value" : "드래그하여 순서를 변경하세요. 길게 눌러 숨기거나 표시하세요."
           }
         },
         "ms" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Seret untuk menyusun semula. Tekan dan tahan untuk menyembunyikan atau memaparkan. Halaman yang tidak digunakan disembunyikan secara automatik melainkan anda memilih untuk memaparkannya secara manual."
+            "value" : "Seret untuk menyusun semula. Tekan lama untuk menyembunyikan atau memaparkan."
           }
         },
         "nb" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Dra for å endre rekkefølgen. Trykk og hold for å skjule eller vise. Ubrukte sider skjules automatisk med mindre du velger å vise dem manuelt."
+            "value" : "Dra for å endre rekkefølge. Trykk og hold for å skjule eller vise."
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Sleep om de volgorde te wijzigen. Houd ingedrukt om te verbergen of te tonen. Ongebruikte pagina’s worden automatisch verborgen, tenzij je ervoor kiest ze handmatig te tonen."
+            "value" : "Sleep om de volgorde te wijzigen. Houd ingedrukt om te verbergen of te tonen."
           }
         },
         "pl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Przeciągnij, aby zmienić kolejność. Przytrzymaj, aby ukryć lub pokazać. Nieużywane strony są automatycznie ukrywane, chyba że ręcznie włączysz ich wyświetlanie."
+            "value" : "Przeciągnij, aby zmienić kolejność. Przytrzymaj, aby ukryć lub pokazać."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Arraste para reordenar. Mantenha pressionado para ocultar ou mostrar. Páginas não utilizadas são ocultadas automaticamente, a menos que você escolha mostrá-las manualmente."
+            "value" : "Arraste para reordenar. Toque e segure para ocultar ou mostrar."
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Trage pentru a schimba ordinea. Apasă lung pentru a ascunde sau afișa. Paginile nefolosite se ascund automat, cu excepția celor pe care alegi să le afișezi."
+            "value" : "Trage pentru a schimba ordinea. Ține apăsat pentru a ascunde sau afișa."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Перетаскивайте для изменения порядка. Нажмите и удерживайте, чтобы скрыть или показать. Неиспользуемые страницы скрываются автоматически, кроме тех, которые вы явно выбрали для показа."
+            "value" : "Перетащите вкладки, чтобы изменить порядок. Нажмите и удерживайте, чтобы скрыть или показать."
           }
         },
         "sk" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Potiahnutím zmeníte poradie. Podržaním skryjete alebo zobrazíte položku. Nepoužívané stránky sa skryjú automaticky, okrem tých, ktoré výslovne nastavíte ako viditeľné."
+            "value" : "Potiahnutím zmeníte poradie. Podržaním skryjete alebo zobrazíte."
           }
         },
         "sl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Povlecite za spremembo vrstnega reda. Pridržite za skrivanje ali prikaz. Neuporabljene strani se samodejno skrijejo, razen tistih, za katere izrecno izberete prikaz."
+            "value" : "Povlecite za spremembo vrstnega reda. Pridržite, da skrijete ali prikažete."
           }
         },
         "sr-Latn" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Prevucite za promenu redosleda. Pritisnite i zadržite za skrivanje ili prikaz. Nekorišćene stranice automatski se skrivaju, osim onih koje izričito odaberete da prikažete."
+            "value" : "Prevucite da promenite redosled. Pritisnite i zadržite da sakrijete ili prikažete."
           }
         },
         "sv" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Dra för att ändra ordningen. Håll ned för att dölja eller visa. Oanvända sidor döljs automatiskt, utom de som du uttryckligen väljer att visa."
+            "value" : "Dra för att ändra ordningen. Håll ned för att dölja eller visa."
           }
         },
         "th" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "ลากเพื่อจัดลำดับใหม่ กดค้างไว้เพื่อซ่อนหรือแสดง หน้าที่ไม่ได้ใช้จะถูกซ่อนโดยอัตโนมัติ เว้นแต่คุณจะเลือกให้แสดง"
+            "value" : "ลากเพื่อจัดลำดับ กดค้างเพื่อซ่อนหรือแสดง"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Yeniden sıralamak için sürükleyin. Gizlemek veya göstermek için basılı tutun. Siz göstermeyi seçmedikçe kullanılmayan sayfalar otomatik olarak gizlenir."
+            "value" : "Sıralamak için sürükleyin. Gizlemek veya göstermek için basılı tutun."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Перетягніть, щоб змінити порядок. Натисніть і утримуйте, щоб приховати або показати. Невикористані сторінки автоматично приховуються, крім тих, які ви показали вручну."
+            "value" : "Перетягніть, щоб змінити порядок. Натисніть і утримуйте, щоб приховати або показати."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Kéo để đổi thứ tự. Nhấn giữ để ẩn hoặc hiện. Các trang không dùng sẽ tự động ẩn, trừ khi bạn chọn hiển thị chúng."
+            "value" : "Kéo để sắp xếp lại. Nhấn giữ để ẩn hoặc hiện."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "拖移以调整顺序，长按可隐藏或显示。未使用的页面会自动隐藏，除非你手动选择显示它们。"
+            "value" : "拖动以调整顺序。长按以隐藏或显示。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "拖移以調整順序，長按可隱藏或顯示。未使用的頁面會自動隱藏，除非你手動選擇顯示它們。"
+            "value" : "拖移以調整順序。長按以隱藏或顯示。"
           }
         }
       }

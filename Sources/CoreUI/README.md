@@ -477,6 +477,10 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   the group's full-width row-button style. Place a standalone native action in
   a layout container so its accessibility bounds do not include the row's
   noninteractive space.
+- **Hidden watch indicators** suppress watched badges and unwatched flags in
+  shared media chrome and native episode cards, not episode counts, progress,
+  download badges, or library/request status. The existing profile-scoped
+  indicator value also invalidates native bitmap caches when it changes.
 - **Unwatched episode counts** — a default-on profile preference replaces the
   top-right watch-status mark with a number on series/season cards.
   Episode counts use charcoal tiles with white digits so they stay quieter than
@@ -493,7 +497,7 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   watch-indicator Settings previews reuse the same check badge and flag.
   Their middle poster represents an in-progress series with three remaining
   episodes. Its shared count badge follows the live count toggle and independent
-  Attached/Floating preference while progress stays visible. Count style crosses
+  Attached/Floating preference while progress follows its independent visibility setting. Count style crosses
   native hosting boundaries, controls overlay placement, and invalidates both
   native poster bitmap caches.
   `MediaWatchIndicatorStyle` owns the eight opaque watch-mark colors and contrasting

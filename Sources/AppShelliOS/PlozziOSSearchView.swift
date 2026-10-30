@@ -7,6 +7,7 @@ import CoreUI
 struct PlozziOSSearchView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
+    @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
     @State private var viewModel: SearchViewModel
     private let appModel: PlozziOSAppModel
     private let onShowSettings: () -> Void
@@ -55,12 +56,12 @@ struct PlozziOSSearchView: View {
             for: .navigationBar
         )
         .toolbar {
-            if usesVerticalToolbar {
+            if usesVerticalToolbar || isOverflowDestination {
                 PlozziOSSettingsToolbarItem(action: onShowSettings)
             }
         }
-        .navigationTitle(horizontalSizeClass == .compact ? Text(verbatim: "") : Text("Search"))
-        .toolbarTitleDisplayMode(.large)
+        .navigationTitle(horizontalSizeClass == .compact && !isOverflowDestination ? Text(verbatim: "") : Text("Search"))
+        .toolbarTitleDisplayMode(isOverflowDestination ? .inline : .large)
         .environment(\.plozzCardCaptionView, .search)
         .task(id: viewModel.query) {
             await viewModel.search()
@@ -147,6 +148,7 @@ private struct PlozziOSSearchHeader: View {
     @Environment(\.themePalette) private var palette
     @Environment(\.hasVisibleSettingsNavigationEntry) private var hasVisibleSettingsNavigationEntry
     @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
+    @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
     @Binding var query: String
     let onShowSettings: () -> Void
 
@@ -183,7 +185,7 @@ private struct PlozziOSSearchHeader: View {
             .plozzSurface(.raised, cornerRadius: PlozzTheme.Metrics.Radius.card)
             .frame(maxWidth: .infinity)
 
-            if !hasVisibleSettingsNavigationEntry && !usesVerticalToolbar {
+            if !hasVisibleSettingsNavigationEntry && !usesVerticalToolbar && !isOverflowDestination {
                 PlozziOSSettingsAvatarButton(action: onShowSettings)
                     .accessibilityIdentifier("search-settings-avatar")
             }

@@ -802,6 +802,7 @@ public final class NativeVideoEngine: VideoEngine {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setSupportsMultichannelContent(true)
             try session.setActive(true)
         } catch {
             PlozzLog.playback.debug("Audio session configuration failed (non-fatal)")

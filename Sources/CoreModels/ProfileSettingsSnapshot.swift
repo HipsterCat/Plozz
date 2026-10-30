@@ -50,6 +50,7 @@ public enum ProfileSettingsTransfer {
         ArtworkSettingsStore.storageKey,
         "com.plozz.watchStatusIndicator",
         WatchStatusIndicatorSettingsStore.episodeCountStorageKey,
+        WatchStatusIndicatorSettingsStore.progressBarsStorageKey,
         WatchStatusIndicatorSettingsStore.episodeCountStyleStorageKey,
         WatchStatusIndicatorSettingsStore.colorStorageKey,
         "com.plozz.nightShift",

@@ -11,6 +11,104 @@ import UIKit
 
 @MainActor
 final class StreamingPlaybackTests: XCTestCase {
+    func testForceTranscodingHintRequiresAFailedConvertedStream() async {
+        for enabled in [false, true] {
+            for converted in [false, true] {
+                let provider = QualityPlaybackProvider()
+                if converted { await provider.setCompatibilityRendition() }
+                else { await provider.setDeliversOriginal() }
+                let engine = QualityEngine()
+                let model = PlayerViewModel(
+                    provider: provider, itemID: "movie",
+                    streamingOptions: .init(quality: .original, forceTranscoding: enabled),
+                    engineFactory: .init(makeNative: { _ in engine })
+                )
+                await model.load()
+                XCTAssertEqual(model.phase, .ready)
+                XCTAssertFalse(model.showsForcedTranscodingFailureHint)
+                XCTAssertEqual(model.streamingIsTranscoding, converted)
+                model.handoffSetPhase(.failed(.invalidResponse))
+                XCTAssertEqual(model.showsForcedTranscodingFailureHint, enabled && converted)
+                XCTAssertNotNil(model.playbackFailureReport?.message)
+                XCTAssertEqual(model.streamingOptions?.forceTranscoding, enabled)
+                model.retryPlayback()
+                XCTAssertFalse(model.showsForcedTranscodingFailureHint)
+                await wait { model.phase == .ready }
+                XCTAssertFalse(model.showsForcedTranscodingFailureHint)
+                await model.stop()
+            }
+        }
+    }
+
+    func testForceTranscodingHintDistinguishesConversionRefusalsFromOtherPreparationFailures() async {
+        let cases: [(StreamingQualityError, Bool)] = [
+            (.unavailable, true), (.unsupported, true), (.noCompatibleStream, true),
+            (.codecUnavailable(.hevc), true), (.plexDecision(1000), true),
+            (.serverRefusal("Conversion refused.", reason: .transcodingDisabled), true),
+            (.serverRefusal("Conversion refused.", reason: .conversionToolUnavailable), true),
+            (.serverRefusal("Conversion refused.", reason: .hdrTranscodeUnsupported), true),
+            (.authenticationRequired, false), (.permissionDenied, false), (.sourceUnavailable, false),
+            (.noStreams, false), (.malformedResponse, false), (.negotiationFailed, false),
+            (.serverHTTP(401), false), (.serverHTTP(500), false),
+            (.playback(.init(kind: .network)), false),
+            (.serverRefusal("Source refused.", reason: .sourceMismatch), false)
+        ]
+        for (error, expected) in cases {
+            let provider = QualityPlaybackProvider()
+            await provider.setPreparationFailure(error)
+            let model = PlayerViewModel(
+                provider: provider, itemID: "movie",
+                streamingOptions: .init(quality: .original, forceTranscoding: true),
+                engineFactory: .init(makeNative: { _ in QualityEngine() })
+            )
+            await model.load()
+            XCTAssertEqual(model.phase, .failed(.invalidResponse))
+            XCTAssertEqual(model.streamingQualityError, error)
+            XCTAssertEqual(model.showsForcedTranscodingFailureHint, expected, "\(error)")
+            XCTAssertEqual(model.streamingOptions?.forceTranscoding, true)
+            await model.stop()
+        }
+    }
+
+    func testForceTranscodingHintFollowsTheCurrentVideoSelection() async {
+        let provider = QualityPlaybackProvider()
+        let engine = QualityEngine()
+        let model = PlayerViewModel(
+            provider: provider, itemID: "movie", streamingOptions: .init(quality: .original),
+            engineFactory: .init(makeNative: { _ in engine })
+        )
+        await model.load()
+        model.changeStreamingOptions(.init(quality: .original, forceTranscoding: true))
+        await wait { model.phase == .ready && engine.positions.count == 2 }
+        model.handoffSetPhase(.failed(.invalidResponse))
+        XCTAssertTrue(model.showsForcedTranscodingFailureHint)
+        model.changeStreamingOptions(.init(quality: .original))
+        XCTAssertFalse(model.showsForcedTranscodingFailureHint)
+        await wait { model.phase == .ready && engine.positions.count == 3 }
+        model.handoffSetPhase(.failed(.invalidResponse))
+        XCTAssertFalse(model.showsForcedTranscodingFailureHint)
+        await model.stop()
+    }
+
+    func testForceTranscodingContinuationDoesNotTurnAnAutomaticFallbackIntoASetting() async {
+        for selectedOptions: StreamingPlaybackOptions? in [nil, .init(quality: .original)] {
+            let model = PlayerViewModel(
+                provider: QualityPlaybackProvider(), itemID: "movie",
+                continuation: .init(
+                    position: 30, streamingOptions: .init(quality: .original, forceTranscoding: true),
+                    intendsPlayback: true, speed: 1, tracks: .init()
+                ),
+                streamingOptions: selectedOptions,
+                engineFactory: .init(makeNative: { _ in QualityEngine() })
+            )
+            await model.load()
+            XCTAssertTrue(model.streamingIsTranscoding)
+            model.handoffSetPhase(.failed(.invalidResponse))
+            XCTAssertEqual(model.showsForcedTranscodingFailureHint, selectedOptions != nil)
+            await model.stop()
+        }
+    }
+
     func testFailureSnapshotPinsTheOldItemAndAttemptAcrossImmediateRetry() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let journal = PlaybackDiagnosticJournal(url: root.appendingPathComponent("playback.json"))
@@ -490,6 +588,9 @@ final class StreamingPlaybackTests: XCTestCase {
                 XCTAssertEqual(calls.last?.source, "version")
                 XCTAssertEqual(calls.last?.options.quality, options?.quality ?? .original)
                 if options == nil { XCTAssertEqual(calls.last?.options.forceTranscoding, true) }
+                model.handoffSetPhase(.failed(.invalidResponse))
+                XCTAssertFalse(model.showsForcedTranscodingFailureHint,
+                               "Keeping a legacy fallback transcoding is not enabling the user's setting.")
                 await model.stop()
             }
         }
@@ -1576,6 +1677,8 @@ private actor QualityPlaybackProvider: StreamingQualityProviding, StreamingSessi
     private var startReportGate: QualityDecisionGate?
     private var stopReportGate: QualityDecisionGate?
     private var refusesQuality = false
+    private var preparationFailure: StreamingQualityError?
+    private var deliversOriginal = false
     private var hevcFailure: (any Error & Sendable)?
     private var negotiatedCodec: DirectPlayVideoCodec?
     private var sourceRange: String?
@@ -1600,6 +1703,8 @@ private actor QualityPlaybackProvider: StreamingQualityProviding, StreamingSessi
         }
     }
     func setRefusesQuality() { refusesQuality = true }
+    func setPreparationFailure(_ error: StreamingQualityError) { preparationFailure = error }
+    func setDeliversOriginal() { deliversOriginal = true }
     func setHEVCFailure(_ error: any Error & Sendable) { hevcFailure = error }
     func setNegotiatedCodec(_ codec: DirectPlayVideoCodec) { negotiatedCodec = codec }
     func setSourceRange(_ range: String) { sourceRange = range }
@@ -1622,10 +1727,12 @@ private actor QualityPlaybackProvider: StreamingQualityProviding, StreamingSessi
         calls.append(.init(item: itemID, source: mediaSourceID, options: streaming, forceTranscode: forceTranscode))
         let sequence = calls.count
         if let gate { self.gate = nil; await gate.suspend() }
+        if let preparationFailure { throw preparationFailure }
         if refusesQuality { throw StreamingQualityError.unavailable }
         if streaming.codec == .preferHEVC, let hevcFailure { throw hevcFailure }
         var request = baseRequest()
-        request.isTranscoding = streaming.requiresConversionPolicy || compatibilityRendition || forceTranscode
+        request.isTranscoding = !deliversOriginal
+            && (streaming.requiresConversionPolicy || compatibilityRendition || forceTranscode)
         request.deliveryMode = request.isTranscoding ? .transcode : .directPlay
         request.streamingOptions = streaming
         request.playSessionID = "report-\(sequence)"

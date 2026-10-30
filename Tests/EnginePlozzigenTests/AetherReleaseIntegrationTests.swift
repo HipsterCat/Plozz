@@ -201,8 +201,8 @@ final class AetherReleaseIntegrationTests: XCTestCase {
     private func assertSpatialRendering(
         _ options: LoadOptions, enabled: Bool, file: StaticString = #filePath, line: UInt = #line
     ) {
-        #if os(tvOS)
-        if #available(tvOS 26.0, *), enabled {
+        #if os(tvOS) || os(iOS)
+        if #available(tvOS 26.0, iOS 26.0, *), enabled {
             XCTAssertEqual(options.objectAudioRendering, .render(.l916), file: file, line: line)
             return
         }

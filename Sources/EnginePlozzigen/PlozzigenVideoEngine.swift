@@ -866,8 +866,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         // Explicit durations may exceed the automatic 2 GiB cap. The engine still
         // clamps this request to its available-space limit and shared retention ledger.
         options.sessionCacheByteBudget = readAhead == .automatic ? nil : Int.max
-        #if os(tvOS)
-        if #available(tvOS 26.0, *), trueHDAtmosEnabled,
+        #if os(tvOS) || os(iOS)
+        if #available(tvOS 26.0, iOS 26.0, *), trueHDAtmosEnabled,
            outputPolicy.isAudible, !outputPolicy.sharesAudioSession {
             // This is the rendering bed, not detected speakers. Aether chooses PCM
             // or APAC for the route and retains its source/channel fallback.

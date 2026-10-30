@@ -39,6 +39,82 @@ final class NativeSettingsToggleTests: XCTestCase {
         try await verifyNativeSwitch(grouped: false)
     }
 
+    func testAdaptiveCardSettingsKeepLabelsAndIndicatorsInFirstViewport() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "CompactCardSettings.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let cards = CardStyleSettingsModel(store: CardStyleSettingsStore(defaults: defaults))
+        let indicators = WatchStatusIndicatorSettingsModel(store: WatchStatusIndicatorSettingsStore(defaults: defaults))
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        window.rootViewController = UIHostingController(rootView:
+            NavigationStack {
+                CardAppearanceControls(cards: cards, watchIndicator: indicators)
+            }
+            .environment(\.themePalette, .dark)
+            .environment(\.colorScheme, .dark)
+            .environment(\.locale, Locale(identifier: "en_US"))
+        )
+        window.makeKeyAndVisible()
+        for width: CGFloat in [390, 600, 834, 600] {
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 900)
+            for mode in WatchStatusIndicator.allCases {
+                indicators.indicator = mode
+                try await settle(window)
+                let text = try captureText(window, name: "adaptive-cards-\(Int(width))-\(mode)")
+                for label in ["Labels", "Customize labels", "Watch indicators", "Show unwatched episode count"] {
+                    XCTAssertTrue(text.localizedCaseInsensitiveContains(label), text)
+                }
+                for label in ["Show labels everywhere", "Hide labels everywhere"] {
+                    XCTAssertEqual(text.contains(label), width == 834, text)
+                }
+                XCTAssertEqual(text.contains("Hidden"), width == 834 || mode == .hidden, text)
+                XCTAssertEqual(text.contains("Color"), mode != .hidden)
+                XCTAssertTrue(indicators.showsUnwatchedEpisodeCount)
+            }
+        }
+    }
+
+    func testCardPickerUsesAvailableWidthAndAccessibilityFallback() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 900, height: 900)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for size in [DynamicTypeSize.large, .accessibility1] {
+            for width: CGFloat in [631, 632, 900, 400] {
+                window.rootViewController = UIHostingController(rootView:
+                    AdaptiveCardSettingsPicker {
+                        Text("Side by side")
+                    } compact: {
+                        Text("Compact menu")
+                    }
+                    .frame(width: width)
+                    .environment(\.dynamicTypeSize, size)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                )
+                window.makeKeyAndVisible()
+                try await settle(window)
+                let text = try captureText(window, name: "card-picker-fit-\(Int(width))-\(size)")
+                let showsChoices = width >= 632 && !size.isAccessibilitySize
+                XCTAssertEqual(text.contains("Side by side"), showsChoices, text)
+                XCTAssertEqual(text.contains("Compact menu"), !showsChoices, text)
+            }
+        }
+    }
+
     func testSkipToggleRevealsOnlySettingsLinkAndRetainsProfileChoices() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -419,11 +495,18 @@ final class NativeSettingsToggleTests: XCTestCase {
                 let text = try captureText(
                     window, name: "fel-settings-\(Int(width))-\(scheme)"
                 )
-                for label in ["FEL", "experimental", "May impact performance.", "Disables spatial audio."] {
+                for label in ["FEL", "experimental", "May impact performance."] {
                     XCTAssertTrue(text.contains(label), "The setting and tradeoff must be visible: \(text)")
                 }
                 XCTAssertFalse(text.contains("Dolby Atmos"), text)
-                XCTAssertFalse(text.contains("DTS:X"), text)
+                if #available(iOS 26.0, *) {
+                    XCTAssertFalse(text.contains("Disables spatial audio."), text)
+                    XCTAssertTrue(text.contains("Rendering layout"), text)
+                    XCTAssertTrue(text.contains("DTS:X"), text)
+                } else {
+                    XCTAssertTrue(text.contains("Disables spatial audio."), text)
+                    XCTAssertFalse(text.contains("Rendering layout"), text)
+                }
                 control.setOn(true, animated: false)
                 control.sendActions(for: .valueChanged)
                 try await settle(window)
@@ -432,6 +515,66 @@ final class NativeSettingsToggleTests: XCTestCase {
                 XCTAssertFalse(PlaybackSettingsStore(defaults: defaults).load().dolbyVisionFELEnabled)
                 XCTAssertEqual(external.settings.player, .builtIn)
                 try assertGreenOnState(control, in: window)
+            }
+        }
+    }
+
+    func testSpatialAudioUsesNativeSwitchAndPreservesProfileChoicesOnPhoneAndTablet() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let suite = "SpatialAudioSettingsHosted-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let store = PlaybackSettingsStore(defaults: defaults, namespace: "guest")
+        for width: CGFloat in [390, 834] {
+            for scheme: ColorScheme in [.light, .dark] {
+                store.save(.default)
+                let playback = PlaybackSettingsModel(store: store)
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 900)
+                window.overrideUserInterfaceStyle = scheme == .dark ? .dark : .light
+                window.rootViewController = UIHostingController(rootView:
+                    List {
+                        SettingsSectionGroup("Audio") {
+                            SpatialAudioControl(isOn: Binding(
+                                get: { playback.settings.trueHDAtmosEnabled },
+                                set: { playback.settings.trueHDAtmosEnabled = $0 }
+                            ))
+                        }
+                    }
+                    .settingsPageSurface()
+                    .environment(\.colorScheme, scheme)
+                    .environment(\.themePalette, scheme == .dark ? .dark : .light)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                )
+                window.makeKeyAndVisible()
+                try await settle(window)
+                let switches = listedSwitches(in: window)
+                if #available(iOS 26.0, *) {
+                    XCTAssertEqual(switches.count, 1)
+                    let control = try XCTUnwrap(switches.first)
+                    XCTAssertTrue(control.isOn)
+                    try assertGreenOnState(control, in: window)
+                    let text = try captureText(window, name: "spatial-audio-\(Int(width))-\(scheme)")
+                    for label in ["Spatial audio", "TrueHD Atmos", "DTS:X", "AirPlay"] {
+                        XCTAssertTrue(text.contains(label), text)
+                    }
+                    control.setOn(false, animated: false)
+                    control.sendActions(for: .valueChanged)
+                    try await settle(window)
+                    XCTAssertFalse(playback.settings.trueHDAtmosEnabled)
+                    XCTAssertFalse(PlaybackSettingsModel(store: store).settings.trueHDAtmosEnabled)
+                } else {
+                    XCTAssertTrue(switches.isEmpty)
+                    XCTAssertTrue(store.load().trueHDAtmosEnabled)
+                }
+                XCTAssertTrue(PlaybackSettingsStore(defaults: defaults).load().trueHDAtmosEnabled)
             }
         }
     }

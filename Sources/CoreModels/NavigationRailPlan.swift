@@ -113,28 +113,41 @@ public enum NavigationDestinationDefaults {
         return keys
     }
 
+    public static let iOSDefaultVisibleKeys = [
+        NavigationLibraryLayout.homeKey,
+        NavigationLibraryLayout.downloadsKey,
+        NavigationLibraryLayout.searchKey,
+    ]
+
+    /// The editor's catalogue, not the default enabled tabs.
     public static var iOS: [String] {
-        var keys = [NavigationLibraryLayout.homeKey, NavigationLibraryLayout.watchlistKey]
-        keys.append(NavigationLibraryLayout.liveTVKey)
-        return keys + [
-            NavigationLibraryLayout.downloadsKey,
+        iOSDefaultVisibleKeys + [
+            NavigationLibraryLayout.watchlistKey,
+            NavigationLibraryLayout.liveTVKey,
             NavigationLibraryLayout.settingsKey,
-            NavigationLibraryLayout.searchKey,
         ]
     }
 
     public static func iOS(visibleLibraries: [AggregatedLibrary]) -> [String] {
         var keys = iOS
+        let libraries = NavigationRailPlan.browsableLibraries(visibleLibraries)
         keys.insert(
-            contentsOf: NavigationRailPlan.browsableLibraries(visibleLibraries).map(\.key),
-            at: keys.count - 2
+            contentsOf: (libraries.count > 1 ? [NavigationLibraryLayout.allLibrariesKey] : [])
+                + libraries.map(\.key),
+            at: keys.count - 1
         )
         return keys
     }
 
-    /// The profile button opens Settings; its optional tab must not force a
-    /// sixth default destination into More.
-    public static let iOSAutomaticallyHiddenKeys: Set<String> = [NavigationLibraryLayout.settingsKey]
+    public static var iOSAutomaticallyHiddenKeys: Set<String> {
+        iOSAutomaticallyHiddenKeys(available: iOS)
+    }
+
+    /// New libraries stay in the editor until explicitly shown. This is a
+    /// presentation default, not a persisted hide or a content restriction.
+    public static func iOSAutomaticallyHiddenKeys(available: [String]) -> Set<String> {
+        Set(available).subtracting(iOSDefaultVisibleKeys)
+    }
 }
 
 public enum NavigationRailPlan {

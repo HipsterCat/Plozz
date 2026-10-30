@@ -314,6 +314,7 @@ public struct PlozziOSRootView: View {
             appModel.settings.watchIndicator.indicator
         )
         .environment(\.plozzShowsUnwatchedEpisodeCount, appModel.settings.watchIndicator.showsUnwatchedEpisodeCount)
+        .environment(\.plozzShowsProgressBars, appModel.settings.watchIndicator.showsProgressBars)
         .environment(\.plozzEpisodeCountBadgeStyle, appModel.settings.watchIndicator.episodeCountStyle)
         .environment(\.plozzWatchIndicatorColor, appModel.settings.watchIndicator.color)
         // See the note in RootView: drives whether an unowned title's corner mark
@@ -768,6 +769,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
     case downloads
     case search
     case settings
+    case allLibraries
     case library(String)
 
     var id: Self { self }
@@ -780,6 +782,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case .downloads: "downloads"
         case .search: "search"
         case .settings: "settings"
+        case .allLibraries: "allLibraries"
         case let .library(key): "library:\(key)"
         }
     }
@@ -792,6 +795,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case "downloads": self = .downloads
         case "search": self = .search
         case "settings": self = .settings
+        case "allLibraries": self = .allLibraries
         default:
             guard rawValue.hasPrefix("library:") else { return nil }
             self = .library(String(rawValue.dropFirst("library:".count)))
@@ -800,6 +804,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
 
     var diagnosticCategory: String {
         if case .library = self { return "library" }
+        if self == .allLibraries { return "library" }
         return rawValue
     }
 
@@ -811,6 +816,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case .downloads: "Downloads"
         case .search: "Search"
         case .settings: "Settings"
+        case .allLibraries: AllLibrariesBrowse.title
         case .library: "Libraries"
         }
     }
@@ -823,6 +829,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case .downloads: "arrow.down.circle"
         case .search: "magnifyingglass"
         case .settings: "gearshape"
+        case .allLibraries: "square.stack.3d.up"
         case .library: "rectangle.stack"
         }
     }
@@ -855,6 +862,7 @@ struct PlozziOSTabShell: View {
     private var heroTrailerController
     @State private var selectedDestination: PlozziOSDestination = .home
     @State private var isShowingMorePage = false
+    @State private var overflowNavigation = PlozziOSOverflowNavigation()
     @State private var hasVisibleSettingsNavigationEntry = false
     @State private var lastContentDestination: PlozziOSDestination = .home
     @State private var retainsExplicitLiveTVEntry = false
@@ -932,17 +940,14 @@ struct PlozziOSTabShell: View {
         _lastContentDestination = State(initialValue: initial)
     }
 
-    static func configuredDestinations(
-        appModel: PlozziOSAppModel,
-        retainingWatchlist: Bool = false
-    ) -> [PlozziOSDestination] {
+    static func configuredDestinations(appModel: PlozziOSAppModel) -> [PlozziOSDestination] {
         let navigation = appModel.settings.navigation
         let libraries = appModel.visibleNavigationLibraries
         let libraryKeys = Set(libraries.map(\.key))
         return navigation.libraryLayout.resolvingAutomaticVisibility(
-            hidden: navigationAvailability(appModel: appModel).automaticallyHiddenKeys
-                .union(NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys),
-            retainingWatchlist: retainingWatchlist
+            hidden: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(
+                available: NavigationDestinationDefaults.iOS(visibleLibraries: libraries)
+            )
         )
             .sections(
                 available: NavigationDestinationDefaults.iOS(visibleLibraries: libraries),
@@ -956,6 +961,7 @@ struct PlozziOSTabShell: View {
                 case NavigationLibraryLayout.searchKey: return .search
                 case NavigationLibraryLayout.downloadsKey: return .downloads
                 case NavigationLibraryLayout.settingsKey: return .settings
+                case NavigationLibraryLayout.allLibrariesKey: return .allLibraries
                 default: return libraryKeys.contains(key) ? .library(key) : nil
                 }
             }
@@ -980,10 +986,7 @@ struct PlozziOSTabShell: View {
     }
 
     private var tabDestinations: [PlozziOSDestination] {
-        var configured = Self.configuredDestinations(
-            appModel: appModel,
-            retainingWatchlist: selectedDestination == .watchlist && !isShowingMorePage
-        )
+        var configured = Self.configuredDestinations(appModel: appModel)
         if retainsExplicitHomeEntry, !configured.contains(.home) {
             configured.insert(.home, at: 0)
         }
@@ -1047,8 +1050,18 @@ struct PlozziOSTabShell: View {
     }
 
     private func tabContent(for destination: PlozziOSDestination) -> some View {
-        NavigationStack {
-            destinationContent(for: destination)
+        let isOverflow = overflowNavigation.destinationIndex.map {
+            tabDestinations.indices.contains($0) && tabDestinations[$0] == destination
+        } ?? false
+        return NavigationStack {
+            destinationContent(for: destination, keepsNavigationBar: isOverflow)
+                .toolbar {
+                    if isOverflow, destination != .downloads {
+                        PlozziOSOverflowBackToolbarItem(action: overflowNavigation.returnToMore)
+                    }
+                }
+                .environment(\.plozziOSIsOverflowDestination, isOverflow)
+                .environment(\.plozziOSOverflowNavigation, overflowNavigation)
         }
         .id(destination == .downloads ? downloadNavigationID : nil)
     }
@@ -1146,6 +1159,17 @@ struct PlozziOSTabShell: View {
             .plozziOSItemNavigation(appModel: appModel)
             .toolbarBackground(.hidden, for: .navigationBar)
             .background { AppBackground(palette: palette) }
+        case .allLibraries:
+            PlozziOSAllLibrariesDestinationView(appModel: appModel)
+                .id(homeContentIdentity + "|" + allLibrariesSourceSignature(appModel.visibleNavigationLibraries))
+                .plozziOSItemNavigation(appModel: appModel)
+                .plozziOSLibraryDestination(appModel: appModel)
+                .toolbar {
+                    if usesVerticalToolbar || !hasVisibleSettingsNavigationEntry {
+                        PlozziOSSettingsToolbarItem(horizontalPlacement: .primaryAction, action: showSettings)
+                    }
+                }
+                .background { AppBackground(palette: palette) }
         case let .library(key):
             if let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) {
                 PlozziOSLibraryDestinationView(
@@ -1178,12 +1202,15 @@ struct PlozziOSTabShell: View {
               let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) else {
             return Text(destination.title)
         }
-        let hasDuplicateName = appModel.visibleNavigationLibraries.contains {
-            $0.key != key && $0.library.title == library.library.title
+        return library.library.displayName
+    }
+
+    func destinationSystemImage(_ destination: PlozziOSDestination) -> String {
+        guard case let .library(key) = destination,
+              let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) else {
+            return destination.systemImage
         }
-        return hasDuplicateName
-            ? library.library.displayName + Text(verbatim: " · \(library.serverName)")
-            : library.library.displayName
+        return library.library.navigationSymbolName
     }
 
     private static func makeHomeViewModel(
@@ -1247,7 +1274,7 @@ struct PlozziOSTabShell: View {
                                     profile: appModel.profiles.activeProfile, size: 28, rendersAsImage: true
                                 )
                             } else {
-                                Image(systemName: destination.systemImage)
+                                Image(systemName: destinationSystemImage(destination))
                             }
                         }
                     }
@@ -1261,7 +1288,8 @@ struct PlozziOSTabShell: View {
                 tabIndex: tabDestinations.firstIndex(of: .settings),
                 action: showSettings,
                 onOverflowVisibilityChange: { isShowingMorePage = $0 },
-                onSettingsVisibilityChange: { hasVisibleSettingsNavigationEntry = $0 }
+                onSettingsVisibilityChange: { hasVisibleSettingsNavigationEntry = $0 },
+                overflowNavigation: overflowNavigation
             )
             .frame(width: 0, height: 0)
         }
@@ -1274,8 +1302,10 @@ struct PlozziOSTabShell: View {
         .onReceive(NotificationCenter.default.publisher(for: .universalWatchlistCacheDidLoad)) { _ in
             refreshWatchlistNavigation()
         }
-        .onChange(of: Self.navigationAvailability(appModel: appModel), initial: true) { _, availability in
-            appModel.settings.navigation.automaticallyHiddenKeys = availability.automaticallyHiddenKeys
+        .onChange(of: NavigationDestinationDefaults.iOS(visibleLibraries: appModel.visibleNavigationLibraries),
+                  initial: true) { _, available in
+            appModel.settings.navigation.automaticallyHiddenKeys =
+                NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: available)
         }
         .task(id: homeContentIdentity, priority: .utility) {
             await refreshNavigationLibraries()
@@ -1599,6 +1629,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
     let action: () -> Void
     var onOverflowVisibilityChange: ((Bool) -> Void)?
     var onSettingsVisibilityChange: ((Bool) -> Void)?
+    var overflowNavigation: PlozziOSOverflowNavigation?
 
     func makeUIViewController(context: Context) -> Controller { Controller() }
 
@@ -1607,6 +1638,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         controller.action = action
         controller.onOverflowVisibilityChange = onOverflowVisibilityChange
         controller.onSettingsVisibilityChange = onSettingsVisibilityChange
+        controller.overflowNavigation = overflowNavigation
         controller.install()
     }
 
@@ -1615,6 +1647,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         controller.action = nil
         controller.onOverflowVisibilityChange = nil
         controller.onSettingsVisibilityChange = nil
+        controller.overflowNavigation = nil
     }
 
     final class Controller: UIViewController, UITabBarControllerDelegate, UITableViewDelegate, UINavigationControllerDelegate {
@@ -1622,6 +1655,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         var action: (() -> Void)?
         var onOverflowVisibilityChange: ((Bool) -> Void)?
         var onSettingsVisibilityChange: ((Bool) -> Void)?
+        var overflowNavigation: PlozziOSOverflowNavigation?
         private var reportedSettingsVisibility: Bool?
         private var reportedOverflowVisibility: Bool?
         private weak var owner: UITabBarController?
@@ -1629,6 +1663,7 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         private weak var overflowTable: UITableView?
         private weak var previousOverflowDelegate: (any UITableViewDelegate)?
         private weak var previousMoreDelegate: (any UINavigationControllerDelegate)?
+        private var previousMoreNavigationBarHidden: Bool?
 
         override func didMove(toParent parent: UIViewController?) {
             super.didMove(toParent: parent)
@@ -1683,11 +1718,20 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
             return nil
         }
 
+        private func tabControllers(in tabs: UITabBarController) -> [UIViewController?] {
+            // Native UITab-backed controllers need not populate the legacy array.
+            tabs.tabs.isEmpty ? (tabs.viewControllers ?? []) : tabs.tabs.map(\.viewController)
+        }
+
         func restore() {
             if owner?.moreNavigationController.delegate === self {
                 owner?.moreNavigationController.delegate = previousMoreDelegate
+                if let previousMoreNavigationBarHidden {
+                    owner?.moreNavigationController.setNavigationBarHidden(previousMoreNavigationBarHidden, animated: false)
+                }
             }
             previousMoreDelegate = nil
+            previousMoreNavigationBarHidden = nil
             if overflowTable?.delegate === self { overflowTable?.delegate = previousOverflowDelegate }
             overflowTable = nil
             previousOverflowDelegate = nil
@@ -1722,7 +1766,11 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
             let more = tabs.moreNavigationController
             if more.delegate !== self {
                 previousMoreDelegate = more.delegate
+                previousMoreNavigationBarHidden = more.isNavigationBarHidden
                 more.delegate = self
+            }
+            if let shown = more.topViewController {
+                updateOverflowNavigation(in: more, showing: shown, animated: false)
             }
             func findTable(in view: UIView) -> UITableView? {
                 if let table = view as? UITableView { return table }
@@ -1743,6 +1791,39 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
 
         func navigationController(
             _ navigationController: UINavigationController,
+            willShow viewController: UIViewController, animated: Bool
+        ) {
+            previousMoreDelegate?.navigationController?(
+                navigationController, willShow: viewController, animated: animated
+            )
+            updateOverflowNavigation(in: navigationController, showing: viewController, animated: animated)
+        }
+
+        private func updateOverflowNavigation(
+            in navigationController: UINavigationController,
+            showing viewController: UIViewController,
+            animated: Bool
+        ) {
+            guard let owner, let overflowNavigation,
+                  navigationController === owner.moreNavigationController else { return }
+            let index = tabControllers(in: owner).firstIndex { $0 === viewController }
+            // More wraps the tab's existing SwiftUI NavigationStack. Only the
+            // inner bar should draw chrome while a destination is on screen.
+            let hidesOuterBar = index != nil || previousMoreNavigationBarHidden == true
+            if navigationController.isNavigationBarHidden != hidesOuterBar {
+                navigationController.setNavigationBarHidden(hidesOuterBar, animated: animated)
+            }
+            guard overflowNavigation.destinationIndex != index
+                    || overflowNavigation.navigationController !== navigationController else { return }
+            Task { @MainActor [weak self, weak owner, weak navigationController, weak viewController] in
+                guard let self, let owner, let navigationController, let viewController,
+                      self.owner === owner, navigationController.topViewController === viewController else { return }
+                overflowNavigation.update(destinationIndex: index, navigationController: navigationController)
+            }
+        }
+
+        func navigationController(
+            _ navigationController: UINavigationController,
             didShow viewController: UIViewController, animated: Bool
         ) {
             previousMoreDelegate?.navigationController?(
@@ -1754,15 +1835,17 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
 
         func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
             // Native More bypasses the tab-selection delegate when it pushes a row.
-            if let owner, let tabIndex, let controllers = owner.viewControllers,
-               controllers.indices.contains(tabIndex), indexPath.section == 0 {
+            if let owner, let tabIndex, indexPath.section == 0 {
+                let controllers = tabControllers(in: owner)
                 let visibleItems = owner.tabBar.items ?? []
-                let overflow = controllers.filter { controller in
-                    !visibleItems.contains { $0 === controller.tabBarItem }
+                let overflow = controllers.indices.filter { index in
+                    guard let controller = controllers[index] else { return true }
+                    return !visibleItems.contains { $0 === controller.tabBarItem }
                 }
                 if overflow.count == tableView.numberOfRows(inSection: 0),
+                   controllers.indices.contains(tabIndex),
                    overflow.indices.contains(indexPath.row),
-                   overflow[indexPath.row] === controllers[tabIndex] {
+                   overflow[indexPath.row] == tabIndex {
                     action?()
                     return nil
                 }
@@ -1807,8 +1890,8 @@ struct PlozziOSSettingsTabAction: UIViewControllerRepresentable {
         }
 
         func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
-            if let tabIndex, let controllers = tabBarController.viewControllers,
-               controllers.indices.contains(tabIndex), controllers[tabIndex] === viewController {
+            let controllers = tabControllers(in: tabBarController)
+            if let tabIndex, controllers.indices.contains(tabIndex), controllers[tabIndex] === viewController {
                 action?()
                 return false
             }
@@ -1865,7 +1948,7 @@ private struct PlozziOSDestinationView: View {
                 viewModel: sharedHomeViewModel,
                 onShowSettings: onShowSettings
             )
-        case .liveTV, .library:
+        case .liveTV, .library, .allLibraries:
             EmptyView()
         case .search:
             PlozziOSSearchView(
@@ -1901,6 +1984,7 @@ private struct PlozziOSDestinationView: View {
 private struct PlozziOSWatchlistLandingView: View {
     @Environment(\.mediaItemNavigator) private var navigateToItem
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
     let appModel: PlozziOSAppModel
     let viewModel: HomeViewModel
     let onShowSettings: () -> Void
@@ -1977,7 +2061,7 @@ private struct PlozziOSWatchlistLandingView: View {
         }
         .navigationTitle("Watchlist")
         .environment(\.plozzCardCaptionView, .watchlist)
-        .toolbarTitleDisplayMode(.large)
+        .toolbarTitleDisplayMode(isOverflowDestination ? .inline : .large)
         .toolbar {
             PlozziOSSettingsToolbarItem(action: onShowSettings)
         }
@@ -2037,6 +2121,7 @@ private struct PlozziOSWatchlistLandingView: View {
 }
 
 private struct PlozziOSHomeLandingView: View {
+    @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
     let appModel: PlozziOSAppModel
     let viewModel: HomeViewModel
     let onAddServer: () -> Void
@@ -2058,7 +2143,7 @@ private struct PlozziOSHomeLandingView: View {
                 }
             }
             .navigationTitle("Home")
-            .toolbarTitleDisplayMode(.large)
+            .toolbarTitleDisplayMode(isOverflowDestination ? .inline : .large)
             .toolbar {
                 PlozziOSSettingsToolbarItem(action: onShowSettings)
             }

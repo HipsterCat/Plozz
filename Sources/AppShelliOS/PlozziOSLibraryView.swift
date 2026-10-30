@@ -119,23 +119,27 @@ private struct PlozziOSLibraryList: View {
     }
 }
 
-private struct PlozziOSLibraryCard: View {
+struct PlozziOSLibraryCard: View {
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.themePalette) private var palette
+    @Environment(\.plozzCardCaptionSettings) private var captions
     let library: MediaLibrary
 
-    @ViewBuilder
     var body: some View {
-        if cardStyle == .framed {
-            content
-                .plozzFramedMediaCard(
-                    innerCornerRadius: metrics.landscapeArtworkCornerRadius
-                )
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-        } else {
-            content
+        Group {
+            if cardStyle == .framed {
+                content
+                    .plozzFramedMediaCard(
+                        innerCornerRadius: metrics.landscapeArtworkCornerRadius
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+            } else {
+                content
+            }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(library.displayName)
     }
 
     private var content: some View {
@@ -168,14 +172,16 @@ private struct PlozziOSLibraryCard: View {
                 cornerRadius: metrics.landscapeArtworkCornerRadius
             )
 
-            library.displayName
-                .font(.headline)
-                .lineLimit(2)
-                .padding(.horizontal, metrics.landscapeCaptionHorizontalInset)
-                .padding(
-                    .bottom,
-                    cardStyle == .framed ? metrics.landscapeCaptionInset : 0
-                )
+            if captions.showsLabels {
+                library.displayName
+                    .font(.headline)
+                    .lineLimit(2)
+                    .padding(.horizontal, metrics.landscapeCaptionHorizontalInset)
+                    .padding(
+                        .bottom,
+                        cardStyle == .framed ? metrics.landscapeCaptionInset : 0
+                    )
+            }
         }
         .contentShape(Rectangle())
     }
@@ -208,19 +214,22 @@ struct PlozziOSLibraryGridView: View {
     /// Passed rather than read from the environment so the pushed destination
     /// carries it explicitly, like every other dependency on this route.
     private let scanStatus: ShareScanStatusModel?
+    private let isCombinedLibrary: Bool
 
     init(
         viewModel: LibraryBrowseViewModel,
         title: String,   // l10n:content — library name from the server
         provider: any MediaProvider,
         settings: PlozziOSSettingsModel,
-        scanStatus: ShareScanStatusModel? = nil
+        scanStatus: ShareScanStatusModel? = nil,
+        isCombinedLibrary: Bool = false
     ) {
         _viewModel = State(initialValue: viewModel)
         self.title = title
         self.provider = provider
         self.settings = settings
         self.scanStatus = scanStatus
+        self.isCombinedLibrary = isCombinedLibrary
     }
 
     var body: some View {
@@ -430,6 +439,7 @@ struct PlozziOSLibraryGridView: View {
                             generation: generation,
                             style: viewModel.gridStyle == .landscape ? .landscape : .poster,
                             provider: provider,
+                            isCombinedLibrary: isCombinedLibrary,
                             playlistOrigin: { viewModel.playlistOrigin(at: index) },
                             onAppear: { await viewModel.itemAppeared(at: index, generation: generation) },
                             onDisappear: { viewModel.itemDisappeared(at: index, generation: generation) }
@@ -618,6 +628,7 @@ private struct PlozziOSLibraryItemCell: View {
     let generation: Int
     var style: PosterCardView.Style = .poster
     let provider: any MediaProvider
+    var isCombinedLibrary = false
     let playlistOrigin: () -> VideoPlaylistPlaybackOrigin?
     let onAppear: () async -> Void
     let onDisappear: () -> Void
@@ -642,6 +653,13 @@ private struct PlozziOSLibraryItemCell: View {
                             accountID: library.sourceAccountID ?? provider.session.server.id
                         )
                     ) {
+                        card
+                    }
+                    .buttonStyle(.plain)
+                } else if isCombinedLibrary {
+                    NavigationLink {
+                        PlozziOSItemPage(appModel: appModel, item: item)
+                    } label: {
                         card
                     }
                     .buttonStyle(.plain)

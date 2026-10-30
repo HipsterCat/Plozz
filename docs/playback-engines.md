@@ -279,7 +279,7 @@ filling a large cushion.
 
 The 7.48.0 integration adds VP9 hardware decoding on supported devices, with a
 software fallback, and AV1 Dolby Vision Profile 10.1 metadata on the software
-presentation path. On tvOS 26+, software/FEL playback can use the existing spatial-audio
+presentation path. On tvOS and iOS/iPadOS 26+, software/FEL playback can use the existing spatial-audio
 preference instead of always falling back to a channel bed. TrueHD's optional
 renderer now decodes the object presentation with matrix interpolation through
 LibTrueHD 3.1.0. This is spatial conversion, not lossless bitstream passthrough.
@@ -381,7 +381,7 @@ toggle's desired mode or the receiver's output.
 
 ### Spatial audio
 
-**Spatial audio defaults on for supported on-demand playback on tvOS 26+.**
+**Spatial audio defaults on for supported on-demand playback on tvOS and iOS/iPadOS 26+.**
 The profile-scoped `trueHDAtmosEnabled` key preserves existing Off choices and
 profile transfers; missing or malformed values use the central default. A build
 that previously omitted the preference cannot recover an Off value already
@@ -405,6 +405,11 @@ At load, Aether selects 24-bit PCM unless the active route includes AirPlay,
 which uses lossy APAC. PCM avoids an additional lossy encode of the rendered bed;
 it is not source-bit-identical object audio or original compressed-bitstream
 passthrough. Actual overhead output still requires compatible equipment.
+On iPhone/iPad, compatible AirPods use the system's spatial rendering automatically
+when Spatial Audio is enabled in the OS. Plozz does not override Off, Fixed or
+Head Tracked preferences. Both playback engines declare multichannel content;
+no separate AirPods setting or route-based opt-in is required. The engine selects
+the bed format at load, rather than restarting playback when headphones connect.
 Diagnostics identify actual `PCM <layout>` pipelines as **Rendered to PCM** and
 APAC as **Lossy encoding**, never inferring either from the selected setting.
 
@@ -418,8 +423,8 @@ feature does not establish licensing compliance or guarantee App Store approval.
 
 Off and unsupported paths retain the ordinary channel presentation selected by
 Lossless surround: FLAC by default, or the E-AC-3 compatibility bridge when off. Live streams,
-shared players, muted previews and iOS/iPadOS do not request conversion. On tvOS
-26+, eligible FEL/software audio can use the existing spatial-audio preference;
+shared players, muted previews and OS versions before 26 do not request conversion.
+On tvOS and iOS/iPadOS 26+, eligible FEL/software audio can use the existing spatial-audio preference;
 unsupported or disabled paths retain channel PCM. Native E-AC-3/JOC stream-copy
 is unaffected. Explicit track selections and language preferences
 remain authoritative. Progressive segment delivery remains off.
@@ -526,16 +531,16 @@ layer is discarded.
 
 FEL decodes both layers with VideoToolbox and reconstructs the picture with Metal.
 It adds GPU/memory work and uses the sample-buffer playback path, not AVPlayer.
-On tvOS 26+, the existing Spatial audio preference also applies to eligible FEL
+On tvOS and iOS/iPadOS 26+, the existing Spatial audio preference also applies to eligible FEL
 audio: E-AC-3/JOC can reach the audio renderer compressed, and supported TrueHD
-and DTS:X tracks use APAC spatial conversion. Other tracks and disabled spatial
-conversion retain channel PCM. Plozz does not request this conversion on iOS/iPadOS
-or older tvOS, so FEL still drops spatial information there, including for
+and DTS:X tracks use route-selected PCM or APAC spatial conversion. Other tracks and disabled spatial
+conversion retain channel PCM. Plozz does not request this conversion on
+OS versions before 26, so FEL still drops spatial information there, including for
 E-AC-3/JOC. The helper says **May impact performance.**, adding **Disables spatial
 audio.** only on those platforms. Non-FEL titles keep their ordinary audio paths.
-Upstream's software spatial-audio measurements cover macOS, not tvOS hardware;
-these routing capabilities do not establish receiver compatibility or verified
-overhead output on a particular Apple TV setup.
+Upstream reports spatial-bed measurements on Apple TV, iPhone with AirPods and
+Mac. Those engine-level results do not establish verified Plozz output or
+head tracking on a particular device and output setup.
 
 Upstream documents measured Dolby Vision metadata consumption on tvOS, but not
 on iOS/iPadOS. Enabling the option is not evidence that a particular file took
@@ -767,11 +772,11 @@ retention assertions; they do not establish physical-device frame pacing.
 | Feature | Plozzigen | Native |
 |---------|-----------|--------|
 | Dolby Vision | ✅ (Profile 5/8; optional dual-layer path, see above) | ✅ (if server delivers DV) |
-| Directly compatible spatial audio | ✅ (E-AC-3 JOC on the native path; software/FEL also eligible with Spatial audio on, tvOS 26+) | ✅ (if stream has E-AC-3 JOC) |
+| Directly compatible spatial audio | ✅ (E-AC-3 JOC on the native path; software/FEL also eligible with Spatial audio on, tvOS/iOS 26+) | ✅ (if stream has E-AC-3 JOC) |
 | HDR10 / HLG | ✅ | ✅ |
 | Full-timeline seek | ✅ | ✅ (if not live transcode) |
 | PGS subtitles | ✅ (engine-owned subtitle paths) | ❌ (server burn-in needed) |
-| Spatial audio conversion with heights | ✅ (supported native and software/FEL tracks on tvOS 26+, lossy) | ❌ |
+| Spatial audio conversion with heights | ✅ (supported native and software/FEL tracks on tvOS/iOS 26+, rendered PCM or lossy APAC) | ❌ |
 | DTS bitstream | ❌ (channel audio uses FLAC/E-AC-3 bridge) | ❌ |
 | TrueHD bitstream | ❌ (channel audio uses FLAC/E-AC-3 bridge) | ❌ |
 

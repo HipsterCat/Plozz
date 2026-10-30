@@ -66,7 +66,7 @@ public struct NavigationLibrariesDetailView: View {
         let keys = NavigationDestinationDefaults.iOS(
             visibleLibraries: includesIndividualLibraries ? visible : []
         )
-        let automaticallyHiddenDestinations = NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
+        let automaticallyHiddenDestinations = NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: keys)
         #else
         let keys = NavigationRailPlan.customizableKeys(
             visibleLibraries: includesIndividualLibraries ? visible : [], style: navigation.style
@@ -126,9 +126,8 @@ public struct NavigationLibrariesDetailView: View {
         }
     }
 
-    /// One row descriptor per arrangeable key: library name, provider brand mark,
-    /// and server name so same-named libraries on different servers are distinct.
-    private static func rowsByKey(
+    /// Content glyphs match navigation; provider and server share the subtitle.
+    static func rowsByKey(
         visible: [AggregatedLibrary]
     ) -> [String: LiftableReorderList<String>.Row] {
         var rows: [String: LiftableReorderList<String>.Row] = [
@@ -147,9 +146,11 @@ public struct NavigationLibrariesDetailView: View {
         for aggregated in NavigationRailPlan.browsableLibraries(visible) {
             rows[aggregated.key] = LiftableReorderList<String>.Row(
                 title: aggregated.library.displayName,
+                symbolName: aggregated.library.navigationSymbolName,
                 providerKind: aggregated.providerKind,
                 mediaShareTransport: aggregated.transportKind,
-                detail: Text(verbatim: aggregated.serverName)
+                subtitle: Text(verbatim: aggregated.serverName),
+                providerMarkInSubtitle: true
             )
         }
         return rows
@@ -171,7 +172,7 @@ public struct NavigationLibrariesDetailView: View {
     private var footnote: LocalizedStringResource { Self.mobileFootnote }
     private static let mobileFootnote = LocalizedStringResource(
         "navigationArrangement.footnote.iOS",
-        defaultValue: "Drag to reorder. Hold to hide or show. Unused pages hide automatically unless you show them.",
+        defaultValue: "Drag to reorder. Hold to hide or show.",
         comment: "Instructions for arranging iPhone and iPad navigation tabs."
     )
     #else

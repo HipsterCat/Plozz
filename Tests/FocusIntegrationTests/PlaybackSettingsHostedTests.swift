@@ -342,11 +342,23 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             for layout in SpatialAudioLayout.allCases {
                 store.save(layout)
                 try await Task.sleep(for: .milliseconds(200))
+                try await waitForHostedLayout(window)
                 let text = try visibleText(in: window, attachment: "Spatial-layout-\(layout.rawValue)-\(typeSize)")
-                for label in ["Rendering layout", layout.rawValue, "Applies to this device.",
+                let normalizedText = text.replacingOccurrences(of: ": ", with: ":")
+                for label in ["Rendering layout", "Applies to this device.",
                               "DTS:X heights require 7.1.4 or 9.1.6."] {
-                    XCTAssertTrue(text.contains(label), text)
+                    XCTAssertTrue(normalizedText.contains(label), text)
                 }
+                let controlFrames = self.profileFocusFrames(in: window)
+                XCTAssertEqual(controlFrames.count, 1)
+                let frame = try XCTUnwrap(controlFrames.first)
+                XCTAssertTrue(window.bounds.contains(frame))
+                let valueText = try visibleText(
+                    in: window, attachment: "Spatial-layout-value-\(layout.rawValue)-\(typeSize)",
+                    crop: CGRect(x: frame.minX + frame.width * 0.65, y: frame.minY,
+                                 width: frame.width * 0.35, height: frame.height)
+                )
+                XCTAssertTrue(valueText.contains(layout.rawValue), valueText)
                 XCTAssertFalse(text.contains("…"), text)
                 XCTAssertEqual(store.load(), layout)
             }
@@ -573,9 +585,11 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         }.sorted { $0.minY < $1.minY }
     }
 
-    private func visibleText(in window: UIWindow, attachment name: String) throws -> String {
+    private func visibleText(in window: UIWindow, attachment name: String, crop: CGRect? = nil) throws -> String {
         window.layoutIfNeeded()
-        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+        let format = UIGraphicsImageRendererFormat()
+        if crop != nil { format.scale = 2 }
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
             XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
         }
         let attachment = XCTAttachment(image: image)
@@ -583,9 +597,19 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
+        // Character recognition avoids prose-model corrections to numeric layouts.
+        request.recognitionLevel = crop == nil ? .accurate : .fast
+        request.usesLanguageCorrection = crop == nil
         request.recognitionLanguages = ["en-US"]
-        try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
+        var recognizedImage = try XCTUnwrap(image.cgImage)
+        if let crop {
+            let scale = CGFloat(recognizedImage.width) / window.bounds.width
+            recognizedImage = try XCTUnwrap(recognizedImage.cropping(to: CGRect(
+                x: crop.minX * scale, y: crop.minY * scale,
+                width: crop.width * scale, height: crop.height * scale
+            ).integral))
+        }
+        try VNImageRequestHandler(cgImage: recognizedImage).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
     }
 }

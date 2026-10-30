@@ -281,8 +281,10 @@ The compact row highlights a reported preferred language and counts the rest
 `MediaSourceDisplayName` formats ordinary filenames, paths and source labels.
 A filename in a URL's path wins over query hints. When the path has no filename,
 only `filename` and `file_name` query parameters are accepted, decoded once.
-Conflicting hints, nested URLs and unrelated query fields supply no filename;
+Conflicting hints, control characters, nested URLs and unrelated query fields supply no filename;
 the picker falls back to the server's other labels and technical metadata.
+Optimized app-hosted tests cover query filename display and control-character
+rejection in the same build configuration used by the version picker.
 Bare query text is never shown as a source label. Cached locator-like names are
 cleaned at presentation time without changing stored values, playback locators
 or source IDs. Only the resulting filename supplies release text or

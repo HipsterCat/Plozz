@@ -189,14 +189,14 @@ Playback > Advanced also contains **Dolby Vision FEL (experimental)** on TV,
 iPhone and iPad. This is a profile-scoped, default-off preference, unlike the
 device-wide external-player choice. It applies to new built-in on-demand sessions
 and travels through profile settings transfer. Its short helper warns that it
-may impact performance. On iPhone/iPad and tvOS before 26 it also warns that
-FEL disables spatial audio; ordinary channel audio still plays. On tvOS 26+,
+may impact performance. On iOS/iPadOS and tvOS before 26 it also warns that
+FEL disables spatial audio; ordinary channel audio still plays. On OS 26+,
 eligible FEL tracks can retain spatial audio when the Spatial audio setting is on.
 Live playback, shared players and muted previews do not opt in.
 See [playback engines](../../docs/playback-engines.md#dolby-vision-fel) for eligibility
 and output limits.
 
-On tvOS 26+, Playback > Advanced also offers **Rendering layout** in a native
+On tvOS and iOS/iPadOS 26+, Playback > Advanced also offers **Rendering layout** in a native
 menu: 5.1.2, 5.1.4, 7.1.2, 7.1.4 and the default 9.1.6. This device-local choice
 is shared by profiles, excluded from profile transfer and read on each new load.
 It does not enable Spatial audio or alter saved On/Off choices. The helper
@@ -248,16 +248,18 @@ profile-scoped and travel through settings transfer. Community-marker attributio
 and identifier sharing appear as a short caption attached to its switch, without
 a separate section footer.
 
-The **Spatial audio (height channel support)** switch is available on tvOS 26 and later. Its
+The **Spatial audio (height channel support)** switch is available on tvOS and iOS/iPadOS 26 and later. Its
 profile-scoped `trueHDAtmosEnabled` preference defaults on, preserves saved Off
 choices and travels through profile transfer. It applies to new supported
 on-demand sessions, not live streams, shared players or muted previews. The
 helper identifies TrueHD Atmos and DTS:X as inputs, PCM rendering and lossy
 AirPlay output. Format names describe compatibility, not certification,
 lossless passthrough, or patent clearance.
-FEL can use the same spatial conversion on tvOS 26+; source eligibility and
+FEL can use the same spatial conversion on these platforms; source eligibility and
 fallback remain engine-owned. Unsupported platforms
 keep ordinary channel playback; directly compatible spatial audio is unaffected.
+Compatible AirPods use the system's spatial rendering automatically when enabled
+in the OS; Plozz does not override Spatial Audio or head-tracking preferences.
 Feature descriptions use neutral spatial-audio wording; track
 metadata, diagnostics and legal notices retain accurate format and dependency names.
 See [spatial audio](../../docs/playback-engines.md#spatial-audio) for limitations.
@@ -276,6 +278,14 @@ All IPTV content (including movies/episodes), NAS shares, and Silo bypass extern
 negotiation altogether. Silo's session-bound grants need its built-in lifecycle;
 no speculative external session is opened. Live TV, trailers, and music keep
 their existing runtimes.
+
+On iPhone/iPad, completed movie and episode downloads have a separate **Open in…**
+action in their Downloads row menu. It uses the native document handoff chooser,
+not the external-player URL preference. Only the exact completed regular file
+in the active profile's registry is shared; removed, replaced, missing, or
+incomplete files are rejected. The receiving app may import its own copy.
+Ordinary Play remains in Plozz, and this file handoff does not return watch
+progress or include separately downloaded subtitle sidecars.
 
 External playback requires directly accessible HTTP(S) media: no app-local
 proxy, downloaded file, private share credentials, separate audio stream, or
@@ -380,7 +390,7 @@ watch history and planning-list behavior are documented in
   Manual hides and ordering stay
   profile-scoped. Refreshing Libraries also updates the main navigation inventory;
   unchanged results must not invalidate the navigation chrome during Settings entry.
-  Mobile retains its existing built-in destinations rather than adding library tabs.
+  Mobile includes enabled library tabs alongside its built-in destinations.
   VoiceOver retains the equivalent state description.
   Use default retains the existing inheritance; On/Off remains
   one shared override, explicitly noted as also affecting Home.
@@ -390,6 +400,8 @@ watch history and planning-list behavior are documented in
   Library tabs share an arrangement across the profile; each library separately
   owns its Recommended row arrangement. Both editors use `LiftableReorderList`,
   its Hidden divider, native focus/drag behavior, and scoped reset actions.
+  Navigation library rows use the shared content-kind glyph, with the provider
+  mark and server name below the library name rather than beside the drag handle.
   `LibraryPresentationLoading` connects the settings UI to the existing browse
   and discovery pipeline through AppRuntime, without a feature-to-feature
   dependency. Identity changes cancel pending discovery and replace row editors.
@@ -543,12 +555,33 @@ watch history and planning-list behavior are documented in
   Size is last inside Cards. Screens & Navigation groups App navigation,
   All screens, Home, Libraries, and Movie & show details; Music player remains TV-only because mobile does
   not implement those presentation choices. Mobile navigation editing includes
-  every enabled video library from the shared discovery inventory; Music and
-  All Libraries remain TV-only. Refreshing Libraries updates native navigation
+  every enabled video library from the shared discovery inventory; Music remains
+  TV-only. Refreshing Libraries updates the available shortcuts
   without resetting saved hide/order choices.
-  The mobile app shell uses native adaptive tabs, sidebar, and system More
-  overflow. Destination declarations and their navigation stacks stay mounted
+  Home, Downloads, and Search are the iPhone/iPad defaults, even before content
+  discovery. Watchlist, Live TV, Settings, All Libraries, and individual libraries
+  are opt-in through App navigation. Discovery never adds tabs automatically.
+  Explicit Show/Hide choices and ordering stay profile-scoped; Reset Navigation
+  restores these three defaults without changing content availability or TV defaults.
+  The mobile app shell uses native adaptive tabs and sidebar, with system More
+  overflow on iPhone only above five enabled pages. Destination declarations and their navigation stacks stay mounted
   across width changes; profile-scoped ordering and visibility remain authoritative.
+  Pages opened from More use their existing stack's single navigation bar: Back,
+  an inline title, and page actions share one row. The outer More bar is hidden
+  only while showing a destination and restored on return. Direct tabs keep their
+  normal title styles; deeper pages keep their own back navigation.
+  The bridge resolves destinations from native `UITab` objects when present:
+  newer iOS versions leave the legacy `viewControllers` array empty. More-row
+  interception and destination matching must use the same controller inventory.
+  Downloads composes the shared Back item inside its page toolbar so its actions
+  do not displace the shell's root navigation control.
+  Library tabs use the same content-kind icons as tvOS and library names without
+  server suffixes. Same-named libraries remain separate destinations; the
+  arrangement editor identifies their servers on a second line.
+  All Libraries is also available on iPhone/iPad when the profile has more than
+  one visible video library. It can be shown, moved, or hidden in App navigation, using
+  the same saved key as tvOS. Hiding an individual navigation shortcut does not
+  exclude that library's content from the combined grid; disabling its content does.
   Settings opens as a sheet from direct tabs or native More without replacing
   the selected page or its navigation history.
   Everyone uses the TV order, with mobile-only Downloads last. Version/build,
@@ -624,16 +657,32 @@ watch history and planning-list behavior are documented in
   saved for later use outside Kids mode; this restriction is not synced as an
   editable setting. Connected server-user restrictions still govern library
   content—Plozz does not infer maturity from incomplete external catalog ratings.
-- `CardAppearanceControls` — the independent **Show unwatched episode count**
-  toggle lives beside Watched Indicator on both platforms. It defaults on,
+- `CardAppearanceControls` — **Watch indicators** offers Watched, Unwatched,
+  and Hidden. Hidden removes only watch marks, preserving episode counts,
+  playback progress, download badges, and library/request status. The saved
+  color is retained while its control is hidden. TV keeps side-by-side previews;
+  iOS also shows side-by-side choices when the settings content fits three
+  200-point cards plus spacing (scaled with text size). Narrow windows and
+  accessibility text sizes use one compact live preview and a native menu for
+  both Labels and Watch indicators. This responds to available width, including
+  iPad multitasking, rather than device type. Custom label overrides leave the
+  visual presets unselected and show Custom in the menu until a preset replaces them.
+  The independent **Show unwatched episode count** toggle defaults on,
   persists per profile, and transfers/syncs with that profile without changing
   its watched/unwatched style. Both previews show a sample count on the
   in-progress series when enabled; toggling it updates the previews immediately
   without removing the separate watched check or unwatched flag examples.
-  **Episode count style** offers Attached or Floating while counts are enabled;
-  it is profile-scoped, transfers with the profile, and never changes watch marks.
+  **Episode count style** offers Attached or Floating while counts are enabled.
+  Mobile uses the same native menu picker as Watch indicators, with a trailing
+  selected value and the system menu affordance.
+  The choice is profile-scoped, transfers with the profile, and never changes watch marks.
   Turning counts off retains the style. Existing profiles keep their previous
   placement on upgrade; both previews then follow this independent choice.
+  **Show progress bars** is a separate default-on, profile-scoped toggle below
+  the count controls. It hides viewing-progress bars on media and episode cards,
+  including Continue Watching and live previews, without removing episode/time
+  text, download indicators, or changing player timelines and play-button progress.
+  The preference transfers/syncs with the profile.
   The eight watch-mark colors appear as one horizontal swatch row below the
   indicator previews. White remains the default; changes update the previews
   immediately and persist/transfer per profile. Narrow mobile layouts scroll
@@ -948,7 +997,12 @@ watch history and planning-list behavior are documented in
   caption bars on only one half. Show labels everywhere and Hide labels everywhere
   govern all media captions; App default owns Showcase and title-artwork exceptions.
   Explicit per-view choices, including Episodes, last until a preset replaces them.
-  Library navigation names and on-artwork information are not captions.
+  Home's Libraries row has a Use default / On / Off override alongside Continue Watching.
+  Use default inherits Home's label setting, including Showcase; explicit choices
+  affect only the Home library-card caption, not the library directory. Library-directory
+  captions continue to follow the global preset. All label editors place page defaults
+  first, then the live preview, then any Overrides section on TV and mobile. Library
+  names in navigation bars, sidebars, menus, and on-artwork information remain visible.
   Per-view help states whether labels are visible or hidden; Mixed explains
   the Showcase and series-artwork exceptions. It follows the focused setting
   and updates when that setting changes.
@@ -1007,7 +1061,7 @@ watch history and planning-list behavior are documented in
   layout with contained row focus.
 - **Mobile Settings is a presentation action.** The profile button is the default
   entry point. Its navigation shortcut starts hidden on iPhone and iPad, keeping
-  the default navigation at five destinations or fewer even with Watchlist.
+  the default navigation at Home, Downloads, and Search.
   The arranger can explicitly Show it; this profile-scoped override survives
   relaunches, while Reset Navigation restores the hidden default. Automatic
   hiding is not saved as a manual preference and does not hide Settings on TV.
