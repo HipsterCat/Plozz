@@ -122,6 +122,9 @@ including forward/backward seeks. Its ordinary test serves an original ten-secon
 MPEG-2 test pattern in a DVD ISO over loopback WebDAV. The fixture contains no
 third-party media and was generated with the commands below. A separate MP4
 fixture exercises ordinary-container playback through the same path.
+Matroska and DVD fixtures also open fresh engines at a nonzero start position,
+checking that the first ready video position is near the requested resume point
+before measuring continued progress. These are resume loads, not post-load seeks.
 
 ```sh
 mkdir -p /tmp/plozz-disc-fixture/VIDEO_TS
@@ -135,7 +138,9 @@ The separate live test is opt-in: pass JSON in the test process's
 `PLOZZ_WEBDAV_PLAYBACK_JSON` environment variable, or set
 `PLOZZ_WEBDAV_PLAYBACK_INPUT` to a private JSON file (or `cache:<filename>` in
 the test host's cache directory) containing `baseURL`, `username`, `password`,
-`relativePath`, and one to three `seekPositions` in seconds. Use a credential-free
+`relativePath`, and one to three `seekPositions` in seconds. Optional `startPosition`
+defaults to zero; supply a finite nonnegative position for a fresh-engine resume
+measurement. No server watch state is written. Use a credential-free
 HTTPS base URL and a media file or decrypted ISO the tester is authorized to
 access. For file input, use a tester-owned file with mode `0600`, outside Git.
 For environment input, load credentials only for `test-without-building`, not
@@ -144,7 +149,9 @@ credentials after the run. Missing configuration skips only that live test;
 it is not evidence of remote playback. Each load/seek has a 120-second deadline
 and frame/progress waits are bounded separately. Preparation and engine-load
 timings are reported separately; the combined metric ends after rendered video
-has progressed beyond 0.5 seconds, not at the first decoder output.
+has progressed beyond 0.5 seconds after the requested start position, not at the
+first decoder output. Resume coverage also requires the first ready video
+position to fall between one second before and five seconds after that position.
 After the final seek, the live test observes another 60 seconds and requires
 more than 58 seconds of playhead advancement. This is a bounded continued-playback
 check, not proof of complete-film playback or physical-device frame smoothness.
