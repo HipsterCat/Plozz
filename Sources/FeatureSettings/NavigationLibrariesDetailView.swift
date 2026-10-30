@@ -66,7 +66,7 @@ public struct NavigationLibrariesDetailView: View {
         let keys = NavigationDestinationDefaults.iOS(
             visibleLibraries: includesIndividualLibraries ? visible : []
         )
-        let automaticallyHiddenDestinations = NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
+        let automaticallyHiddenDestinations = NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: keys)
         #else
         let keys = NavigationRailPlan.customizableKeys(
             visibleLibraries: includesIndividualLibraries ? visible : [], style: navigation.style
@@ -172,7 +172,7 @@ public struct NavigationLibrariesDetailView: View {
     private var footnote: LocalizedStringResource { Self.mobileFootnote }
     private static let mobileFootnote = LocalizedStringResource(
         "navigationArrangement.footnote.iOS",
-        defaultValue: "Drag to reorder. Hold to hide or show. Unused pages hide automatically unless you show them.",
+        defaultValue: "Drag to reorder. Hold to hide or show.",
         comment: "Instructions for arranging iPhone and iPad navigation tabs."
     )
     #else

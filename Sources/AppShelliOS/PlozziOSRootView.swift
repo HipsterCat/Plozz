@@ -769,6 +769,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
     case downloads
     case search
     case settings
+    case allLibraries
     case library(String)
 
     var id: Self { self }
@@ -781,6 +782,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case .downloads: "downloads"
         case .search: "search"
         case .settings: "settings"
+        case .allLibraries: "allLibraries"
         case let .library(key): "library:\(key)"
         }
     }
@@ -793,6 +795,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case "downloads": self = .downloads
         case "search": self = .search
         case "settings": self = .settings
+        case "allLibraries": self = .allLibraries
         default:
             guard rawValue.hasPrefix("library:") else { return nil }
             self = .library(String(rawValue.dropFirst("library:".count)))
@@ -801,6 +804,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
 
     var diagnosticCategory: String {
         if case .library = self { return "library" }
+        if self == .allLibraries { return "library" }
         return rawValue
     }
 
@@ -812,6 +816,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case .downloads: "Downloads"
         case .search: "Search"
         case .settings: "Settings"
+        case .allLibraries: AllLibrariesBrowse.title
         case .library: "Libraries"
         }
     }
@@ -824,6 +829,7 @@ enum PlozziOSDestination: Identifiable, Hashable {
         case .downloads: "arrow.down.circle"
         case .search: "magnifyingglass"
         case .settings: "gearshape"
+        case .allLibraries: "square.stack.3d.up"
         case .library: "rectangle.stack"
         }
     }
@@ -934,17 +940,14 @@ struct PlozziOSTabShell: View {
         _lastContentDestination = State(initialValue: initial)
     }
 
-    static func configuredDestinations(
-        appModel: PlozziOSAppModel,
-        retainingWatchlist: Bool = false
-    ) -> [PlozziOSDestination] {
+    static func configuredDestinations(appModel: PlozziOSAppModel) -> [PlozziOSDestination] {
         let navigation = appModel.settings.navigation
         let libraries = appModel.visibleNavigationLibraries
         let libraryKeys = Set(libraries.map(\.key))
         return navigation.libraryLayout.resolvingAutomaticVisibility(
-            hidden: navigationAvailability(appModel: appModel).automaticallyHiddenKeys
-                .union(NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys),
-            retainingWatchlist: retainingWatchlist
+            hidden: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(
+                available: NavigationDestinationDefaults.iOS(visibleLibraries: libraries)
+            )
         )
             .sections(
                 available: NavigationDestinationDefaults.iOS(visibleLibraries: libraries),
@@ -958,6 +961,7 @@ struct PlozziOSTabShell: View {
                 case NavigationLibraryLayout.searchKey: return .search
                 case NavigationLibraryLayout.downloadsKey: return .downloads
                 case NavigationLibraryLayout.settingsKey: return .settings
+                case NavigationLibraryLayout.allLibrariesKey: return .allLibraries
                 default: return libraryKeys.contains(key) ? .library(key) : nil
                 }
             }
@@ -982,10 +986,7 @@ struct PlozziOSTabShell: View {
     }
 
     private var tabDestinations: [PlozziOSDestination] {
-        var configured = Self.configuredDestinations(
-            appModel: appModel,
-            retainingWatchlist: selectedDestination == .watchlist && !isShowingMorePage
-        )
+        var configured = Self.configuredDestinations(appModel: appModel)
         if retainsExplicitHomeEntry, !configured.contains(.home) {
             configured.insert(.home, at: 0)
         }
@@ -1158,6 +1159,17 @@ struct PlozziOSTabShell: View {
             .plozziOSItemNavigation(appModel: appModel)
             .toolbarBackground(.hidden, for: .navigationBar)
             .background { AppBackground(palette: palette) }
+        case .allLibraries:
+            PlozziOSAllLibrariesDestinationView(appModel: appModel)
+                .id(homeContentIdentity + "|" + allLibrariesSourceSignature(appModel.visibleNavigationLibraries))
+                .plozziOSItemNavigation(appModel: appModel)
+                .plozziOSLibraryDestination(appModel: appModel)
+                .toolbar {
+                    if usesVerticalToolbar || !hasVisibleSettingsNavigationEntry {
+                        PlozziOSSettingsToolbarItem(horizontalPlacement: .primaryAction, action: showSettings)
+                    }
+                }
+                .background { AppBackground(palette: palette) }
         case let .library(key):
             if let library = appModel.visibleNavigationLibraries.first(where: { $0.key == key }) {
                 PlozziOSLibraryDestinationView(
@@ -1290,8 +1302,10 @@ struct PlozziOSTabShell: View {
         .onReceive(NotificationCenter.default.publisher(for: .universalWatchlistCacheDidLoad)) { _ in
             refreshWatchlistNavigation()
         }
-        .onChange(of: Self.navigationAvailability(appModel: appModel), initial: true) { _, availability in
-            appModel.settings.navigation.automaticallyHiddenKeys = availability.automaticallyHiddenKeys
+        .onChange(of: NavigationDestinationDefaults.iOS(visibleLibraries: appModel.visibleNavigationLibraries),
+                  initial: true) { _, available in
+            appModel.settings.navigation.automaticallyHiddenKeys =
+                NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: available)
         }
         .task(id: homeContentIdentity, priority: .utility) {
             await refreshNavigationLibraries()
@@ -1934,7 +1948,7 @@ private struct PlozziOSDestinationView: View {
                 viewModel: sharedHomeViewModel,
                 onShowSettings: onShowSettings
             )
-        case .liveTV, .library:
+        case .liveTV, .library, .allLibraries:
             EmptyView()
         case .search:
             PlozziOSSearchView(

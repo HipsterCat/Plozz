@@ -2,7 +2,7 @@
 import CoreModels
 import CoreUI
 import FeatureAuth
-import FeatureHomeCore
+@testable import FeatureHomeCore
 import SwiftUI
 import UIKit
 import Vision
@@ -12,6 +12,115 @@ import XCTest
 
 @MainActor
 final class LibraryNavigationTests: XCTestCase {
+    func testDefaultTabsRemainHomeDownloadsAndSearchAfterDiscoveryOnPhoneAndTablet() async throws {
+        let app = try makeApp()
+        XCTAssertEqual(PlozziOSTabShell.configuredDestinations(appModel: app), [.home, .downloads, .search])
+        await app.refreshNavigationLibraries()
+        app.settings.navigation.hasWatchlistItems = true
+        XCTAssertEqual(PlozziOSTabShell.configuredDestinations(appModel: app), [.home, .downloads, .search])
+        try await withTabs(app: app) { tabs, window in
+            try await waitUntil(window: window) { self.tabTitles(tabs).count == 3 }
+            XCTAssertEqual(self.tabTitles(tabs), ["Home", "Downloads", "Search"])
+            XCTAssertFalse(tabs.tabBar.items?.contains { $0.title == "More" } ?? false)
+        }
+    }
+
+    func testAllLibrariesUsesBothProvidersAndHonorsContentVisibility() async throws {
+        let fixture = LibraryNavigationFixture()
+        let app = try makeApp(fixture: fixture)
+        await app.refreshNavigationLibraries()
+        showLibraryShortcuts(in: app)
+        XCTAssertTrue(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.allLibraries))
+        let provider = try XCTUnwrap(resolveAllLibrariesBrowse(
+            libraries: app.visibleNavigationLibraries,
+            in: app.accountsProviders.homeAccounts,
+            identitySources: { _ in [] }
+        ) as? AggregatedLibraryProvider)
+        XCTAssertEqual(Set(provider.sources.map(\.accountID)), ["plex", "jellyfin"])
+        XCTAssertEqual(Set(provider.sources.compactMap(\.kind)), [.movie, .series])
+        _ = try await provider.items(
+            in: AllLibrariesBrowse.containerID, kind: .unknown,
+            page: .init(startIndex: 0, limit: 20)
+        )
+        let requests = await fixture.browseRequests
+        XCTAssertTrue(requests.contains("plex:library"))
+        XCTAssertTrue(requests.contains("jellyfin:library"))
+
+        app.settings.homeVisibility.setEnabled(false, for: "plex:library")
+        XCTAssertFalse(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.allLibraries))
+        let filtered = try XCTUnwrap(resolveAllLibrariesBrowse(
+            libraries: app.visibleNavigationLibraries,
+            in: app.accountsProviders.homeAccounts,
+            identitySources: { _ in [] }
+        ) as? AggregatedLibraryProvider)
+        XCTAssertEqual(filtered.sources.map(\.accountID), ["jellyfin"])
+        XCTAssertNil(resolveAllLibrariesBrowse(
+            libraries: app.visibleNavigationLibraries, in: [], identitySources: { _ in [] }
+        ))
+    }
+
+    func testAllLibrariesCanBeHiddenReorderedAndRestoredPerProfile() async throws {
+        let app = try makeApp()
+        await app.refreshNavigationLibraries()
+        let key = NavigationLibraryLayout.allLibrariesKey
+        let available = NavigationDestinationDefaults.iOS(visibleLibraries: app.visibleNavigationLibraries)
+        app.settings.navigation.applyLibrarySections(
+            .init(enabled: [key], disabled: available.filter { $0 != key }), available: available,
+            automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: available)
+        )
+        XCTAssertEqual(PlozziOSTabShell.configuredDestinations(appModel: app), [.allLibraries])
+        let originalProfile = app.profiles.activeProfileID
+        let next = app.profiles.add(name: "No libraries", isAwaitingSetup: false)
+        app.profiles.select(next.id)
+        app.refreshActiveProfileSettings()
+        app.profiles.setActiveAccountIDs([], for: next.id)
+        app.accountsProviders.reloadAccounts()
+        XCTAssertFalse(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.allLibraries))
+        app.profiles.select(originalProfile)
+        app.refreshActiveProfileSettings()
+        app.accountsProviders.reloadAccounts()
+        await app.refreshNavigationLibraries()
+        XCTAssertEqual(PlozziOSTabShell.configuredDestinations(appModel: app), [.allLibraries])
+        app.settings.navigation.applyLibrarySections(
+            .init(enabled: [NavigationLibraryLayout.homeKey],
+                  disabled: available.filter { $0 != NavigationLibraryLayout.homeKey }), available: available,
+            automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: available)
+        )
+        XCTAssertFalse(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.allLibraries))
+    }
+
+    func testAllLibrariesNativeTabLoadsBothLibraries() async throws {
+        let fixture = LibraryNavigationFixture()
+        let app = try makeApp(fixture: fixture)
+        await app.refreshNavigationLibraries()
+        let available = NavigationDestinationDefaults.iOS(visibleLibraries: app.visibleNavigationLibraries)
+        app.settings.navigation.applyLibrarySections(
+            .init(enabled: [NavigationLibraryLayout.homeKey, NavigationLibraryLayout.allLibrariesKey],
+                  disabled: available.filter {
+                      ![NavigationLibraryLayout.homeKey, NavigationLibraryLayout.allLibrariesKey].contains($0)
+                  }), available: available,
+            automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: available)
+        )
+        try await withTabs(app: app) { tabs, window in
+            try await waitUntil(window: window) { self.tabTitles(tabs).contains("All Libraries") }
+            await fixture.clearBrowseRequests()
+            if let tab = tabs.tabs.first(where: { $0.title == "All Libraries" }) {
+                tabs.selectedTab = tab
+            } else {
+                tabs.selectedViewController = try XCTUnwrap(
+                    tabs.viewControllers?.first { $0.tabBarItem.title == "All Libraries" }
+                )
+            }
+            let deadline = ContinuousClock.now + .seconds(5)
+            while await fixture.browseRequests.count < 2, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let requests = await fixture.browseRequests
+            XCTAssertTrue(requests.contains("plex:library"))
+            XCTAssertTrue(requests.contains("jellyfin:library"))
+        }
+    }
+
     func testLibraryIconsMatchTVNavigationAndServerNamesUseSubtitles() async throws {
         let app = try makeApp()
         await app.refreshNavigationLibraries()
@@ -37,6 +146,8 @@ final class LibraryNavigationTests: XCTestCase {
 
     func testSameNamedLibrariesKeepShortSeparateNativeTabs() async throws {
         let app = try makeApp(usesDuplicateLibraryNames: true)
+        await app.refreshNavigationLibraries()
+        showLibraryShortcuts(in: app)
         try await withTabs(app: app) { tabs, window in
             try await waitUntil(window: window) {
                 self.tabTitles(tabs).filter { $0 == "Videos" }.count == 2
@@ -122,8 +233,10 @@ final class LibraryNavigationTests: XCTestCase {
         }
     }
 
-    func testDiscoveredLibrariesAppearInNativePhoneAndTabletNavigation() async throws {
+    func testExplicitlyShownLibrariesAppearInNativePhoneAndTabletNavigation() async throws {
         let app = try makeApp()
+        await app.refreshNavigationLibraries()
+        showLibraryShortcuts(in: app)
         try await withTabs(app: app) { tabs, window in
             try await waitUntil(window: window) {
                 app.settings.navigation.contentLibraries.count == 2
@@ -144,7 +257,8 @@ final class LibraryNavigationTests: XCTestCase {
         let enabled = [NavigationLibraryLayout.downloadsKey, "plex:library", "jellyfin:library"]
         app.settings.navigation.applyLibrarySections(
             .init(enabled: enabled, disabled: available.filter { !enabled.contains($0) }),
-            available: available
+            available: available,
+            automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: available)
         )
         try await withTabs(app: app) { tabs, window in
             try await waitUntil(window: window) { self.tabTitles(tabs).contains("Plex Movies") }
@@ -170,6 +284,8 @@ final class LibraryNavigationTests: XCTestCase {
     func testNativeOverflowRetainsEveryLibrary() async throws {
         let fixture = LibraryNavigationFixture(libraryCount: 10)
         let app = try makeApp(fixture: fixture)
+        await app.refreshNavigationLibraries()
+        showLibraryShortcuts(in: app)
         try await withTabs(app: app) { tabs, window in
             try await waitUntil(window: window) {
                 self.tabTitles(tabs).filter { $0.hasPrefix("Plex Movies") || $0.hasPrefix("Jellyfin Shows") }.count == 20
@@ -193,6 +309,8 @@ final class LibraryNavigationTests: XCTestCase {
         let recovered = await app.refreshNavigationLibraries()
         XCTAssertTrue(recovered)
         XCTAssertEqual(app.settings.discoveredLibraries.state.value, app.settings.navigation.contentLibraries)
+        XCTAssertEqual(PlozziOSTabShell.configuredDestinations(appModel: app), [.home, .downloads, .search])
+        showLibraryShortcuts(in: app)
         XCTAssertTrue(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.library("plex:library")))
         let navigation = app.settings.navigation
         let keys = NavigationDestinationDefaults.iOS(visibleLibraries: app.visibleNavigationLibraries)
@@ -211,6 +329,7 @@ final class LibraryNavigationTests: XCTestCase {
     func testDisabledAndExcludedLibrariesNeverBecomeDestinations() async throws {
         let app = try makeApp()
         await app.refreshNavigationLibraries()
+        showLibraryShortcuts(in: app)
         app.settings.homeVisibility.setEnabled(false, for: "plex:library")
         XCTAssertFalse(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.library("plex:library")))
         app.profiles.setActiveAccountIDs(["plex"], for: app.profiles.activeProfileID)
@@ -262,12 +381,15 @@ final class LibraryNavigationTests: XCTestCase {
         await fixture.resume()
         let shellPublished = await shell.value
         XCTAssertTrue(shellPublished)
-        XCTAssertTrue(PlozziOSTabShell.configuredDestinations(appModel: app).contains(.library("plex:library")))
+        XCTAssertTrue(app.visibleNavigationLibraries.contains { $0.key == "plex:library" })
+        XCTAssertEqual(PlozziOSTabShell.configuredDestinations(appModel: app), [.home, .downloads, .search])
         XCTAssertEqual(app.settings.discoveredLibraries.state.value, app.settings.navigation.contentLibraries)
         XCTAssertTrue(app.settings.discoveredLibraries.refreshingAccountIDs.isEmpty)
     }
 
     func testLibraryIdentityAndDiagnosticsRemainSeparate() {
+        XCTAssertEqual(PlozziOSDestination(rawValue: PlozziOSDestination.allLibraries.rawValue), .allLibraries)
+        XCTAssertEqual(PlozziOSDestination.allLibraries.diagnosticCategory, "library")
         let first = PlozziOSDestination.library("plex:library")
         let second = PlozziOSDestination.library("jellyfin:library")
         XCTAssertNotEqual(first, second)
@@ -322,6 +444,14 @@ final class LibraryNavigationTests: XCTestCase {
             appModel: app, homeViewModelBox: LazyViewState<HomeViewModel>(), onAddServer: {},
             showingSettings: .constant(false), showingProfileSwitcher: .constant(false),
             deferredPairingURL: .constant(nil), systemColorScheme: .dark
+        )
+    }
+
+    private func showLibraryShortcuts(in app: PlozziOSAppModel) {
+        let available = NavigationDestinationDefaults.iOS(visibleLibraries: app.visibleNavigationLibraries)
+        app.settings.navigation.applyLibrarySections(
+            .init(enabled: available, disabled: []), available: available,
+            automaticallyHiddenKeys: NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys(available: available)
         )
     }
 

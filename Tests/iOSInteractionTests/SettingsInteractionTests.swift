@@ -156,6 +156,40 @@ final class SettingsInteractionTests: XCTestCase {
         }
     }
 
+    func testAllLibrariesFromMoreCombinesMoviesAndShows() throws {
+        launchNavigation(arguments: ["--libraries-in-more", "--all-libraries-fixture"])
+        let more = app.tabBars.buttons["More"]
+        if more.waitForExistence(timeout: 5) { more.tap() }
+        let row = app.tables.cells.containing(.staticText, identifier: "All Libraries").firstMatch
+        if row.waitForExistence(timeout: 3) {
+            row.tap()
+        } else {
+            app.buttons["All Libraries"].firstMatch.tap()
+        }
+        XCTAssertTrue(app.navigationBars["All Libraries"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.scrollViews.staticTexts["Harbor"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.scrollViews.staticTexts["Orbit"].waitForExistence(timeout: 10), app.debugDescription)
+        capture("all-libraries-combined-grid")
+    }
+
+    func testDefaultAndFiveExplicitPagesDoNotCreateMore() throws {
+        let fixture = ["--libraries-in-more", "--all-libraries-fixture"]
+        launchNavigation(arguments: fixture + ["--default-navigation"])
+        XCTAssertTrue(app.tabBars.buttons["Downloads"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.tabBars.buttons["Home"].exists)
+        XCTAssertTrue(app.tabBars.buttons["Search"].exists)
+        XCTAssertFalse(app.tabBars.buttons["More"].exists)
+        XCTAssertFalse(app.buttons["All Libraries"].exists)
+        capture("three-default-pages")
+        app.terminate()
+        launchNavigation(arguments: fixture + ["--five-navigation-pages"])
+        XCTAssertTrue(app.buttons["All Libraries"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.tabBars.buttons["More"].exists)
+        app.buttons["All Libraries"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["All Libraries"].waitForExistence(timeout: 5), app.debugDescription)
+        capture("five-explicit-pages")
+    }
+
     func testLibraryFromMoreKeepsItsTitleAndProfileBesideBack() throws {
         launchNavigation(arguments: ["--libraries-in-more"])
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 600, "Regular-width iPad has direct tabs.")

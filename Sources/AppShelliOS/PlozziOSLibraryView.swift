@@ -214,19 +214,22 @@ struct PlozziOSLibraryGridView: View {
     /// Passed rather than read from the environment so the pushed destination
     /// carries it explicitly, like every other dependency on this route.
     private let scanStatus: ShareScanStatusModel?
+    private let isCombinedLibrary: Bool
 
     init(
         viewModel: LibraryBrowseViewModel,
         title: String,   // l10n:content — library name from the server
         provider: any MediaProvider,
         settings: PlozziOSSettingsModel,
-        scanStatus: ShareScanStatusModel? = nil
+        scanStatus: ShareScanStatusModel? = nil,
+        isCombinedLibrary: Bool = false
     ) {
         _viewModel = State(initialValue: viewModel)
         self.title = title
         self.provider = provider
         self.settings = settings
         self.scanStatus = scanStatus
+        self.isCombinedLibrary = isCombinedLibrary
     }
 
     var body: some View {
@@ -436,6 +439,7 @@ struct PlozziOSLibraryGridView: View {
                             generation: generation,
                             style: viewModel.gridStyle == .landscape ? .landscape : .poster,
                             provider: provider,
+                            isCombinedLibrary: isCombinedLibrary,
                             playlistOrigin: { viewModel.playlistOrigin(at: index) },
                             onAppear: { await viewModel.itemAppeared(at: index, generation: generation) },
                             onDisappear: { viewModel.itemDisappeared(at: index, generation: generation) }
@@ -624,6 +628,7 @@ private struct PlozziOSLibraryItemCell: View {
     let generation: Int
     var style: PosterCardView.Style = .poster
     let provider: any MediaProvider
+    var isCombinedLibrary = false
     let playlistOrigin: () -> VideoPlaylistPlaybackOrigin?
     let onAppear: () async -> Void
     let onDisappear: () -> Void
@@ -648,6 +653,13 @@ private struct PlozziOSLibraryItemCell: View {
                             accountID: library.sourceAccountID ?? provider.session.server.id
                         )
                     ) {
+                        card
+                    }
+                    .buttonStyle(.plain)
+                } else if isCombinedLibrary {
+                    NavigationLink {
+                        PlozziOSItemPage(appModel: appModel, item: item)
+                    } label: {
                         card
                     }
                     .buttonStyle(.plain)

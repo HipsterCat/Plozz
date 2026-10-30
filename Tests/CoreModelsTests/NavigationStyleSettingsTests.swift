@@ -279,11 +279,7 @@ final class NavigationStyleSettingsStoreTests: XCTestCase {
             let sections = NavigationLibraryLayout.default
                 .resolvingAutomaticVisibility(hidden: hidden)
                 .sections(available: available, requiredEnabled: [])
-            XCTAssertEqual(sections.enabled, available.filter {
-                $0 != NavigationLibraryLayout.settingsKey
-                    && (hasWatchlist || $0 != NavigationLibraryLayout.watchlistKey)
-            })
-            XCTAssertLessThanOrEqual(sections.enabled.count, 5)
+            XCTAssertEqual(sections.enabled, NavigationDestinationDefaults.iOSDefaultVisibleKeys)
             XCTAssertTrue(NavigationDestinationDefaults.iPhoneOverflowKeys(visible: sections.enabled).isEmpty)
         }
         XCTAssertTrue(NavigationLibraryLayout.default
@@ -308,14 +304,14 @@ final class NavigationStyleSettingsStoreTests: XCTestCase {
         XCTAssertTrue(layout.hiddenKeys.isEmpty)
         XCTAssertTrue(layout.shownKeys.isEmpty)
         primary.save(layout)
-        XCTAssertEqual(sections(primary.load()).disabled, [NavigationLibraryLayout.settingsKey])
+        XCTAssertEqual(Set(sections(primary.load()).disabled), automatic)
 
         layout.apply(.init(enabled: available, disabled: []), available: available,
                      requiredEnabled: [], automaticallyHiddenKeys: automatic)
         primary.save(layout)
         XCTAssertTrue(primary.load().shownKeys.contains(NavigationLibraryLayout.settingsKey))
         XCTAssertEqual(sections(primary.load()).enabled, available)
-        XCTAssertEqual(sections(child.load()).disabled, [NavigationLibraryLayout.settingsKey])
+        XCTAssertEqual(Set(sections(child.load()).disabled), automatic)
 
         layout.apply(.init(enabled: available.filter { $0 != NavigationLibraryLayout.settingsKey },
                            disabled: [NavigationLibraryLayout.settingsKey]),
@@ -323,7 +319,7 @@ final class NavigationStyleSettingsStoreTests: XCTestCase {
         primary.save(layout)
         XCTAssertTrue(primary.load().hiddenKeys.contains(NavigationLibraryLayout.settingsKey))
         primary.save(.default)
-        XCTAssertEqual(sections(primary.load()).disabled, [NavigationLibraryLayout.settingsKey])
+        XCTAssertEqual(Set(sections(primary.load()).disabled), automatic)
         XCTAssertTrue(primary.load().hiddenKeys.isEmpty)
 
         let legacy = try JSONDecoder().decode(NavigationLibraryLayout.self, from: JSONEncoder().encode([

@@ -3,6 +3,41 @@ import UIKit
 
 @MainActor
 enum OverflowNavigationCapture {
+    static func captureTabs(selecting title: String?) async throws {
+        let deadline = ContinuousClock.now + .seconds(8)
+        while ContinuousClock.now < deadline {
+            if let root = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                .flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController,
+               let tabs = findTabs(in: root),
+               max(tabs.tabs.count, tabs.viewControllers?.count ?? 0) > 0 {
+                if let title {
+                    if let tab = tabs.tabs.first(where: { $0.title == title }) {
+                        tabs.selectedTab = tab
+                    } else if let controller = tabs.viewControllers?.first(where: { $0.tabBarItem.title == title }) {
+                        tabs.selectedViewController = controller
+                    } else {
+                        try await Task.sleep(for: .milliseconds(50))
+                        continue
+                    }
+                }
+                try await Task.sleep(for: .seconds(1))
+                let report: [String: Any] = [
+                    "processIdentifier": ProcessInfo.processInfo.processIdentifier,
+                    "nativeTabs": tabs.tabs.map(\.title),
+                    "legacyTabs": (tabs.viewControllers ?? []).compactMap(\.tabBarItem.title),
+                    "tabBarItems": (tabs.tabBar.items ?? []).compactMap(\.title),
+                    "selectedTab": tabs.selectedTab?.title ?? ""
+                ]
+                try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(
+                    to: URL.documentsDirectory.appendingPathComponent("navigation-tabs-capture.json")
+                )
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw CaptureError.rowUnavailable
+    }
+
     static func openRow(named title: String) async throws {
         let deadline = ContinuousClock.now + .seconds(8)
         while ContinuousClock.now < deadline {

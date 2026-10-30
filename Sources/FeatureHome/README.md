@@ -509,6 +509,12 @@ records on both platforms; error dialogs, playback routing and timeouts are unch
   abstraction; never imports a specific provider module.
   All Libraries keeps reachable sources when capability preparation, query facets,
   inventory discovery, or duplicate-card hydration encounters an unavailable source.
+  Its provider and query implementation live in `FeatureHomeCore` and are shared
+  by tvOS and iPhone/iPad. Mobile uses the existing native library grid, sort and
+  filter controls, with a separate profile-scoped browse preference key. Combined
+  cards use unified detail routing, not a synthetic provider as their playback
+  source. Profile/account changes or a changed library source set replace retained
+  browse state; ordinary discovery reordering does not.
   Inventory membership stays fixed per attempt. Before publishing a first page,
   a source lost during inventory or card hydration causes one bounded rebuild
   without that source; concurrent callers share recovery. Published pages keep
