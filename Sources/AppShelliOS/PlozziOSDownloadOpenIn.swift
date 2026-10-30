@@ -7,7 +7,7 @@ import UIKit
 struct DownloadOpenInFile: Identifiable {
     let id = UUID()
     let url: URL
-    let title: String
+    let title: String // l10n:content - downloaded media title supplied by the provider
 }
 
 struct DownloadOpenInModifier: ViewModifier {

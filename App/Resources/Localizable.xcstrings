@@ -499088,6 +499088,226 @@
         }
       }
     },
+    "No compatible apps are available for this download." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لا توجد تطبيقات متوافقة لفتح هذا الملف."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Няма съвместими приложения за отваряне на този файл."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No hi ha cap aplicació compatible per obrir aquest fitxer."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pro otevření tohoto souboru nejsou k dispozici žádné kompatibilní aplikace."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Der er ingen kompatible apps til at åbne denne fil."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Für diese Datei sind keine kompatiblen Apps verfügbar."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Δεν υπάρχουν συμβατές εφαρμογές για αυτό το αρχείο."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "No hay apps compatibles con este archivo descargado."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "هیچ برنامهٔ سازگاری برای این فایل وجود ندارد."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tälle ladatulle tiedostolle ei ole yhteensopivia sovelluksia."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aucune app compatible n’est disponible pour ce fichier téléchargé."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "אין יישומים תואמים לפתיחת הקובץ שהורד."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "इस फ़ाइल को खोलने के लिए कोई संगत ऐप उपलब्ध नहीं है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nema kompatibilnih aplikacija za ovu datoteku."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nincs kompatibilis alkalmazás ehhez a fájlhoz."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tidak ada aplikasi yang kompatibel untuk file ini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Non ci sono app compatibili con questo file."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このファイルを開けるアプリがありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "다운로드한 파일을 열 수 있는 앱이 없습니다."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tiada app yang serasi untuk fail yang dimuat turun ini."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ingen tilgjengelige apper kan åpne den nedlastede filen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Er zijn geen geschikte apps beschikbaar voor dit gedownloade bestand."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Brak aplikacji obsługujących ten pobrany plik."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Não há apps compatíveis com este arquivo baixado."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nu există aplicații compatibile cu acest fișier descărcat."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Нет приложений, совместимых с этим загруженным файлом."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Pre tento stiahnutý súbor nie sú dostupné kompatibilné aplikácie."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Za to preneseno datoteko ni na voljo združljivih aplikacij."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Nema kompatibilnih aplikacija za ovu preuzetu datoteku."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Det finns inga kompatibla appar för den här nedladdade filen."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ไม่มีแอปที่เปิดไฟล์ที่ดาวน์โหลดมานี้ได้"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İndirilen bu dosyayı açabilecek bir uygulama yok."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Немає сумісних програм для відкриття цього завантаженого файлу."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Không có ứng dụng tương thích để mở tệp đã tải về này."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "没有可打开此下载文件的应用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "沒有可開啟此下載檔案的 App。"
+          }
+        }
+      }
+    },
     "No connected Live TV servers" : {
       "localizations" : {
         "ar" : {
@@ -538113,6 +538333,226 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "在 Seerr 中開啟並檢視本季"
+          }
+        }
+      }
+    },
+    "Open in…" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "فتح في…"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Отвори в…"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Obre amb…"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otevřít v…"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Åbn i…"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Öffnen in…"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Άνοιγμα σε…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Abrir en…"
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "باز کردن در…"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Avaa sovelluksessa…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ouvrir dans…"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "פתיחה ב…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "इसमें खोलें…"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otvori u…"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Megnyitás ezzel…"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Buka dengan…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Apri in…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ほかのアプリで開く…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "다른 앱으로 열기…"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Buka dalam…"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Åpne i…"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Open in…"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otwórz w…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Abrir em…"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deschide în…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Открыть в…"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otvoriť v…"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Odpri v…"
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Otvori u…"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Öppna i…"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "เปิดใน…"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Şununla Aç…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Відкрити в…"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Mở bằng…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "用其他应用打开…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "用其他 App 開啟…"
           }
         }
       }
@@ -869634,6 +870074,226 @@
         }
       }
     },
+    "This download is no longer available. Try downloading it again." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لم يعد هذا الملف متاحًا. حاول تنزيله مجددًا."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Този файл вече не е наличен. Опитайте да го изтеглите отново."
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Aquest fitxer ja no està disponible. Prova de baixar-lo de nou."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tento soubor už není k dispozici. Zkuste ho stáhnout znovu."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Denne fil er ikke længere tilgængelig. Prøv at hente den igen."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diese Datei ist nicht mehr verfügbar. Versuche, sie erneut herunterzuladen."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Αυτό το αρχείο δεν είναι πλέον διαθέσιμο. Δοκιμάστε να το κατεβάσετε ξανά."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Este archivo descargado ya no está disponible. Prueba a descargarlo de nuevo."
+          }
+        },
+        "fa" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "این فایل دانلودشده دیگر در دسترس نیست. سعی کنید آن را دوباره دانلود کنید."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tämä ladattu tiedosto ei ole enää saatavilla. Kokeile ladata se uudelleen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ce fichier téléchargé n’est plus disponible. Essayez de le télécharger à nouveau."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "הקובץ שהורד כבר לא זמין. נסו להוריד אותו שוב."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "यह फ़ाइल अब उपलब्ध नहीं है। इसे फिर से डाउनलोड करके देखें।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ova datoteka više nije dostupna. Pokušajte je ponovno preuzeti."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ez a fájl már nem érhető el. Próbálja meg újra letölteni."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "File ini tidak lagi tersedia. Coba unduh lagi."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Questo file non è più disponibile. Prova a scaricarlo di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このファイルは利用できなくなりました。もう一度ダウンロードしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "다운로드한 파일을 더 이상 사용할 수 없습니다. 다시 다운로드해 보세요."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Fail yang dimuat turun ini tidak lagi tersedia. Cuba muat turun semula."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Den nedlastede filen er ikke lenger tilgjengelig. Prøv å laste den ned på nytt."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dit gedownloade bestand is niet meer beschikbaar. Probeer het opnieuw te downloaden."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ten pobrany plik nie jest już dostępny. Spróbuj pobrać go ponownie."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Este arquivo baixado não está mais disponível. Tente baixá-lo novamente."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Acest fișier descărcat nu mai este disponibil. Încearcă să-l descarci din nou."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Загруженный файл больше недоступен. Попробуйте скачать его снова."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tento stiahnutý súbor už nie je k dispozícii. Skúste ho stiahnuť znova."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ta prenesena datoteka ni več na voljo. Poskusite jo znova prenesti."
+          }
+        },
+        "sr-Latn" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ova preuzeta datoteka više nije dostupna. Pokušajte da je ponovo preuzmete."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Den här nedladdade filen är inte längre tillgänglig. Försök ladda ner den igen."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ไฟล์ที่ดาวน์โหลดมานี้ไม่พร้อมใช้งานแล้ว ลองดาวน์โหลดอีกครั้ง"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "İndirilen bu dosya artık kullanılamıyor. Yeniden indirmeyi deneyin."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Цей завантажений файл більше недоступний. Спробуйте завантажити його знову."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Tệp đã tải về này không còn khả dụng. Hãy thử tải lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此下载文件已不可用。请尝试重新下载。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此下載檔案已無法使用。請嘗試重新下載。"
+          }
+        }
+      }
+    },
     "This downloads all %lld episodes at original quality and can use significant storage and data. You can remove them anytime from Downloads." : {
       "comment" : "Confirmation message when downloading an entire season on iPhone or iPad. %lld is the number of episodes that will be downloaded.",
       "localizations" : {
@@ -1020557,223 +1021217,223 @@
         "ar" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "اسحب لتغيير الترتيب. اضغط مطولًا للإخفاء أو الإظهار. تُخفى الصفحات التي لم تستخدمها بعد تلقائيًا ما لم تُظهرها يدويًا."
+            "value" : "اسحب لإعادة الترتيب. اضغط مطولًا للإخفاء أو الإظهار."
           }
         },
         "bg" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Плъзнете, за да пренаредите. Задръжте, за да скриете или покажете. Страниците, които още не сте използвали, се скриват автоматично, освен ако не ги покажете ръчно."
+            "value" : "Плъзнете за пренареждане. Натиснете продължително за скриване или показване."
           }
         },
         "ca" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Arrossega per canviar l'ordre. Mantén premut per amagar o mostrar. Les pàgines que encara no has utilitzat s'amaguen automàticament, tret que les mostris manualment."
+            "value" : "Arrossega per reordenar. Mantén premut per ocultar o mostrar."
           }
         },
         "cs" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Pořadí změníte přetažením. Podržením položku skryjete nebo zobrazíte. Dosud nepoužité stránky se automaticky skrývají, pokud je sami nezobrazíte."
+            "value" : "Přetažením změníte pořadí. Podržením skryjete nebo zobrazíte."
           }
         },
         "da" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Træk for at ændre rækkefølgen. Tryk og hold for at skjule eller vise. Sider, du endnu ikke har brugt, skjules automatisk, medmindre du viser dem manuelt."
+            "value" : "Træk for at ændre rækkefølgen. Tryk og hold nede for at skjule eller vise."
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Ziehe die Elemente, um sie neu anzuordnen. Halte sie gedrückt, um sie aus- oder einzublenden. Noch nicht genutzte Seiten werden automatisch ausgeblendet, sofern du sie nicht manuell einblendest."
+            "value" : "Zum Neuanordnen ziehen. Zum Ein- oder Ausblenden gedrückt halten."
           }
         },
         "el" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Σύρετε για αλλαγή σειράς. Πατήστε παρατεταμένα για απόκρυψη ή εμφάνιση. Οι σελίδες που δεν χρησιμοποιούνται αποκρύπτονται αυτόματα, εκτός αν επιλέξετε να τις εμφανίσετε."
+            "value" : "Σύρετε για αναδιάταξη. Πατήστε παρατεταμένα για απόκρυψη ή εμφάνιση."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Drag to reorder. Hold to hide or show. Unused pages hide automatically unless you show them."
+            "value" : "Drag to reorder. Hold to hide or show."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Arrastra para reordenar. Mantén pulsado para ocultar o mostrar. Las páginas que no se usan se ocultan automáticamente, salvo que elijas mostrarlas."
+            "value" : "Arrastra para reordenar. Mantén pulsado para ocultar o mostrar."
           }
         },
         "fa" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "برای تغییر ترتیب، بکشید. برای پنهان کردن یا نمایش، نگه دارید. صفحه‌های بدون استفاده خودکار پنهان می‌شوند، مگر اینکه نمایش آن‌ها را انتخاب کنید."
+            "value" : "برای تغییر ترتیب، بکشید. برای پنهان یا نمایان کردن، لمس کنید و نگه دارید."
           }
         },
         "fi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Muuta järjestystä vetämällä. Piilota tai näytä painamalla pitkään. Käyttämättömät sivut piilotetaan automaattisesti, ellet valitse niiden näyttämistä."
+            "value" : "Järjestä vetämällä. Piilota tai näytä painamalla pitkään."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Faites glisser pour réorganiser. Appuyez longuement pour masquer ou afficher. Les pages inutilisées sont masquées automatiquement, sauf si vous choisissez de les afficher."
+            "value" : "Faites glisser pour réorganiser. Appuyez longuement pour masquer ou afficher."
           }
         },
         "he" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "גרירה לשינוי הסדר. לחיצה ממושכת להסתרה או להצגה. עמודים שאינם בשימוש מוסתרים אוטומטית, אלא אם בחרת להציג אותם."
+            "value" : "גררו לשינוי הסדר. לחצו לחיצה ארוכה להסתרה או להצגה."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "क्रम बदलने के लिए खींचें। छिपाने या दिखाने के लिए दबाकर रखें। इस्तेमाल न होने वाले पेज अपने-आप छिप जाते हैं, जब तक आप उन्हें मैन्युअल रूप से दिखाना न चुनें।"
+            "value" : "क्रम बदलने के लिए खींचें। छिपाने या दिखाने के लिए दबाकर रखें।"
           }
         },
         "hr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Povucite za promjenu redoslijeda. Dodirnite i držite za skrivanje ili prikaz. Stranice koje ne koristite automatski se skrivaju, osim ako ih ručno postavite kao vidljive."
+            "value" : "Povucite za promjenu redoslijeda. Držite pritisnuto za skrivanje ili prikaz."
           }
         },
         "hu" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Húzással módosíthatja a sorrendet. Hosszan megérintve elrejtheti vagy megjelenítheti az elemet. A nem használt oldalak automatikusan elrejtődnek, kivéve, ha kézzel láthatóra állítja őket."
+            "value" : "Húzással rendezheti át. Hosszan nyomva elrejtheti vagy megjelenítheti."
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Seret untuk mengubah urutan. Tekan dan tahan untuk menyembunyikan atau menampilkan. Halaman yang tidak digunakan otomatis disembunyikan, kecuali Anda memilih untuk menampilkannya secara manual."
+            "value" : "Seret untuk mengubah urutan. Tekan lama untuk menyembunyikan atau menampilkan."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Trascina per riordinare. Tieni premuto per nascondere o mostrare. Le pagine inutilizzate si nascondono automaticamente, a meno che tu non scelga di mostrarle manualmente."
+            "value" : "Trascina per riordinare. Tieni premuto per nascondere o mostrare."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "ドラッグで並べ替え、長押しで表示・非表示を切り替えます。手動で表示を選んだページを除き、使っていないページは自動的に非表示になります。"
+            "value" : "ドラッグして並べ替え。長押しで表示・非表示を切り替え。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "드래그하여 순서를 변경하세요. 길게 눌러 숨기거나 표시하세요. 사용하지 않는 페이지는 직접 표시하도록 설정하지 않으면 자동으로 숨겨집니다."
+            "value" : "드래그하여 순서를 변경하세요. 길게 눌러 숨기거나 표시하세요."
           }
         },
         "ms" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Seret untuk menyusun semula. Tekan dan tahan untuk menyembunyikan atau memaparkan. Halaman yang tidak digunakan disembunyikan secara automatik melainkan anda memilih untuk memaparkannya secara manual."
+            "value" : "Seret untuk menyusun semula. Tekan lama untuk menyembunyikan atau memaparkan."
           }
         },
         "nb" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Dra for å endre rekkefølgen. Trykk og hold for å skjule eller vise. Ubrukte sider skjules automatisk med mindre du velger å vise dem manuelt."
+            "value" : "Dra for å endre rekkefølge. Trykk og hold for å skjule eller vise."
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Sleep om de volgorde te wijzigen. Houd ingedrukt om te verbergen of te tonen. Ongebruikte pagina’s worden automatisch verborgen, tenzij je ervoor kiest ze handmatig te tonen."
+            "value" : "Sleep om de volgorde te wijzigen. Houd ingedrukt om te verbergen of te tonen."
           }
         },
         "pl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Przeciągnij, aby zmienić kolejność. Przytrzymaj, aby ukryć lub pokazać. Nieużywane strony są automatycznie ukrywane, chyba że ręcznie włączysz ich wyświetlanie."
+            "value" : "Przeciągnij, aby zmienić kolejność. Przytrzymaj, aby ukryć lub pokazać."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Arraste para reordenar. Mantenha pressionado para ocultar ou mostrar. Páginas não utilizadas são ocultadas automaticamente, a menos que você escolha mostrá-las manualmente."
+            "value" : "Arraste para reordenar. Toque e segure para ocultar ou mostrar."
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Trage pentru a schimba ordinea. Apasă lung pentru a ascunde sau afișa. Paginile nefolosite se ascund automat, cu excepția celor pe care alegi să le afișezi."
+            "value" : "Trage pentru a schimba ordinea. Ține apăsat pentru a ascunde sau afișa."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Перетаскивайте для изменения порядка. Нажмите и удерживайте, чтобы скрыть или показать. Неиспользуемые страницы скрываются автоматически, кроме тех, которые вы явно выбрали для показа."
+            "value" : "Перетащите вкладки, чтобы изменить порядок. Нажмите и удерживайте, чтобы скрыть или показать."
           }
         },
         "sk" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Potiahnutím zmeníte poradie. Podržaním skryjete alebo zobrazíte položku. Nepoužívané stránky sa skryjú automaticky, okrem tých, ktoré výslovne nastavíte ako viditeľné."
+            "value" : "Potiahnutím zmeníte poradie. Podržaním skryjete alebo zobrazíte."
           }
         },
         "sl" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Povlecite za spremembo vrstnega reda. Pridržite za skrivanje ali prikaz. Neuporabljene strani se samodejno skrijejo, razen tistih, za katere izrecno izberete prikaz."
+            "value" : "Povlecite za spremembo vrstnega reda. Pridržite, da skrijete ali prikažete."
           }
         },
         "sr-Latn" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Prevucite za promenu redosleda. Pritisnite i zadržite za skrivanje ili prikaz. Nekorišćene stranice automatski se skrivaju, osim onih koje izričito odaberete da prikažete."
+            "value" : "Prevucite da promenite redosled. Pritisnite i zadržite da sakrijete ili prikažete."
           }
         },
         "sv" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Dra för att ändra ordningen. Håll ned för att dölja eller visa. Oanvända sidor döljs automatiskt, utom de som du uttryckligen väljer att visa."
+            "value" : "Dra för att ändra ordningen. Håll ned för att dölja eller visa."
           }
         },
         "th" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "ลากเพื่อจัดลำดับใหม่ กดค้างไว้เพื่อซ่อนหรือแสดง หน้าที่ไม่ได้ใช้จะถูกซ่อนโดยอัตโนมัติ เว้นแต่คุณจะเลือกให้แสดง"
+            "value" : "ลากเพื่อจัดลำดับ กดค้างเพื่อซ่อนหรือแสดง"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Yeniden sıralamak için sürükleyin. Gizlemek veya göstermek için basılı tutun. Siz göstermeyi seçmedikçe kullanılmayan sayfalar otomatik olarak gizlenir."
+            "value" : "Sıralamak için sürükleyin. Gizlemek veya göstermek için basılı tutun."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Перетягніть, щоб змінити порядок. Натисніть і утримуйте, щоб приховати або показати. Невикористані сторінки автоматично приховуються, крім тих, які ви показали вручну."
+            "value" : "Перетягніть, щоб змінити порядок. Натисніть і утримуйте, щоб приховати або показати."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "Kéo để đổi thứ tự. Nhấn giữ để ẩn hoặc hiện. Các trang không dùng sẽ tự động ẩn, trừ khi bạn chọn hiển thị chúng."
+            "value" : "Kéo để sắp xếp lại. Nhấn giữ để ẩn hoặc hiện."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "拖移以调整顺序，长按可隐藏或显示。未使用的页面会自动隐藏，除非你手动选择显示它们。"
+            "value" : "拖动以调整顺序。长按以隐藏或显示。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "needs_review",
-            "value" : "拖移以調整順序，長按可隱藏或顯示。未使用的頁面會自動隱藏，除非你手動選擇顯示它們。"
+            "value" : "拖移以調整順序。長按以隱藏或顯示。"
           }
         }
       }

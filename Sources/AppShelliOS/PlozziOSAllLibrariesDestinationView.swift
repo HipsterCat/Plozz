@@ -10,7 +10,7 @@ struct PlozziOSAllLibrariesDestinationView: View {
     private var title: String { // l10n:content - locale-scoped resource for the shared grid's String API
         var resource = AllLibrariesBrowse.title
         resource.locale = locale
-        return String(localized: resource)
+        return String(localized: resource) // l10n:content - recomputed from the observed locale, never cached
     }
 
     var body: some View {
