@@ -154,12 +154,12 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
     /// `.original`, `false` → `.device`), migrated in the decoder below.
     public var audioLanguagePreference: AudioLanguagePreference
 
-    /// Spatial conversion for supported tvOS on-demand sessions. Keep the original
+    /// Spatial conversion for supported tvOS/iOS on-demand sessions. Keep the original
     /// key so saved Off choices and transferred profile preferences survive.
     public var trueHDAtmosEnabled: Bool
 
     /// Experimental Profile 7 FEL reconstruction. Off by default; applies to new
-    /// on-demand sessions and uses channel-based audio without spatial information.
+    /// on-demand sessions, retaining eligible spatial audio on OS 26 and later.
     public var dolbyVisionFELEnabled: Bool
 
     /// Remember the chosen **audio language** per series: switching audio on any

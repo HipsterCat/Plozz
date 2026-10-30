@@ -104,6 +104,8 @@ private final class TransportReaderGroup: @unchecked Sendable {
 }
 
 public final class TransportIOReader: IOReader, @unchecked Sendable {
+    public let discImageProbeEnabled: Bool
+
     private struct ReaderState {
         var position: Int64 = 0
         var isClosed = false
@@ -152,15 +154,21 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
     private static let maximumReadAheadWindow = 32 * 1024 * 1024
     private static let minimumPrefetchWindow = 16 * 1024 * 1024
     private static let probeWindowSize = 64 * 1024
+    private static let containerProbeWindowSize = 256 * 1024
     private static let maximumProbeWindows = 8
     private let readAheadWindow: Int
     private let maxBackendChunk: Int
 
-    public convenience init(source: TransportByteSource) {
-        self.init(source: source, readAheadWindow: Self.defaultReadAheadWindow)
+    public convenience init(source: TransportByteSource, discImageProbeEnabled: Bool = true) {
+        self.init(
+            source: source,
+            readAheadWindow: Self.defaultReadAheadWindow,
+            discImageProbeEnabled: discImageProbeEnabled
+        )
     }
 
-    init(source: TransportByteSource, readAheadWindow: Int) {
+    init(source: TransportByteSource, readAheadWindow: Int, discImageProbeEnabled: Bool = true) {
+        self.discImageProbeEnabled = discImageProbeEnabled
         let lease = MediaTransportSourceLease(source: source)
         self.lease = lease
         self.resolvedSource = nil
@@ -171,7 +179,8 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
         _ = readerGroup.register(self)
     }
 
-    public init(resolvedSource: MediaTransportResolvedSource) {
+    public init(resolvedSource: MediaTransportResolvedSource, discImageProbeEnabled: Bool = true) {
+        self.discImageProbeEnabled = discImageProbeEnabled
         self.resolvedSource = resolvedSource
         self.lease = resolvedSource.sourceLease
         self.cursor = resolvedSource.sourceLease.makeCursor()!
@@ -186,8 +195,10 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
         lease: MediaTransportSourceLease,
         resolvedSource: MediaTransportResolvedSource?,
         readAheadWindow: Int,
+        discImageProbeEnabled: Bool,
         readerGroup: TransportReaderGroup
     ) {
+        self.discImageProbeEnabled = discImageProbeEnabled
         self.cursor = cursor
         self.lease = lease
         self.resolvedSource = resolvedSource
@@ -251,7 +262,13 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
             if maxBackendChunk > Self.defaultBackendChunk {
                 let sequential = !state.bufferData.isEmpty
                     && offset == state.bufferStart + Int64(state.bufferData.count)
-                let window = sequential ? min(state.bufferData.count * 4, maxBackendChunk) : Self.probeWindowSize
+                var window = sequential ? min(state.bufferData.count * 4, maxBackendChunk) : Self.probeWindowSize
+                // Ordinary containers can store their index at EOF. Finish a
+                // bounded tail in one request instead of a slow growth staircase.
+                if !discImageProbeEnabled, requestedLength >= Self.containerProbeWindowSize,
+                   remaining <= Self.defaultReadAheadWindow {
+                    window = max(window, remaining)
+                }
                 length = min(max(requestedLength, window), maxBackendChunk, remaining)
                 state.bufferData = Data()
             } else {
@@ -285,7 +302,8 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
                 }
                 state.bufferStart = operation.offset
                 state.bufferData = data
-                if maxBackendChunk > Self.defaultBackendChunk, data.count <= Self.probeWindowSize {
+                let cacheLimit = discImageProbeEnabled ? Self.probeWindowSize : Self.containerProbeWindowSize
+                if maxBackendChunk > Self.defaultBackendChunk, data.count <= cacheLimit {
                     state.probeWindows.removeAll { $0.start == operation.offset }
                     state.probeWindows.append((operation.offset, data))
                     if state.probeWindows.count > Self.maximumProbeWindows {
@@ -414,6 +432,7 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
             lease: lease,
             resolvedSource: resolvedSource,
             readAheadWindow: readAheadWindow,
+            discImageProbeEnabled: discImageProbeEnabled,
             readerGroup: readerGroup
         )
         return readerGroup.register(reader) ? reader : nil

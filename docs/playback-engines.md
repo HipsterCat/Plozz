@@ -43,7 +43,8 @@ demuxer. The demand read adopts the pending window instead of requesting it
 again. Sparse probes and default-size transports do not speculate.
 
 The current and pending windows retain at most 64 MiB of logical payload per
-adaptive reader, plus the 512 KiB probe cache. This is not a process/peak-memory
+adaptive reader, plus the probe cache (512 KiB for discs/unknown sources, 2 MiB
+for known ordinary containers). This is not a process/peak-memory
 cap: clones, HTTP, decoder and HLS buffers have their own memory costs. Stopping
 consumption can leave up to one unused 32 MiB window; no further work is started
 until the consumer advances. Seeks within the current or pending window preserve
@@ -65,13 +66,45 @@ The full media-probe budget and default sealed HLS segment delivery remain
 unchanged; shortening analysis without track-completeness checks can lose sparse
 audio/subtitle tracks.
 
+Known ordinary network-file containers (MP4/MOV, Matroska/WebM, MPEG-TS and AVI)
+skip ISO/UDF signature reads through Aether's `discImageProbeEnabled` contract,
+including independent readers and detail probes. ISO and unknown containers
+retain disc recognition. This changes neither container/track analysis nor
+transport identity, range, redirect or credential validation.
+
+For known ordinary containers, a demand of at least 256 KiB within the final
+4 MiB coalesces the remaining tail, still capped by the transport's preferred
+request size. This avoids growing through several requests for a trailing MP4
+index. Up to eight 256 KiB probe windows retain the header across that seek,
+avoiding a second header download. Small/disc probes keep the existing policy.
+The tradeoff is up to 4 MiB fetched for a partially consumed tail and up to
+1.5 MiB more retained probe payload per ordinary-container reader; cancellation,
+clone independence and validated complete-window delivery remain unchanged.
+
+WebDAV playback sources at least 256 KiB combine the mandatory range probe with
+the initial 256 KiB media window. The full prefix is validated and retained by
+the source lease, avoiding another header request; it adds at most 256 KiB per
+source and can fetch unnecessary bytes when opening elsewhere. Small files and
+GET-only identity discovery retain the two-byte probe. Accepted password
+challenges are reused only inside the exact ephemeral account/revision/origin/
+trust/role session; anonymous delivery remains separate. Origin revalidation,
+complete-response validation and server authentication refusals remain enforced.
+
+Share sidecar discovery lists the video's parent once and visits only advertised
+`Subs`/`Subtitles` folders, using their actual casing. An unlistable parent retains
+the legacy folder-name probes; ordinary optional-listing failures are logged,
+while cancellation stops discovery. Own-folder exact-stem matching, dedicated
+folder boundary matching and extras' exact-stem rule are unchanged.
+
 Related upstream designs separate request sizing from buffered consumption:
 [FFmpeg HTTP](https://github.com/FFmpeg/FFmpeg/blob/b7e835e06913e4374a4567003fe8c75cebfffb98/libavformat/http.c)
 supports separate initial/steady request sizes and short-seek read-ahead;
 [VLC prefetch](https://github.com/videolan/vlc/blob/11bcb6f56d59b43cf589556f426c7a5cbd460fdd/modules/stream_filter/prefetch.c)
 uses a bounded producer/consumer buffer; and
 [mpv demux](https://github.com/mpv-player/mpv/blob/dde0671072723c311df874a32dc4e48b5197ca62/demux/demux.c)
-keeps bounded forward/backward packet caches. These are architectural references,
+keeps bounded forward/backward packet caches.
+[Kodi's HTTP reader](https://github.com/xbmc/xbmc/blob/af9ff93d022fedceaff6b5a256b3a8345f4263d5/xbmc/filesystem/CurlFile.cpp#L1482-L1508)
+retains old read state across seeks. These are architectural references,
 not measurements of those players on Plozz's test service or copied implementations.
 
 This does not add CSS/AACS decryption, disc menus, BD-J, multi-angle playback,
@@ -94,15 +127,20 @@ hdiutil makehybrid -iso -udf -default-volume-name PLOZZ_DISC_FIXTURE \
   -o dvd-test-pattern.iso /tmp/plozz-disc-fixture
 ```
 
-The separate live test is opt-in: set the test process's
+The separate live test is opt-in: pass JSON in the test process's
+`PLOZZ_WEBDAV_PLAYBACK_JSON` environment variable, or set
 `PLOZZ_WEBDAV_PLAYBACK_INPUT` to a private JSON file (or `cache:<filename>` in
 the test host's cache directory) containing `baseURL`, `username`, `password`,
 `relativePath`, and one to three `seekPositions` in seconds. Use a credential-free
-HTTPS base URL, a decrypted ISO the tester is authorized to access, and a file
-owned by the tester with mode `0600`, outside Git. Remove staged simulator
+HTTPS base URL and a media file or decrypted ISO the tester is authorized to
+access. For file input, use a tester-owned file with mode `0600`, outside Git.
+For environment input, load credentials only for `test-without-building`, not
+build commands that could dump their environment. Remove staged simulator
 credentials after the run. Missing configuration skips only that live test;
 it is not evidence of remote playback. Each load/seek has a 120-second deadline
-and frame/progress waits are bounded separately.
+and frame/progress waits are bounded separately. Preparation and engine-load
+timings are reported separately; the combined metric ends after rendered video
+has progressed beyond 0.5 seconds, not at the first decoder output.
 After the final seek, the live test observes another 60 seconds and requires
 more than 58 seconds of playhead advancement. This is a bounded continued-playback
 check, not proof of complete-film playback or physical-device frame smoothness.
@@ -241,7 +279,7 @@ filling a large cushion.
 
 The 7.48.0 integration adds VP9 hardware decoding on supported devices, with a
 software fallback, and AV1 Dolby Vision Profile 10.1 metadata on the software
-presentation path. On tvOS 26+, software/FEL playback can use the existing spatial-audio
+presentation path. On tvOS and iOS/iPadOS 26+, software/FEL playback can use the existing spatial-audio
 preference instead of always falling back to a channel bed. TrueHD's optional
 renderer now decodes the object presentation with matrix interpolation through
 LibTrueHD 3.1.0. This is spatial conversion, not lossless bitstream passthrough.
@@ -343,7 +381,7 @@ toggle's desired mode or the receiver's output.
 
 ### Spatial audio
 
-**Spatial audio defaults on for supported on-demand playback on tvOS 26+.**
+**Spatial audio defaults on for supported on-demand playback on tvOS and iOS/iPadOS 26+.**
 The profile-scoped `trueHDAtmosEnabled` key preserves existing Off choices and
 profile transfers; missing or malformed values use the central default. A build
 that previously omitted the preference cannot recover an Off value already
@@ -367,6 +405,11 @@ At load, Aether selects 24-bit PCM unless the active route includes AirPlay,
 which uses lossy APAC. PCM avoids an additional lossy encode of the rendered bed;
 it is not source-bit-identical object audio or original compressed-bitstream
 passthrough. Actual overhead output still requires compatible equipment.
+On iPhone/iPad, compatible AirPods use the system's spatial rendering automatically
+when Spatial Audio is enabled in the OS. Plozz does not override Off, Fixed or
+Head Tracked preferences. Both playback engines declare multichannel content;
+no separate AirPods setting or route-based opt-in is required. The engine selects
+the bed format at load, rather than restarting playback when headphones connect.
 Diagnostics identify actual `PCM <layout>` pipelines as **Rendered to PCM** and
 APAC as **Lossy encoding**, never inferring either from the selected setting.
 
@@ -380,8 +423,8 @@ feature does not establish licensing compliance or guarantee App Store approval.
 
 Off and unsupported paths retain the ordinary channel presentation selected by
 Lossless surround: FLAC by default, or the E-AC-3 compatibility bridge when off. Live streams,
-shared players, muted previews and iOS/iPadOS do not request conversion. On tvOS
-26+, eligible FEL/software audio can use the existing spatial-audio preference;
+shared players, muted previews and OS versions before 26 do not request conversion.
+On tvOS and iOS/iPadOS 26+, eligible FEL/software audio can use the existing spatial-audio preference;
 unsupported or disabled paths retain channel PCM. Native E-AC-3/JOC stream-copy
 is unaffected. Explicit track selections and language preferences
 remain authoritative. Progressive segment delivery remains off.
@@ -488,16 +531,16 @@ layer is discarded.
 
 FEL decodes both layers with VideoToolbox and reconstructs the picture with Metal.
 It adds GPU/memory work and uses the sample-buffer playback path, not AVPlayer.
-On tvOS 26+, the existing Spatial audio preference also applies to eligible FEL
+On tvOS and iOS/iPadOS 26+, the existing Spatial audio preference also applies to eligible FEL
 audio: E-AC-3/JOC can reach the audio renderer compressed, and supported TrueHD
-and DTS:X tracks use APAC spatial conversion. Other tracks and disabled spatial
-conversion retain channel PCM. Plozz does not request this conversion on iOS/iPadOS
-or older tvOS, so FEL still drops spatial information there, including for
+and DTS:X tracks use route-selected PCM or APAC spatial conversion. Other tracks and disabled spatial
+conversion retain channel PCM. Plozz does not request this conversion on
+OS versions before 26, so FEL still drops spatial information there, including for
 E-AC-3/JOC. The helper says **May impact performance.**, adding **Disables spatial
 audio.** only on those platforms. Non-FEL titles keep their ordinary audio paths.
-Upstream's software spatial-audio measurements cover macOS, not tvOS hardware;
-these routing capabilities do not establish receiver compatibility or verified
-overhead output on a particular Apple TV setup.
+Upstream reports spatial-bed measurements on Apple TV, iPhone with AirPods and
+Mac. Those engine-level results do not establish verified Plozz output or
+head tracking on a particular device and output setup.
 
 Upstream documents measured Dolby Vision metadata consumption on tvOS, but not
 on iOS/iPadOS. Enabling the option is not evidence that a particular file took
@@ -729,11 +772,11 @@ retention assertions; they do not establish physical-device frame pacing.
 | Feature | Plozzigen | Native |
 |---------|-----------|--------|
 | Dolby Vision | ✅ (Profile 5/8; optional dual-layer path, see above) | ✅ (if server delivers DV) |
-| Directly compatible spatial audio | ✅ (E-AC-3 JOC on the native path; software/FEL also eligible with Spatial audio on, tvOS 26+) | ✅ (if stream has E-AC-3 JOC) |
+| Directly compatible spatial audio | ✅ (E-AC-3 JOC on the native path; software/FEL also eligible with Spatial audio on, tvOS/iOS 26+) | ✅ (if stream has E-AC-3 JOC) |
 | HDR10 / HLG | ✅ | ✅ |
 | Full-timeline seek | ✅ | ✅ (if not live transcode) |
 | PGS subtitles | ✅ (engine-owned subtitle paths) | ❌ (server burn-in needed) |
-| Spatial audio conversion with heights | ✅ (supported native and software/FEL tracks on tvOS 26+, lossy) | ❌ |
+| Spatial audio conversion with heights | ✅ (supported native and software/FEL tracks on tvOS/iOS 26+, rendered PCM or lossy APAC) | ❌ |
 | DTS bitstream | ❌ (channel audio uses FLAC/E-AC-3 bridge) | ❌ |
 | TrueHD bitstream | ❌ (channel audio uses FLAC/E-AC-3 bridge) | ❌ |
 

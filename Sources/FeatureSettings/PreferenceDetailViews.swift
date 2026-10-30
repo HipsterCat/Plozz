@@ -842,17 +842,7 @@ struct PlaybackDetailView: View {
             SettingsSplitRow(id: "lossless-surround", title: "Audio") {
                 SettingsControlRows {
                     LosslessAudioControl()
-                    #if os(tvOS)
-                    if #available(tvOS 26.0, *) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
-                                .accessibilityIdentifier("spatial-audio-toggle")
-                            Text("Uses PCM for supported TrueHD Atmos and DTS:X tracks; lossy audio over AirPlay.")
-                                .settingsHelperText()
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    #endif
+                    SpatialAudioControl(isOn: $playback.settings.trueHDAtmosEnabled)
                 }
             }
         ]

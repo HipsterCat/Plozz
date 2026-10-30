@@ -189,14 +189,14 @@ Playback > Advanced also contains **Dolby Vision FEL (experimental)** on TV,
 iPhone and iPad. This is a profile-scoped, default-off preference, unlike the
 device-wide external-player choice. It applies to new built-in on-demand sessions
 and travels through profile settings transfer. Its short helper warns that it
-may impact performance. On iPhone/iPad and tvOS before 26 it also warns that
-FEL disables spatial audio; ordinary channel audio still plays. On tvOS 26+,
+may impact performance. On iOS/iPadOS and tvOS before 26 it also warns that
+FEL disables spatial audio; ordinary channel audio still plays. On OS 26+,
 eligible FEL tracks can retain spatial audio when the Spatial audio setting is on.
 Live playback, shared players and muted previews do not opt in.
 See [playback engines](../../docs/playback-engines.md#dolby-vision-fel) for eligibility
 and output limits.
 
-On tvOS 26+, Playback > Advanced also offers **Rendering layout** in a native
+On tvOS and iOS/iPadOS 26+, Playback > Advanced also offers **Rendering layout** in a native
 menu: 5.1.2, 5.1.4, 7.1.2, 7.1.4 and the default 9.1.6. This device-local choice
 is shared by profiles, excluded from profile transfer and read on each new load.
 It does not enable Spatial audio or alter saved On/Off choices. The helper
@@ -248,16 +248,18 @@ profile-scoped and travel through settings transfer. Community-marker attributio
 and identifier sharing appear as a short caption attached to its switch, without
 a separate section footer.
 
-The **Spatial audio (height channel support)** switch is available on tvOS 26 and later. Its
+The **Spatial audio (height channel support)** switch is available on tvOS and iOS/iPadOS 26 and later. Its
 profile-scoped `trueHDAtmosEnabled` preference defaults on, preserves saved Off
 choices and travels through profile transfer. It applies to new supported
 on-demand sessions, not live streams, shared players or muted previews. The
 helper identifies TrueHD Atmos and DTS:X as inputs, PCM rendering and lossy
 AirPlay output. Format names describe compatibility, not certification,
 lossless passthrough, or patent clearance.
-FEL can use the same spatial conversion on tvOS 26+; source eligibility and
+FEL can use the same spatial conversion on these platforms; source eligibility and
 fallback remain engine-owned. Unsupported platforms
 keep ordinary channel playback; directly compatible spatial audio is unaffected.
+Compatible AirPods use the system's spatial rendering automatically when enabled
+in the OS; Plozz does not override Spatial Audio or head-tracking preferences.
 Feature descriptions use neutral spatial-audio wording; track
 metadata, diagnostics and legal notices retain accurate format and dependency names.
 See [spatial audio](../../docs/playback-engines.md#spatial-audio) for limitations.

@@ -2201,6 +2201,7 @@ struct PlozziOSPlaybackSettingsView: View {
             }
             SettingsSectionGroup("Audio") {
                 LosslessAudioControl()
+                SpatialAudioControl(isOn: $model.settings.trueHDAtmosEnabled)
             }
             SettingsSectionGroup {
                 Button { showsAdvancedPlayback = true } label: {

@@ -561,6 +561,7 @@ targets:
     sources:
       - path: Tests/iOSPresentationTests
       - path: Tests/EnginePlozzigenTests/SpatialAudioLayoutPreferenceTests.swift
+      - path: Tests/FeaturePlaybackTests/NativePlaybackLifecycleTests.swift
       - path: Tests/FeatureLiveTVCoreTests/LiveTVPlaybackCoordinatorTests.swift
       - path: Tests/FeatureLiveTVTests/LiveTVGuideRowLayoutTests.swift
       - path: Tests/CoreModelsTests/SettingsHydrationTests.swift

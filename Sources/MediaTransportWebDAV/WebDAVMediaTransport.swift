@@ -321,7 +321,10 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
             if let discovered = metadata.probe {
                 probe = discovered
             } else {
-                probe = try await probeFile(url)
+                probe = try await probeFile(
+                    url, prefetch: sessionKey.role == .playback
+                        && locator.representation.size >= RangeProbe.initialReadByteCount
+                )
             }
             guard probe.totalLength == locator.representation.size else {
                 throw MediaTransportError.sourceChanged(reason: "WebDAV representation changed since scan")
@@ -349,9 +352,10 @@ final class WebDAVMediaTransportFileSystem: MediaTransportFileSystem, @unchecked
         }
     }
 
-    private func probeFile(_ url: URL) async throws -> RangeProbeResult {
+    private func probeFile(_ url: URL, prefetch: Bool = false) async throws -> RangeProbeResult {
         try await client.probeRange(
-            root: root, url: url, sessionKey: sessionKey, credential: credential, trustPolicy: trustPolicy
+            root: root, url: url, sessionKey: sessionKey, credential: credential,
+            trustPolicy: trustPolicy, prefetch: prefetch
         )
     }
 
