@@ -81,6 +81,15 @@ The tradeoff is up to 4 MiB fetched for a partially consumed tail and up to
 1.5 MiB more retained probe payload per ordinary-container reader; cancellation,
 clone independence and validated complete-window delivery remain unchanged.
 
+WebDAV playback sources at least 256 KiB combine the mandatory range probe with
+the initial 256 KiB media window. The full prefix is validated and retained by
+the source lease, avoiding another header request; it adds at most 256 KiB per
+source and can fetch unnecessary bytes when opening elsewhere. Small files and
+GET-only identity discovery retain the two-byte probe. Accepted password
+challenges are reused only inside the exact ephemeral account/revision/origin/
+trust/role session; anonymous delivery remains separate. Origin revalidation,
+complete-response validation and server authentication refusals remain enforced.
+
 Share sidecar discovery lists the video's parent once and visits only advertised
 `Subs`/`Subtitles` folders, using their actual casing. An unlistable parent retains
 the legacy folder-name probes; ordinary optional-listing failures are logged,
@@ -93,7 +102,9 @@ supports separate initial/steady request sizes and short-seek read-ahead;
 [VLC prefetch](https://github.com/videolan/vlc/blob/11bcb6f56d59b43cf589556f426c7a5cbd460fdd/modules/stream_filter/prefetch.c)
 uses a bounded producer/consumer buffer; and
 [mpv demux](https://github.com/mpv-player/mpv/blob/dde0671072723c311df874a32dc4e48b5197ca62/demux/demux.c)
-keeps bounded forward/backward packet caches. These are architectural references,
+keeps bounded forward/backward packet caches.
+[Kodi's HTTP reader](https://github.com/xbmc/xbmc/blob/af9ff93d022fedceaff6b5a256b3a8345f4263d5/xbmc/filesystem/CurlFile.cpp#L1482-L1508)
+retains old read state across seeks. These are architectural references,
 not measurements of those players on Plozz's test service or copied implementations.
 
 This does not add CSS/AACS decryption, disc menus, BD-J, multi-angle playback,

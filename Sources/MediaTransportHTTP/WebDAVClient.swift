@@ -109,7 +109,8 @@ public struct WebDAVClient: Sendable {
         )
     }
 
-    /// Establishes a GET validator and size with a bounded two-byte probe.
+    /// Establishes a GET validator and size with a bounded probe, optionally
+    /// retaining the first playback window instead of discarding two bytes.
     /// Same-origin hops remain root-bound; external HTTPS media hops use an
     /// isolated anonymous session. Its final URL lives only in the source lease.
     public func probeRange(
@@ -117,16 +118,17 @@ public struct WebDAVClient: Sendable {
         url: URL,
         sessionKey: TransportSessionKey,
         credential: WebDAVCredential,
-        trustPolicy: TrustPolicy
+        trustPolicy: TrustPolicy,
+        prefetch: Bool = false
     ) async throws -> RangeProbeResult {
         let (result, anonymous) = try await executeMediaGET(
-            requestBuilder: { RangeProbe.probeRequest(url: $0) },
+            requestBuilder: { RangeProbe.probeRequest(url: $0, prefetch: prefetch) },
             root: root,
             url: url,
             sessionKey: sessionKey,
             credential: credential,
             trustPolicy: trustPolicy,
-            maxResponseBytes: RangeProbe.probeByteCount
+            maxResponseBytes: prefetch ? RangeProbe.initialReadByteCount : RangeProbe.probeByteCount
         )
         let (data, response) = (result.data, result.response)
         try validateAuthenticationStatus(response)
@@ -145,7 +147,8 @@ public struct WebDAVClient: Sendable {
             status: response.statusCode,
             headers: headers,
             bodyLength: data.count,
-            resourceURL: resourceURL
+            resourceURL: resourceURL,
+            prefetch: prefetch
         ) {
         case .success(let result):
             return RangeProbeResult(
@@ -153,7 +156,8 @@ public struct WebDAVClient: Sendable {
                 totalLength: result.totalLength,
                 resourceURL: result.resourceURL,
                 lastModified: result.lastModified,
-                usesAnonymousSession: anonymous
+                usesAnonymousSession: anonymous,
+                initialData: prefetch ? data : Data()
             )
         case .failure(let error):
             throw error
