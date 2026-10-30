@@ -6,7 +6,7 @@ instead of inheriting the page's monochrome navigation tint.
 
 The Settings screen and its detail pages. Profile-aware and integration-aware.
 
-Playback > **Ask before resuming** is per-profile and off by default, including
+Playback > **Ask to resume or start over** is per-profile and off by default, including
 for existing profiles. TV and mobile resume partially watched movies and episodes
 directly unless it is enabled. Enabled profiles get the shared native Resume /
 Start Over dialog before user-initiated playback; explicit restart and
