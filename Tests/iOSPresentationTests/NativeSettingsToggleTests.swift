@@ -72,9 +72,10 @@ final class NativeSettingsToggleTests: XCTestCase {
                 for label in ["Labels", "Customize labels", "Watch indicators", "Show unwatched episode count"] {
                     XCTAssertTrue(text.localizedCaseInsensitiveContains(label), text)
                 }
-                for label in ["Show labels everywhere", "Hide labels everywhere"] {
-                    XCTAssertEqual(text.contains(label), width == 834, text)
-                }
+                let showsLabelCards = text.contains("Show labels everywhere")
+                XCTAssertEqual(showsLabelCards, text.contains("Hide labels everywhere"), text)
+                if width < 632 { XCTAssertFalse(showsLabelCards, text) }
+                XCTAssertTrue(text.contains("App default"), text)
                 XCTAssertEqual(text.contains("Hidden"), width == 834 || mode == .hidden, text)
                 XCTAssertEqual(text.contains("Color"), mode != .hidden)
                 XCTAssertTrue(indicators.showsUnwatchedEpisodeCount)
@@ -1147,12 +1148,26 @@ final class NativeSettingsToggleTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.recognitionLanguages = ["en-US"]
-        request.customWords = technicalWords
-        try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([request])
-        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+        let cgImage = try XCTUnwrap(image.cgImage)
+        func recognizedLines(in image: CGImage) throws -> [String] {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["en-US"]
+            request.customWords = technicalWords
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+        }
+        var lines = try recognizedLines(in: cgImage)
+        // Wide native rows can lose their trailing values when Vision downsamples the whole page.
+        for y in stride(from: 0, to: cgImage.height, by: 1000) {
+            for x in stride(from: 0, to: cgImage.width, by: 600) {
+                let tile = try XCTUnwrap(cgImage.cropping(to: CGRect(
+                    x: x, y: y, width: min(1200, cgImage.width - x), height: min(1200, cgImage.height - y)
+                )))
+                lines += try recognizedLines(in: tile)
+            }
+        }
+        return lines.joined(separator: " ")
     }
 
     private func captureScrollableText(_ window: UIWindow, name: String) async throws -> String {

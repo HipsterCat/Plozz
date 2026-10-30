@@ -1736,8 +1736,14 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        try await waitUntil { focused }
-        XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        try await waitUntil {
+            window.layoutIfNeeded()
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            return focused
+        }
+        XCTAssertNotNil(system.focusedItem)
     }
 
     private func sourceView(in view: UIView) -> DetailTransitionSourceView? {
