@@ -31,13 +31,11 @@ final class HomeRowBrowseTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(presentation(eligible)).canBrowse, "Hidden-library overflow must not add an action")
     }
 
-    func testCompleteHistoryWatchlistAndFailedRowsDoNotOfferBrowse() throws {
+    func testCompleteHistoryAndFailedRowsDoNotOfferBrowse() throws {
         let shared = HomeRowChoice.shared
-        for kind in [HomeRowKind.continueWatching, .watchlist] {
-            let choice = try XCTUnwrap(shared.first { $0.id == .global(HomeGlobalRow(rawValue: kind.rawValue)!) })
-            let row = HomePresentationRow(choice: choice, source: .home(.init(kind: kind, items: items(100))))
-            XCTAssertFalse(row.canBrowse)
-        }
+        let history = try XCTUnwrap(shared.first { $0.id == .global(.continueWatching) })
+        let row = HomePresentationRow(choice: history, source: .home(.init(kind: .continueWatching, items: items(100))))
+        XCTAssertFalse(row.canBrowse)
         let choice = try XCTUnwrap(shared.first { $0.id == .global(.recentlyAdded) })
         let section = LibrarySection(id: "shelf", title: "Shelf", items: items(20), hasMore: true)
         for (loading, failure): (Bool, AppError?) in [(true, nil), (false, .serverUnreachable)] {

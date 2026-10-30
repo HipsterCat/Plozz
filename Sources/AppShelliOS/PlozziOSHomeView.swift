@@ -88,6 +88,7 @@ struct PlozziOSHomeScrollView<Hero: View, Rows: View>: View {
 
 struct PlozziOSHomeView: View {
     @Environment(\.homeLiveTVSnapshot) private var liveTV
+    @Environment(\.openWatchlist) private var openWatchlist
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
@@ -156,6 +157,12 @@ struct PlozziOSHomeView: View {
     private let onAddServer: () -> Void
     private let onShowSettings: () -> Void
     private let heroMetadataEnricher: HeroMetadataEnricher
+
+    private func browseAction(for row: HomePresentationRow) -> (() -> Void)? {
+        guard row.canBrowse else { return nil }
+        if row.id == .global(.watchlist) { return openWatchlist }
+        return { rowBrowser = viewModel.browseRow(row) }
+    }
 
     init(
         appModel: PlozziOSAppModel,
@@ -596,7 +603,7 @@ struct PlozziOSHomeView: View {
                         watchlistIntentRevision: watchlistIntentRevision,
                         watchlistLoadingPlaceholderCount:
                             viewModel.watchlistLoadingPlaceholderCount,
-                        onBrowse: presentation.canBrowse ? { rowBrowser = viewModel.browseRow(presentation) } : nil
+                        onBrowse: browseAction(for: presentation)
                     )
                 case let .liveTV(channels):
                     PlozziOSHomeMediaRail(
@@ -626,7 +633,7 @@ struct PlozziOSHomeView: View {
                                 row: row, appModel: appModel, scope: ObjectIdentifier(viewModel),
                                 coordinator: featuredTrailers, controller: trailerController,
                                 isActive: homeIsFrontmost && homeHasAppeared && !homeIsScrolling,
-                                onBrowse: presentation.canBrowse ? { rowBrowser = viewModel.browseRow(presentation) } : nil
+                                onBrowse: browseAction(for: presentation)
                             )
                         } else {
                             PlozziOSHomeMediaRail(
@@ -637,7 +644,7 @@ struct PlozziOSHomeView: View {
                                     : .poster,
                                 appModel: appModel,
                                 browseItem: row.browseItem,
-                                onBrowse: presentation.canBrowse ? { rowBrowser = viewModel.browseRow(presentation) } : nil,
+                                onBrowse: browseAction(for: presentation),
                                 onNavigationInteraction:
                                     viewModel.noteHomeNavigationInteraction
                             )

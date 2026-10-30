@@ -145,6 +145,8 @@ struct HomeRowPreview: Sendable {
 }
 
 public extension HomeRow {
+    static let watchlistPreviewLimit = 20
+
     /// Resolves the ordered, visible Home rows from loaded content.
     ///
     /// This makes explicit (and testable) the visibility rules the view used to
@@ -203,7 +205,10 @@ public extension HomeRow {
         // libraryID) so the guarantee survives even if provenance is added later.
         if isGlobalRowEnabled(.watchlist),
            !content.watchlist.isEmpty || includesEmptyWatchlist || isPending(.watchlist) {
-            rows.append(makeRow(.watchlist, items: content.watchlist))
+            let preview = HomeRowPreview(content.watchlist, limit: watchlistPreviewLimit)
+            var row = makeRow(.watchlist, items: preview.items)
+            row.hasMore = preview.hasMore
+            rows.append(row)
         }
         if isGlobalRowEnabled(.recentlyAdded) {
             let latest = content.latest.filter { $0.isVisibleOnHome(isLibraryVisible: isLibraryVisible) }

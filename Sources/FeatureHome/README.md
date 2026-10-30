@@ -18,9 +18,14 @@ Browse actions appear only when the feed confirms additional eligible titles
 beyond the Home preview, not merely because the preview reaches its limit.
 Home requests one lookahead item in the existing bounded fetch; it does not
 probe every shelf again. Complete rows, including single-item shelves and
-uncapped Continue Watching/Watchlist snapshots, have no redundant browse action.
-Sort and filter menus sit at the trailing end of the TV heading and in the
-top-right navigation toolbar on iPhone/iPad.
+uncapped Continue Watching snapshots, have no redundant browse action.
+Watchlist previews the first 20 titles in its existing Home order. When there
+are more, its action selects the existing Watchlist destination instead of
+opening a separate row browser. The full profile-scoped Watchlist and its saved
+sorting/filtering preferences remain intact. A hidden Watchlist navigation entry
+is available temporarily for this explicit visit without changing the saved layout.
+The shared row browser's sort and filter menus sit at the trailing end of the
+TV heading and in the top-right navigation toolbar on iPhone/iPad.
 
 `HomeRowBrowseModel` preserves source order by default and loads additional
 bounded pages as the grid advances. Library and collection rows use their existing
@@ -35,8 +40,8 @@ result. Pending or failed queries never display a partially sorted page as a
 complete answer. This can require more requests and memory than opening the
 default-order grid, especially for large collections. Work is cancelled on
 navigation/supersession, and profile/source visibility is checked again after
-asynchronous work. Continue Watching and Watchlist reuse Home's retained data;
-the browser does not reinterpret their account-wide membership. Browse controls
+asynchronous work. Watchlist reuses Home's full retained data in its existing tab;
+the preview does not reinterpret its account-wide membership. Browse controls
 are destination-local and do not change the Home row's settings or order.
 
 ## Recently Added watched filtering

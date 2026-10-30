@@ -133,6 +133,7 @@ final class HomeNavigationActivity {
 /// Continue Watching, Latest, and library shortcuts.
 public struct HomeView: View {
     @Environment(\.homeLiveTVSnapshot) private var liveTV
+    @Environment(\.openWatchlist) private var openWatchlist
     @Environment(LibraryPresentationSettingsModel.self) private var libraryPresentation: LibraryPresentationSettingsModel?
     @State private var viewModel: HomeViewModel
     private var visibility: HomeLibraryVisibilityModel
@@ -1360,7 +1361,9 @@ public struct HomeView: View {
     }
 
     private func browseAction(for row: HomePresentationRow) -> (() -> Void)? {
-        row.canBrowse ? { rowBrowser = viewModel.browseRow(row) } : nil
+        guard row.canBrowse else { return nil }
+        if row.id == .global(.watchlist) { return openWatchlist }
+        return { rowBrowser = viewModel.browseRow(row) }
     }
 
     @ViewBuilder
