@@ -499089,6 +499089,7 @@
       }
     },
     "No compatible apps are available for this download." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -538338,6 +538339,7 @@
       }
     },
     "Open in…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -870075,6 +870077,7 @@
       }
     },
     "This download is no longer available. Try downloading it again." : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

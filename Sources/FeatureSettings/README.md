@@ -279,13 +279,9 @@ negotiation altogether. Silo's session-bound grants need its built-in lifecycle;
 no speculative external session is opened. Live TV, trailers, and music keep
 their existing runtimes.
 
-On iPhone/iPad, completed movie and episode downloads have a separate **Open in…**
-action in their Downloads row menu. It uses the native document handoff chooser,
-not the external-player URL preference. Only the exact completed regular file
-in the active profile's registry is shared; removed, replaced, missing, or
-incomplete files are rejected. The receiving app may import its own copy.
-Ordinary Play remains in Plozz, and this file handoff does not return watch
-progress or include separately downloaded subtitle sidecars.
+On iPhone/iPad, downloaded movies and episodes play inside Plozz. Downloads
+menus do not export files to other apps, regardless of the external-player
+preference. External playback remains available for supported online sources.
 
 External playback requires directly accessible HTTP(S) media: no app-local
 proxy, downloaded file, private share credentials, separate audio stream, or
