@@ -314,12 +314,16 @@ final class HomeRowArrangementHostedTests: XCTestCase {
     #if os(iOS)
     func testHomeBrowseControlsUseTrailingToolbar() async throws {
         let model = HomeRowBrowseModel(
-            title: "Library picks", snapshot: [MediaItem(id: "one", title: "One", kind: .movie)]
+            title: "Library picks", snapshot: (0..<40).map {
+                MediaItem(id: "\($0)", title: "Shelf title \($0)", kind: .movie)
+            }
         )
         for (width, textSize): (CGFloat, DynamicTypeSize) in [(320, .accessibility3), (1024, .large)] {
             try await withWindow(size: CGSize(width: width, height: 900)) {
                 NavigationStack {
-                    HomeRowBrowseView(model: model, columns: [GridItem(.flexible())]) { Text($0.title) }
+                    HomeRowBrowseView(model: model, columns: [GridItem(.flexible())]) {
+                        Text($0.title).frame(height: 80)
+                    }
                 }
                 .environment(\.dynamicTypeSize, textSize)
             } inspect: { window in
@@ -335,6 +339,15 @@ final class HomeRowArrangementHostedTests: XCTestCase {
                     XCTAssertGreaterThan(frame.height, 0)
                     XCTAssertLessThanOrEqual(frame.maxX, window.bounds.maxX)
                     XCTAssertLessThanOrEqual(frame.maxY, bar.convert(bar.bounds, to: window).maxY)
+                }
+                let before = controls.map { $0.convert($0.bounds, to: window) }
+                try self.scrollToBottom(window)
+                _ = try await self.snapshot(window, name: "Home browse toolbar after scrolling \(width)")
+                let after = views(bar).compactMap { $0 as? UIButton }.map { $0.convert($0.bounds, to: window) }
+                XCTAssertEqual(after.count, before.count)
+                for (initial, scrolled) in zip(before, after) {
+                    XCTAssertEqual(scrolled.midX, initial.midX, accuracy: 1)
+                    XCTAssertEqual(scrolled.midY, initial.midY, accuracy: 1)
                 }
             }
         }

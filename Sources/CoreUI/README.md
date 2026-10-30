@@ -37,8 +37,14 @@ card's focus or selection treatment.
 query-control layout, sort choices/directions, and active-filter labels shared
 by Library and Watchlist on TV and mobile. Mobile controls wrap at narrow widths
 and keep their 44-point action targets; TV keeps the existing native menu style.
-`WatchlistBrowseControls` supplies Watchlist's supported choices, not a parallel
-menu design. Callers retain their query behavior and accessibility identifiers.
+`WatchlistSortMenu` and `WatchlistFilterMenu` supply Watchlist's supported choices,
+not a parallel menu design. `WatchlistBrowseControls` composes them for inline
+surfaces. On iPhone and iPad, Watchlist, library grids, and Home row browsers
+place their supported sort/filter actions in the trailing navigation toolbar,
+outside the scrolling content. Library content-mode tabs remain in the page;
+unsupported query actions stay hidden. Mobile filter icons fill when filters
+are active, including in icon-only toolbars.
+Callers retain their query behavior and accessibility identifiers.
 Sort and filter buttons show their icon and current choice, without `Sort:` or
 `Filter:` prefixes. An unfiltered button shows `All`; compound filters keep their
 summary and fall back to the active count at narrow widths. Descriptive prefixes

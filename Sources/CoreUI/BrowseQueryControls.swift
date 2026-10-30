@@ -115,19 +115,27 @@ public struct BrowseFilterLabel: View {
             Label {
                 Text(verbatim: selection)
             } icon: {
-                Image(systemName: "line.3.horizontal.decrease")
+                Image(systemName: symbolName)
             }
             .fixedSize()
             if activeCount > 0 {
                 Label {
                     Text(activeCount, format: .number)
                 } icon: {
-                    Image(systemName: "line.3.horizontal.decrease")
+                    Image(systemName: symbolName)
                 }
                 .fixedSize()
             }
         }
         .accessibilityLabel(Text("Filter: \(selection)"))
+    }
+
+    private var symbolName: String {
+        #if os(iOS)
+        activeCount > 0 ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"
+        #else
+        "line.3.horizontal.decrease"
+        #endif
     }
 
     private var selection: String {

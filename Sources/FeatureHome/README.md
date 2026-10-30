@@ -25,7 +25,10 @@ opening a separate row browser. The full profile-scoped Watchlist and its saved
 sorting/filtering preferences remain intact. A hidden Watchlist navigation entry
 is available temporarily for this explicit visit without changing the saved layout.
 The shared row browser's sort and filter menus sit at the trailing end of the
-TV heading and in the top-right navigation toolbar on iPhone/iPad.
+TV heading and in the top-right navigation toolbar on iPhone/iPad. Watchlist
+and library grids use that same mobile toolbar placement, keeping supported
+query actions available while the content scrolls without adding a pinned
+content header.
 
 `HomeRowBrowseModel` preserves source order by default and loads additional
 bounded pages as the grid advances. Library and collection rows use their existing

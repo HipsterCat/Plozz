@@ -1990,7 +1990,7 @@ private struct PlozziOSDestinationView: View {
     }
 }
 
-private struct PlozziOSWatchlistLandingView: View {
+struct PlozziOSWatchlistLandingView: View {
     @Environment(\.mediaItemNavigator) private var navigateToItem
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
@@ -2003,8 +2003,6 @@ private struct PlozziOSWatchlistLandingView: View {
         @Bindable var browse = viewModel.watchlistBrowse
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 16) {
-                WatchlistBrowseControls(preferences: $browse.preferences)
-                    .padding(.horizontal)
                 ContentStateView(
                     state: viewModel.state,
                     emptyMessage: "Your Watchlist is empty.",
@@ -2072,6 +2070,12 @@ private struct PlozziOSWatchlistLandingView: View {
         .environment(\.plozzCardCaptionView, .watchlist)
         .toolbarTitleDisplayMode(isOverflowDestination ? .inline : .large)
         .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                WatchlistSortMenu(sort: $browse.preferences.sort)
+                    .labelStyle(.iconOnly)
+                WatchlistFilterMenu(filter: $browse.preferences.filter)
+                    .labelStyle(.iconOnly)
+            }
             PlozziOSSettingsToolbarItem(action: onShowSettings)
         }
     }
