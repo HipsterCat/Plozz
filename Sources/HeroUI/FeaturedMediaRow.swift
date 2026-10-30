@@ -29,6 +29,13 @@ public struct FeaturedMediaRow: View {
     @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzRowTitleTightening) private var titleTightening
+    private var onBrowse: (() -> Void)?
+
+    public func browsingRow(_ action: (() -> Void)?) -> Self {
+        var copy = self
+        copy.onBrowse = action
+        return copy
+    }
 
     public init(
         title: Text, items: [MediaItem], scope: ObjectIdentifier,
@@ -90,16 +97,21 @@ public struct FeaturedMediaRow: View {
             #if os(tvOS)
             MediaRowHeader(
                 title: title,
-                onSeeAll: onSeeAll.map { action in {
+                onSeeAll: onBrowse == nil ? onSeeAll.map { action in {
                     coordinator.stop()
                     action()
-                } }
+                } } : nil
             )
             #else
             HStack {
-                title.font(.title2.bold())
+                if let onBrowse {
+                    BrowseRowHeading(title: title) { coordinator.stop(); onBrowse() }
+                        .font(.title2.bold())
+                } else {
+                    title.font(.title2.bold())
+                }
                 Spacer()
-                if let onSeeAll {
+                if onBrowse == nil, let onSeeAll {
                     Button("See all") {
                         coordinator.stop()
                         onSeeAll()
@@ -113,7 +125,8 @@ public struct FeaturedMediaRow: View {
                     .plozzForeground(.secondary)
                     .padding(.leading, inset + (television ? navigationContentInset : 0))
                     .padding(.trailing, inset)
-            } else {
+            }
+            if !items.isEmpty || onBrowse != nil {
                 rail
             }
         }
@@ -179,6 +192,15 @@ public struct FeaturedMediaRow: View {
                     )
                     .id(item.stablePresentationID)
                 }
+                #if os(tvOS)
+                if let onBrowse {
+                    MediaRowBrowseCard(
+                        width: size.width, featuredSize: size,
+                        onFocus: { focusedID = nil; coordinator.stop() },
+                        action: { coordinator.stop(); onBrowse() }
+                    )
+                }
+                #endif
             }
             .scrollTargetLayout()
             #if os(tvOS)

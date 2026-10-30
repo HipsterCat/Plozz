@@ -561,7 +561,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
                 id: id,
                 title: title,
                 style: .poster,
-                items: Array(items.prefix(max(1, limit)))
+                items: Array(items.prefix(max(1, limit))),
+                browseID: PlexClient.homeShelfKey(hub.key) ?? "hub:\(id)"
             )
         }
     }
@@ -604,7 +605,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
                 id: id, title: title, items: Array(items.prefix(max(1, limit))),
                 isHomeDefault: isDefault,
                 isLegacyHomeDefault: items.count >= Self.minimumHubItems
-                    && !Self.isPersonHub(identifier: hub.hubIdentifier, context: hub.context, title: hub.title)
+                    && !Self.isPersonHub(identifier: hub.hubIdentifier, context: hub.context, title: hub.title),
+                browseID: PlexClient.homeShelfKey(hub.key) ?? "hub:\(rawID)"
             )
         }
     }

@@ -3,6 +3,48 @@ import CoreModels
 @testable import ProviderJellyfin
 
 final class JellyfinHomeLayoutTests: XCTestCase {
+    func testFullLatestShelfPropagatesSourceFailureRatherThanPublishingEmpty() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/selected-user/Items/Latest", json: "[]", status: 503)
+        let provider = JellyfinProvider(session: session(), http: stub)
+        do {
+            _ = try await provider.homeRowPage(.latest(libraryIDs: ["movies"]), startIndex: 0, limit: 60)
+            XCTFail("An unavailable source is not an exhausted shelf")
+        } catch {
+            XCTAssertNotNil(error as? AppError)
+        }
+    }
+
+    func testFullServerShelfExtendsPastPreviewCapForJellyfinAndEmby() async throws {
+        for kind: ProviderKind in [.jellyfin, .emby] {
+            let stub = StubHTTPClient()
+            let items = (0..<135).map { #"{"Id":"\#($0)","Type":"Movie","Name":"Title \#($0)"}"# }
+                .joined(separator: ",")
+            let section: ServerHomeSection
+            let path: String
+            if kind == .emby {
+                section = .init(id: "emby:native", kind: .recommendations, libraryID: "movies")
+                path = "/Users/selected-user/Sections/native/Items"
+                stub.stub(pathSuffix: path, json: #"{"Items":[\#(items)],"TotalRecordCount":135}"#)
+            } else {
+                section = .init(id: "web:recentlyadded:movies", kind: .recentlyAdded, libraryID: "movies")
+                path = "/Users/selected-user/Items/Latest"
+                stub.stub(pathSuffix: path, json: "[\(items)]")
+            }
+            let provider = JellyfinProvider(session: session(kind), http: stub)
+            let feed = HomeRowFeed.server(section, excludedLibraryIDs: [], anchorIDs: ["0"])
+            let second = try await provider.homeRowPage(feed, startIndex: 60, limit: 60)
+            XCTAssertEqual(second.items.map(\.id), (60..<120).map(String.init))
+            XCTAssertEqual(second.nextOffset, 120)
+            let last = try await provider.homeRowPage(feed, startIndex: 120, limit: 60)
+            XCTAssertEqual(last.items.count, 15)
+            XCTAssertNil(last.nextOffset)
+            XCTAssertTrue(last.items.allSatisfy { $0.libraryID == "movies" })
+            let query = try XCTUnwrap(stub.queryItems(forPathSuffix: path))
+            XCTAssertEqual(query.first { $0.name == "Limit" }?.value, "181")
+        }
+    }
+
     private func session(_ kind: ProviderKind = .jellyfin) -> UserSession {
         UserSession(
             server: MediaServer(

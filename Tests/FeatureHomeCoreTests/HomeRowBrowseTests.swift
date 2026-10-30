@@ -1,0 +1,219 @@
+import CoreModels
+@testable import FeatureHomeCore
+import XCTest
+
+@MainActor
+final class HomeRowBrowseTests: XCTestCase {
+    func testDefaultOrderLoadsBeyondHomePreviewAndStopsAtExhaustion() async {
+        let all = items(145)
+        let source = Pages(all)
+        let model = HomeRowBrowseModel(title: "Shelf", loaders: [{ start, limit in
+            await source.page(start, limit)
+        }])
+        await model.load()
+        XCTAssertEqual(model.items, Array(all.prefix(60)))
+        XCTAssertTrue(model.hasMore)
+        await model.load()
+        XCTAssertEqual(model.items.count, 120)
+        await model.load()
+        XCTAssertEqual(model.items, all)
+        XCTAssertFalse(model.hasMore)
+        let requests = await source.requests
+        XCTAssertEqual(requests, [0, 60, 120])
+    }
+
+    func testSortAndFilterIncludeUnloadedPagesBeforePublishing() async {
+        let source = Pages(items(143))
+        let model = HomeRowBrowseModel(title: "Shelf", loaders: [{ start, limit in
+            await source.page(start, limit)
+        }])
+        await model.load()
+        model.query.sort = .init(field: .name, direction: .descending)
+        model.query.filters = .init(filter: .unwatched)
+        await model.load()
+        XCTAssertEqual(model.items.count, 71)
+        XCTAssertEqual(model.items.first?.id, "141")
+        XCTAssertFalse(model.hasMore)
+        XCTAssertEqual(model.query, model.appliedQuery)
+        let requests = await source.requests
+        XCTAssertEqual(requests, [0, 60, 120])
+    }
+
+    func testFailedCompleteQueryDoesNotPublishPartialSortedResultsAndCanRetry() async {
+        let source = Pages(items(143), failureAt: 60)
+        let model = HomeRowBrowseModel(title: "Shelf", loaders: [{ start, limit in
+            try await source.falliblePage(start, limit)
+        }])
+        await model.load()
+        let original = model.items
+        model.query.sort = .init(field: .name, direction: .descending)
+        await model.load()
+        XCTAssertEqual(model.error, .serverUnreachable)
+        XCTAssertEqual(model.items, original)
+        XCTAssertNotEqual(model.query, model.appliedQuery)
+        await source.recover()
+        await model.load()
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.items.count, 143)
+        XCTAssertEqual(model.items.first?.id, "142")
+    }
+
+    func testScopeChangeClearsItemsAndRejectsLatePage() async {
+        var current = true
+        let gate = PageGate()
+        let model = HomeRowBrowseModel(
+            title: "Shelf", loaders: [{ _, _ in await gate.wait() }],
+            isCurrent: { current }
+        )
+        let work = Task { await model.load() }
+        await gate.waitUntilStarted()
+        current = false
+        await gate.finish(.init(items: items(1), nextOffset: nil))
+        await work.value
+        XCTAssertTrue(model.items.isEmpty)
+        XCTAssertFalse(model.hasMore)
+        XCTAssertEqual(model.error, .notFound)
+    }
+
+    func testCancellationNeverPublishesLateResults() async {
+        let gate = PageGate()
+        let model = HomeRowBrowseModel(title: "Shelf", loaders: [{ _, _ in await gate.wait() }])
+        let work = Task { await model.load() }
+        await gate.waitUntilStarted()
+        work.cancel()
+        await gate.finish(.init(items: items(1), nextOffset: nil))
+        await work.value
+        XCTAssertTrue(model.items.isEmpty)
+        XCTAssertNil(model.error)
+    }
+
+    func testFixedShelfHasNoFetchAndRestoresOriginalOrder() async {
+        let original = items(35)
+        let model = HomeRowBrowseModel(title: "Fixed", snapshot: original)
+        model.query.sort = .init(field: .name, direction: .descending)
+        await model.load()
+        XCTAssertEqual(model.items.first?.id, "34")
+        model.query = .init()
+        await model.load()
+        XCTAssertEqual(model.items, original)
+        XCTAssertFalse(model.hasMore)
+    }
+
+    func testSupersededQueryCannotOverwriteNewerResults() async {
+        let gate = PageGate()
+        let source = SupersededPageSource(gate: gate, current: items(3))
+        let model = HomeRowBrowseModel(title: "Shelf", loaders: [{ _, _ in
+            await source.page()
+        }])
+        let original = Task { await model.load() }
+        await gate.waitUntilStarted()
+        model.query.sort = .init(field: .name, direction: .descending)
+        await model.load()
+        XCTAssertEqual(model.items.map(\.id), ["2", "1", "0"])
+        await gate.finish(.init(items: items(1), nextOffset: nil))
+        await original.value
+        XCTAssertEqual(model.items.map(\.id), ["2", "1", "0"])
+        XCTAssertEqual(model.query, model.appliedQuery)
+        XCTAssertFalse(model.isLoading)
+    }
+
+    func testTVFilterIncludesEpisodesAndSeasons() {
+        let kinds: [MediaItemKind] = [.movie, .series, .season, .episode, .video]
+        let all = kinds.enumerated().map {
+            MediaItem(id: "\($0.offset)", title: "Title", kind: $0.element)
+        }
+        var query = HomeRowBrowseQuery()
+        query.media = .shows
+        XCTAssertEqual(query.applying(to: all).map(\.kind), [.series, .season, .episode])
+    }
+
+    func testMalformedContinuationFailsRatherThanLooping() async {
+        let model = HomeRowBrowseModel(title: "Shelf", loaders: [{ _, _ in
+            .init(items: [], nextOffset: 0)
+        }])
+        await model.load()
+        XCTAssertEqual(model.error, .invalidResponse)
+    }
+
+    func testLiveWatchlistUsesSavedDatesAndRefreshesMembership() async {
+        var first = MediaItem(id: "first", title: "First", kind: .movie)
+        first.watchlistAddedAt = Date(timeIntervalSince1970: 20)
+        var second = MediaItem(id: "second", title: "Second", kind: .movie)
+        second.watchlistAddedAt = Date(timeIntervalSince1970: 10)
+        var snapshot = [second, first]
+        let model = HomeRowBrowseModel(
+            title: "Watchlist", snapshot: snapshot, snapshotProvider: { snapshot }, watchlistDates: true
+        )
+        model.query.sort = .init(field: .dateAdded, direction: .descending)
+        await model.load()
+        XCTAssertEqual(model.items.map(\.id), ["first", "second"])
+        snapshot = [second]
+        await model.load()
+        XCTAssertEqual(model.items.map(\.id), ["second"])
+    }
+
+    func testScopedWatchMutationReevaluatesTheWholeLoadedFilter() async {
+        let all = [
+            MediaItem(id: "same", title: "A", kind: .movie, isPlayed: true).taggingSource("a"),
+            MediaItem(id: "same", title: "B", kind: .movie, isPlayed: true).taggingSource("b")
+        ]
+        let model = HomeRowBrowseModel(title: "Shelf", snapshot: all)
+        model.query.filters = .init(filter: .unwatched)
+        await model.load()
+        XCTAssertTrue(model.items.isEmpty)
+        model.applyMutation(.init(itemIDs: ["same"], scopedItemIDs: ["a:same"], played: false))
+        XCTAssertEqual(model.items.map(\.sourceAccountID), ["a"])
+    }
+
+    private func items(_ count: Int) -> [MediaItem] {
+        (0..<count).map {
+            MediaItem(id: "\($0)", title: String(format: "Title %03d", $0), kind: .movie, isPlayed: $0 % 2 == 0)
+        }
+    }
+
+}
+
+private actor Pages {
+    let items: [MediaItem]
+    var requests: [Int] = []
+    var failureAt: Int?
+    init(_ items: [MediaItem], failureAt: Int? = nil) { self.items = items; self.failureAt = failureAt }
+    func page(_ start: Int, _ limit: Int) -> HomeRowPage {
+        requests.append(start)
+        return .prefix(items, startIndex: start, limit: limit)
+    }
+    func falliblePage(_ start: Int, _ limit: Int) throws -> HomeRowPage {
+        if failureAt == start { throw AppError.serverUnreachable }
+        return page(start, limit)
+    }
+    func recover() { failureAt = nil }
+}
+
+private actor PageGate {
+    private var completion: CheckedContinuation<HomeRowPage, Never>?
+    private var started: CheckedContinuation<Void, Never>?
+    func wait() async -> HomeRowPage {
+        await withCheckedContinuation {
+            completion = $0
+            started?.resume()
+            started = nil
+        }
+    }
+    func waitUntilStarted() async {
+        if completion != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+    func finish(_ page: HomeRowPage) { completion?.resume(returning: page); completion = nil }
+}
+
+private actor SupersededPageSource {
+    let gate: PageGate
+    let current: [MediaItem]
+    private var requested = false
+    init(gate: PageGate, current: [MediaItem]) { self.gate = gate; self.current = current }
+    func page() async -> HomeRowPage {
+        if requested { return .init(items: current, nextOffset: nil) }
+        requested = true
+        return await gate.wait()
+    }
+}

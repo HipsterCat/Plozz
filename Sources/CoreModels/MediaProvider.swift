@@ -39,6 +39,9 @@ public protocol MediaProvider: Sendable {
     /// Recently added items across the user's libraries.
     func latest(limit: Int) async throws -> [MediaItem]
 
+    /// Continues the exact Home feed in provider order, not an unrestricted library.
+    func homeRowPage(_ feed: HomeRowFeed, startIndex: Int, limit: Int) async throws -> HomeRowPage
+
     /// "Continue Watching" restricted to the given libraries, used by the Home
     /// aggregator to honour the user's per-library Home-visibility *at fetch
     /// time* — and, crucially, to stamp each returned item's `libraryID` so

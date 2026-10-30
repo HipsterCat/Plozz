@@ -7,6 +7,33 @@ an empty provider feed from local curation without recording media or account ID
 Home rows, item detail, series/season experience, and the online-trailer
 fallback when the user's server has no attached trailer.
 
+## Browsing Home rows
+
+Media rows have a title-chevron action on iPhone/iPad and a trailing **See all**
+card on Apple TV. The TV action is a separate native control, not a synthetic
+media item, and follows the rail's poster, landscape, or featured geometry.
+Both TV Home layouts retain the complete `HomePresentationRow` source when
+opening the shared browser. Libraries and Live TV keep their existing navigation.
+The TV Discovery row browses its current curated snapshot rather than inventing
+an unrelated catalog query.
+
+`HomeRowBrowseModel` preserves source order by default and loads additional
+bounded pages as the grid advances. Library and collection rows use their existing
+container APIs. Provider Home feeds continue the exact feed: Plex uses its
+same-origin shelf key where available, while limit-only feeds extend their
+requested prefix. Recommendation membership is separate from arranger slot
+identity; a missing or changed source is an error, not permission to browse an
+unrelated library. Fixed server shelves end when the source has no continuation.
+
+Sorting and filtering first complete the shelf, then publish the whole-row
+result. Pending or failed queries never display a partially sorted page as a
+complete answer. This can require more requests and memory than opening the
+default-order grid, especially for large collections. Work is cancelled on
+navigation/supersession, and profile/source visibility is checked again after
+asynchronous work. Continue Watching and Watchlist reuse Home's retained data;
+the browser does not reinterpret their account-wide membership. Browse controls
+are destination-local and do not change the Home row's settings or order.
+
 ## Recently Added watched filtering
 
 Screens & Navigation > Home > Filtering offers **Recently Added** under

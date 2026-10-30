@@ -240,7 +240,7 @@ public final class HomeViewModel {
                                            localizedTitle: $0.localizedTitle, localizedTitleSuffix: $0.localizedTitleSuffix,
                                            style: $0.style,
                                            items: Array($0.items.prefix(perRow)), isHomeDefault: $0.isHomeDefault,
-                                           isLegacyHomeDefault: $0.isLegacyHomeDefault)
+                                           isLegacyHomeDefault: $0.isLegacyHomeDefault, browseID: $0.browseID)
                         }
                     )
                 },
@@ -1852,6 +1852,39 @@ public final class HomeViewModel {
             scoped = scoped.selectingSource(first)
         }
         return scoped
+    }
+
+    public func browseRow(_ row: HomePresentationRow) -> HomeRowBrowseModel {
+        let visibility = currentVisibility()
+        let snapshot: (@MainActor () -> [MediaItem]?)?
+        if case let .home(home) = row.source, [.watchlist, .continueWatching].contains(home.kind) {
+            snapshot = { [weak self] in
+                guard case let .loaded(content) = self?.state else { return nil }
+                return home.kind == .watchlist ? content.watchlist : content.continueWatching
+            }
+        } else {
+            snapshot = nil
+        }
+        let libraries: [AggregatedLibrary]
+        if case let .loaded(content) = state { libraries = content.libraries } else { libraries = [] }
+        return HomeRowBrowseFactory.make(
+            row, accounts: accounts, visibility: visibility, libraries: libraries,
+            identitySources: identitySources, snapshotProvider: snapshot
+        ) { [weak self] in
+            self?.currentVisibility() == visibility
+        }
+    }
+
+    public func browseDiscovery(_ items: [MediaItem]) -> HomeRowBrowseModel {
+        let visibility = currentVisibility()
+        return HomeRowBrowseModel(
+            title: "Discovery",
+            localizedTitle: LocalizedStringResource(
+                "home.row.discovery", defaultValue: "Discovery",
+                comment: "Name of a Home row of recommended titles from outside the user's libraries."
+            ),
+            snapshot: items, isCurrent: { [weak self] in self?.currentVisibility() == visibility }
+        )
     }
 
     public func heroCollectionContent(
