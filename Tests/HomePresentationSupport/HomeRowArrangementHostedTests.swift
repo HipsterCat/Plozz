@@ -1857,7 +1857,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             let text = lines.map(\.0).joined(separator: " ")
             XCTAssertTrue(text.contains("Basement is offline."), text)
             XCTAssertTrue(text.contains("Sign in to Cinema again."), text)
-            XCTAssertTrue(text.contains("load sections from Loft."), text)
+            XCTAssertTrue(text.contains("load rows from Loft."), text)
             XCTAssertFalse(text.contains("Cinema is offline"), text)
             XCTAssertFalse(text.contains("Loft is offline"), text)
             XCTAssertFalse(text.contains("Available server is offline"), text)
@@ -1870,7 +1870,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             let recoveredText = recovered.map(\.0).joined(separator: " ")
             XCTAssertFalse(recoveredText.contains("Basement is offline"), recoveredText)
             XCTAssertTrue(recoveredText.contains("Sign in to Cinema again."), recoveredText)
-            XCTAssertTrue(recoveredText.contains("load sections from Loft."), recoveredText)
+            XCTAssertTrue(recoveredText.contains("load rows from Loft."), recoveredText)
         }
     }
 
@@ -1910,12 +1910,18 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             .frame(width: 1050)
             #endif
         } inspect: { window in
+            let controls = try await self.capture(window, name: "Home arranger controls")
+            XCTAssertFalse(controls.contains { $0.0.contains("Merge Next Up rows") })
+            XCTAssertTrue(controls.contains { $0.0.contains("Home rows") }, controls.map(\.0).joined(separator: " "))
+            XCTAssertFalse(controls.contains { $0.0.contains("Hero") })
+            try self.scrollToBottom(window)
             let before = try await self.capture(window, name: "Home arranger original order")
             XCTAssertFalse(before.contains { $0.0.contains("Include Next Up") })
             XCTAssertFalse(before.contains { $0.0.contains("Home layout") })
             XCTAssertGreaterThan(try self.y("Alpha", in: before), try self.y("Beta", in: before))
             XCTAssertTrue(before.contains { $0.0.contains("All libraries") })
             visibility.applyRows(.init(enabled: Array(ids.reversed()), disabled: hidden), choices: choices)
+            try self.scrollToBottom(window)
             let after = try await self.capture(window, name: "Home arranger reversed order")
             XCTAssertGreaterThan(try self.y("Beta", in: after), try self.y("Alpha", in: after))
             XCTAssertEqual(store.load().rowSections(choices: choices).enabled, Array(ids.reversed()))
@@ -1988,7 +1994,7 @@ final class HomeRowArrangementHostedTests: XCTestCase {
         }
     }
 
-    func testSourceFailuresAppearOnlyOnTheMainEditor() async throws {
+    func testSourceFailuresAppearOnInventoryPagesButNotRowAppearance() async throws {
         let suite = "HomeRootFailures.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -2018,10 +2024,12 @@ final class HomeRowArrangementHostedTests: XCTestCase {
                     }
                 }
             } inspect: { window in
+                _ = try await self.capture(window, name: "Home source error page \(page)")
+                try self.scrollToBottom(window)
                 let lines = try await self.capture(window, name: "Home source error placement \(page)")
                 let text = lines.map(\.0).joined(separator: " ")
-                XCTAssertEqual(text.contains("Basement is offline."), page == 0, text)
-                XCTAssertEqual(lines.filter { $0.0.contains("Retry") }.count, page == 0 ? 1 : 0, text)
+                XCTAssertEqual(text.contains("Basement is offline."), page != 1, text)
+                XCTAssertEqual(lines.filter { $0.0.contains("Retry") }.count, page != 1 ? 1 : 0, text)
             }
         }
     }
@@ -2270,6 +2278,19 @@ final class HomeRowArrangementHostedTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
         try await inspect(window)
+    }
+
+    private func scrollToBottom(_ window: UIWindow) throws {
+        func scrollViews(_ view: UIView) -> [UIScrollView] {
+            (view as? UIScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
+        }
+        window.layoutIfNeeded()
+        let scroll = try XCTUnwrap(scrollViews(window).first { $0.contentSize.height > 0 })
+        let bottom = max(
+            -scroll.adjustedContentInset.top,
+            scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom
+        )
+        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottom), animated: false)
     }
 
     private func snapshot(_ window: UIWindow, name: String, scale: CGFloat = 1) async throws -> UIImage {

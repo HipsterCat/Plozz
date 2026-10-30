@@ -25,15 +25,25 @@ supported capability remains at parity.
   Aether-enabled profiles use `PlozzigenMediaFormats` for linked container,
   video and audio families rather than native hardware-only restrictions.
   Native-only profiles and server conversion limits remain independent.
-  On-demand Original quality sends explicit null bitrate limits in the device
-  profile; omitting those keys would restore Jellyfin's 8 Mbps defaults.
-  User-selected lower qualities retain their exact limits. Server/user policy,
-  codec compatibility, Live TV and music negotiation remain independent.
+  On-demand Original quality sends explicit null bitrate limits to Jellyfin;
+  omitting those profile keys would restore its 8 Mbps defaults. Emby requires
+  numeric limits: Original sends its signed-64-bit protocol ceiling in both the
+  request and device profile. Null/omitted limits cause unnecessary conversion
+  on Emby 4.10.2.0, even for compatible low-bitrate originals. This does not restore
+  the old 120 Mbps client cap. User-selected lower qualities retain their exact
+  limits. Server/user policy, codec compatibility, Live TV and music negotiation
+  remain independent.
+  If Emby copies the unlimited ceiling into a required conversion's video target,
+  bound that saturated target to the original video bitrate (or container bitrate
+  when the video rate is unavailable). Preserve smaller server targets and all
+  other rendition restrictions. Missing source bitrate fails explicitly rather
+  than starting an effectively unbounded encode. Direct files are not capped.
   Optional playback diagnostics retain bounded server-decision facts: source
-  bitrate, client limit, direct-play/stream/transcode flags, subtitle burn-in,
-  and allowlisted reasons from the response or its transcode URL. Addresses,
-  tokens, paths, and unknown reason text are never included. These facts explain
-  why conversion was selected; they do not prove why the resulting stream failed.
+  bitrate, selected quality limit (nil for Original), direct-play/stream/transcode
+  flags, subtitle burn-in, and allowlisted reasons from the response or its
+  transcode URL. Addresses, tokens, paths, and unknown reason text are never
+  included. These facts explain why conversion was selected; they do not prove
+  why the resulting stream failed.
 - `JellyfinMusicProvider` — music-library queries (artists, albums, tracks)
   surfaced through the shared provider abstraction.
 

@@ -1150,8 +1150,12 @@ public struct JellyfinClient: Sendable {
     ) async throws -> PlaybackInfoResponse {
         try streaming?.quality.validate()
         var capabilityProfile = streaming.map { self.capabilityProfile.applying($0) } ?? self.capabilityProfile
-        capabilityProfile.maxStreamingBitrate = streaming?.quality.maximumBitrate
-        capabilityProfile.maxStaticBitrate = streaming?.quality.maximumBitrate
+        // Emby treats null/omitted limits as restrictive, unlike Jellyfin. Its
+        // signed-64-bit ceiling represents Maximum without restoring the 120 Mbps cap.
+        let maximumBitrate = streaming?.quality.maximumBitrate
+            ?? (providerKind == .emby ? Int(Int64.max) : nil)
+        capabilityProfile.maxStreamingBitrate = maximumBitrate
+        capabilityProfile.maxStaticBitrate = maximumBitrate
         var queryItems = [URLQueryItem(name: "UserId", value: userID)]
         if let streaming {
             if let track = streaming.audioTrack {
