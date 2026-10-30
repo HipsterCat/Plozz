@@ -19,7 +19,6 @@ struct PlozziOSDownloadedShowView: View {
     @Environment(\.themePalette) private var palette
     @State private var pendingBulkDeletion: PlozziOSDownloadsBulkDeletion?
     @State private var detailNav: PlozziOSDownloadDetailNav?
-    @State private var openInRecord: DownloadedMediaRecord?
 
     var body: some View {
         let show = currentShow
@@ -35,7 +34,6 @@ struct PlozziOSDownloadedShowView: View {
                                     openEpisode: { item in
                                         detailNav = PlozziOSDownloadDetailNav(item: item)
                                     },
-                                    openIn: { openInRecord = $0 },
                                     removeSeason: {
                                         pendingBulkDeletion = .season(season, showTitle: show.title)
                                     }
@@ -108,7 +106,6 @@ struct PlozziOSDownloadedShowView: View {
             }
         }
         .detailOpenFeedback()
-        .modifier(DownloadOpenInModifier(record: $openInRecord, model: model, appModel: appModel))
         .confirmationDialog(
             pendingBulkDeletion.map { Text($0.title) } ?? Text(verbatim: ""),
             isPresented: Binding(
@@ -151,13 +148,12 @@ private struct PlozziOSDownloadedSeasonSection: View {
     let model: PlozziOSDownloadsModel
     let horizontalInset: CGFloat
     let openEpisode: (MediaItem) -> Void
-    let openIn: (DownloadedMediaRecord) -> Void
     let removeSeason: () -> Void
 
     var body: some View {
         Section {
             ForEach(season.records) { record in
-                PlozziOSDownloadedEpisodeRow(record: record, model: model, openEpisode: openEpisode, openIn: openIn)
+                PlozziOSDownloadedEpisodeRow(record: record, model: model, openEpisode: openEpisode)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(
@@ -246,7 +242,6 @@ private struct PlozziOSDownloadedEpisodeRow: View {
     let record: DownloadedMediaRecord
     let model: PlozziOSDownloadsModel
     let openEpisode: (MediaItem) -> Void
-    let openIn: (DownloadedMediaRecord) -> Void
 
     var body: some View {
         DownloadCompactCard(menu: {
@@ -258,12 +253,6 @@ private struct PlozziOSDownloadedEpisodeRow: View {
                 Button("Resume", systemImage: "play.fill") {
                     Task { await model.resume(record) }
                 }
-            }
-            if record.status == .completed {
-                Button("Open in…", systemImage: "square.and.arrow.up") {
-                    openIn(record)
-                }
-                .accessibilityIdentifier("download-open-in")
             }
             Button("Remove", systemImage: "trash", role: .destructive) {
                 Task { await model.remove(record) }
