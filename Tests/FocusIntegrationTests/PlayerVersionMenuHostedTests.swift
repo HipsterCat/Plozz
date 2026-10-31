@@ -8,6 +8,19 @@ import XCTest
 
 @MainActor
 final class PlayerVersionMenuHostedTests: XCTestCase {
+    func testVersionFilenameQueriesRejectControlCharactersInOptimizedBuild() {
+        XCTAssertEqual(
+            MediaSourceDisplayName.fileName(from: "filename=Movie.Extended-GROUP.mkv"),
+            "Movie.Extended-GROUP.mkv"
+        )
+        for encodedControl in ["%00", "%09", "%0A", "%0D", "%7F", "%C2%85", "%E2%80%8B"] {
+            XCTAssertNil(
+                MediaSourceDisplayName.fileName(from: "filename=Movie\(encodedControl)Name.mkv"),
+                encodedControl
+            )
+        }
+    }
+
     func testReturningFromScrolledVersionsRestoresVisibleRootAndNativeFocus() async throws {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
@@ -136,7 +149,7 @@ final class PlayerVersionMenuHostedTests: XCTestCase {
         }
         let version = MediaVersion(
             id: "remux",
-            fileName: "n?\ntorrent_name=Movie.Extended.2160p.REMUX.HEVC.TrueHD-GROUP.mkv&id=tt123&media_type=movie",
+            fileName: "n?\nfilename=Movie.Extended.2160p.REMUX.HEVC.TrueHD-GROUP.mkv&id=tt123&media_type=movie",
             edition: "Extended", height: 2160, bitrate: 80_000_000, sizeBytes: 42_000_000_000,
             duration: 7_200, videoCodec: "hevc", audioCodec: "truehd", audioChannels: 8,
             sourceMetadata: .init(audioLanguages: ["eng", "fra"])
@@ -146,6 +159,10 @@ final class PlayerVersionMenuHostedTests: XCTestCase {
             versions: [version, .init(id: "other", height: 1080)], selectedVersionID: version.id,
             actions: [], onSelectSource: { _ in }, onSelectVersion: { _ in }, onPerformAction: { _ in }
         )
+        XCTAssertEqual(MediaSourceDisplayName.fileName(from: version.fileName),
+                       "Movie.Extended.2160p.REMUX.HEVC.TrueHD-GROUP.mkv")
+        XCTAssertEqual(MediaVersion.PickerPresentation(version).releaseName,
+                       "Movie.Extended.2160p.REMUX.HEVC.TrueHD-GROUP.mkv")
         window.rootViewController = UIHostingController(rootView:
             panel.environment(\.locale, Locale(identifier: "en_US"))
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black)
@@ -161,7 +178,7 @@ final class PlayerVersionMenuHostedTests: XCTestCase {
         for fact in ["Extended", "4K", "42 GB", "English", "+1", "HEVC", "TrueHD", "80 Mbps", "2h", "GROUP.mkv"] {
             XCTAssertTrue(visible.localizedCaseInsensitiveContains(fact), "Missing detail version fact \(fact): \(visible)")
         }
-        XCTAssertFalse(visible.contains("torrent_name"))
+        XCTAssertFalse(visible.contains("filename="))
         XCTAssertFalse(visible.contains("media_type"))
         let title = try XCTUnwrap(request.results?.first { $0.topCandidates(1).first?.string.contains("Extended") == true })
         let center = CGPoint(x: title.boundingBox.midX * 1920, y: (1 - title.boundingBox.midY) * 1080)
@@ -195,7 +212,7 @@ final class PlayerVersionMenuHostedTests: XCTestCase {
             .init(version: .init(id: "1080", fileName: "Movie-1080.mkv", edition: "Theatrical", height: 1080), isSelected: false),
             .init(version: .init(
                 id: "4k",
-                fileName: "https://media.example/stream?torrent_name=Movie.Extended.2160p.REMUX.HEVC.TrueHD.Atmos-GROUP.mkv&id=tt123&media_type=movie",
+                fileName: "https://media.example/stream?file_name=Movie.Extended.2160p.REMUX.HEVC.TrueHD.Atmos-GROUP.mkv&id=tt123&media_type=movie",
                 edition: "Extended", height: 2160, bitrate: 80_000_000, sizeBytes: 42_000_000_000,
                 duration: 7_200, videoCodec: "hevc", audioCodec: "truehd", audioProfile: "Atmos",
                 sourceMetadata: .init(audioLanguages: ["eng", "fra"])
@@ -237,7 +254,7 @@ final class PlayerVersionMenuHostedTests: XCTestCase {
         for fact in ["Extended", "4K", "42 GB", "English", "+1", "HEVC", "TrueHD", "Atmos", "80 Mbps", "2h", "GROUP.mkv"] {
             XCTAssertTrue(visibleText.localizedCaseInsensitiveContains(fact), "Missing version fact \(fact): \(visibleText)")
         }
-        XCTAssertFalse(visibleText.contains("torrent_name"))
+        XCTAssertFalse(visibleText.contains("file_name="))
         XCTAssertFalse(visibleText.contains("media_type"))
         let selectedText = try XCTUnwrap(text.results?.first {
             $0.topCandidates(1).first?.string.contains("Extended") == true

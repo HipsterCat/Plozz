@@ -38,7 +38,6 @@ struct AppearanceDetailView: View {
     @Environment(NavigationStyleSettingsModel.self) private var navigation
     @Environment(TransparencyPreferenceModel.self) private var transparency
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
-    @Environment(ContentRatingSettingsModel.self) private var contentRatings
 
     var body: some View {
         @Bindable var settingsNavigation = settingsNavigation
@@ -69,24 +68,18 @@ struct AppearanceDetailView: View {
     private var rows: [SettingsSplitRow] {
         let availableRows = allRows
         if section == .screensNavigation {
-            return [
+            return availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
+                SettingsSplitRow(id: "all-screens", title: "All screens") { EmptyView() }
+                    .destination(.allScreens),
                 SettingsSplitRow(
-                    id: "content-ratings", title: "Show content ratings",
-                    sectionStart: .heading(Text("All screens"))
-                ) {
-                    ContentRatingToggle(model: contentRatings)
-                }.labeledControl()
-            ] + SpoilerRowsBuilder(spoilers: spoilers).rows.map { $0.page() }
-                + availableRows.filter { $0.id == "navigation" }.map { $0.destination(.navigationLayout) } + [
-                    SettingsSplitRow(
-                        id: "customize-home", title: "Customize Home",
-                        sectionStart: .heading(Text("Customize individual screens"))
-                    ) { EmptyView() }.destination(.customizeHome),
-                    SettingsSplitRow(id: "customize-libraries", title: "Customize Libraries") { EmptyView() }
-                        .destination(.customizeLibraries),
-                    SettingsSplitRow(id: "title-details", title: "Detail Page") { EmptyView() }
-                        .destination(.detailPage)
-                ] + availableRows.filter { $0.id == "music-player" }.map { $0.page() }
+                    id: "customize-home", title: "Home",
+                    sectionStart: .divider
+                ) { EmptyView() }.destination(.customizeHome),
+                SettingsSplitRow(id: "customize-libraries", title: "Libraries") { EmptyView() }
+                    .destination(.customizeLibraries),
+                SettingsSplitRow(id: "title-details", title: "Movie & show details") { EmptyView() }
+                    .destination(.detailPage)
+            ] + availableRows.filter { $0.id == "music-player" }.map { $0.page() }
         }
         #if os(tvOS)
         if inWorkspace {
@@ -158,13 +151,15 @@ struct AppearanceDetailView: View {
                     id: "cards",
                     title: "Cards",
                     description: "How media cards look across the app.",
-                    subpage: SettingsDetailSubpage { CardCaptionCustomizationView(cards: cardStyle) }
+                    subpage: SettingsDetailSubpage {
+                        CardCaptionCustomizationView(cards: cardStyle, visibility: librariesScope.homeVisibility)
+                    }
                 ) {
                     cardsControls
                 }.groupedContent(),
                 SettingsSplitRow(
                     id: "navigation",
-                    title: "Navigation"
+                    title: "App navigation"
                 ) {
                     NavigationAppearanceDetail(
                         navigation: navigation,
@@ -173,7 +168,7 @@ struct AppearanceDetailView: View {
                 }.groupedContent(),
                 SettingsSplitRow(
                     id: "music-player",
-                    title: "Music Player",
+                    title: "Music player",
                     description: "How the now-playing music screen looks.",
                 ) {
                     MusicPlayerStyleDetail(
@@ -237,8 +232,6 @@ struct AppearanceDetailView: View {
                 SettingsControlGroup(illustrated: true) {
                     CompactNavigationPicker(selection: $navigation.style)
                     Toggle("Prevent Accidental Exit", isOn: $navigation.preventsAccidentalExit)
-                    Toggle("Zoom when opening titles", isOn: $navigation.detailZoomEnabled)
-                        .accessibilityIdentifier("detail-zoom-enabled")
                 }
                 #else
                 CompactNavigationPicker(selection: $navigation.style)
@@ -257,7 +250,23 @@ struct AppearanceDetailView: View {
     }
 
     @ViewBuilder private var cardsControls: some View {
-        CardAppearanceControls(cards: cardStyle, watchIndicator: watchStatusIndicator, density: density)
+        CardAppearanceControls(
+            cards: cardStyle, watchIndicator: watchStatusIndicator,
+            density: density, visibility: librariesScope.homeVisibility
+        )
+    }
+}
+
+struct AllScreensDetailView: View {
+    @Environment(ContentRatingSettingsModel.self) private var contentRatings
+    let spoilers: SpoilerSettingsModel
+
+    var body: some View {
+        SettingsSplitLayout(title: "All screens", rows: [
+            SettingsSplitRow(id: "content-ratings", title: "Show content ratings") {
+                ContentRatingToggle(model: contentRatings)
+            }.labeledControl()
+        ] + SpoilerRowsBuilder(spoilers: spoilers).rows)
     }
 }
 
@@ -322,14 +331,15 @@ struct DetailPageDetailView: View {
     @Environment(\.detailHeaderSettings) private var detailHeaderSettings
 
     var body: some View {
-        SettingsSplitLayout(title: "Detail Page", rows: heroRows)
+        SettingsSplitLayout(title: "Movie & show details", rows: heroRows)
     }
 
     private var heroRows: [SettingsSplitRow] {
         var rows = [
             SettingsSplitRow(
                 id: "detail-page-hero-mode",
-                title: "Background"
+                title: "Background",
+                sectionStart: detailHeaderSettings == nil ? .heading(Text("Hero")) : nil
             ) {
                 SettingsControlRows(nonTVSpacing: SettingsMetrics.sectionSpacing) {
                     DescribedSegmentedPicker(
@@ -342,14 +352,7 @@ struct DetailPageDetailView: View {
                         Toggle("Start muted", isOn: $heroBackground.settings.detailTrailerMuted)
                     }
                     if heroBackground.settings.detailMode == .themeMusic {
-                        SettingsDetailGroup(title: "Volume") {
-                            DescribedSegmentedPicker(
-                                options: ThemeMusicVolume.playbackLevels,
-                                selection: $themeMusic.settings.volume,
-                                title: { $0.displayName },
-                                detail: { $0.detail }
-                            )
-                        }
+                        ThemeMusicVolumeControl(model: themeMusic)
                     }
                 }
             }
@@ -357,7 +360,8 @@ struct DetailPageDetailView: View {
         if let detailHeaderSettings {
             rows.insert(SettingsSplitRow(
                 id: "detail-page-logo-size",
-                title: "Logo & text size"
+                title: "Logo & text size",
+                sectionStart: .heading(Text("Hero"))
             ) {
                 DetailLogoSizeSettingsForm(model: detailHeaderSettings)
             }, at: 0)
@@ -374,9 +378,11 @@ struct DetailPageDetailView: View {
                 DetailHeaderAgeSettingsForm(model: detailHeaderSettings)
             })
         }
-        rows.append(SettingsSplitRow(id: "detail-page-card-labels", title: "Card labels") {
-            CardCaptionSettingsControls(cards: cards, scope: .detail)
-        })
+        rows.append(SettingsSplitRow(
+            id: "detail-page-card-labels", title: "Customize labels", sectionStart: .heading(Text("Cards"))
+        ) {
+            CardCaptionSettingsLink(cards: cards, scope: .detail)
+        }.labeledControl())
         return rows
     }
 }
@@ -418,6 +424,8 @@ struct PlaybackDetailView: View {
     @Environment(\.locale) private var locale
     #if os(tvOS)
     @Environment(\.settingsInWorkspace) private var inWorkspace
+    #else
+    @State private var showsSkipMarkerSettings = false
     #endif
     @Bindable var playback: PlaybackSettingsModel
     /// The profile base subtitle mode/language now lives in `SubtitleBehavior`
@@ -569,6 +577,11 @@ struct PlaybackDetailView: View {
 
     var body: some View {
         SettingsSplitLayout(title: section == .subtitles ? "Subtitles" : "Playback", rows: rows)
+            #if !os(tvOS)
+            .navigationDestination(isPresented: $showsSkipMarkerSettings) {
+                SkipMarkerSettingsView(model: playback)
+            }
+            #endif
     }
 
     // MARK: - Split sections
@@ -793,8 +806,8 @@ struct PlaybackDetailView: View {
         ]
     }
 
-    private var audioRows: [SettingsSplitRow] {
-        var rows = [
+    var audioRows: [SettingsSplitRow] {
+        [
             SettingsSplitRow(
                 id: "audio-defaults",
                 title: "Audio defaults"
@@ -825,21 +838,14 @@ struct PlaybackDetailView: View {
                     Toggle("Remember audio language per series", isOn: $playback.settings.rememberAudioTrackPerSeries)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            },
+            SettingsSplitRow(id: "lossless-surround", title: "Audio") {
+                SettingsControlRows {
+                    LosslessAudioControl()
+                    SpatialAudioControl(isOn: $playback.settings.trueHDAtmosEnabled)
+                }
             }
         ]
-        #if os(tvOS)
-        if #available(tvOS 26.0, *) {
-            rows.append(SettingsSplitRow(
-                id: "truehd-atmos",
-                title: "Spatial audio (height channel support)",
-                description: "Converts TrueHD Atmos and DTS:X to Apple spatial audio (lossy)."
-            ) {
-                Toggle("Spatial audio (height channel support)", isOn: $playback.settings.trueHDAtmosEnabled)
-                    .accessibilityIdentifier("spatial-audio-toggle")
-            })
-        }
-        #endif
-        return rows
     }
 
     private var skipIntroRows: [SettingsSplitRow] {
@@ -848,8 +854,12 @@ struct PlaybackDetailView: View {
                 id: "skip-intros-mode",
                 title: "Skip intros, credits & more"
             ) {
+                #if os(tvOS)
                 SkipMarkerSettingsControl(model: playback)
-            }
+                #else
+                SkipMarkerSettingsControl(model: playback, onOpenSettings: { showsSkipMarkerSettings = true })
+                #endif
+            }.labeledControl()
         ]
     }
 
@@ -880,6 +890,10 @@ struct PlaybackDetailView: View {
 
     private var resumeRows: [SettingsSplitRow] {
         [
+            SettingsSplitRow(id: "ask-before-resuming", title: "Ask to resume or start over") {
+                Toggle("Ask to resume or start over", isOn: $playback.settings.askBeforeResuming)
+                    .accessibilityIdentifier("playback-ask-before-resuming")
+            },
             SettingsSplitRow(
                 id: "resume-rewind",
                 title: "Rewind on resume",

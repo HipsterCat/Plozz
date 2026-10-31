@@ -7,7 +7,7 @@ import CoreNetworking
 /// Holds an authenticated `JellyfinClient` and maps Jellyfin DTOs onto the
 /// provider-agnostic `CoreModels` types. Feature modules depend only on
 /// `MediaProvider`; this is the single place Jellyfin specifics live.
-public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIdentityProviding, AuthenticatedHTTPOriginProviding, ServerAddressUpdating {
+public struct JellyfinProvider: MediaProvider, ServerRatingsProviding, SeriesResumeProviding, SeriesIdentityProviding, AuthenticatedHTTPOriginProviding, ServerAddressUpdating {
     public var playbackInventoryRequiresEnrichment: Bool { true }
 
     public let kind: ProviderKind
@@ -18,6 +18,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     let collectionLibraryCache = MediaBrowserCollectionLibraryCache()
     let videoPlaylistCache = VideoPlaylistSnapshotCache()
     let liveTVLeases = JellyfinLiveTVLeaseStore()
+    private let serverRatingsReader = JellyfinServerRatings()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
     private let probeDescriptors: MediaBrowserProbeDescriptorStore
@@ -164,7 +165,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 title: title,
                 localizedTitle: localizedTitle,
                 items: Array(items.prefix(limit)),
-                isHomeDefault: forHome ? false : nil
+                isHomeDefault: forHome ? false : nil,
+                browseID: "\(recommendation.RecommendationType):\(recommendation.CategoryId ?? subject ?? "")"
             )
         }
     }
@@ -415,6 +417,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             provider: kind, operation: .homeContinueWatching,
             failures: [.init(section: .continueWatching, error: error)]
         )
+        LibraryDiagnosticJournal.shared.record(diagnostic)
         PlozzLog.networking.error(
             "History \(endpoint) failed (\(scope)): \(diagnostic.supportText)"
         )
@@ -682,6 +685,14 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         return map(item: dto)
     }
 
+    public func serverRatings(for item: MediaItem) async throws -> [ExternalRating]? {
+        try await serverRatingsReader.ratings(for: item, client: client)
+    }
+
+    public func cachedServerRatings(for item: MediaItem) async -> [ExternalRating]? {
+        await serverRatingsReader.cachedRatings(for: item)
+    }
+
     public func playbackItem(id: String) async throws -> MediaItem {
         var item = try await item(id: id)
         if item.kind == .movie || item.kind == .episode {
@@ -731,8 +742,8 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         async let remoteTask = client.remoteTrailers(userID: session.userID, id: itemID)
 
         // Local trailer files play through the normal provider path; server
-        // remote trailers are YouTube URLs that route to the keyless YouTube
-        // trailer provider. Both are best-effort so one failing doesn't hide the
+        // remote trailers are links that open in YouTube. Both are best-effort
+        // so one failing doesn't hide the
         // other.
         let local = ((try? await localTask) ?? []).map(map(item:))
         let remote = ((try? await remoteTask) ?? []).compactMap { link -> MediaItem? in
@@ -1502,6 +1513,10 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             try Task.checkCancellation()
         }
 
+        if kind == .emby, streaming?.quality.maximumBitrate == nil {
+            try source.boundEmbyOriginalTranscodingBitrate()
+        }
+
         if !didRemux {
             do {
                 try source.requestSDRForH264Transcode(
@@ -1627,6 +1642,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 ?? PlaybackRequest.sourceFileName(from: originalSource.Name)
         )
         request.burnedInSubtitleTrackID = source.burnedInSubtitleTrackID
+        request.serverDecision = source.playbackServerDecision(clientMaxBitrate: streaming?.quality.maximumBitrate)
         request.chapters = MediaChapter.normalized((detail.Chapters ?? []).enumerated().compactMap { index, chapter -> MediaChapter? in
             // Emby mixes skip boundaries into this array; those are not chapters.
             let marker = chapter.MarkerType?.lowercased() ?? ""
@@ -1957,7 +1973,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         let audioStream = audio.map { a in
             MediaSourceMetadata.AudioStream(
                 codec: a.Codec,
-                profile: a.Profile,
+                profile: MediaSourceMetadata.audioProfile(a.Profile, displayTitles: [a.DisplayTitle, a.Title]),
                 channels: a.Channels,
                 channelLayout: a.ChannelLayout,
                 sampleRate: a.SampleRate,
@@ -1998,14 +2014,16 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         case "DOLBYVISION":
             let dovi = embyDolbyVisionInfo(stream.ExtendedVideoSubType)
             switch dovi.compatibilityID {
-            case 1: return "DOVIWithHDR10"
+            case 1:
+                let range = (stream.VideoRangeType ?? "").uppercased()
+                return range.contains("HDR10PLUS") || range.contains("HDR10+")
+                    ? "DOVIWithHDR10Plus" : "DOVIWithHDR10"
             case 2: return "DOVIWithSDR"
             case 4: return "DOVIWithHLG"
             case 0: return "DOVI"
             default:
-                // Without a compatibility id, profiles 7/8 conventionally carry
-                // an HDR10-compatible base layer; otherwise make no fallback claim.
-                if dovi.profile == 7 || dovi.profile == 8 {
+                // Profile 8 alone does not distinguish HDR10, HLG and SDR bases.
+                if dovi.profile == 7 {
                     return "DOVIWithHDR10"
                 }
                 return "DOVI"
@@ -2031,7 +2049,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             return profile
         }
         switch (videoRangeType ?? "").uppercased() {
-        case "DOVIWITHHDR10", "DOVIWITHHLG", "DOVIWITHSDR":
+        case "DOVIWITHHDR10", "DOVIWITHHDR10PLUS", "DOVIWITHHDR10+", "DOVIWITHHLG", "DOVIWITHSDR":
             return 8
         case "DOVI", "DOLBYVISION":
             return 5
@@ -2394,6 +2412,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             isPlayed: serverPlayed && !isRewatching,
             hasBeenPlayed: serverPlayed || hasContainerHistory,
             posterURL: Self.imageURL(for: dto, kind: .primary, maxWidth: 500, client: client),
+            primaryImageAspectRatio: dto.PrimaryImageAspectRatio,
             seriesPosterURL: dto.SeriesId.flatMap {
                 client.imageURL(itemID: $0, kind: .primary, maxWidth: 500)
             },

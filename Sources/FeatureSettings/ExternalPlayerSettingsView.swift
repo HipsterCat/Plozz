@@ -26,6 +26,11 @@ public struct PlaybackAdvancedSettingsView: View {
             SettingsSectionGroup {
                 DolbyVisionFELControl(isOn: $playback.settings.dolbyVisionFELEnabled)
             }
+            if #available(iOS 26.0, *) {
+                SettingsSectionGroup {
+                    SpatialAudioLayoutControl()
+                }
+            }
         }
         .settingsPageSurface()
         .navigationTitle("Advanced")
@@ -38,7 +43,7 @@ public struct PlaybackAdvancedSettingsView: View {
     static func rows(
         playback: PlaybackSettingsModel, model: ExternalPlayerSettingsModel = .shared
     ) -> [SettingsSplitRow] {
-        ExternalPlayerSettingsRows.advanced(model: model) + [
+        var rows = ExternalPlayerSettingsRows.advanced(model: model) + [
             SettingsSplitRow(id: "dolby-vision-fel", title: "Video") {
                 DolbyVisionFELControl(isOn: Binding(
                     get: { playback.settings.dolbyVisionFELEnabled },
@@ -46,17 +51,34 @@ public struct PlaybackAdvancedSettingsView: View {
                 ))
             }
         ]
+        #if os(tvOS)
+        if #available(tvOS 26.0, *) {
+            rows.append(SettingsSplitRow(id: "spatial-audio-layout", title: "Audio") {
+                SpatialAudioLayoutControl()
+            })
+        }
+        #endif
+        return rows
     }
 }
 
 private struct DolbyVisionFELControl: View {
     @Binding var isOn: Bool
 
+    private var helperText: LocalizedStringResource {
+        #if os(tvOS) || os(iOS)
+        if #available(tvOS 26.0, iOS 26.0, *) {
+            return "May impact performance."
+        }
+        #endif
+        return "May impact performance. Disables spatial audio."
+    }
+
     var body: some View {
         SettingsControlRows {
             Toggle("Dolby Vision FEL (experimental)", isOn: $isOn)
                 .accessibilityIdentifier("playback-dolby-vision-fel")
-            Text("More picture detail for supported Dolby Vision Profile 7 videos. Uses more memory, may stutter, and turns off overhead sound.")
+            Text(helperText)
                 .settingsHelperText()
                 .fixedSize(horizontal: false, vertical: true)
         }

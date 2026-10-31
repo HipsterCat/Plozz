@@ -86,6 +86,24 @@ work, not twelve connected servers, profile-transition frame pacing or hardware
 scrolling. `watchlist-artwork-rehydration` separately exercises the production
 Plex/Jellyfin credential-restoration path, checking every title and cast image.
 
+`mobile-video-glow` measures the light inline video preview in 2.3-second
+windows against the existing 160-by-90 continuity fixture. Require the same
+surface and advancing playback; it isolates preview overhead, not HD decoding.
+`mobile-video-glow-hd` and `mobile-video-glow-hd-disabled` use the same
+1920-by-1080, 30 fps synthetic video with and without the color glow. The enabled
+case must complete new samples, capped at five per window; the disabled case
+must have no sampling task. These report app-process CPU and resident memory,
+not GPU/render-server cost or physical-device energy and frame pacing.
+
+The glow fixtures in `Tests/SubtitlePresentationSupport/Fixtures` are synthetic:
+`live-continuity-dim.mp4` is the first 30 seconds of `live-continuity.mp4`,
+scaled by `colorchannelmixer=rr=0.18:gg=0.18:bb=0.18` and encoded with
+libx264 CRF 24. `glow-software.mkv` is its first eight seconds, encoded as MPEG-2
+at quality 3 to require the software route. `glow-hd.mp4` uses FFmpeg
+`testsrc2=size=1920x1080:rate=30:duration=35`, libx264, preset `veryfast`, CRF 28.
+All omit audio and use yuv420p. The dim fixture changes decoded pixels, not an
+overlay above the video, so it actually exercises color extraction on dark input.
+
 `mobile-profile-pin-handoff` unlocks a local profile in a sixteen-profile
 household using the production 120,000-round verifier. It separates verification
 duration from the largest 2 ms main-actor heartbeat gap. Initialization settles
@@ -177,6 +195,7 @@ fixture with real `XCUIRemote` directional input:
 ```sh
 python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID"
 python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID" --workload detail-return
+python3 tools/performance.py profile --platform tvOS --sim-id "$PLOZZ_SIM_ID" --workload horizontal-navigation
 python3 tools/performance.py report .build/performance/runs/RUN_ID
 ```
 
@@ -193,6 +212,18 @@ for three visits, preserving the profiled app process. The native focus journal
 is retained with the sample; return-stage `at` values use the main-thread
 monotonic clock rather than the journal writer's asynchronous timestamps.
 Animation callbacks do not establish exact presented-frame timing.
+
+The `horizontal-navigation` workload traverses the custom top bar with real
+library pages available: fifteen Right presses to library ten and fifteen Left presses
+back to Home, repeated three times without per-key accessibility polling.
+Each endpoint must have actual native focus, while the open page remains Home.
+Only Select opens a different page. It retains the transition journal
+and three round-trip durations, which include UI-driver overhead and are not
+input latency or FPS. The fixture creates isolated library models/settings;
+it does not measure connected-server latency. Keep this exact input cadence for
+before/after attribution. Captures from the former focus-preview behavior include
+page construction and are not equivalent page-work benchmarks. Hosted focus checks
+separately verify that rapid and settled focus never change or rebuild the open page.
 
 `Process Sample` is the default backend and uses macOS's installed `sample`
 tool. The report separates main-thread frames, app-owned main-thread frames and

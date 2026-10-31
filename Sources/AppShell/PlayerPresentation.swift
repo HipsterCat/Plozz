@@ -13,7 +13,6 @@ import MetadataKit
 import FeatureSearch
 import FeatureSettings
 import FeatureProfiles
-import ProviderTrailers
 import RatingsService
 import TraktService
 import SeerService
@@ -112,6 +111,10 @@ struct PlayerPresentation: View {
         }
         .task {
             if viewModel == nil {
+                guard externalContext?().isAuthorized != false else {
+                    dismiss()
+                    return
+                }
                 ExternalPlaybackRuntime.shared.beginPlaybackIntent()
                 HandoffDiagnostics.emit(
                     "presentation READY trace=\(activeRequest.traceID.uuidString.prefix(8)) "
@@ -120,9 +123,9 @@ struct PlayerPresentation: View {
                 )
                 do {
                     activeRequest = try await preparedRequest(activeRequest)
-                    guard !Task.isCancelled, isPresented else { return }
+                    try checkPresentationAuthorization()
                     if await openExternalPlayer() { return }
-                    guard !Task.isCancelled, isPresented else { return }
+                    try checkPresentationAuthorization()
                     viewModel = try make(activeRequest, nil, nil)
                 } catch is CancellationError {
                     if isPresented { dismiss() }
@@ -317,7 +320,8 @@ struct PlayerPresentation: View {
             }
             let prepared = preparesEpisodeHandoff
                 ? await outgoing.prepareEpisodeHandoff(to: request.item) : nil
-            guard !Task.isCancelled, isPresented, viewModel === outgoing else {
+            guard !Task.isCancelled, isPresented, externalContext?().isAuthorized != false,
+                  viewModel === outgoing else {
                 await outgoing.discardEpisodeHandoff(prepared)
                 handoffTask = nil
                 return
@@ -326,7 +330,8 @@ struct PlayerPresentation: View {
                 && outgoing.shouldPreserveDisplayMode(forNext: prepared)
             let prefetched = prepared?.inheritingPreservedDisplayMode(preserveDisplayMode)
             await outgoing.stop(preserveDisplayMode: preserveDisplayMode)
-            guard !Task.isCancelled, isPresented, viewModel === outgoing else {
+            guard !Task.isCancelled, isPresented, externalContext?().isAuthorized != false,
+                  viewModel === outgoing else {
                 await outgoing.discardEpisodeHandoff(prefetched)
                 handoffTask = nil
                 return
@@ -349,26 +354,27 @@ struct PlayerPresentation: View {
     }
 
     private func preparedRequest(_ request: PlayRequest) async throws -> PlayRequest {
-        // Online trailers use their own provider, even with no connected library.
-        let item: MediaItem
-        if request.item.isYouTubeTrailer {
-            item = request.item
-        } else {
-            let prepared = try await PlaybackVersionChoiceModel.prepareWithFailover(
-                request.item, triedAccountIDs: triedAccountIDs,
-                prepare: { try await prepareVersion(versionChoice, $0) },
-                nextSource: makeFailover, isCurrent: { isPresented }
-            )
-            triedAccountIDs = prepared.triedAccountIDs
-            item = prepared.item
-        }
-        try Task.checkCancellation()
-        guard isPresented else { throw CancellationError() }
+        try checkPresentationAuthorization()
+        guard !request.item.isYouTubeTrailer else { throw AppError.invalidResponse }
+        let prepared = try await PlaybackVersionChoiceModel.prepareWithFailover(
+            request.item, triedAccountIDs: triedAccountIDs,
+            prepare: { try await prepareVersion(versionChoice, $0) },
+            nextSource: makeFailover,
+            isCurrent: { isPresented && externalContext?().isAuthorized != false }
+        )
+        triedAccountIDs = prepared.triedAccountIDs
+        let item = prepared.item
+        try checkPresentationAuthorization()
         return PlayRequest(
             item: item, startPosition: request.startPosition, traceID: request.traceID,
             requestedAt: request.requestedAt, versionPreferences: versionPreferences,
             playlist: item.sourceAccountID == request.playlist?.accountID ? request.playlist : nil
         )
+    }
+
+    private func checkPresentationAuthorization() throws {
+        try Task.checkCancellation()
+        guard isPresented, externalContext?().isAuthorized != false else { throw CancellationError() }
     }
 
     private func showVersionChoiceFailure(_ error: Error) {

@@ -17,8 +17,10 @@ import Sentry
 ///   • A bounded in-memory operation timeline attached to existing events, including active operations.
 ///   • Numerical memory-pressure evidence when supplied by the SDK.
 ///   • Original foreground/active booleans when supplied by the SDK.
-/// What is NOT sent: user identity, IP, server URLs/hostnames, media titles,
+/// What automatic reports omit: user identity, IP fields, server URLs/hostnames, media titles,
 /// profile names, automatic network/UI breadcrumbs, or performance traces.
+/// Manual submissions use separate typed attachment exports; their optional
+/// message is explicitly user-provided and is not claimed to be anonymous.
 @MainActor
 public final class SentryCrashReporter: CrashReporter {
     private let dsn: String
@@ -99,6 +101,7 @@ public final class SentryCrashReporter: CrashReporter {
 
         isActive = true
         PerformanceDiagnostics.shared.start()
+        SearchDiagnosticJournal.shared.start()
         SiloSetupDiagnostics.shared.start { diagnostic in
             guard SentrySDK.isEnabled, let event = Self.siloSetupEvent(diagnostic) else { return }
             SentrySDK.capture(event: event)
@@ -130,6 +133,7 @@ public final class SentryCrashReporter: CrashReporter {
     public func stop() {
         guard isActive else { return }
         PerformanceDiagnostics.shared.stop()
+        SearchDiagnosticJournal.shared.stop()
         SiloSetupDiagnostics.shared.stop()
         DeviceSetupDiagnostics.shared.stop()
         for observer in diagnosticObservers { NotificationCenter.default.removeObserver(observer) }

@@ -9,7 +9,9 @@ import FeatureSettings
 struct FocusHostApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--reorder-input-fixture") {
+            if ProcessInfo.processInfo.arguments.contains("--large-native-navigation-fixture") {
+                LargeNativeNavigationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--reorder-input-fixture") {
                 ReorderInputFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--home-section-warning-fixture") {
                 HomeSectionWarningFixture()
@@ -27,6 +29,8 @@ struct FocusHostApp: App {
                 ServerAddressNavigationFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--read-ahead-settings-fixture") {
                 PlaybackReadAheadFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--skip-settings-fixture") {
+                SkipSettingsFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--iptv-organization-fixture") {
                 IPTVOrganizationFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--category-search-fixture") {
@@ -57,6 +61,8 @@ struct FocusHostApp: App {
                 SubtitleStyleInputFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--home-layout-onboarding-fixture") {
                 HomeLayoutOnboardingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--plex-home-onboarding-fixture") {
+                PlexHomeOnboardingFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--library-showcase-fixture") {
                 LibraryShowcaseFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--library-held-scroll-fixture") {
@@ -100,6 +106,31 @@ struct FocusHostApp: App {
     }
 }
 
+private struct SkipSettingsFixture: View {
+    @State private var playback: PlaybackSettingsModel
+    @State private var navigation = SettingsPageNavigation<String>()
+
+    init() {
+        let store = PlaybackSettingsStore(namespace: "skip-settings-remote-fixture")
+        store.save(.init(
+            skipIntros: .autoInstant,
+            skipMarkerRules: [.anime: [.intro: .init(mode: .on, automaticDelaySeconds: 5)]]
+        ))
+        _playback = State(initialValue: PlaybackSettingsModel(store: store))
+    }
+
+    var body: some View {
+        SettingsPageStack(navigation: navigation, pageWidth: 960, onRootBack: {}) {
+            SkipMarkerSettingsView(model: playback)
+        } destination: { _ in EmptyView() }
+        .environment(\.settingsInWorkspace, true)
+        .environment(\.themePalette, .dark)
+        .environment(\.colorScheme, .dark)
+        .toggleStyle(SettingsSwitchToggleStyle())
+        .background { SettingsPageBackground() }
+    }
+}
+
 private struct HomeSectionWarningFixture: View {
     @State private var retries = 0
 
@@ -128,6 +159,16 @@ private struct HomeSectionsEditorFixture: View {
             store: HomeLibraryVisibilityStore(namespace: "home-section-remote-fixture")
         )
         visibility.useRowDefaults(.combined)
+        if ProcessInfo.processInfo.arguments.contains("--single-home-row") {
+            let choices = HomeRowChoice.shared
+            visibility.applyRows(
+                .init(
+                    enabled: [.global(.continueWatching)],
+                    disabled: choices.map(\.id).filter { $0 != .global(.continueWatching) }
+                ),
+                choices: choices
+            )
+        }
         _visibility = State(initialValue: visibility)
     }
 

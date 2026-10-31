@@ -384,11 +384,11 @@ final class JellyfinVersionsWatchlistRefreshTests: XCTestCase {
         XCTAssertEqual(stub.sentPaths, ["/Users/u1/Items/i2"], "Local single-source details need no inventory request.")
     }
 
-    func testTorrentSourcePathOnlyChangesTheDisplayFilename() throws {
-        let path = "https://media.example/stream?torrent_name=Film%20%26%20Friends.Extended.REMUX.mkv&id=tt123&media_type=movie"
+    func testFilenameHintOnlyChangesTheDisplayFilename() throws {
+        let path = "https://media.example/stream?file_name=Film%20%26%20Friends.Extended.REMUX.mkv&id=tt123&media_type=movie"
         let sources = try JSONDecoder.plozz.decode([MediaSourceInfo].self, from: Data("""
         [
-          {"Id":"torrent","Name":"4K Remux","Path":"\(path)"},
+          {"Id":"remote","Name":"4K Remux","Path":"\(path)"},
           {"Id":"local","Path":"/movies/Film.mkv"}
         ]
         """.utf8))
@@ -396,9 +396,29 @@ final class JellyfinVersionsWatchlistRefreshTests: XCTestCase {
         XCTAssertEqual(versions[0].fileName, "Film & Friends.Extended.REMUX.mkv")
         XCTAssertEqual(versions[0].sourceMetadata?.fileName, versions[0].fileName)
         XCTAssertEqual(MediaVersion.PickerPresentation(versions[0]).releaseName, versions[0].fileName)
-        XCTAssertEqual(versions[0].playbackMediaSourceID, "torrent")
+        XCTAssertEqual(versions[0].playbackMediaSourceID, "remote")
         XCTAssertEqual(sources[0].Path, path)
         XCTAssertEqual(versions[1].fileName, "Film.mkv")
+    }
+
+    func testOpaqueSourcePathKeepsServerLabelAndIdentity() throws {
+        let path = "https://media.example/stream?source_name=Hidden.Extended.mkv&token=fixture"
+        let sources = try JSONDecoder.plozz.decode([MediaSourceInfo].self, from: Data("""
+        [
+          {"Id":"remote","Name":"Server copy","Path":"\(path)","MediaStreams":[
+            {"Index":0,"Type":"Video","Codec":"hevc","Height":2160}
+          ]},
+          {"Id":"local","Path":"/movies/Film.mkv"}
+        ]
+        """.utf8))
+        let versions = JellyfinProvider.versions(from: sources)
+        XCTAssertNil(versions[0].fileName)
+        XCTAssertNil(versions[0].sourceMetadata?.fileName)
+        XCTAssertEqual(versions[0].resolutionLabel, "4K")
+        XCTAssertEqual(MediaVersion.PickerPresentation(versions[0]).releaseName, "Server copy")
+        XCTAssertNil(versions[0].editionLabel)
+        XCTAssertEqual(versions[0].playbackMediaSourceID, "remote")
+        XCTAssertEqual(sources[0].Path, path)
     }
 
     // MARK: - Feature B: Favorites-backed watchlist
@@ -472,6 +492,46 @@ final class JellyfinVersionsWatchlistRefreshTests: XCTestCase {
             },
             ["0", "10000"]
         )
+    }
+
+    func testJellyfinAndEmbyWatchlistQueriesPreserveReleaseDatesAndUnknownFavoriteDates() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let stub = StubHTTPClient()
+            stub.stub(pathSuffix: "/Users/u1/Items", json: """
+            {"Items":[
+              {"Id":"movie","Name":"Alpha","Type":"Movie","PremiereDate":"2024-01-01T00:00:00Z","DateCreated":"2026-01-01T00:00:00Z"},
+              {"Id":"show","Name":"Zulu","Type":"Series","PremiereDate":"2023-01-01T00:00:00Z"},
+              {"Id":"undated","Name":"Oscar","Type":"Movie"}
+            ],"TotalRecordCount":3}
+            """)
+            let session = UserSession(
+                server: .init(id: "s", name: "Fixture", baseURL: URL(string: "http://host:8096")!, provider: kind),
+                userID: "u1", userName: "Viewer", deviceID: "fixture", accessToken: "TOKEN"
+            )
+            let provider = JellyfinProvider(session: session, accountID: kind.rawValue, http: stub)
+            let destination = try XCTUnwrap(MediaBrowserWatchlistDestination(provider: provider))
+            let entries = try await destination.fetchEntries()
+            XCTAssertEqual(entries.map(\.kind), [.movie, .series, .movie])
+            XCTAssertTrue(entries.allSatisfy { $0.addedAt == nil })
+            XCTAssertEqual(entries.first?.presentation?.releaseDate, Date(timeIntervalSince1970: 1_704_067_200))
+            let items = try entries.map { entry in
+                let presentation = try XCTUnwrap(entry.presentation)
+                return MediaItem(id: presentation.title, title: presentation.title, kind: entry.kind,
+                                 watchlistAddedAt: entry.addedAt, releaseDate: presentation.releaseDate,
+                                 sourceAccountID: provider.accountID)
+            }
+            XCTAssertEqual(WatchlistBrowsePreferences(filter: .shows).items(from: items).map(\.title), ["Zulu"])
+            XCTAssertEqual(WatchlistBrowsePreferences(filter: .movies).items(from: items).map(\.title), ["Alpha", "Oscar"])
+            XCTAssertEqual(WatchlistBrowsePreferences(sort: .init(field: .releaseDate, direction: .ascending))
+                .items(from: items).map(\.title), ["Zulu", "Alpha", "Oscar"])
+            XCTAssertEqual(WatchlistBrowsePreferences.default.items(from: items), items)
+            for entry in entries {
+                let owned = await destination.resolveLibraryCopy(for: entry)
+                XCTAssertEqual(owned?.source.providerKind, kind)
+                XCTAssertEqual(owned?.source.accountID, provider.accountID)
+                XCTAssertEqual(owned?.presentation?.releaseDate, entry.presentation?.releaseDate)
+            }
+        }
     }
 
     func testWatchlistRejectsOverlappingPages() async throws {

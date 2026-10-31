@@ -18,6 +18,8 @@ public final class SearchViewModel {
     private let accounts: [ResolvedAccount]
     private let limit: Int
     private let debounce: Duration
+    private let diagnostics: PerformanceDiagnostics
+    private let searchDiagnostics: SearchDiagnosticJournal
     /// Shared identity-index lookup folded into dedup so each result card carries
     /// its full cross-server source set even before the detail picker probes.
     private let identitySources: @Sendable (MediaItem) -> [MediaSourceRef]
@@ -49,7 +51,9 @@ public final class SearchViewModel {
         identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] },
         disabledLibraryKeys: @escaping () -> Set<String> = { [] },
         seerSearch: (@Sendable (String) async -> [MediaItem])? = nil,
-        seerRequestAvailability: (@Sendable (MediaItem) async -> MediaRequestAvailability?)? = nil
+        seerRequestAvailability: (@Sendable (MediaItem) async -> MediaRequestAvailability?)? = nil,
+        diagnostics: PerformanceDiagnostics = .shared,
+        searchDiagnostics: SearchDiagnosticJournal = .shared
     ) {
         self.accounts = accounts
         self.limit = limit
@@ -58,6 +62,8 @@ public final class SearchViewModel {
         self.disabledLibraryKeys = disabledLibraryKeys
         self.seerSearch = seerSearch
         self.seerRequestAvailability = seerRequestAvailability
+        self.diagnostics = diagnostics
+        self.searchDiagnostics = searchDiagnostics
     }
 
     deinit {
@@ -86,6 +92,10 @@ public final class SearchViewModel {
         }
         guard !Task.isCancelled else { return }
 
+        let span = diagnostics.begin(.search, metrics: .init(accounts: accounts.count))
+        var outcome = PerformanceDiagnostics.Outcome.cancelled
+        var metrics = PerformanceDiagnostics.Metrics()
+        defer { span?.finish(Task.isCancelled ? .cancelled : outcome, metrics: metrics) }
         state = .loading
 
         // Start the discovery (Seerr) search concurrently with the library search
@@ -127,6 +137,8 @@ public final class SearchViewModel {
         ) {
             sections.append(notInLibrary)
         }
+        outcome = libraryError == nil ? .succeeded : .failed
+        metrics = .init(items: sections.reduce(0) { $0 + $1.items.count }, rows: sections.count)
 
         if !sections.isEmpty {
             state = .loaded(sections)
@@ -299,6 +311,7 @@ public final class SearchViewModel {
         // library the user turned off app-wide are excluded. Only accounts that
         // actually have a disabled library take the scoped path (see providers).
         let disabledKeys = disabledLibraryKeys()
+        let diagnosticSearch = searchDiagnostics.beginSearch()
         let results = await withTaskGroup(of: (Int, Result<[MediaItem], AppError>).self) { group in
             for (index, resolved) in accounts.enumerated() {
                 group.addTask {
@@ -307,15 +320,27 @@ public final class SearchViewModel {
                         let prefix = "\(accountID):"
                         return key.hasPrefix(prefix) ? String(key.dropFirst(prefix.count)) : nil
                     }
+                    let diagnostic = diagnosticSearch?.source(
+                        index: index, provider: resolved.provider.kind,
+                        limit: perAccountLimit, disabledLibraries: disabledForAccount.count
+                    )
                     do {
                         if let interactive = resolved.provider as? any InteractiveBrowseActivityReporting {
                             await interactive.noteInteractiveBrowseActivity()
                         }
-                        let hits = try await resolved.provider.search(query: query, limit: perAccountLimit, excludingLibraries: disabledForAccount)
+                        let hits = try await SearchDiagnosticJournal.$currentSource.withValue(diagnostic) {
+                            try await PerformanceDiagnostics.$provider.withValue(resolved.provider.kind) {
+                                try await resolved.provider.search(query: query, limit: perAccountLimit,
+                                                                   excludingLibraries: disabledForAccount)
+                            }
+                        }
+                        diagnostic?.finish(resultCount: hits.count)
                         return (index, .success(hits.map { $0.taggingSource(accountID) }))
                     } catch let error as AppError {
+                        diagnostic?.finish(error: error)
                         return (index, .failure(error))
                     } catch {
+                        diagnostic?.finish(error: error is CancellationError ? .cancelled : .unknown(""))
                         return (index, .failure(.unknown("")))
                     }
                 }

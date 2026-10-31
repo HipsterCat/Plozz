@@ -211,7 +211,11 @@ public final class SiloProvider: MediaProvider, CapabilityReporting, MediaSortFi
         guard limit > 0 else { return [] }
         var result: [MediaItem] = []
         var seen = Set<String>()
-        for library in try await libraries() where !disabled.contains(library.id) {
+        let available = try await libraries()
+        let diagnostic = SearchDiagnosticJournal.currentSource
+        diagnostic?.libraries(available: available.count, excluded: available.filter { disabled.contains($0.id) }.count)
+        for (index, library) in available.enumerated() where !disabled.contains(library.id) {
+            diagnostic?.beginLibrary(index: index)
             let matches = try await catalogItems(
                 [URLQueryItem(name: "library_id", value: library.id),
                  URLQueryItem(name: "q", value: query)],
@@ -292,15 +296,28 @@ public final class SiloProvider: MediaProvider, CapabilityReporting, MediaSortFi
 
     func catalogDTOs(_ query: [URLQueryItem], limit: Int) async throws -> [SiloItem] {
         guard limit > 0 else { return [] }
+        // Silo binds the page size into its cursor scope, including the final page.
+        let pageLimit = min(200, limit)
         var result: [SiloItem] = []
         var cursor: String?
         var seen = Set<String>()
         repeat {
             try Task.checkCancellation()
-            var parameters = query + [URLQueryItem(name: "limit", value: String(min(200, limit - result.count)))]
+            var parameters = query + [URLQueryItem(name: "limit", value: String(pageLimit))]
             if let cursor { parameters.append(URLQueryItem(name: "cursor", value: cursor)) }
+            let diagnostic = SearchDiagnosticJournal.currentSource
+            diagnostic?.beginPage(limit: pageLimit, usedCursor: cursor != nil)
             let page: SiloCatalogPage = try await client.request("/catalog", query: parameters)
             result += page.items
+            let needsMore = page.page?.has_more == true && result.count < limit
+            let next = page.page?.next_cursor
+            let failure: SearchDiagnosticJournal.PagingFailure?
+            if needsMore && page.items.isEmpty { failure = .emptyPage }
+            else if needsMore && (next?.isEmpty != false) { failure = .missingCursor }
+            else if needsMore, let next, seen.contains(next) { failure = .repeatedCursor }
+            else { failure = nil }
+            diagnostic?.finishPage(rows: page.items.count, hasMore: page.page?.has_more == true,
+                                   hasNextCursor: next?.isEmpty == false, failure: failure)
             guard page.page?.has_more == true, result.count < limit else { break }
             guard !page.items.isEmpty, let next = page.page?.next_cursor, !next.isEmpty,
                   seen.insert(next).inserted else { throw AppError.invalidResponse }
@@ -326,8 +343,9 @@ public final class SiloProvider: MediaProvider, CapabilityReporting, MediaSortFi
             return MediaVersion(id: file.file_id, fileName: file.file_name, edition: file.edition_raw,
                                 width: info.video?.width, height: info.video?.height, bitrate: info.video?.bitrate,
                                 sizeBytes: file.file_size, duration: file.duration, isDefault: index == 0,
-                                videoCodec: file.codec_video, videoRange: info.video?.videoRangeType,
-                                audioCodec: file.codec_audio, audioChannels: info.audio?.channels,
+                                videoCodec: info.video?.codec,
+                                videoRange: info.video?.videoRangeType ?? info.video?.videoRange,
+                                audioCodec: info.audio?.codec, audioChannels: info.audio?.channels,
                                 audioProfile: info.audio?.profile, container: file.container,
                                 sourceMetadata: info)
         }
@@ -481,19 +499,16 @@ public final class SiloProvider: MediaProvider, CapabilityReporting, MediaSortFi
             videoInfo.width = video.width
             if let height = video.height { videoInfo.height = height }
             if let range = video.video_range { videoInfo.videoRange = range }
-            videoInfo.dolbyVisionProfile = video.dv_profile
-            if let profile = video.dv_profile, profile > 0 {
-                videoInfo.videoRangeType = "DOVI"
-            } else if video.hdr10_plus == true {
-                videoInfo.videoRangeType = "HDR10Plus"
-            } else {
-                videoInfo.videoRangeType = video.video_range_type
+            if video.dv_config_present != false, let profile = video.dv_profile, profile > 0 {
+                videoInfo.dolbyVisionProfile = profile
             }
+            videoInfo.videoRangeType = Self.normalizedVideoRangeType(video)
+            videoInfo.colorTransfer = video.color_transfer
         }
         var audioInfo = MediaSourceMetadata.AudioStream(codec: file.codec_audio)
         if let audio = file.audio_tracks?.first(where: { $0.default }) ?? file.audio_tracks?.first {
             if let codec = audio.codec { audioInfo.codec = codec }
-            audioInfo.profile = audio.profile
+            audioInfo.profile = MediaSourceMetadata.audioProfile(audio.profile, displayTitles: [audio.title])
             audioInfo.channels = audio.channels
             audioInfo.channelLayout = audio.layout
             audioInfo.language = audio.language
@@ -503,6 +518,36 @@ public final class SiloProvider: MediaProvider, CapabilityReporting, MediaSortFi
             fileName: file.file_name,
             video: videoInfo, audio: audioInfo,
             audioLanguages: file.audio_tracks?.compactMap(\.language))
+    }
+
+    static func normalizedVideoRangeType(_ video: SiloVideoTrack) -> String? {
+        let explicit = video.video_range_type?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = (explicit ?? "").uppercased().replacingOccurrences(of: "+", with: "PLUS")
+        let explicitDV = normalized.hasPrefix("DOVI") || normalized.hasPrefix("DOLBYVISION")
+        let hasDV = explicitDV || (video.dv_config_present ?? ((video.dv_profile ?? 0) > 0))
+        let hasPlus = video.hdr10_plus == true || normalized.contains("HDR10PLUS")
+        guard hasDV else { return hasPlus ? "HDR10Plus" : explicit }
+        if hasPlus { return "DOVIWithHDR10Plus" }
+        if explicitDV, normalized != "DOVI", normalized != "DOLBYVISION" { return explicit }
+
+        // A present zero can be omitted from Silo's JSON. A false presence
+        // flag must not turn legacy/default numeric fields into evidence.
+        if video.dv_bl_compat_id_present == true
+            || (video.dv_bl_compat_id_present == nil && video.dv_bl_compat_id != nil) {
+            switch video.dv_bl_compat_id ?? 0 {
+            case 1: return "DOVIWithHDR10"
+            case 2: return "DOVIWithSDR"
+            case 4: return "DOVIWithHLG"
+            case 0: return "DOVI"
+            default: return "DOVI"
+            }
+        }
+        switch normalized {
+        case "HDR10": return "DOVIWithHDR10"
+        case "HLG": return "DOVIWithHLG"
+        case "SDR": return "DOVIWithSDR"
+        default: return video.dv_profile == 7 ? "DOVIWithHDR10" : "DOVI"
+        }
     }
 }
 

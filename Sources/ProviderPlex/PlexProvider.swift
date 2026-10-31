@@ -14,6 +14,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
     public let credentialRevision: CredentialRevision
     let client: PlexClient
     let liveTVLeases = PlexLiveTVLeaseStore()
+    let playbackFailureDiagnostics: PlaybackFailureDiagnostics
     let libraryGenreCache = PlexLibraryGenreCache()
     private let videoPlaylistCache = VideoPlaylistSnapshotCache()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
@@ -54,11 +55,13 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         session: UserSession,
         accountID: String? = nil,
         credentialRevision: CredentialRevision = CredentialRevision(),
+        cloudTokenResolver: (@Sendable () async throws -> String?)? = nil,
         http: HTTPClient = URLSessionHTTPClient(),
         interactiveHTTP: HTTPClient? = nil,
         hybridEngineEnabled: Bool = false,
         connectionRefresh: PlexConnectionResolver.Refresh? = nil,
         probe: HTTPClient = URLSessionHTTPClient(session: .plozzDiscovery),
+        playbackFailureDiagnostics: PlaybackFailureDiagnostics = .shared,
         themeArchiveResolver: @escaping @Sendable (String?) async -> URL? = {
             await ThemeMusicArchive.resolvedURL(tvdbID: $0)
         }
@@ -66,6 +69,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         self.session = session
         self.accountID = accountID ?? session.server.id
         self.credentialRevision = credentialRevision
+        self.playbackFailureDiagnostics = playbackFailureDiagnostics
         self.themeArchiveResolver = themeArchiveResolver
         let deviceProfile = PlexDeviceProfile(clientIdentifier: session.deviceID)
         // Probe the persisted connection list (or the single saved URL) and stay
@@ -113,6 +117,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
             resolver: makeResolver(session.server.alternateConnectionURLs ?? [], advertised),
             deviceProfile: deviceProfile,
             token: session.accessToken,
+            serverID: session.server.id,
+            cloudTokenResolver: cloudTokenResolver,
             http: http,
             interactiveHTTP: interactiveHTTP,
             hybridEngineEnabled: hybridEngineEnabled
@@ -555,7 +561,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
                 id: id,
                 title: title,
                 style: .poster,
-                items: Array(items.prefix(max(1, limit)))
+                items: Array(items.prefix(max(1, limit))),
+                browseID: PlexClient.homeShelfKey(hub.key) ?? "hub:\(id)"
             )
         }
     }
@@ -598,7 +605,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
                 id: id, title: title, items: Array(items.prefix(max(1, limit))),
                 isHomeDefault: isDefault,
                 isLegacyHomeDefault: items.count >= Self.minimumHubItems
-                    && !Self.isPersonHub(identifier: hub.hubIdentifier, context: hub.context, title: hub.title)
+                    && !Self.isPersonHub(identifier: hub.hubIdentifier, context: hub.context, title: hub.title),
+                browseID: PlexClient.homeShelfKey(hub.key) ?? "hub:\(rawID)"
             )
         }
     }
@@ -1326,9 +1334,9 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
             .joined(separator: " ")
 
         let hasDovi = (doviPresent ?? false)
-            || doviProfile != nil
-            || doviLevel != nil
-            || doviBLPresent != nil
+            || (doviProfile ?? 0) > 0
+            || (doviLevel ?? 0) > 0
+            || doviBLPresent == true
             || titleHint.contains("DOVI")
             || titleHint.contains("DOLBY VISION")
         let hasHDR10Plus = transfer.contains("2094")
@@ -1350,21 +1358,21 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
             // base-layer compatibility ID is the authoritative cross-compat signal:
             //   0 = none (pure DV, e.g. Profile 5), 1 = HDR10, 2 = SDR, 4 = HLG.
             switch doviBLCompatID {
-            case 1: return "DOVIWithHDR10"
+            case 1: return hasHDR10Plus ? "DOVIWithHDR10Plus" : "DOVIWithHDR10"
             case 2: return "DOVIWithSDR"
             case 4: return "DOVIWithHLG"
             case 0: return "DOVI"
             default: break   // compat ID absent (older Plex) → infer from profile
             }
             // Without a compat ID: Profile 5 never has a fallback; only an explicit
-            // HDR10+ hint, Profiles 7/8 (HDR10-compatible base), or an explicit
+            // HDR10+ hint, Profile 7 (HDR10-compatible base), or an explicit
             // "HDR10" in the server's display title (a genuine dual-format label
             // like "DoVi/HDR10") add a second badge. Do NOT infer HDR10 from the PQ
             // transfer or DOVIBLPresent — every DV stream is PQ + base-layer, so
             // those would wrongly badge a pure Profile 5 file.
             if doviProfile == 5 { return "DOVI" }
             if hasHDR10Plus { return "DOVIWithHDR10PLUS" }
-            if doviProfile == 7 || doviProfile == 8 { return "DOVIWithHDR10" }
+            if doviProfile == 7 { return "DOVIWithHDR10" }
             if titleHint.contains("HDR10") { return "DOVIWithHDR10" }
             if hasHLG { return "DOVIWithHLG" }
             return "DOVI"
@@ -1450,10 +1458,9 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         let audioStream = audio.map { a in
             return MediaSourceMetadata.AudioStream(
                 codec: a.codec,
-                profile: Self.audioProfile(
-                    streamProfile: a.profile,
-                    streamDisplayTitles: [a.displayTitle, a.extendedDisplayTitle],
-                    mediaAudioProfile: mediaAudioProfile
+                profile: MediaSourceMetadata.audioProfile(
+                    a.profile,
+                    displayTitles: [a.displayTitle, a.extendedDisplayTitle, mediaAudioProfile]
                 ),
                 channels: a.channels,
                 channelLayout: a.audioChannelLayout,
@@ -2430,6 +2437,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
     static func mediaLevelMetadata(from media: PlexMedia) -> MediaSourceMetadata? {
         let lines: Int?
         switch (media.videoResolution ?? "").lowercased() {
+        case "8k": lines = 4320
         case "4k": lines = 2160
         case "1080": lines = 1080
         case "720": lines = 720
@@ -2462,10 +2470,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
         if media.audioCodec != nil || media.audioChannels != nil || media.audioProfile != nil {
             audio = MediaSourceMetadata.AudioStream(
                 codec: media.audioCodec,
-                profile: Self.audioProfile(
-                    streamProfile: nil,
-                    streamDisplayTitles: [],
-                    mediaAudioProfile: media.audioProfile
+                profile: MediaSourceMetadata.audioProfile(
+                    nil, displayTitles: [media.audioProfile]
                 ),
                 channels: media.audioChannels
             )
@@ -2480,43 +2486,6 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding, Ser
             audio: audio
         )
         return metadata.isEmpty ? nil : metadata
-    }
-
-    /// Folds Plex's various Atmos / DTS:X hints into a single audio profile string
-    /// the shared badge logic can read. Plex spreads object-based-audio markers
-    /// across three places — none of them universally populated:
-    ///   1. the audio Stream's own `profile` (rarely says "atmos");
-    ///   2. the audio Stream's `(extended)displayTitle`
-    ///      (e.g. `"Dolby TrueHD Atmos 7.1"`);
-    ///   3. the parent Media-level `audioProfile`
-    ///      (e.g. `"dolby digital plus + dolby atmos"`) — frequently the **only**
-    ///      place Atmos is mentioned for an Atmos-carrying EAC3 episode.
-    /// We treat all three as evidence and append a normalized `Atmos` / `DTS:X`
-    /// token to the stream profile so `MediaBadges.audioBadges` can surface the
-    /// correct headline format regardless of which signal the server emits.
-    static func audioProfile(  // l10n:content — normalized audio-codec profile token (e.g. "dts x"), not user-facing prose
-        streamProfile: String?,
-        streamDisplayTitles: [String?],
-        mediaAudioProfile: String?
-    ) -> String? {
-        let hintBlob = (streamDisplayTitles + [mediaAudioProfile])
-            .compactMap { $0?.lowercased() }
-            .joined(separator: " ")
-        let hasAtmos = hintBlob.contains("atmos")
-        let hasDTSX = hintBlob.contains("dts:x")
-            || hintBlob.contains("dts-x")
-            || hintBlob.contains("dtsx")
-            || hintBlob.contains("dts x")
-
-        var parts: [String] = []
-        if let streamProfile, !streamProfile.isEmpty { parts.append(streamProfile) }
-        if hasAtmos, !parts.contains(where: { $0.lowercased().contains("atmos") }) {
-            parts.append("Atmos")
-        }
-        if hasDTSX, !parts.contains(where: { $0.lowercased().contains("dts:x") }) {
-            parts.append("DTS:X")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     /// Maps Plex's native rating fields onto provider-agnostic ratings. Plex
@@ -2909,6 +2878,7 @@ extension PlexProvider: WatchlistProviding {
         let items =         try await client.watchlist()
             .map { dto -> MediaItem in
                 var copy = mapDiscover(metadata: dto)
+                copy.watchlistAddedAt = dto.watchlistedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
                 copy.isFavorite = true
                 copy.locallyValidatedPlayableSource = false
                 return copy

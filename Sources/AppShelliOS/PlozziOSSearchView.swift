@@ -6,6 +6,8 @@ import PlozzCoreUI
 
 struct PlozziOSSearchView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
+    @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
     @State private var viewModel: SearchViewModel
     private let appModel: PlozziOSAppModel
     private let onShowSettings: () -> Void
@@ -50,11 +52,16 @@ struct PlozziOSSearchView: View {
         // Regular-width iPad keeps the bar so the system sidebar toggle remains
         // reachable when the adaptable tab sidebar is collapsed.
         .toolbar(
-            horizontalSizeClass == .compact && !keepsNavigationBar ? .hidden : .visible,
+            horizontalSizeClass == .compact && !keepsNavigationBar && !usesVerticalToolbar ? .hidden : .visible,
             for: .navigationBar
         )
-        .navigationTitle(horizontalSizeClass == .compact ? Text(verbatim: "") : Text("Search"))
-        .toolbarTitleDisplayMode(.large)
+        .toolbar {
+            if usesVerticalToolbar || isOverflowDestination {
+                PlozziOSSettingsToolbarItem(action: onShowSettings)
+            }
+        }
+        .navigationTitle(horizontalSizeClass == .compact && !isOverflowDestination ? Text(verbatim: "") : Text("Search"))
+        .toolbarTitleDisplayMode(isOverflowDestination ? .inline : .large)
         .environment(\.plozzCardCaptionView, .search)
         .task(id: viewModel.query) {
             await viewModel.search()
@@ -136,9 +143,12 @@ struct PlozziOSSearchView: View {
     }
 }
 
-/// Explicit top header: a touch-friendly search field that takes all available
-/// width with the active-profile settings avatar immediately to its right.
+/// Keep a local Settings entry only when native navigation does not expose it.
 private struct PlozziOSSearchHeader: View {
+    @Environment(\.themePalette) private var palette
+    @Environment(\.hasVisibleSettingsNavigationEntry) private var hasVisibleSettingsNavigationEntry
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
+    @Environment(\.plozziOSIsOverflowDestination) private var isOverflowDestination
     @Binding var query: String
     let onShowSettings: () -> Void
 
@@ -149,9 +159,11 @@ private struct PlozziOSSearchHeader: View {
                     .plozzForeground(.secondary)
                 TextField(
                     "Movies, shows, and episodes",
-                    text: $query
+                    text: $query,
+                    prompt: Text("Movies, shows, and episodes").foregroundColor(palette.secondaryText)
                 )
                 .textFieldStyle(.plain)
+                .foregroundStyle(palette.primaryText)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .accessibilityLabel("Search your libraries")
@@ -170,10 +182,13 @@ private struct PlozziOSSearchHeader: View {
             }
             .padding(.horizontal, 12)
             .frame(minHeight: 44)
-            .background(.thinMaterial, in: Capsule())
+            .plozzSurface(.raised, cornerRadius: PlozzTheme.Metrics.Radius.card)
             .frame(maxWidth: .infinity)
 
-            PlozziOSSettingsAvatarButton(action: onShowSettings)
+            if !hasVisibleSettingsNavigationEntry && !usesVerticalToolbar && !isOverflowDestination {
+                PlozziOSSettingsAvatarButton(action: onShowSettings)
+                    .accessibilityIdentifier("search-settings-avatar")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)

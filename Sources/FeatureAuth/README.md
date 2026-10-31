@@ -61,6 +61,9 @@ session persistence.
   width, stacked mobile actions fill the card's content width, all content
   scrolls at large text sizes, and TV entry focuses Sign In
   Again (or Retry when a sign-in attempt failed).
+  On TV, managed account recovery owns the shared opaque dialog surface through
+  the link-code phase too; the covered Settings error must not show through
+  behind the QR code or instructions.
 - **Plex account recovery stays inside the profile gate.** A rejected Home-user
   list request means the saved account needs sign-in, not that the server is
   offline or the user's Home PIN is wrong. Failed activations offer Sign In Again
@@ -107,6 +110,17 @@ session persistence.
   than invalidating every provider and losing active Silo grants.
 - **Tokens NEVER leave the Keychain.** Never written to `UserDefaults`,
   never logged. `AccountStore` is split-storage by design.
+- **One Plex Home authorization across servers.** During one profile activation,
+  a successful Home-user PIN authenticates that Plex login/user once. Other enabled
+  servers with the same Plex account user ID and Home-user UUID reuse its in-memory
+  cloud token and resolve their own server access tokens. No PIN is retained or
+  replayed. Sharing is limited to the account credentials, bindings, and source
+  generations captured for that activation; cancellation, manual activation,
+  disabled sources, credential replacement, and changed identities cannot reuse
+  stale proof. Distinct Plex logins or different Home users remain independent.
+  Opt-in automatic startup reconstructs sharing only for the saved session's
+  validated accounts. Re-enabling a sibling server can reuse an enabled user's
+  authorization; disabling the last authorized source still removes that proof.
 - **IPTV cache cleanup uses the complete household inventory.** Background
   maintenance runs at startup and after account mutations on both platforms.
   It preserves disabled/profile-unselected accounts and fails closed on missing,
@@ -127,6 +141,12 @@ session persistence.
   Emby uses password, and Plex uses Link.
 - **Always cancellable.** Every flow must be Cancel-able from the remote
   without leaking polling tasks.
+- **Connection reports distinguish validation from sign-in.** Password sign-in
+  and Quick Connect add bounded `ServerConnectionDiagnostics` records to the
+  existing explicit diagnostic submission. Quick Connect records begin/approval
+  stages rather than one journal entry per poll. Cancelled work is excluded;
+  usernames, passwords, codes, tokens, server addresses, and response bodies
+  are never retained by this journal.
 - **IPTV editor removal captures row identity first.** Guide/header removal
   actions capture the row's ID before mutating its collection. Reading a bound
   row from inside `removeAll` can overlap the collection's exclusive write
@@ -261,6 +281,16 @@ profiles mapped to the same Plex user. Local Profile Locks and Kids Profile exit
 gates remain in force for manual switching. Local unlock proof expires on every
 active-profile change, not just process exit; async verification must still match
 the original request, selection generation and lock before granting entry.
+On tvOS, Automatically Sign In also bypasses the return picker. With it off,
+selection is required on every return if any profile has a local or Plex PIN,
+after five minutes away for multiple unprotected profiles, and not on warm
+returns for one unprotected profile. This timing is derived, not configurable.
+Expiry revokes live PIN proof. Foreground reauthorization retains the same
+viewer's credentials behind an opaque input-blocking gate so unchanged tokens do
+not reset browsing identity. It still checks current Plex protection, never
+replays old PIN proof, and retains the gate on cancellation or network failure.
+Different-profile selection continues to clear credentials normally. Player
+exemptions and navigation retention are described in `FeatureProfiles/README.md`.
 Disabling automatic sign-in removes the stored session without changing any PIN;
 sign-out invalidates it.
 Every unresolved Plex binding verifies current Home-user protection before entry,

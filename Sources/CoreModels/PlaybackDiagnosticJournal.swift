@@ -90,6 +90,7 @@ public final class PlaybackDiagnosticJournal: @unchecked Sendable {
         public let quality: StreamingQuality?
         public let codecPreference: StreamingCodecPreference?
         public let sourceRange: SourceDynamicRange?
+        public let serverDecision: PlaybackServerDecision?
 
         public init(
             provider: ProviderKind?, engine: PlaybackEngineKind? = nil, request: PlaybackRequest? = nil,
@@ -119,6 +120,7 @@ public final class PlaybackDiagnosticJournal: @unchecked Sendable {
             quality = options?.quality
             codecPreference = options?.codec
             sourceRange = SourceDynamicRange.providerHint(from: request?.sourceMetadata)
+            serverDecision = request?.serverDecision
         }
 
         private static func token(_ value: String?, accepts: (String) -> Bool) -> String? {
@@ -131,6 +133,7 @@ public final class PlaybackDiagnosticJournal: @unchecked Sendable {
                 && sourceVideo.map(PlozzigenMediaFormats.supports(videoCodec:)) != false
                 && sourceAudio.map(PlozzigenMediaFormats.supports(audioCodec:)) != false
                 && negotiatedCodec.map { DirectPlayVideoCodec(rawValue: $0) != nil } != false
+                && serverDecision?.isValid != false
         }
     }
 
@@ -155,7 +158,7 @@ public final class PlaybackDiagnosticJournal: @unchecked Sendable {
         var discarded = 0
         var entries: [Entry] = []
     }
-    enum StorageIssue: String {
+    enum StorageIssue: String, Encodable, Sendable {
         case locationUnavailable, readFailed, invalidJournal, invalidEvidence, oversized, writeFailed, encodeFailed
     }
 
@@ -237,6 +240,114 @@ public final class PlaybackDiagnosticJournal: @unchecked Sendable {
                 } catch {
                     self.storageFailed(.encodeFailed)
                     continuation.resume(returning: "format=plozz-playback-journal-1\nstorage=encodeFailed")
+                }
+            }
+        }
+    }
+
+    public struct Export: Encodable, Sendable {
+        private let schema = 2
+        private let storageAvailable: Bool
+        private let storageIssue: StorageIssue?
+        private let discarded: Int
+        private let entries: [ExportEntry]
+
+        fileprivate init(journal: Journal, storage: StorageIssue?, scope: DiagnosticExportScope) {
+            storageAvailable = storage == nil
+            storageIssue = storage
+            discarded = journal.discarded
+            entries = journal.entries.map { ExportEntry($0, scope: scope) }
+        }
+    }
+
+    private struct ExportEntry: Encodable, Sendable {
+        let ageMilliseconds: Int?
+        let build: String
+        let session: String
+        let attempt: String
+        let event: Event
+        let facts: ExportFacts
+        let elapsedMilliseconds: Int?
+        let route: PlaybackFailureEvidence.Route?
+        let failure: Failure?
+        let phase: Phase?
+        let liveFailure: PlaybackFailureDiagnostic?
+        let stopReason: StopReason?
+        let stage: PlaybackDiagnosticReport.Stage?
+        let evidence: PlaybackFailureEvidence?
+
+        init(_ entry: Entry, scope: DiagnosticExportScope) {
+            ageMilliseconds = scope.ageMilliseconds(for: entry.timestamp)
+            build = entry.build
+            session = scope.alias(for: entry.session.uuidString)
+            attempt = scope.alias(for: entry.attempt.uuidString)
+            event = entry.event
+            facts = ExportFacts(entry.facts)
+            elapsedMilliseconds = entry.elapsedMilliseconds
+            route = entry.route
+            failure = entry.failure
+            phase = entry.phase
+            liveFailure = entry.liveFailure
+            stopReason = entry.stopReason
+            stage = entry.stage
+            evidence = entry.evidence
+        }
+    }
+
+    private struct ExportFacts: Encodable, Sendable {
+        let provider: ProviderKind?
+        let content: PlaybackFailureDiagnostic.Content
+        let engine: PlaybackEngineKind?
+        let source: Source
+        let transcoding: Bool
+        let sourceContainer: String?
+        let sourceVideo: String?
+        let sourceAudio: String?
+        let negotiatedCodec: String?
+        let hasServerSession: Bool
+        let outputCodec: DirectPlayVideoCodec?
+        let outputRange: SourceDynamicRange?
+        let quality: StreamingQuality?
+        let codecPreference: StreamingCodecPreference?
+        let sourceRange: SourceDynamicRange?
+        let serverDecision: PlaybackServerDecision?
+
+        init(_ facts: Facts) {
+            provider = facts.provider
+            content = facts.content
+            engine = facts.engine
+            source = facts.source
+            transcoding = facts.transcoding
+            sourceContainer = facts.sourceContainer
+            sourceVideo = facts.sourceVideo
+            sourceAudio = facts.sourceAudio
+            negotiatedCodec = facts.negotiatedCodec
+            hasServerSession = facts.hasServerSession
+            outputCodec = facts.outputCodec
+            outputRange = facts.outputRange
+            quality = facts.quality
+            codecPreference = facts.codecPreference
+            sourceRange = facts.sourceRange
+            serverDecision = facts.serverDecision
+        }
+    }
+
+    public func export(scope: DiagnosticExportScope) async -> Export {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.drain(scheduleWrite: false)
+                self.trim()
+                do {
+                    _ = try self.encode()
+                    continuation.resume(returning: Export(
+                        journal: self.journal, storage: self.storageIssue, scope: scope
+                    ))
+                } catch {
+                    self.storageFailed(.encodeFailed)
+                    continuation.resume(returning: Export(
+                        journal: Journal(discarded: min(1_000_000_000, self.journal.discarded + self.journal.entries.count)),
+                        storage: .encodeFailed, scope: scope
+                    ))
                 }
             }
         }

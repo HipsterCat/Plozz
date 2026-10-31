@@ -17,6 +17,7 @@ struct PlozziOSLiveTVDestination: View {
 
     @Environment(ProfilesModel.self) private var profiles
     @Environment(\.mediaItemNavigator) private var navigateToItem
+    @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
     @State private var isExpanded = false
     @State private var liveOutputGroup = LiveChannelOutputGroup()
     @State private var network: LiveTVMobileNetworkController
@@ -111,7 +112,7 @@ struct PlozziOSLiveTVDestination: View {
             homeModel: HomeLiveTVRuntime.model(profileID: profileID),
             homeAuthorizationID: HomeLiveTVRuntime.authorizationID(profileID: profileID, accounts: accountsProviders),
             onOpenTitle: navigateToItem.map { navigator in { navigator($0) } },
-            topBarAccessory: AnyView(PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings))
+            topBarAccessory: usesVerticalToolbar ? nil : AnyView(PlozziOSSettingsAvatarButton(action: onShowSettings))
         ) { playback in
             LiveChannelPlayerView(
                 channelID: playback.channel.id,
@@ -146,6 +147,12 @@ struct PlozziOSLiveTVDestination: View {
                 canToggleFavorite: playback.canToggleFavorite,
                 onToggleFavorite: playback.onToggleFavorite,
                 isExpanded: playback.isExpanded,
+                isPreviewVisible: playback.isPreviewVisible,
+                onExpandPreview: playback.expandPreview,
+                previewReflectionHeight: playback.previewReflectionHeight,
+                previewTopReflectionHeight: playback.previewTopReflectionHeight,
+                previewLeadingReflectionWidth: playback.previewLeadingReflectionWidth,
+                previewTrailingReflectionWidth: playback.previewTrailingReflectionWidth,
                 isActive: playback.isPlaybackActive,
                 onReturnToGuide: playback.returnToGuide,
                 playPauseRequest: playback.playPauseRequest,
@@ -211,10 +218,16 @@ struct PlozziOSLiveTVDestination: View {
         }
         .id(profileScope)
         .plozziOSLivePlayerOrientation(
-            isPresented: isActive && isExpanded && isCurrentProfileScope,
-            orientation: playbackOrientation
+            isPresented: isExpanded,
+            orientation: playbackOrientation,
+            isActive: isActive && isCurrentProfileScope
         )
         .toolbar(isExpanded ? .hidden : .visible, for: .tabBar)
+        .toolbar {
+            if usesVerticalToolbar && !isExpanded {
+                PlozziOSSettingsToolbarItem(action: onShowSettings)
+            }
+        }
         .onAppear {
             network.start()
         }

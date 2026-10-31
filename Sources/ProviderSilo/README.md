@@ -134,6 +134,14 @@ These Home and device-login contracts were checked at upstream revision
   channels never imply stereo or surround. Detail heroes observe source-scoped
   episode metadata separately from the rail, so a later sparse season/resume
   result cannot erase badges or restore stale progress.
+  Explicit Dolby Vision/HDR10+ combinations survive profile mapping. Native
+  `dv_bl_compat_id` and its presence flag distinguish HDR10, HLG, SDR, and no
+  compatible base; an omitted zero with a true presence flag means no compatible
+  base, while a false flag does not authorize use of a legacy numeric value.
+  Profile 8 alone does not imply HDR10. The selected audio track's profile/title
+  retains declared Atmos/JOC and DTS:X hints without borrowing other tracks.
+  These facts reuse the detail response; no new media probes or card hydration
+  requests are added.
   Progress is read through the paged, library-scoped progress endpoint; Home's
   native next-up selections are corroborated before inclusion in a restricted
   library view. Versions use the original Silo file ID.
@@ -195,6 +203,33 @@ The native browse query has no watch-rollup expansion option. Consequently,
 cards without those values cannot show an accurate remaining-episode count.
 Supporting `user_data` on Silo's existing card responses would let this mapper
 consume the same rollup without additional client requests.
+
+## Search
+
+TV and mobile use the shared federated search through `MediaProvider.search`.
+Silo searches the native `/catalog` endpoint with `q`, scoped to each enabled
+video library and the authenticated server profile. Results preserve the server's
+order within each library, original content IDs, account/library attribution and
+episode relationships; duplicate content IDs appear once. Disabled Plozz
+libraries are not queried. Authentication and server failures remain errors,
+not empty successful searches.
+
+Catalog cursor sequences keep their initial page size (at most 200), including
+after a short nonterminal page. Silo binds `limit` into the cursor scope, so a
+smaller final request is invalid; the client trims the final results locally.
+Missing or repeated continuation cursors fail rather than looping.
+This contract was checked against the
+[native catalog handler](https://github.com/Silo-Server/silo-server/blob/9b77105e5870b0cdea8148b26194f026d275167d/internal/apiv2/catalog_items.go)
+and is covered by `SiloSearchTests.swift` in `ProviderSiloTests`.
+
+Opted-in manual search diagnostics distinguish library-listing, catalog and token
+refresh HTTP/decode failures. The bounded source record includes available,
+excluded and attempted library counts, page sizes, returned row counts,
+continuation presence and missing/repeated/empty-page failures. Library references
+are request-local ordinals, never server IDs; cursor values and queries are
+excluded. HTTP status, transport errors and allowlisted decoding fields survive
+in the report even if another provider makes the overall search appear successful.
+See [search diagnostic retention and consent](../FeatureSearch/README.md#diagnostic-submissions).
 
 ## Collections
 

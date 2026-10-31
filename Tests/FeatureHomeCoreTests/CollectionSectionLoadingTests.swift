@@ -31,9 +31,11 @@ final class CollectionSectionLoadingTests: XCTestCase {
             XCTAssertTrue(row.items.allSatisfy { $0.sourceAccountID == "account" })
             XCTAssertNil(row.failure)
             XCTAssertFalse(row.isLoading)
+            XCTAssertTrue(row.hasMore)
+            XCTAssertTrue(row.row.section.hasMore)
             let requests = await provider.requests
             XCTAssertEqual(requests.map(\.startIndex), [0, 2, 4])
-            XCTAssertEqual(requests.map(\.limit), [5, 3, 1])
+            XCTAssertEqual(requests.map(\.limit), [6, 4, 2])
             XCTAssertEqual(row.row.browseItem?.id, "collection")
             XCTAssertEqual(row.row.browseItem?.sourceAccountID, "account")
             XCTAssertEqual(row.row.collectionCardStyle, .featured)
@@ -99,6 +101,33 @@ final class CollectionSectionLoadingTests: XCTestCase {
         } else { XCTFail("Expected authored Featured row") }
         section.source = .init(accountID: "account", collectionID: "another", title: "Another", serverUserID: "viewer")
         XCTAssertTrue(HomePresentationRow.resolve(rows: [], content: content, visibility: visibility(section)).isEmpty)
+    }
+
+    func testServerCollectionCoversUseUniformAutoShapeAndPerRowOverrides() throws {
+        let definition = HomeServerRowDefinition(
+            accountID: "account", serverName: "Server", providerKind: .jellyfin,
+            section: .init(id: "recent-collections", kind: .recentlyAdded, title: "Movie Collections")
+        )
+        let covers = (0..<3).map {
+            MediaItem(id: "collection-\($0)", title: "Collection", kind: .collection, primaryImageAspectRatio: 16.0 / 9)
+        }
+        let content = HomeViewModel.Content(serverRows: [.init(definition: definition, items: covers)])
+        let visibility = HomeLibraryVisibility(rowCustomization: .init(
+            defaults: .custom, order: [definition.id], shown: [definition.id], serverRows: [definition]
+        ))
+        func row(_ settings: LibraryPresentationSettings) throws -> HomeLibrarySectionGroup.Row {
+            let entry = try XCTUnwrap(HomePresentationRow.resolve(
+                rows: [], content: content, visibility: visibility, presentation: settings
+            ).first)
+            guard case let .library(row) = entry.source else { throw AppError.invalidResponse }
+            return row
+        }
+        XCTAssertEqual(try row(.default).section.style, .landscape)
+        var settings = LibraryPresentationSettings.default
+        settings.collectionCoverLayouts[LibraryPresentationSettings.collectionCoverAddress(for: definition.id)] = .poster
+        XCTAssertEqual(try row(settings).section.style, .poster)
+        XCTAssertEqual(try row(settings).section.items, covers)
+        XCTAssertNil(try row(settings).browseItem)
     }
 
     @MainActor

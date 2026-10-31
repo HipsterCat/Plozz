@@ -100,7 +100,7 @@ private struct CrashReportingConsentChoices: View {
     }
 
     private var shareButton: some View {
-        Button("Share Diagnostics") { onChoice(true) }
+        Button { onChoice(true) } label: { Text(SettingsCopy.shareDiagnostics) }
             .fixedSize(horizontal: false, vertical: true)
             .plozzActionButton(role: .primary)
             .accessibilityIdentifier("diagnostics-consent-share")
@@ -123,13 +123,18 @@ private struct CrashReportingConsentFooter: View {
     var body: some View {
         VStack(spacing: 16) {
             VStack(spacing: 8) {
-                Text("Sent through Sentry. No logins, server addresses, or viewing history.")
-                Text("Change anytime in Settings > Help & Diagnostics.")
+                Text(SettingsCopy.automaticDiagnostics)
+                Text(SettingsCopy.automaticDiagnosticsExclusions)
+                Text("Sharing is optional. Change anytime in Settings > Help & Diagnostics.")
             }
             .font(.footnote)
             .plozzForeground(.secondary)
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
+
+            PrivacyPolicyLink()
+                .plozzActionButton(role: .secondary)
+                .controlSize(.small)
 
             Group {
                 #if os(tvOS)
@@ -176,7 +181,8 @@ private struct CrashReportingConsentRepositoryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    Text("Reports include technical error details, app and device information, and diagnostics such as timing and memory use. They are sent to the developer through Sentry only when reporting is enabled.")
+                    Text(SettingsCopy.automaticDiagnostics)
+                    Text(SettingsCopy.automaticDiagnosticsExclusions)
                     Text("Sharing is optional and does not change any app features. Sending recent activity logs is a separate action in Settings.")
                     Text("Scan to open the Plozz GitHub repo.")
                     SettingsQRCode(string: AppLinks.repository.absoluteString, correctionLevel: .low)

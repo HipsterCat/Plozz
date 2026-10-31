@@ -1,17 +1,18 @@
 import Foundation
 
 /// Only allowlisted response facts may enter a user-shared library report.
-public struct ResponseDecodingDiagnostic: Equatable, Sendable {
-    public enum Route: String, Sendable {
+public struct ResponseDecodingDiagnostic: Encodable, Equatable, Sendable {
+    public enum Route: String, Encodable, Sendable {
         case movieRecommendations, libraryHubs, other
         case collectionCandidates, collectionLibraryScope, collectionMembers
         case continueWatching, continueWatchingItems, continueWatchingHub, onDeck
         case resumeItems, nextUp
-        case itemDetail, playbackInventory, serverDiscovery
+        case itemDetail, playbackInventory, serverDiscovery, serverAuthentication
+        case search, searchLibraries, searchCatalog, searchAuthentication
     }
-    public enum Payload: String, Sendable { case empty, object, array, scalar, nonJSON }
-    public enum Reason: String, Sendable { case missingKey, wrongType, nullValue, corruptedData, other }
-    public enum ValueType: String, Sendable { case string, integer, number, boolean, array, object, other }
+    public enum Payload: String, Encodable, Sendable { case empty, object, array, scalar, nonJSON }
+    public enum Reason: String, Encodable, Sendable { case missingKey, wrongType, nullValue, corruptedData, other }
+    public enum ValueType: String, Encodable, Sendable { case string, integer, number, boolean, array, object, other }
 
     public let route: Route
     public let httpStatus: Int
@@ -59,7 +60,8 @@ public struct ResponseDecodingDiagnostic: Equatable, Sendable {
             "ErrorCode", "PlaySessionId", "Container", "Protocol", "Path", "IsRemote", "Bitrate",
             "SupportsDirectPlay", "SupportsDirectStream", "SupportsTranscoding",
             "Index", "Codec", "Language", "Width", "Height", "Channels", "SampleRate",
-            "Media", "Part", "Stream"
+            "Media", "Part", "Stream",
+            "items", "content_id", "total", "total_exact", "window_cursor", "page", "has_more", "next_cursor"
         ]
         path = keys.isEmpty ? "<root>" : keys.prefix(24).map {
             if let index = $0.intValue, $0.stringValue == "Index \(index)" { return "[\(index)]" }
@@ -79,12 +81,12 @@ public struct ResponseDecodingDiagnostic: Equatable, Sendable {
     }
 }
 
-public struct LibraryPagingDiagnostic: Equatable, Sendable {
-    public enum Stage: String, Sendable {
+public struct LibraryPagingDiagnostic: Encodable, Equatable, Sendable {
+    public enum Stage: String, Encodable, Sendable {
         case collectionCandidates, libraryScope, collectionMembers
         case continueWatchingItems, continueWatchingHub, onDeck
     }
-    public enum Reason: String, Sendable {
+    public enum Reason: String, Encodable, Sendable {
         case negativeTotal, emptyID, duplicateInPage, emptyBeforeTotal, nonAdvancing, nonPrefixOverlap
         case unexpectedItemType, itemsPastEnd
         case changedTotal, sizeMismatch, offsetMismatch, repeatedItem, contradictoryMore
@@ -104,17 +106,22 @@ public struct LibraryPagingDiagnostic: Equatable, Sendable {
     }
 }
 
-public struct ResponseTransportDiagnostic: Equatable, Sendable {
+public struct ResponseTransportDiagnostic: Encodable, Equatable, Sendable {
     public let route: ResponseDecodingDiagnostic.Route
     public let urlErrorCode: Int
+    public let underlying: [PlaybackFailureEvidence.ErrorCode]
 
-    public init(route: ResponseDecodingDiagnostic.Route, urlErrorCode: Int) {
+    public init(
+        route: ResponseDecodingDiagnostic.Route, urlErrorCode: Int,
+        underlying: [PlaybackFailureEvidence.ErrorCode] = []
+    ) {
         self.route = route
         self.urlErrorCode = urlErrorCode
+        self.underlying = Array(underlying.prefix(7).filter(\.isValid))
     }
 }
 
-public struct ResponseStatusDiagnostic: Equatable, Sendable {
+public struct ResponseStatusDiagnostic: Encodable, Equatable, Sendable {
     public let route: ResponseDecodingDiagnostic.Route
     public let httpStatus: Int
 
@@ -124,7 +131,7 @@ public struct ResponseStatusDiagnostic: Equatable, Sendable {
     }
 }
 
-public struct ResponseRequestDiagnostic: Equatable, Sendable {
+public struct ResponseRequestDiagnostic: Encodable, Equatable, Sendable {
     public let route: ResponseDecodingDiagnostic.Route
     public let method: String
     public let elapsedMilliseconds: Int
@@ -152,8 +159,8 @@ public struct ResponseRequestDiagnostic: Equatable, Sendable {
     }
 }
 
-public struct ResponseValidationDiagnostic: Equatable, Sendable {
-    public enum Reason: String, Sendable {
+public struct ResponseValidationDiagnostic: Encodable, Equatable, Sendable {
+    public enum Reason: String, Encodable, Sendable {
         case emptySources, missingSourceID, blankSourceID, duplicateSourceID, unavailablePlaceholder
         case serverRejected, missingMetadata
         case itemIDMismatch, itemKindMismatch, accountMismatch
@@ -171,8 +178,8 @@ public struct ResponseValidationDiagnostic: Equatable, Sendable {
 }
 
 public struct LibraryLoadDiagnostic: Equatable, Sendable {
-    public enum Operation: String, Sendable { case libraryRecommendations, libraryBrowse, homeContinueWatching }
-    public enum Section: String, Sendable {
+    public enum Operation: String, Encodable, Sendable { case libraryRecommendations, libraryBrowse, homeContinueWatching }
+    public enum Section: String, Encodable, Sendable {
         case continueWatching, recommendations, recentlyAdded
         case browse, collections, playlists, collectionMembers, playlistMembers
 

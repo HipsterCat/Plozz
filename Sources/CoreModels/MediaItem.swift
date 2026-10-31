@@ -190,6 +190,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// Stable Plozz identity used only for durable Watchlist presentation/focus.
     /// Provider addressing continues to use `id` and `sources`.
     public var watchlistAliasID: MediaAliasID?
+    /// When this title was added to Watchlist, not to a provider's library.
+    public var watchlistAddedAt: Date?
     /// Provider-owned folder route for inspecting this title's original files.
     /// Addressed on `sourceAccountID`, independently of playback source selection.
     public var fileBrowserContainerID: String?
@@ -214,6 +216,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public var originalTitle: String?
     public var kind: MediaItemKind
     public var overview: String?
+    /// Authenticated parent-series text for Home heroes, never an episode synopsis.
+    public var seriesSynopsis: MediaSeriesSynopsis?
 
     /// Series title for an episode, etc.
     public var parentTitle: String?
@@ -294,6 +298,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
 
     /// Primary (poster) artwork.
     public var posterURL: URL?
+    /// Width / height of the selected primary cover, not of its backdrop or video.
+    public var primaryImageAspectRatio: Double?
     /// The owning series' vertical poster, for episodes. Lets episode cards shown
     /// in a poster grid (Home "Recently Added", library) display the show poster
     /// instead of the episode's own 16:9 still. `nil` for non-episodes.
@@ -522,6 +528,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         originalTitle: String? = nil,
         kind: MediaItemKind,
         watchlistAliasID: MediaAliasID? = nil,
+        watchlistAddedAt: Date? = nil,
         fileBrowserContainerID: String? = nil,
         overview: String? = nil,
         parentTitle: String? = nil,
@@ -547,6 +554,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         isPlayed: Bool = false,
         hasBeenPlayed: Bool? = nil,
         posterURL: URL? = nil,
+        primaryImageAspectRatio: Double? = nil,
         seriesPosterURL: URL? = nil,
         backdropURL: URL? = nil,
         heroBackdropURL: URL? = nil,
@@ -590,6 +598,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.showsScheduledReleaseTime = showsScheduledReleaseTime
         self.id = id
         self.watchlistAliasID = watchlistAliasID
+        self.watchlistAddedAt = watchlistAddedAt
         self.fileBrowserContainerID = fileBrowserContainerID
         self.title = title
         self.originalTitle = originalTitle
@@ -619,6 +628,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.isPlayed = isPlayed
         self.hasBeenPlayed = hasBeenPlayed ?? isPlayed
         self.posterURL = posterURL
+        self.primaryImageAspectRatio = primaryImageAspectRatio
         self.seriesPosterURL = seriesPosterURL
         self.backdropURL = backdropURL
         self.heroBackdropURL = heroBackdropURL
@@ -671,13 +681,14 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// in sync with the custom `init(from:)` below.
     private enum CodingKeys: String, CodingKey {
         case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber, episodeNumberEnd, episodeOrdering
+        case watchlistAddedAt
         case fileBrowserContainerID, artworkLookupSubject
-        case originalTitle
+        case originalTitle, seriesSynopsis
         case productionYear, releaseDate, officialRating, genres, people, studios, tags, taglines
         case librarySortValues
         case familyGuidance
         case seriesID, seasonID, runtime, resumePosition, playedPercentage, unwatchedEpisodeCount, isPlayed, hasBeenPlayed
-        case posterURL, seriesPosterURL, backdropURL, heroBackdropURL
+        case posterURL, primaryImageAspectRatio, seriesPosterURL, backdropURL, heroBackdropURL
         case fallbackArtworkURL, logoURL, ratings, providerIDs, metadataProvenance
         case usesProviderRatings
         case discoverySources
@@ -702,6 +713,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
             MediaAliasID.self,
             forKey: .watchlistAliasID
         )
+        watchlistAddedAt = try container.decodeIfPresent(Date.self, forKey: .watchlistAddedAt)
         fileBrowserContainerID = try container.decodeIfPresent(
             String.self,
             forKey: .fileBrowserContainerID
@@ -710,6 +722,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         originalTitle = try container.decodeIfPresent(String.self, forKey: .originalTitle)
         kind = try container.decode(MediaItemKind.self, forKey: .kind)
         overview = try container.decodeIfPresent(String.self, forKey: .overview)
+        seriesSynopsis = try container.decodeIfPresent(MediaSeriesSynopsis.self, forKey: .seriesSynopsis)
         parentTitle = try container.decodeIfPresent(String.self, forKey: .parentTitle)
         seasonNumber = try container.decodeIfPresent(Int.self, forKey: .seasonNumber)
         episodeNumber = try container.decodeIfPresent(Int.self, forKey: .episodeNumber)
@@ -735,6 +748,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         isPlayed = try container.decodeIfPresent(Bool.self, forKey: .isPlayed) ?? false
         hasBeenPlayed = try container.decodeIfPresent(Bool.self, forKey: .hasBeenPlayed) ?? isPlayed
         posterURL = try container.decodeIfPresent(URL.self, forKey: .posterURL)
+        primaryImageAspectRatio = try container.decodeIfPresent(Double.self, forKey: .primaryImageAspectRatio)
         seriesPosterURL = try container.decodeIfPresent(URL.self, forKey: .seriesPosterURL)
         backdropURL = try container.decodeIfPresent(URL.self, forKey: .backdropURL)
         heroBackdropURL = try container.decodeIfPresent(URL.self, forKey: .heroBackdropURL)

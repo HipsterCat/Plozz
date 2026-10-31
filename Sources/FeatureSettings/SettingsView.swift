@@ -414,6 +414,7 @@ public struct SettingsView: View {
                 .padding(.bottom, SettingsFormMetrics.pageBottomInset)
             }
             .scrollClipDisabled()
+            .scrollsTopNavigation(onReturnToTop: { navigation.select(.playback) })
         } detail: { route in
             destination(for: route)
         }
@@ -900,6 +901,8 @@ public struct SettingsView: View {
                 librariesScope: context.librariesScope, settingsNavigation: navigation,
                 theme: theme, nightShift: nightShift, spoilers: spoilers, section: .screensNavigation
             )
+        case .allScreens:
+            AllScreensDetailView(spoilers: spoilers)
         case .about:
             ScrollView {
                 VStack(alignment: .leading, spacing: SettingsFormMetrics.controlSpacing) {
@@ -1063,7 +1066,8 @@ public struct SettingsView: View {
             )
         case .recentActivity:
             RecentActivityDetailView(
-                canSendDiagnostics: crashReportingConfigured && crashReporting.isEnabled
+                crashReporting: crashReporting,
+                crashReportingConfigured: crashReportingConfigured
             )
         case let .plexUser(accountID):
             PlexLinkedUserDetailView(scope: context.librariesScope, accountID: accountID)

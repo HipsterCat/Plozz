@@ -116,6 +116,45 @@ final class PlozziOSAppModel {
     }
 
     let accountsProviders: AccountsProvidersModel
+    private let navigationLibraryDiscovery = NavigationLibraryDiscovery()
+
+    var navigationLibrariesScopeKey: String {
+        let credentials = accounts.map(\.connectionScopeKey).sorted().joined(separator: "|")
+        let active = accountsProviders.activeAccountIDs.sorted().joined(separator: ",")
+        return "\(profiles.activeProfileID)#\(credentials)#\(active)#\(plexHomeUsers.plexIdentityGeneration)"
+    }
+
+    var visibleNavigationLibraries: [AggregatedLibrary] {
+        let accountIDs = Set(accountsProviders.navigationAccounts.map(\.id))
+        return NavigationRailPlan.browsableLibraries(settings.navigation.contentLibraries).filter {
+            accountIDs.contains($0.accountID)
+                && settings.homeVisibility.isEnabled($0.key)
+                && !$0.isRetiredCollectionShortcut
+        }
+    }
+
+    @discardableResult
+    func refreshNavigationLibraries() async -> Bool {
+        let scope = navigationLibrariesScopeKey
+        let currentSettings = settings
+        let accountIDs = Set(accountsProviders.navigationAccounts.map(\.id))
+        let request = currentSettings.discoveredLibraries.beginRefresh(accountIDs: accountIDs)
+        defer { currentSettings.discoveredLibraries.cancelRefresh(request) }
+        guard let discovered = await navigationLibraryDiscovery.refresh(
+            from: accountsProviders.homeAccounts,
+            expectedAccountIDs: accountIDs,
+            navigation: currentSettings.navigation,
+            isCurrent: { self.settings === currentSettings && self.navigationLibrariesScopeKey == scope }
+        ) else { return false }
+        currentSettings.discoveredLibraries.finishRefresh(
+            with: discovered.libraries,
+            unreachableAccountIDs: discovered.unreachableAccountIDs,
+            failures: discovered.failures,
+            request: request
+        )
+        return true
+    }
+
     let profiles: ProfilesModel
     @ObservationIgnored
     private(set) lazy var familyGuidance = FamilyGuidanceService(
@@ -467,6 +506,9 @@ final class PlozziOSAppModel {
                     item: item
                 )
             },
+            watchlistProviderChange: { [unowned self] accountID in
+                self.watchlistProviderChange(for: accountID)
+            },
             resolveDurableWatchlist: { [unowned self] items in
                 self.resolvedUniversalWatchlistItems(candidates: items)
             },
@@ -792,6 +834,10 @@ final class PlozziOSAppModel {
         accountsProviders.credentialRevision = { [weak self] account in
             self?.plexHomeUsers.effectiveCredentialRevision(for: account)
                 ?? account.credentialRevision
+        }
+        accountsProviders.cloudTokenResolver = { [weak self] account, revision in
+            guard let self else { throw CancellationError() }
+            return try await self.plexHomeUsers.resolveCloudToken(for: account, expectedRevision: revision)
         }
         authenticatedHTTPResolver.configure { [weak accountsProviders] locator in
             guard let accountsProviders,
@@ -1245,6 +1291,7 @@ final class PlozziOSAppModel {
     }
 
     var plexPINRequestForAppPresentation: PlexHomeUsersModel.PlexPINRequest? {
+        guard plexHomeUsers.pendingPlexUserSelection == nil, pendingLibrarySelection == nil else { return nil }
         let request = plexHomeUsers.pendingPlexPINRequest
         return request == inlinePlexPINRequest ? nil : request
     }
@@ -1298,7 +1345,9 @@ final class PlozziOSAppModel {
         // `.launch`, so the cover was asked for from the root while Settings was
         // still up — and silently never appeared. Exactly what the origin split
         // exists to prevent.
-        guard profileOnboardingStep == nil, profileOnboardingID == nil else { return }
+        guard profileOnboardingStep == nil, profileOnboardingID == nil,
+              pendingFirstRunStep == nil, plexHomeUsers.pendingPlexUserSelection == nil,
+              pendingLibrarySelection == nil else { return }
         guard profiles.activeProfile.needsSetup else { return }
         profileOnboardingID = profiles.activeProfileID
         profileOnboardingStep = .libraries
@@ -1469,7 +1518,20 @@ final class PlozziOSAppModel {
     /// The lock rides the synced profile record, so a profile locked on the Apple
     /// TV arrives here locked too; without this gate it would open with one tap
     /// and the lock would be worthless.
+    @ObservationIgnored
+    private var plexOnboardingSelection: (id: String, onActivated: @MainActor () -> Void)?
+
+    func selectProfileForPlexOnboarding(_ id: String, onActivated: @escaping @MainActor () -> Void) {
+        plexOnboardingSelection = (id, onActivated)
+        requestProfileSelection(id)
+    }
+
     func selectProfile(_ id: String) {
+        plexOnboardingSelection = nil
+        requestProfileSelection(id)
+    }
+
+    private func requestProfileSelection(_ id: String) {
         guard let target = profiles.profiles.first(where: { $0.id == id }) else {
             performSelectProfile(id)
             return
@@ -1516,6 +1578,7 @@ final class PlozziOSAppModel {
 
     /// Abandons a held switch, leaving the child where they were.
     func cancelParentalSwitch() {
+        plexOnboardingSelection = nil
         // Deliberately does NOT clear `parentalFallThrough`: cancelling a switch
         // the child never asked for must not hand them the profile they were
         // dropped into.
@@ -1549,6 +1612,7 @@ final class PlozziOSAppModel {
 
     /// Abandons a pending unlock, leaving the active profile untouched.
     func cancelProfileLockPrompt() {
+        plexOnboardingSelection = nil
         gate.lockedSwitch = nil
     }
 
@@ -1630,6 +1694,8 @@ final class PlozziOSAppModel {
     }
 
     func performSelectProfile(_ id: String, unlocking lock: ProfileLock? = nil) {
+        let onboarding = plexOnboardingSelection?.id == id ? plexOnboardingSelection : nil
+        plexOnboardingSelection = nil
         universalWatchlistRetryScheduler = nil
         profiles.select(id)
         // `select` NO-OPS for an id this device doesn't have — a peer can delete
@@ -1639,6 +1705,10 @@ final class PlozziOSAppModel {
         // profile the gate exists to withhold, so everything below is conditional
         // on the switch having actually landed.
         guard profiles.activeProfileID == id else { return }
+        if onboarding != nil, profileOnboardingID != nil {
+            profileOnboardingID = profiles.activeProfile.needsSetup ? id : nil
+            profileOnboardingStep = profiles.activeProfile.needsSetup ? .libraries : nil
+        }
         if let lock, profiles.activeProfile.lock == lock { profiles.noteProfileUnlocked(id) }
         TouchFeedback.shared.invalidatePendingConfirmations()
         plexHomeUsers.beginExplicitProfileActivation()
@@ -1659,11 +1729,14 @@ final class PlozziOSAppModel {
         // rather than leaving it permanently unable to import. Deferred by a
         // runloop turn for the same reason creation is: this can run from inside
         // a sheet that has to close first.
-        Task { @MainActor in
-            await Task.yield()
-            resumeProfileOnboardingIfNeeded()
+        if onboarding == nil {
+            Task { @MainActor in
+                await Task.yield()
+                resumeProfileOnboardingIfNeeded()
+            }
         }
-        refreshActiveProfileConfiguration()
+        refreshActiveProfileConfiguration(deferPlexIdentity: onboarding != nil && lock?.matchesPlexPIN != true)
+        onboarding?.onActivated()
     }
 
     func refreshActiveProfileSettings() {
@@ -1683,10 +1756,14 @@ final class PlozziOSAppModel {
     /// Reapply settings and reconcile sources without granting a new profile
     /// activation or discarding an unchanged Plex authentication in progress.
     func refreshActiveProfileConfiguration() {
+        refreshActiveProfileConfiguration(deferPlexIdentity: false)
+    }
+
+    private func refreshActiveProfileConfiguration(deferPlexIdentity: Bool) {
         refreshActiveProfileSettings()
         transitionDownloads(to: profiles.activeProfileID)
         reloadAccountsAndCrashContext()
-        plexHomeUsers.ensurePlexIdentityForActiveProfile()
+        if !deferPlexIdentity { plexHomeUsers.ensurePlexIdentityForActiveProfile() }
         identityIndex.reset()
         identityIndex.warmIdentityIndex()
         drainWatchOutbox()
@@ -2711,25 +2788,26 @@ final class PlozziOSAppModel {
         self.pendingAdditionalUser = nil
     }
 
-    func selectPlexUserDuringOnboarding(_ user: PlexHomeUser) {
+    func selectPlexUserDuringOnboarding(_ user: PlexHomeUser, addAllProfiles: Bool) {
         guard let pending = plexHomeUsers.pendingPlexUserSelection else { return }
-        let binding = PlexHomeUserBinding(
-            homeUserID: user.id,
-            name: user.name,
-            avatarURL: user.avatarURL?.absoluteString,
-            requiresPIN: user.requiresPIN,
-            pinRequirementVerified: user.pinRequirementVerified
-        )
-        var profile = profiles.activeProfile
-        for accountID in pending.applyToAccountIDs {
-            profile = profile.settingHomeUserBinding(
-                binding,
-                forPlexAccount: accountID
-            )
+        guard plexHomeUsers.selectOnboardingUser(user, addAllProfiles: addAllProfiles) else { return }
+        if addAllProfiles, let profileID = plexHomeUsers.importedOnboardingProfileID(for: user) {
+            selectProfileForPlexOnboarding(profileID) { [weak self] in
+                self?.finishPlexUserOnboarding(user, pending: pending, imported: true)
+            }
+            return
         }
+        finishPlexUserOnboarding(user, pending: pending, imported: false)
+    }
 
-        profiles.update(profile)
-        if pending.isFirstRun {
+    func importPlexHomeProfilesDuringOnboarding() -> PlexHomeProfileImportResult {
+        plexHomeUsers.importOnboardingProfiles()
+    }
+
+    private func finishPlexUserOnboarding(
+        _ user: PlexHomeUser, pending: PlexHomeUsersModel.PendingPlexUserSelection, imported: Bool
+    ) {
+        if pending.isFirstRun && !imported {
             profiles.seedDefaultProfileIdentity(
                 name: user.name,
                 avatarImageURL: user.avatarURL?.absoluteString
@@ -2737,6 +2815,12 @@ final class PlozziOSAppModel {
         }
         appliesPlexIdentityAfterLibrarySelection = true
         plexHomeUsers.clearUserSelection()
+        if imported, !pending.isFirstRun, profiles.activeProfile.needsSetup {
+            appliesPlexIdentityAfterLibrarySelection = false
+            resumeProfileOnboardingIfNeeded()
+            plexHomeUsers.ensurePlexIdentityForActiveProfile()
+            return
+        }
         scheduleLibrarySelection(
             accountIDs: pending.applyToAccountIDs,
             beginsFirstRun: pending.isFirstRun
@@ -2785,6 +2869,7 @@ final class PlozziOSAppModel {
     }
 
     func completeLibrarySelection() {
+        guard plexHomeUsers.pendingPlexPINRequest == nil else { return }
         pendingLibrarySelection = nil
         if beginsFirstRunAfterLibrarySelection {
             beginsFirstRunAfterLibrarySelection = false
@@ -3059,6 +3144,7 @@ final class PlozziOSAppModel {
         }
         pendingLibrarySelection = PendingLibrarySelection(accountIDs: available)
         if beginsFirstRunAfterLibrarySelection { pendingFirstRunStep = .libraries }
+        plexHomeUsers.ensurePlexIdentityForActiveProfile()
     }
 
     private func preparePostShareOnboarding(

@@ -66,6 +66,8 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: App/Plozz
+      - path: App/Privacy/tvOS/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: App/Resources/Assets.xcassets
       - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/Fonts
@@ -306,6 +308,8 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: TopShelf/ContentProvider.swift
+      - path: TopShelf/PrivacyInfo.xcprivacy
+        buildPhase: resources
       # The snapshot model + store are compiled into the extension directly so
       # it stays free of CoreModels and the rest of the app's stack.
       - path: Sources/TopShelfKit/TopShelfSnapshot.swift
@@ -333,6 +337,8 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: App/PlozziOS
+      - path: App/Privacy/iOS/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/Fonts
       # Same shared catalog as the tvOS target — see the note there.
@@ -474,6 +480,7 @@ targets:
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchFixture.swift
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
+      - path: Tests/AuthPresentationSupport/PlexHomeOnboardingFixture.swift
       - path: Tests/FeatureLiveTVRemoteTests/NavigationRailFixture.swift
       - path: App/Resources/Assets.xcassets
       - path: App/Resources/CommunityAssets.xcassets
@@ -513,9 +520,14 @@ targets:
       - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
       - path: Tests/SubtitlePresentationSupport/Fixtures/four-three.mp4
         buildPhase: resources
+      - path: Tests/SubtitlePresentationSupport/Fixtures/live-continuity.mp4
+        buildPhase: resources
+      - path: Tests/SubtitlePresentationSupport/Fixtures/live-continuity-dim.mp4
+        buildPhase: resources
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: App/Resources/Localizable.xcstrings
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
+      - path: Tests/AuthPresentationSupport/PlexHomeOnboardingFixture.swift
       - path: App/PlozziOS/Assets.xcassets
       - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/ReleaseNotes.json
@@ -557,8 +569,12 @@ targets:
     platform: iOS
     sources:
       - path: Tests/iOSPresentationTests
+      - path: Tests/EnginePlozzigenTests/SpatialAudioLayoutPreferenceTests.swift
+      - path: Tests/FeaturePlaybackTests/NativePlaybackLifecycleTests.swift
+      - path: Tests/FeatureLiveTVCoreTests/LiveTVPlaybackCoordinatorTests.swift
       - path: Tests/FeatureLiveTVTests/LiveTVGuideRowLayoutTests.swift
       - path: Tests/CoreModelsTests/SettingsHydrationTests.swift
+      - path: Tests/CoreModelsTests/ResumeRewindSettingsTests.swift
       - path: Tests/CoreModelsTests/ProfileLockPresentationTests.swift
       - path: Tests/FeaturePlaybackTests/SubtitleOverlayGeometryTests.swift
       - path: Tests/FocusIntegrationTests/LiveTVSourcesRuntimeHostedTests.swift
@@ -580,6 +596,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.PresentationTests
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
+        # Spatial layout tests call the dynamic engine directly, not only through the app umbrella.
+        OTHER_LDFLAGS: "$(inherited) -framework AetherEngine"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PlozziOSPresentationHost.app/PlozziOSPresentationHost"
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
@@ -596,6 +614,7 @@ targets:
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchInteractionTests.swift
       - path: Tests/HomeRemoteTests/ServerAddressNavigationInteractionTests.swift
+      - path: Tests/HomeRemoteTests/PlexHomeOnboardingInteractionTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.InteractionTests

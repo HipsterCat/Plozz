@@ -36,6 +36,34 @@ HOME_HOST_FITTING_COUNTERS = [
     "hostFittingMaxNanoseconds", "hostFittingReentrantCalls",
 ]
 SCENARIOS = {
+    "server-ratings-critical-path": {
+        "suite": "network", "target": "ProviderJellyfinTests",
+        "test": "ServerRatingsLatencyTests/testPerformanceRequiredItemAndPlayback",
+        "file": "Tests/ProviderJellyfinTests/ServerRatingsLatencyTests.swift",
+        "description": "Load four item details and playback inventories with a 150-ms optional server-rating cache endpoint.",
+        "counters": ["items", "playbackItems", "nativeRequests", "playbackRequests", "cacheRequests"],
+    },
+    "mobile-video-glow-hd": {
+        "suite": "ui", "platforms": ["iOS"],
+        "test": "LiveTVPreviewPresentationTests/testPerformanceHDVideoGlow",
+        "file": "Tests/iOSPresentationTests/LiveTVPreviewPresentationTests.swift",
+        "description": "Play 1080p30 synthetic video with light preview color sampling; require advancing playback and bounded completed samples.",
+        "counters": ["players", "visiblePreviews", "windowMilliseconds"],
+    },
+    "mobile-video-glow-hd-disabled": {
+        "suite": "ui", "platforms": ["iOS"],
+        "test": "LiveTVPreviewPresentationTests/testPerformanceHDVideoWithoutGlow",
+        "file": "Tests/iOSPresentationTests/LiveTVPreviewPresentationTests.swift",
+        "description": "Play the same 1080p30 fixture without glow as the sampling-cost control.",
+        "counters": ["players", "visiblePreviews", "windowMilliseconds"],
+    },
+    "mobile-video-glow": {
+        "suite": "ui", "platforms": ["iOS"],
+        "test": "LiveTVPreviewPresentationTests/testPerformanceLightVideoPreview",
+        "file": "Tests/iOSPresentationTests/LiveTVPreviewPresentationTests.swift",
+        "description": "Play the native synthetic video in a visible light-mode preview with surrounding glow over 2.3-second windows; require advancing playback and one retained surface.",
+        "counters": ["players", "visiblePreviews", "windowMilliseconds"],
+    },
     "live-tv-schedule-capture": {
         "suite": "core", "target": "AppRuntimeTests",
         "test": "LiveTVPortableCapturePerformanceTests/testPerformanceDefinitionOnlyCaptures",
@@ -746,7 +774,9 @@ class Lane:
         bundle_id = "com.thatcube.Plozz.FocusHost"
         workload = getattr(self.args, "workload", "home-navigation")
         test = (
-            "DetailReturnFocusRemoteTests/testProfilePopulatedShowcaseDetailReturns"
+            "LargeNativeNavigationRemoteTests/testProfileRapidHorizontalNavigation"
+            if workload == "horizontal-navigation"
+            else "DetailReturnFocusRemoteTests/testProfilePopulatedShowcaseDetailReturns"
             if workload == "detail-return"
             else "ProductionHomeNavigationTests/testNavigateProductionHomeWithNativeCards"
         )
@@ -786,9 +816,14 @@ class Lane:
                          "--home-artwork-cache-namespace=" + self.output.name]
             if workload == "detail-return":
                 arguments = [
-                    "--production-home-fixture", "--native-top-home", "--return-focus-trace",
+                    "--production-home-fixture", "--top-bar-home", "--return-focus-trace",
                     "--immersive-home", "--progressive-library-rows", "--populated-home-return",
                     "--distinct-home-artwork", "--home-artwork-cache-namespace=" + self.output.name,
+                ]
+            elif workload == "horizontal-navigation":
+                arguments = [
+                    "--large-native-navigation-fixture", "--real-library-pages",
+                    "--trace-tab-transitions",
                 ]
             _, launch = self.command("fixture-launch", ["xcrun", "simctl", "launch", self.args.sim_id, bundle_id, *arguments])
             launched = True
@@ -987,7 +1022,7 @@ def main(argv=None):
     profile.add_argument("--sim-id", required=True)
     profile.add_argument("--timeout", type=int, default=2400)
     profile.add_argument("--template", choices=("Time Profiler", "SwiftUI", "Process Sample"), default="Process Sample")
-    profile.add_argument("--workload", choices=("home-navigation", "detail-return"), default="home-navigation")
+    profile.add_argument("--workload", choices=("home-navigation", "detail-return", "horizontal-navigation"), default="home-navigation")
     comparison = commands.add_parser("compare", help="Compare saved runs; never updates a baseline.")
     comparison.add_argument("baseline", type=Path)
     comparison.add_argument("candidate", type=Path)

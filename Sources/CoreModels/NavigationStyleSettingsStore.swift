@@ -13,17 +13,12 @@ public protocol NavigationStyleSettingsStoring: Sendable {
     func save(_ style: NavigationStyle)
     func loadPreventsAccidentalExit() -> Bool
     func savePreventsAccidentalExit(_ preventsExit: Bool)
-    func loadDetailZoomEnabled() -> Bool
-    func saveDetailZoomEnabled(_ enabled: Bool)
 }
 
 public final class NavigationStyleSettingsStore: NavigationStyleSettingsStoring, @unchecked Sendable {
-    public static let detailZoomStorageKey = "detailZoomEnabled"
-
     private let defaults: UserDefaults
     private let styleKey: String
     private let preventsAccidentalExitKey: String
-    private let detailZoomKey: String
 
     /// - Parameter namespace: per-profile scope. `nil` (the default/primary
     ///   profile) uses the legacy un-suffixed key (`NavigationStyle.storageKey`);
@@ -35,7 +30,6 @@ public final class NavigationStyleSettingsStore: NavigationStyleSettingsStoring,
             "preventsAccidentalExit",
             namespace: namespace
         )
-        self.detailZoomKey = SettingsKey.scoped(Self.detailZoomStorageKey, namespace: namespace)
     }
 
     public func load() -> NavigationStyle {
@@ -56,14 +50,6 @@ public final class NavigationStyleSettingsStore: NavigationStyleSettingsStoring,
 
     public func savePreventsAccidentalExit(_ preventsExit: Bool) {
         defaults.set(preventsExit, forKey: preventsAccidentalExitKey)
-    }
-
-    public func loadDetailZoomEnabled() -> Bool {
-        defaults.bool(forKey: detailZoomKey)
-    }
-
-    public func saveDetailZoomEnabled(_ enabled: Bool) {
-        defaults.set(enabled, forKey: detailZoomKey)
     }
 }
 
@@ -88,11 +74,6 @@ public final class NavigationStyleSettingsModel {
         didSet { store.savePreventsAccidentalExit(preventsAccidentalExit) }
     }
 
-    /// Opt-in tvOS title zoom. Native page transitions are the default.
-    public var detailZoomEnabled: Bool {
-        didSet { store.saveDetailZoomEnabled(detailZoomEnabled) }
-    }
-
     /// Which optional destinations and libraries navigation shows, plus the library
     /// order. Persisted regardless of style so switching chrome never loses it.
     public private(set) var libraryLayout: NavigationLibraryLayout
@@ -105,6 +86,11 @@ public final class NavigationStyleSettingsModel {
 
     public var resolvedLibraryLayout: NavigationLibraryLayout {
         libraryLayout.resolvingAutomaticVisibility(hidden: automaticallyHiddenKeys)
+    }
+
+    /// Ordering hints for library cards outside navigation; their visibility remains independent.
+    public var libraryOrderingKeys: [String] {
+        libraryLayout.order + contentLibraries.map(\.key)
     }
 
     public var showsWatchlist: Bool {
@@ -130,7 +116,6 @@ public final class NavigationStyleSettingsModel {
         self.layoutStore = layoutStore
         self.style = store.load()
         self.preventsAccidentalExit = store.loadPreventsAccidentalExit()
-        self.detailZoomEnabled = store.loadDetailZoomEnabled()
         self.libraryLayout = layoutStore.load()
         self.librariesSnapshotStore = librariesSnapshotStore
         let libraries = librariesSnapshotStore?.load() ?? []
@@ -144,13 +129,15 @@ public final class NavigationStyleSettingsModel {
         unreachableAccountIDs: Set<String>,
         failures: [String: AppError] = [:]
     ) {
-        contentLibraries = NavigationContentAvailability.reconcileLibraries(
+        let libraries = NavigationContentAvailability.reconcileLibraries(
             discovered: discovered,
             unreachableAccountIDs: unreachableAccountIDs,
             remembered: contentLibraries
         ).filter { accountIDs.contains($0.accountID) }
-        discoveredAccountIDs.formIntersection(accountIDs)
-        discoveredAccountIDs.formUnion(accountIDs.subtracting(unreachableAccountIDs))
+        if contentLibraries != libraries { contentLibraries = libraries }
+        let discoveredIDs = discoveredAccountIDs.intersection(accountIDs)
+            .union(accountIDs.subtracting(unreachableAccountIDs))
+        if discoveredAccountIDs != discoveredIDs { discoveredAccountIDs = discoveredIDs }
         let offline = unreachableAccountIDs.intersection(accountIDs).filter {
             failures[$0] == nil || failures[$0] == .serverUnreachable
         }
@@ -162,7 +149,7 @@ public final class NavigationStyleSettingsModel {
         #if os(iOS)
         []
         #else
-        [NavigationLibraryLayout.settingsKey]
+        style == .tabBar ? [] : [NavigationLibraryLayout.settingsKey]
         #endif
     }
 
@@ -186,6 +173,14 @@ public final class NavigationStyleSettingsModel {
             sections, available: available, requiredEnabled: requiredNavigationKeys,
             automaticallyHiddenKeys: automaticallyHiddenKeys.union(additionalHiddenKeys)
         )
+        guard next != libraryLayout else { return }
+        libraryLayout = next
+        layoutStore.save(next)
+    }
+
+    public func recordNavigationMove(of key: String) {
+        var next = libraryLayout
+        next.recordMove(of: key)
         guard next != libraryLayout else { return }
         libraryLayout = next
         layoutStore.save(next)

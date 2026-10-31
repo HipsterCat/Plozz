@@ -10,10 +10,16 @@ language every other module speaks.
 - The dual-provider abstraction: `MediaProvider` protocol, `ProviderKind`,
   `ProviderRegistry` / `ProviderResolving`, `ResolvedAccount`.
 - Cross-cutting UI state: `LoadState`, `AppError`.
+- `ThemeMusicVolume` persists a bounded 0–1 gain per profile. Legacy named levels
+  decode to their original gain; only the old `"off"` token triggers the paired
+  background-mode migration, not a new numeric zero.
 - `PlaybackReadAhead` and `LivePlaybackBuffer` are independent device-local
   network/storage preferences, not profile settings. Both default to Automatic
   and are excluded from profile transfer. `EngineSessionCache` carries active
   temporary-cache usage and the engine's effective playback-safe budget.
+- `LosslessAudioSettingsStore` defaults on and remains device-local across
+  profile changes and transfers. The audio bridge reads it for each new load;
+  missing source-channel metadata does not downgrade the chosen output mode.
 - `PlaybackDiagnosticReport` supplies privacy-safe failure Details for on-demand
   playback, Live TV and IPTV setup. Preserve typed reasons and numeric causes,
   distinguish preparation/opening/playback, and never export raw error text.
@@ -25,12 +31,19 @@ language every other module speaks.
   Send diagnostics action includes this local journal, without enabling
   automatic on-demand failure uploads or claiming confirmed backend delivery.
 - Shared decode/encode helpers: `JSONDecoder.plozz`, `JSONEncoder.plozz`.
+- `SearchDiagnosticJournal` retains consent-scoped per-source search outcomes and
+  typed request/page evidence for manual reports, separately from general
+  performance timings. It holds no query or account content and clears on opt-out;
+  see [retention and coverage](../FeatureSearch/README.md#diagnostic-submissions).
 - `HTTPDate` shares HTTP timestamp parsing/formatting and strict `Retry-After`
   interpretation across HTTP media transports and IPTV. Consumers convert
   finite retry delays to monotonic deadlines; malformed headers remain unknown,
   not permission to retry immediately.
 - Subtitle behaviour + appearance model: `SubtitleBehavior`, `SubtitleStyle`,
   plus the neutral `SubtitleColor` / `SubtitleEdgeStyle` / `SubtitleMode` primitives.
+  `SubtitleCue` equality includes timing and presentation payload, so a live
+  revision of an existing cue is not discarded as unchanged. Bitmap equality
+  uses immutable image identity and placement, never a pixel comparison.
 - Profiles persistence contract: `ProfilePersisting`, `ProfileStore`,
   `ProfilesModel`, plus the Plex Home-user mapping (`PlexHomeUser`).
 - Local PIN proof is in-memory and bound to the current verifier and selection.
@@ -81,6 +94,17 @@ language every other module speaks.
   membership for returned titles.
 
 ## Public surface, at a glance
+
+Technical badges use the same stream classifier for detail heroes, version
+pickers, and cached share facts. Confirmed Dolby Vision compatibility is one
+badge (`DV HDR10+`, `DV HDR10`, or `DV HLG`), with the full format names retained
+for accessibility. Missing or unrecognized range metadata is not evidence of
+SDR. A profile number alone never establishes a compatible Dolby Vision base
+layer. Resolution uses effective dimensions, including cropped 4K and 8K.
+Audio keeps the selected track's carrier codec, spatial format, and channel
+layout together. Stereo codecs remain in detailed format information rather
+than adding headline badges. Video codecs remain separate version/diagnostic
+facts; these badges describe source metadata, not the active output format.
 
 `RuntimeFeatureFlags.buildDefault` is the shared application rollout selection.
 Debug and Release builds share `productionDefault`, with WeTrakr enabled,
@@ -254,11 +278,17 @@ country flags. `Multi` is not a language and adds no count.
 These display facts never create selectable tracks or change track preferences.
 The compact row highlights a reported preferred language and counts the rest
 (`English | +9` in one chip) without discarding the complete language inventory.
-`MediaSourceDisplayName` extracts a readable `torrent_name` from URL/query-backed
-sources (including percent-encoded names) before taking a basename. It also
-cleans cached locator-like names at presentation time. Only the decoded name,
-not unrelated query parameters, supplies release text or edition/quality hints;
-playback locators and source IDs remain unchanged.
+`MediaSourceDisplayName` formats ordinary filenames, paths and source labels.
+A filename in a URL's path wins over query hints. When the path has no filename,
+only `filename` and `file_name` query parameters are accepted, decoded once.
+Conflicting hints, control characters, nested URLs and unrelated query fields supply no filename;
+the picker falls back to the server's other labels and technical metadata.
+Optimized app-hosted tests cover query filename display and control-character
+rejection in the same build configuration used by the version picker.
+Bare query text is never shown as a source label. Cached locator-like names are
+cleaned at presentation time without changing stored values, playback locators
+or source IDs. Only the resulting filename supplies release text or
+filename-derived edition/quality hints.
 Multiline remote-source labels can identify their release file on a folder-marked
 line, including continuation lines through the file extension; presentation
 extracts that filename rather than displaying the entire provider description.

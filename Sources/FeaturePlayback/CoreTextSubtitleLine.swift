@@ -65,7 +65,11 @@ struct CoreTextSubtitleLine: UIViewRepresentable {
     var systemFontDescriptor: UIFontDescriptor? = nil
     var glyphBackground: UIColor? = nil
 
-    func makeUIView(context: Context) -> SubtitleLineView { SubtitleLineView() }
+    func makeUIView(context: Context) -> SubtitleLineView {
+        let view = SubtitleLineView()
+        view.configure(configuration)
+        return view
+    }
 
     func updateUIView(_ view: SubtitleLineView, context: Context) {
         view.configure(configuration)
@@ -82,15 +86,16 @@ struct CoreTextSubtitleLine: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SubtitleLineView, context: Context) -> CGSize? {
+        // Measurement must use this cue, even before updateUIView has run.
+        uiView.configure(configuration)
         let w = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 10_000
         return uiView.measure(maxWidth: w)
     }
 }
 
 /// UIKit view that lays out one subtitle line with Core Text and draws it with a
-/// proper outer outline. Layout (the expensive part — shaping + glyph-path
-/// extraction) is cached and only rebuilt when the config or wrap width changes,
-/// so a 60 fps `TimelineView` redraw just re-fills a cached `CGPath`.
+/// proper outer outline. A bounded, per-cue cache retains shaping and glyph paths
+/// across sizing probes; drawing reuses the layout matching the accepted size.
 final class SubtitleLineView: UIView {
 
     struct Config: Equatable {
@@ -119,6 +124,7 @@ final class SubtitleLineView: UIView {
         var background: BackgroundFill?  // rounded box hugging the text, drawn first
         var glyphBackgrounds: [CGRect] = []
         var defaultFillPath: CGPath? = nil
+        var outsideGlyphsPath: CGPath? = nil
     }
 
     /// Glyphs of one source-coloured span, in the same coordinates as `path`.
@@ -147,8 +153,17 @@ final class SubtitleLineView: UIView {
     }
 
     private var config: Config?
-    private var layout: Layout?
-    private var layoutWidth: CGFloat = -1
+    private struct Measurement {
+        var width: CGFloat
+        var layout: Layout
+    }
+    private var measurements: [Measurement] = []
+    #if DEBUG
+    private(set) var drawnTextForTesting: String?
+    private(set) var layoutBuildCountForTesting = 0
+    private(set) var drawCountForTesting = 0
+    var cachedLayoutCountForTesting: Int { measurements.count }
+    #endif
 
     override init(frame: CGRect) { super.init(frame: frame); commonInit() }
     required init?(coder: NSCoder) { super.init(coder: coder); commonInit() }
@@ -162,25 +177,42 @@ final class SubtitleLineView: UIView {
     func configure(_ c: Config) {
         guard c != config else { return }
         config = c
-        layout = nil
-        layoutWidth = -1
+        measurements.removeAll(keepingCapacity: true)
         invalidateIntrinsicContentSize()
         setNeedsDisplay()
     }
 
     func measure(maxWidth: CGFloat) -> CGSize {
-        guard let c = config else { return .zero }
-        if let l = layout, layoutWidth == maxWidth || l.totalSize.width == maxWidth {
-            return l.totalSize
+        guard let c = config, maxWidth > 0 else { return .zero }
+        if let index = measurements.lastIndex(where: {
+            $0.width == maxWidth || $0.layout.totalSize.width == maxWidth
+        }) {
+            return reuseMeasurement(at: index).totalSize
         }
-        let l = buildLayout(c, maxWidth: maxWidth)
-        layout = l
-        layoutWidth = maxWidth
-        return l.totalSize
+        return cacheLayout(c, maxWidth: maxWidth).totalSize
+    }
+
+    private func reuseMeasurement(at index: Int) -> Layout {
+        if index != measurements.count - 1 {
+            measurements.append(measurements.remove(at: index))
+        }
+        return measurements[measurements.count - 1].layout
+    }
+
+    private func cacheLayout(_ config: Config, maxWidth: CGFloat) -> Layout {
+        let layout = buildLayout(config, maxWidth: maxWidth)
+        // Keep minimum/ideal/maximum and constrained measurements without
+        // retaining an unbounded set of paths during resizing.
+        if measurements.count == 4 {
+            let eviction = measurements.firstIndex { $0.layout.totalSize != bounds.size } ?? 0
+            measurements.remove(at: eviction)
+        }
+        measurements.append(Measurement(width: maxWidth, layout: layout))
+        return layout
     }
 
     override var intrinsicContentSize: CGSize {
-        layout?.totalSize ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+        measurements.last?.layout.totalSize ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
@@ -193,13 +225,11 @@ final class SubtitleLineView: UIView {
         // SwiftUI gives the view its measured (ink-tight) width, not necessarily
         // the wider wrapping proposal. Re-shaping at that smaller width wraps a
         // second time and draws extra lines above the height we just measured.
-        if let cached = layout,
-           layoutWidth == bounds.width || cached.totalSize.width == bounds.width {
-            l = cached
+        if let index = measurements.lastIndex(where: { $0.layout.totalSize == bounds.size })
+            ?? measurements.lastIndex(where: { $0.width == bounds.width }) {
+            l = reuseMeasurement(at: index)
         } else {
-            l = buildLayout(c, maxWidth: bounds.width)
-            layout = l
-            layoutWidth = bounds.width
+            l = cacheLayout(c, maxWidth: bounds.width)
         }
 
         ctx.saveGState()
@@ -230,7 +260,7 @@ final class SubtitleLineView: UIView {
         //    blurred/offset copy shows behind everything else.
         if let sh = c.shadow {
             ctx.saveGState()
-            clipOutsideGlyphs(path, in: ctx)
+            clipOutsideGlyphs(l, in: ctx)
             // UIKit shadow offsets stay in device space even after the text
             // coordinate flip; positive height still means down on screen.
             ctx.setShadow(offset: sh.offset, blur: sh.blur, color: sh.color.cgColor)
@@ -244,7 +274,7 @@ final class SubtitleLineView: UIView {
         //    the outer half remains once the fill is painted over it.
         if let outline = c.outline, c.outlineWidth > 0 {
             ctx.saveGState()
-            clipOutsideGlyphs(path, in: ctx)
+            clipOutsideGlyphs(l, in: ctx)
             ctx.addPath(path)
             ctx.setStrokeColor(outline.cgColor)
             ctx.setLineWidth(c.outlineWidth * 2)
@@ -279,17 +309,30 @@ final class SubtitleLineView: UIView {
                 ctx.restoreGState()
             }
         }
+        #if DEBUG
+        drawCountForTesting += 1
+        drawnTextForTesting = l.path.isEmpty && l.colorGlyphs.isEmpty ? nil : c.text
+        #endif
     }
 
     // MARK: - Layout
 
-    private func clipOutsideGlyphs(_ path: CGPath, in context: CGContext) {
-        context.addRect(bounds)
-        context.addPath(path)
-        context.clip(using: .evenOdd)
+    private func clipOutsideGlyphs(_ layout: Layout, in context: CGContext) {
+        guard let outside = layout.outsideGlyphsPath else { return }
+        context.addPath(outside)
+        context.clip(using: .winding)
+    }
+
+    static func outsideGlyphsPath(_ path: CGPath, bounds: CGRect) -> CGPath {
+        // Font contours may overlap. Even-odd inversion exposes those joins;
+        // subtract the same winding-rule silhouette used by the text fill.
+        CGPath(rect: bounds, transform: nil).subtracting(path, using: .winding)
     }
 
     private func buildLayout(_ c: Config, maxWidth: CGFloat) -> Layout {
+        #if DEBUG
+        layoutBuildCountForTesting += 1
+        #endif
         let font = makeCTFont(c)
         let attr = makeAttributed(c, font: font)
         let fs = CTFramesetterCreateWithAttributedString(attr)
@@ -383,13 +426,18 @@ final class SubtitleLineView: UIView {
                 rect: r.offsetBy(dx: -drawn.minX, dy: -drawn.minY),
                 color: bg.color, cornerRadius: bg.cornerRadius)
         }
+        let totalSize = CGSize(width: ceil(drawn.width), height: ceil(drawn.height))
+        let outside = c.shadow != nil || (c.outline != nil && c.outlineWidth > 0)
+            ? Self.outsideGlyphsPath(path, bounds: CGRect(origin: .zero, size: totalSize))
+            : nil
         return Layout(path: path,
                       spanFills: spanFills,
-                      totalSize: CGSize(width: ceil(drawn.width), height: ceil(drawn.height)),
+                      totalSize: totalSize,
                       colorGlyphs: colorGlyphs,
                       background: background,
                       glyphBackgrounds: glyphBackgrounds.map { $0.offsetBy(dx: -drawn.minX, dy: -drawn.minY) },
-                      defaultFillPath: rawDefaultFill.copy(using: &shift) ?? rawDefaultFill)
+                      defaultFillPath: rawDefaultFill.copy(using: &shift) ?? rawDefaultFill,
+                      outsideGlyphsPath: outside)
     }
 
     /// Reference letters for a line's full height: ascenders and descenders

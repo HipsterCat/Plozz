@@ -205,7 +205,6 @@ public struct MediaRowView: View {
     @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.plozzArtworkPolicy) private var presentationArtworkPolicy
-    @Environment(\.plozzRowTitleTightening) private var titleTightening
     /// Keeps branch-specific masking completely out of native navigation styles.
     @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
     #if os(tvOS)
@@ -261,6 +260,15 @@ public struct MediaRowView: View {
     @State private var alignedEntryTarget: String?
     @PlozzCardFocus private var loadingCardFocused: Bool
     @State private var tracksLoadingFocus: Bool
+    private var onBrowse: (() -> Void)?
+    private var usesRowBrowsing = false
+
+    public func browsingRow(_ action: (() -> Void)?) -> Self {
+        var copy = self
+        copy.onBrowse = action
+        copy.usesRowBrowsing = true
+        return copy
+    }
 
     public init(
         title: Text?,
@@ -548,14 +556,12 @@ public struct MediaRowView: View {
     }
 
     public var body: some View {
-        if !items.isEmpty || !liveChannels.isEmpty || loadingPlaceholderCount > 0 || episodeEntry != nil || onSeeAll != nil {
-            VStack(alignment: .leading, spacing: layoutMetrics.sectionTitleSpacing - titleTightening) {
-                if let title {
-                    MediaRowHeader(
-                        title: title, leadingInset: leadingInset,
-                        onSeeAll: onSeeAll, onFocusEntered: onFocusEntered
-                    )
-                }
+        if !items.isEmpty || !liveChannels.isEmpty || loadingPlaceholderCount > 0 || episodeEntry != nil
+            || onSeeAll != nil || onBrowse != nil {
+            MediaRowSection(
+                title: title, leadingInset: leadingInset, spacing: layoutMetrics.sectionTitleSpacing,
+                onSeeAll: usesRowBrowsing ? nil : onSeeAll, onFocusEntered: onFocusEntered
+            ) {
                 if items.isEmpty && loadingPlaceholderCount == 0 && onSeeAll != nil {
                     Text("No titles in this collection.")
                         .plozzForeground(.secondary)
@@ -600,6 +606,21 @@ public struct MediaRowView: View {
                                     onLiveChannelFocused?(focused)
                                 }
                             }
+                            #if os(tvOS)
+                            if let onBrowse, loadingPlaceholderCount == 0 {
+                                MediaRowBrowseCard(
+                                    width: cardSlotWidth,
+                                    style: presentation == .poster ? .poster : .landscape,
+                                    showsSeriesArtwork: showsSeriesArtwork,
+                                    onFocus: {
+                                        activity.pendingReport?.cancel()
+                                        activity.pendingReport = nil
+                                        onFocusEntered?()
+                                        onFocusChange?(nil)
+                                    }, action: onBrowse
+                                )
+                            }
+                            #endif
                         }
                         // The row's ordinary page gutter, unchanged from before the
                         // navigation rail existed, with the first card's visible

@@ -197,6 +197,7 @@ struct BaseItemDto: Decodable {
     let MediaSources: [MediaSourceInfo]?
     let MediaStreams: [MediaStreamDto]?
     let ImageTags: [String: String]?
+    let PrimaryImageAspectRatio: Double?
     let BackdropImageTags: [String]?
     /// Emby exposes intro and credits markers as chapter entries.
     let Chapters: [ChapterInfoDto]?
@@ -353,7 +354,7 @@ struct MediaSourceInfo: Decodable {
 /// lets the server choose DirectPlay vs a seekable HLS transcode for this device.
 struct PlaybackInfoBody: Encodable {
     let UserId: String
-    let MaxStreamingBitrate: Int
+    let MaxStreamingBitrate: Int?
     let AutoOpenLiveStream: Bool
     let MediaSourceId: String?
     let EnableDirectPlay: Bool?

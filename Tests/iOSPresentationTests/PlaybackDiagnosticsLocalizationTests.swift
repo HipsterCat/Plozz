@@ -9,7 +9,86 @@ import XCTest
 
 @MainActor
 final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
-    func testErrorDetailsSheetUsesCenteredInlineTitleAndLeadingCloseIcon() async throws {
+    func testPlayerDiagnosticsSheetUsesAppPaletteInsteadOfDarkVideoChrome() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for palette in [ThemePalette.light, .dark, .pureBlack] {
+            for gradient in [false, true] {
+                let model = PlayerViewModel(provider: DiagnosticsAppearanceProvider(), itemID: "fixture")
+                let host = UIHostingController(rootView:
+                    PlayerView(viewModel: model, showDiagnostics: true, showsSharedControls: false)
+                        .environment(\.themePalette, palette)
+                        .environment(\.colorScheme, palette.isLight ? .light : .dark)
+                        .environment(\.gradientBackgroundsEnabled, gradient)
+                        .environment(\.locale, Locale(identifier: "en_US"))
+                )
+                window.overrideUserInterfaceStyle = palette.isLight ? .light : .dark
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                let deadline = ContinuousClock.now + .seconds(5)
+                while (host.presentedViewController == nil
+                       || host.presentedViewController?.isBeingPresented == true), ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                let sheet = try XCTUnwrap(host.presentedViewController)
+                try await Task.sleep(for: .milliseconds(200))
+                sheet.view.layoutIfNeeded()
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 2
+                format.preferredRange = .standard
+                let image = UIGraphicsImageRenderer(bounds: sheet.view.bounds, format: format).image { _ in
+                    XCTAssertTrue(sheet.view.drawHierarchy(in: sheet.view.bounds, afterScreenUpdates: true))
+                }
+                let cgImage = try XCTUnwrap(image.cgImage)
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                try VNImageRequestHandler(cgImage: cgImage).perform([request])
+                let engine = try XCTUnwrap(request.results?.first {
+                    $0.topCandidates(1).first?.string.contains("AVPlayer") == true
+                }, "The real player's diagnostics body must be visible.")
+                let box = engine.boundingBox
+                let crop = try XCTUnwrap(cgImage.cropping(to: CGRect(
+                    x: box.minX * CGFloat(cgImage.width), y: (1 - box.maxY) * CGFloat(cgImage.height),
+                    width: box.width * CGFloat(cgImage.width), height: box.height * CGFloat(cgImage.height)
+                ).integral))
+                var pixels = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+                try pixels.withUnsafeMutableBytes { buffer in
+                    let context = try XCTUnwrap(CGContext(
+                        data: buffer.baseAddress, width: crop.width, height: crop.height,
+                        bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                        space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+                    ))
+                    context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+                }
+                let contrastingPixels = stride(from: 0, to: pixels.count, by: 4).filter { offset in
+                    palette.isLight
+                        ? max(pixels[offset], pixels[offset + 1], pixels[offset + 2]) < 70
+                        : min(pixels[offset], pixels[offset + 1], pixels[offset + 2]) > 180
+                }.count
+                XCTAssertGreaterThan(contrastingPixels, 60,
+                                     "Diagnostics text must contrast with the shared sheet, not inherit white video chrome.")
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "Player diagnostics light-\(palette.isLight)-gradient-\(gradient)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                model.controls.diagnosticsEnabled = false
+                await model.stop()
+                host.dismiss(animated: false)
+                window.rootViewController = nil
+            }
+        }
+    }
+
+    func testErrorDetailsSheetUsesNativeInlineTitleAndCloseIcon() async throws {
         try await assertDetailsHeader(.onDemand(
             error: .noStreams, provider: .jellyfin, engine: nil, stage: .preparation
         ))
@@ -34,34 +113,51 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        let sheet = UIHostingController(rootView: PlaybackDiagnosticDetailsSheet(
-            report: report
-        ).environment(\.locale, Locale(identifier: "en_US")))
-        sheet.modalPresentationStyle = .pageSheet
-        await withCheckedContinuation { continuation in
-            presenter.present(sheet, animated: true) { continuation.resume() }
-        }
-        sheet.view.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(150))
-        func descendants(_ view: UIView) -> [UIView] {
-            [view] + view.subviews.flatMap(descendants)
-        }
-        let bar = try XCTUnwrap(descendants(sheet.view).compactMap { $0 as? UINavigationBar }.first)
-        let item = try XCTUnwrap(bar.topItem)
-        XCTAssertEqual(item.title, "Details")
-        XCTAssertLessThanOrEqual(bar.bounds.height, 64, "The title must remain inline, not a large scrolling heading.")
-        let buttons = (item.leftBarButtonItems ?? []) + item.leadingItemGroups.flatMap(\.barButtonItems)
-        XCTAssertEqual(buttons.count, 1)
-        XCTAssertNotNil(buttons.first?.image)
-        XCTAssertTrue((item.rightBarButtonItems ?? []).isEmpty && item.trailingItemGroups.isEmpty)
-        let title = try XCTUnwrap(descendants(bar).compactMap { $0 as? UILabel }.first { $0.text == "Details" })
-        XCTAssertEqual(title.convert(title.bounds, to: bar).midX, bar.bounds.midX, accuracy: 2)
-        let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        let reference = AnyView(NavigationStack {
+            Color.clear
+                .navigationTitle("Details")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close", systemImage: "xmark") {}
+                            .labelStyle(.iconOnly)
+                    }
+                }
         })
-        attachment.name = "Centered Details title and leading Close"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        var titleCenters: [CGFloat] = []
+        for content in [AnyView(PlaybackDiagnosticDetailsSheet(report: report)), reference] {
+            let sheet = UIHostingController(rootView: content.environment(\.locale, Locale(identifier: "en_US")))
+            sheet.modalPresentationStyle = .pageSheet
+            await withCheckedContinuation { continuation in
+                presenter.present(sheet, animated: true) { continuation.resume() }
+            }
+            sheet.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(150))
+            func descendants(_ view: UIView) -> [UIView] {
+                [view] + view.subviews.flatMap(descendants)
+            }
+            let bar = try XCTUnwrap(descendants(sheet.view).compactMap { $0 as? UINavigationBar }.first)
+            let item = try XCTUnwrap(bar.topItem)
+            XCTAssertEqual(item.title, "Details")
+            XCTAssertLessThanOrEqual(bar.bounds.height, 64, "The title must remain inline, not a large scrolling heading.")
+            let buttons = (item.leftBarButtonItems ?? []) + item.leadingItemGroups.flatMap(\.barButtonItems)
+            XCTAssertEqual(buttons.count, 1)
+            XCTAssertNotNil(buttons.first?.image)
+            XCTAssertTrue((item.rightBarButtonItems ?? []).isEmpty && item.trailingItemGroups.isEmpty)
+            let title = try XCTUnwrap(descendants(bar).compactMap { $0 as? UILabel }.first { $0.text == "Details" })
+            titleCenters.append(title.convert(title.bounds, to: bar).midX / bar.bounds.width)
+            let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+            })
+            attachment.name = "Native Details title and Close \(titleCenters.count)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            await withCheckedContinuation { continuation in
+                presenter.dismiss(animated: false) { continuation.resume() }
+            }
+        }
+        XCTAssertEqual(titleCenters[0], titleCenters[1], accuracy: 0.005,
+                       "Details must follow the OS's native inline title placement.")
     }
 
     private let commonLabelKeys = [
@@ -153,6 +249,92 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.scrollView(in: $0) }.first
     }
 
+    func testReadAheadDiagnosticsRenderMemoryAndDiskOnBothPresentations() throws {
+        for memory in [true, false] {
+            var diagnostics = fixture(mode: .plozzigen)
+            diagnostics.engineName = "AetherEngine v7.47.0"
+            diagnostics.sourceFileName = memory ? "Sample P7.mkv" : "Sample P8.mkv"
+            diagnostics.videoCodec = "hevc"
+            diagnostics.resolution = .init(width: 3840, height: 2160)
+            diagnostics.hdr = .dolbyVision
+            diagnostics.dolbyVisionProfile = memory ? 7 : 8
+            diagnostics.videoBitrate = 95_000_000
+            diagnostics.indicatedBitrate = nil
+            diagnostics.observedBitrate = nil
+            diagnostics.audioOutput = nil
+            diagnostics.audioOutputDescription = nil
+            diagnostics.sourceFileSizeBytes = nil
+            diagnostics.streamTransport = nil
+            diagnostics.deviceModel = "Apple TV 4K"
+            if memory {
+                diagnostics.positionSeconds = nil
+                diagnostics.durationSeconds = nil
+                diagnostics.seekableStartSeconds = nil
+                diagnostics.seekableEndSeconds = nil
+            }
+            diagnostics.bufferedSecondsAhead = memory ? 8 : 24
+            diagnostics.engineBufferedSecondsAhead = memory ? nil : 180
+            diagnostics.sessionCache = .init(
+                residentBytes: memory ? 96 << 20 : 1_280 << 20,
+                effectiveBudgetBytes: memory ? 96 << 20 : 2_048 << 20,
+                storage: memory ? .memory : .disk, targetSeconds: 300,
+                byteLimitReached: memory
+            )
+            for television in [true, false] {
+                let overlay = PlaybackDiagnosticsOverlay(
+                    diagnostics: diagnostics, presentation: television ? .television : .mobile
+                )
+                let content = Group {
+                    if television {
+                        overlay.televisionPanel(width: 1280)
+                    } else {
+                        overlay.mobileContent(width: 844).frame(width: 844)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                let renderer = ImageRenderer(content: content
+                    .environment(\.themePalette, .dark)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                    .background(.black))
+                renderer.scale = 2
+                let image = try XCTUnwrap(renderer.cgImage)
+                let attachment = XCTAttachment(image: UIImage(cgImage: image))
+                attachment.name = "\(television ? "TV" : "Mobile") \(memory ? "memory" : "disk") read-ahead"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                if television {
+                    let headerImage = try XCTUnwrap(image.cropping(to: CGRect(
+                        x: 0, y: 0, width: min(1280, image.width), height: min(160, image.height)
+                    )))
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    try VNImageRequestHandler(cgImage: headerImage).perform([request])
+                    let observations = request.results ?? []
+                    for text in ["Playback Diagnostics", "Playing from", "AetherEngine"] {
+                        let observation = try XCTUnwrap(observations.first {
+                            $0.topCandidates(1).first?.string.contains(text) == true
+                        }, "Missing header \(text)")
+                        if text == "Playback Diagnostics" {
+                            XCTAssertEqual(observation.boundingBox.minX * Double(headerImage.width) / 2,
+                                           24, accuracy: 4)
+                        } else {
+                            XCTAssertLessThan(observation.boundingBox.maxX * Double(headerImage.width) / 2,
+                                              640, "Source and engine must remain grouped on the left.")
+                        }
+                    }
+                }
+                let text = try renderedText(image, locale: "en_US")
+                XCTAssertTrue(text.contains("Cache storage"), text)
+                XCTAssertTrue(text.contains("v7.47.0"), text)
+                XCTAssertTrue(text.contains("Read-ahead target"), text)
+                XCTAssertTrue(text.contains("5 min"), text)
+                XCTAssertEqual(text.contains("Memory limit reached"), memory, text)
+                XCTAssertTrue(text.replacingOccurrences(of: "O", with: "0")
+                    .contains(memory ? "8.0s" : "180.0s"), text)
+            }
+        }
+    }
+
     func testTelevisionDiagnosticsUseTheSameLocalizedLabels() throws {
         let panel = PlaybackDiagnosticsOverlay(diagnostics: fixture(mode: .transcode), presentation: .television)
         let text = try renderedText(
@@ -231,7 +413,18 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
     }
 
     func testAudioProcessingShowsActualPipelineWithoutClaimingReceiverOutput() throws {
-        for pipeline in ["TRUEHD Atmos → APAC 7.1.4", "TRUEHD → FLAC bridge", "TRUEHD → EAC3 bridge"] {
+        let cases = [
+            ("TRUEHD Atmos → APAC 7.1.4", "Lossy encoding", "APAC"),
+            ("TRUEHD Atmos → PCM 9.1.6", "Rendered to PCM", "PCM"),
+            ("DTS:X → PCM 7.1.4", "Rendered to PCM", "PCM"),
+            ("TRUEHD → FLAC bridge", "Lossless encoding", "FLAC"),
+            ("TRUEHD → EAC3 bridge", "Lossy encoding", "EAC3"),
+            ("DTS → FLAC bridge", "Lossless encoding", "FLAC"),
+            ("DTS → EAC3 bridge", "Lossy encoding", "EAC3"),
+            ("Stream-copy (EAC3)", "No re-encoding", "EAC3"),
+            ("libavcodec DTS → CoreAudio", "Decoded to PCM", "CoreAudio")
+        ]
+        for (pipeline, encoding, format) in cases {
             var diagnostics = fixture(mode: .plozzigen)
             diagnostics.audioPipelineDescription = pipeline
             for width in [390.0, 844.0] {
@@ -241,27 +434,83 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
                         .fixedSize(horizontal: false, vertical: true),
                     locale: "en"
                 )
-                assertAudioProcessing(in: text, pipeline: pipeline)
+                assertAudioProcessing(in: text, encoding: encoding, format: format)
             }
             let panel = PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: .television)
             let text = try renderedText(
                 panel.televisionPanel(width: 1280), locale: "en"
             )
-            assertAudioProcessing(in: text, pipeline: pipeline, compact: true)
+            assertAudioProcessing(in: text, encoding: encoding, format: format, compact: true)
         }
     }
 
-    private func assertAudioProcessing(in text: String, pipeline: String, compact: Bool = false) {
-        let tokens = ["Processing", "System output", "Dolby Atmos", "HDMI", "TRUEHD"] + (compact ? [] : ["Connection"])
+    private func assertAudioProcessing(in text: String, encoding: String, format: String, compact: Bool = false) {
+        let tokens = ["Encoding", encoding, "Processing", "System output", "Dolby Atmos", "HDMI"] + (compact ? [] : ["Connection"])
         for token in tokens {
             XCTAssertTrue(normalized(text).contains(normalized(token)), text)
         }
-        let format = pipeline.contains("APAC") ? "APAC" : (pipeline.contains("FLAC") ? "FLAC" : "EAC3")
         XCTAssertTrue(text.contains(format), text)
         XCTAssertFalse(text.contains("Bridged on-device"), text)
         XCTAssertFalse(normalized(text).contains("not verified"), text)
         XCTAssertFalse(normalized(text).contains("managed by"), text)
         if format == "APAC" { XCTAssertTrue(text.contains("7.1.4"), text) }
+    }
+
+    func testUnknownAudioPipelineDoesNotGuessItsEncodingInEitherPresentation() throws {
+        var diagnostics = fixture(mode: .plozzigen)
+        diagnostics.audioCodec = "FLAC"
+        diagnostics.audioChannels = 8
+        for pipeline in [nil, "Unreported pipeline"] {
+            diagnostics.audioPipelineDescription = pipeline
+            for presentation in [PlaybackDiagnosticsOverlay.Presentation.mobile, .television] {
+                let panel = PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: presentation)
+                let text: String
+                if presentation == .mobile {
+                    text = try renderedText(
+                        panel.mobileContent(width: 390).frame(width: 390)
+                            .fixedSize(horizontal: false, vertical: true), locale: "en"
+                    )
+                } else {
+                    text = try renderedText(panel.televisionPanel(width: 1280), locale: "en")
+                }
+                XCTAssertTrue(text.contains("Processing"), text)
+                for absent in ["Lossless", "Lossy", "No re-encoding", "Decoded to PCM"] {
+                    XCTAssertFalse(text.contains(absent), text)
+                }
+                if let pipeline { XCTAssertTrue(text.contains(pipeline), text) }
+            }
+        }
+    }
+
+    func testAudioEncodingDescriptionsUseTheSameTranslationInBothPresentations() throws {
+        let bundleURL = try XCTUnwrap(Bundle.main.url(forResource: "cs", withExtension: "lproj"))
+        let bundle = try XCTUnwrap(Bundle(url: bundleURL))
+        for (pipeline, key) in [
+            ("DTS → FLAC bridge", "Lossless encoding"),
+            ("DTS → EAC3 bridge", "Lossy encoding"),
+            ("Stream-copy (EAC3)", "No re-encoding"),
+            ("libavcodec DTS → CoreAudio", "Decoded to PCM")
+        ] {
+            var diagnostics = fixture(mode: .plozzigen)
+            diagnostics.audioPipelineDescription = pipeline
+            for presentation in [PlaybackDiagnosticsOverlay.Presentation.mobile, .television] {
+                let panel = PlaybackDiagnosticsOverlay(diagnostics: diagnostics, presentation: presentation)
+                let text: String
+                if presentation == .mobile {
+                    text = try renderedText(
+                        panel.mobileContent(width: 390).frame(width: 390)
+                            .fixedSize(horizontal: false, vertical: true), locale: "cs"
+                    )
+                } else {
+                    text = try renderedText(panel.televisionPanel(width: 1280), locale: "cs")
+                }
+                for source in ["Encoding", key] {
+                    let translated = bundle.localizedString(forKey: source, value: nil, table: "Localizable")
+                    XCTAssertNotEqual(translated, source)
+                    XCTAssertTrue(normalized(text).contains(normalized(translated)), text)
+                }
+            }
+        }
     }
 
     func testUnreportedSystemOutputIsOmittedInsteadOfReplacingItWithAnExpectation() throws {
@@ -414,5 +663,26 @@ final class PlaybackDiagnosticsLocalizationTests: XCTestCase {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "cs"))
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
+}
+private struct DiagnosticsAppearanceProvider: MediaProvider {
+    let kind = ProviderKind.jellyfin
+    let session = UserSession(
+        server: .init(id: "fixture", name: "Fixture", baseURL: URL(string: "https://fixture.invalid")!,
+                      provider: .jellyfin),
+        userID: "fixture", userName: "Fixture", deviceID: "fixture", accessToken: "fixture"
+    )
+
+    func libraries() async throws -> [MediaLibrary] { [] }
+    func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
+    func latest(limit: Int) async throws -> [MediaItem] { [] }
+    func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
+    }
+    func item(id: String) async throws -> MediaItem { throw AppError.notFound }
+    func children(of itemID: String) async throws -> [MediaItem] { [] }
+    func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
+    func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }
+    func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
+    func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }
 #endif

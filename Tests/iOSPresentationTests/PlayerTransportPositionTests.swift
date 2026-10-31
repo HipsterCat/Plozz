@@ -11,6 +11,126 @@ import XCTest
 
 @MainActor
 final class PlayerTransportPositionTests: XCTestCase {
+    func testScrubbingDisablesLevelGesturesWithoutRestoringPlaybackBrightness() async throws {
+        let model = PlayerViewModel(provider: LayoutProvider(), itemID: "fixture")
+        model.controls.duration = 1200
+        model.controls.intendsPause = true
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        var brightness: CGFloat = 0.6
+        var writes: [CGFloat] = []
+        let control = PlayerTouchLevelControl(
+            readBrightness: { _ in brightness },
+            writeBrightness: { _, value in brightness = value; writes.append(value) }
+        )
+        let host = UIHostingController(rootView: PlozziOSPlayerControlsOverlay(
+            viewModel: model, keyboardActions: PlozziOSPlayerKeyboardActions(),
+            hasVersions: false, versionsPresented: false, onShowVersions: {}, onClose: {}
+        )
+            .environment(\.playerTouchLevelControl, control)
+            .environment(\.scenePhase, .active)
+        )
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            control.deactivate()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        func gestureView(in view: UIView) -> UIView? {
+            if view.gestureRecognizers?.contains(where: {
+                $0.delegate is PlayerTouchGestureSurface.Coordinator
+            }) == true { return view }
+            return view.subviews.lazy.compactMap { gestureView(in: $0) }.first
+        }
+        let mounted = ContinuousClock.now + .seconds(5)
+        while gestureView(in: host.view) == nil, ContinuousClock.now < mounted {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let surface = try XCTUnwrap(gestureView(in: host.view))
+        let recognizers = try XCTUnwrap(surface.gestureRecognizers)
+        let pan = try XCTUnwrap(recognizers.compactMap { $0 as? UIPanGestureRecognizer }.first)
+        let indicator = try XCTUnwrap(recognizers.compactMap { $0 as? UILongPressGestureRecognizer }
+            .first { $0.minimumPressDuration == 0 })
+        XCTAssertTrue(pan.isEnabled)
+        XCTAssertTrue(indicator.isEnabled)
+
+        for value in [0.25, 1.0] {
+            _ = try control.begin(.brightness, in: surface)
+            try control.set(.brightness, value: value, in: surface)
+            let beforeScrub = writes
+            model.controls.isScrubbing = true
+            let suspended = ContinuousClock.now + .seconds(5)
+            while pan.isEnabled, ContinuousClock.now < suspended {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertFalse(pan.isEnabled, "Neither brightness nor volume swipes may run during a seek.")
+            XCTAssertFalse(indicator.isEnabled, "Direct level-meter touches must also be suspended.")
+            XCTAssertEqual(brightness, CGFloat(value), "Seeking must preserve low and maximum brightness.")
+            XCTAssertEqual(writes, beforeScrub, "Entering scrub mode must not write brightness.")
+            model.controls.isScrubbing = false
+            let resumed = ContinuousClock.now + .seconds(5)
+            while !pan.isEnabled, ContinuousClock.now < resumed {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(pan.isEnabled)
+            XCTAssertTrue(indicator.isEnabled)
+            XCTAssertEqual(writes, beforeScrub, "Ending a seek must not write brightness either.")
+        }
+        control.deactivate()
+        XCTAssertEqual(brightness, 0.6, "Actual playback deactivation must still restore the original level.")
+    }
+
+    func testInlineLiveControlsFitPreviewWithoutFullscreenCards() async throws {
+        let input = LiveChannelInput.stream(
+            url: try XCTUnwrap(URL(string: "https://fixture.invalid/live.m3u8")), httpHeaders: [:]
+        )
+        let tracks = LiveChannelPlayerModel(engine: try PlozzigenVideoEngine(), input: input)
+        defer { tracks.stop() }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: LiveLayoutFixture(input: input, tracks: tracks, inline: true)
+            .environment(\.themePalette, .dark)
+            .environment(\.colorScheme, .dark)
+            .background(.blue))
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for size in [CGSize(width: 320, height: 160), CGSize(width: 393, height: 180),
+                     CGSize(width: 834, height: 360), CGSize(width: 852, height: 170)] {
+            window.frame = CGRect(origin: .zero, size: size)
+            host.view.frame = window.bounds
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(300))
+            let center = try XCTUnwrap(tracks.subtitles.controlsLayout.frame(for: .centerTransport))
+            let title = try XCTUnwrap(tracks.subtitles.controlsLayout.frame(for: .title))
+            XCTAssertGreaterThan(center.height, 44)
+            XCTAssertLessThanOrEqual(center.height, 64)
+            XCTAssertEqual(center.midY, size.height / 2, accuracy: 1)
+            XCTAssertLessThanOrEqual(center.maxY, title.minY)
+            XCTAssertGreaterThanOrEqual(center.minY, 0)
+            XCTAssertLessThanOrEqual(title.maxY, size.height)
+            XCTAssertGreaterThanOrEqual(title.height, 44)
+            XCTAssertNil(tracks.subtitles.controlsLayout.frame(for: .timeline))
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Inline preview controls \(Int(size.width))x\(Int(size.height))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     func testLivePresentationControlsWithoutExternalRoutesHaveNoStopButtonOrEmptyPill() async throws {
         let engine = try PlozzigenVideoEngine()
         defer { engine.stop() }
@@ -496,10 +616,9 @@ final class PlayerTransportPositionTests: XCTestCase {
                         isScrubbing: model.controls.isScrubbing, scrubPreviewImage: thumbnail, showsScrubPreview: true,
                         pictureInPictureAvailable: false, onTogglePictureInPicture: {},
                         onScrubChanged: { _ in }, onScrubEditingChanged: { _ in },
-                        onSkipBackward: {}, onPlayPause: {}, onSkipForward: {}, onShowSpeed: {},
-                        supportsVideoZoom: false, onShowCustomZoom: {}, onShowSubtitles: {},
-                        onShowQuality: {}, hasVersions: false, onShowVersions: {},
-                        onOptionsMenuPresentationChange: { _ in }, isCardOpen: .constant(false),
+                        onSkipBackward: {}, onPlayPause: {}, onSkipForward: {},
+                        supportsVideoZoom: false, hasVersions: false, menuPresentation: .init(),
+                        isCardOpen: .constant(false),
                         onInteraction: {}, availableSize: geometry.size
                     )
                 }
@@ -519,6 +638,7 @@ final class PlayerTransportPositionTests: XCTestCase {
         var phase = LiveChannelPlaybackPhase.playing
         var canGoLive = true
         var canMultiview = false
+        var inline = false
         @FocusState private var focus: LiveChannelControl?
         private let now = Date()
 
@@ -535,7 +655,8 @@ final class PlayerTransportPositionTests: XCTestCase {
                 onMultiview: canMultiview ? {} : nil, guideContent: nil, pendingGuideOpen: false, consumeGuideOpen: {},
                 onGuideCardChange: { _ in }, loadOnNow: { [] }, onTuneChannel: nil,
                 tracks: tracks, diagnosticsEnabled: false, toggleDiagnostics: {},
-                onTracksPresentationChange: { _ in }, onControlActivity: {}, onDismissControls: {}
+                onTracksPresentationChange: { _ in }, onControlActivity: {}, onDismissControls: {},
+                onExpandPreview: inline ? {} : nil
             )
         }
     }

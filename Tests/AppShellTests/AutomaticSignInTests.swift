@@ -198,6 +198,58 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertFalse(next.plex.restoreAutomaticSignInAtLaunch(), "The launch exemption is one-shot")
     }
 
+    func testRestoredHomeSessionAuthorizesReenabledSiblingButNotManualActivation() async throws {
+        let house = try household()
+        try house.accounts.add(Account(
+            id: "sibling", server: MediaServer(
+                id: "sibling-server", name: "Sibling", baseURL: URL(string: "https://sibling.example")!, provider: .plex
+            ), userID: "owner", userName: "Owner", deviceID: "device"
+        ), token: "sibling-owner")
+        let initial = launch(house)
+        for id in ["account", "sibling"] {
+            initial.profiles.update(initial.profiles.activeProfile.settingHomeUserBinding(
+                .init(homeUserID: "parent", name: "Parent", requiresPIN: true), forPlexAccount: id
+            ))
+        }
+        let profile = initial.profiles.activeProfile
+        try house.startup.enable(with: .init(
+            profile: .init(profile),
+            accounts: initial.hub.accounts.map { .init($0, profile: profile) }.sorted { $0.id < $1.id },
+            plexCredentials: Dictionary(uniqueKeysWithValues: ["account", "sibling"].map {
+                ($0, .init(serverToken: "saved-\($0)", discoverToken: "parent-cloud", pinVerified: true))
+            })
+        ))
+        let next = launch(house)
+        next.plex.plexHomeUsersFetch = { _, _ in
+            [PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true)]
+        }
+        next.plex.plexHomeUserSwitch = { _, _, _, _ in
+            XCTFail("A restored authorized sibling should not request or replay a PIN.")
+            return "unexpected"
+        }
+        XCTAssertTrue(next.plex.restoreAutomaticSignInAtLaunch())
+        next.plex.ensurePlexIdentityForActiveProfile()
+        next.profiles.setActiveAccountIDs(["account"], for: profile.id)
+        next.hub.reloadAccounts()
+        next.plex.activeAccountsDidChange()
+        XCTAssertNil(next.plex.resolvedToken(for: "sibling"))
+        next.profiles.setActiveAccountIDs(["account", "sibling"], for: profile.id)
+        next.hub.reloadAccounts()
+        next.plex.activeAccountsDidChange()
+        await next.plex.waitForPlexPINRequirementCheck()
+        XCTAssertNil(next.plex.pendingPlexPINRequest)
+        XCTAssertEqual(next.plex.discoverToken(for: "sibling"), "parent-cloud")
+        XCTAssertEqual(next.plex.resolvedToken(for: "sibling"), "server-parent-cloud")
+
+        next.plex.beginExplicitProfileActivation()
+        next.plex.ensurePlexIdentityForActiveProfile()
+        await next.plex.waitForPlexPINRequirementCheck()
+        XCTAssertEqual(next.plex.plexPINEntryAvailability, .available)
+        XCTAssertNotNil(next.plex.pendingPlexPINRequest)
+        XCTAssertNil(next.plex.discoverToken(for: "account"))
+        XCTAssertNil(next.plex.discoverToken(for: "sibling"))
+    }
+
     func testManualSwitchBackToSamePlexUserStillPrompts() async throws {
         let house = try household()
         let first = launch(house)
@@ -319,6 +371,68 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertEqual(next.flow.pendingLockedProfile?.id, parent.id)
         next.flow.cancelProfileLockPrompt()
         XCTAssertEqual(next.profiles.activeProfileID, other.id)
+    }
+
+    func testAutomaticSignInBypassesReturnPromptUntilDisabled() async throws {
+        let house = try household(provider: .jellyfin)
+        let first = launch(house)
+        var parent = first.profiles.activeProfile
+        parent.replaceLock(with: ProfileLock.make(pin: "1357", iterations: 1))
+        first.profiles.update(parent)
+        first.flow.switchProfile(to: parent.id)
+        let accepted = await first.flow.submitProfileLockPIN("1357")
+        XCTAssertTrue(accepted)
+        first.flow.setAutomaticallySignIn(true)
+        let next = launch(house)
+        next.flow.prepareLaunchPicker()
+        XCTAssertFalse(next.flow.activeProfileAwaitsUnlock)
+
+        XCTAssertNil(next.flow.foregroundReturnDelay)
+        next.flow.lockForForegroundIfNeeded()
+        XCTAssertFalse(next.flow.isForegroundLocked)
+        XCTAssertFalse(next.flow.activeProfileAwaitsUnlock)
+        next.flow.setAutomaticallySignIn(false)
+        XCTAssertEqual(next.flow.foregroundReturnDelay, 0)
+        next.flow.lockForForegroundIfNeeded()
+        XCTAssertTrue(next.flow.activeProfileAwaitsUnlock)
+        XCTAssertFalse(next.plex.isAutomaticallySignedIn(parent))
+        next.flow.switchProfile(to: parent.id)
+        XCTAssertNotNil(next.flow.pendingLockedProfile)
+        XCTAssertFalse(next.flow.canFinishForegroundUnlock)
+    }
+
+    func testForegroundPlexNetworkFailureCannotReuseStartupPINProof() async throws {
+        let house = try household()
+        let first = launch(house)
+        await authenticatePlex(first)
+        first.flow.setAutomaticallySignIn(true)
+        let next = launch(house)
+        next.flow.prepareLaunchPicker()
+        XCTAssertFalse(next.flow.isChoosingProfile)
+        next.flow.setAutomaticallySignIn(false)
+        next.flow.lockForForegroundIfNeeded()
+        next.flow.switchProfile(to: next.profiles.activeProfileID)
+        await next.plex.waitForPlexPINRequirementCheck()
+        XCTAssertNotNil(next.plex.pendingPlexPINRequest)
+        XCTAssertEqual(next.plex.plexPINEntryAvailability, .unavailable)
+        XCTAssertFalse(next.flow.canFinishForegroundUnlock)
+        next.flow.cancelForegroundProfileSelection()
+        next.flow.cancelProfileSelection()
+        XCTAssertTrue(next.flow.isForegroundLocked)
+        XCTAssertTrue(next.flow.isChoosingProfile)
+    }
+
+    func testReturnDefaultsFollowProfilesAcrossLaunchWithoutChangingColdStart() throws {
+        let house = try household(provider: .jellyfin)
+        let first = launch(house)
+        XCTAssertNil(first.flow.foregroundReturnDelay)
+        let second = first.profiles.add(name: "Second")
+        first.flow.switchProfile(to: second.id)
+        XCTAssertEqual(first.flow.foregroundReturnDelay, 300)
+        let next = launch(house)
+        XCTAssertEqual(next.flow.foregroundReturnDelay, 300)
+        next.flow.prepareLaunchPicker()
+        XCTAssertTrue(next.flow.isChoosingProfile, "The return grace period does not bypass cold-start selection.")
     }
 
     func testLastSuccessfullySelectedProfileIsRemembered() throws {

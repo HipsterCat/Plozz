@@ -197,6 +197,88 @@ final class SearchSectionTests: XCTestCase {
 
 @MainActor
 final class SearchViewModelTests: XCTestCase {
+    func testSearchJournalRetainsPartialProviderFailureWithoutChangingResults() async throws {
+        let journal = SearchDiagnosticJournal()
+        journal.start()
+        let providers = [
+            SearchStubProvider(results: [], error: .unauthorized, providerKind: .silo, accountID: "private-silo"),
+            SearchStubProvider(results: makeItems(2), providerKind: .plex, accountID: "private-plex")
+        ]
+        let accounts = providers.map {
+            ResolvedAccount(account: Account(id: $0.accountID, from: $0.session), provider: $0)
+        }
+        let model = SearchViewModel(
+            accounts: accounts, debounceMilliseconds: 0,
+            disabledLibraryKeys: { ["private-silo:private-library", "unrelated:library"] },
+            searchDiagnostics: journal
+        )
+        model.query = "private-search-phrase"
+        await model.search()
+        guard case .loaded = model.state else { return XCTFail("Successful provider must still supply results") }
+        let report = journal.export(scope: DiagnosticExportScope())
+        let silo = try XCTUnwrap(report.entries.first { $0.facts.provider == .silo })
+        let plex = try XCTUnwrap(report.entries.first { $0.facts.provider == .plex })
+        XCTAssertEqual(silo.search, plex.search)
+        XCTAssertEqual(silo.facts.outcome, .failed)
+        XCTAssertEqual(silo.facts.reason, "unauthorized")
+        XCTAssertEqual(silo.facts.disabledLibraryCount, 1)
+        XCTAssertEqual(plex.facts.disabledLibraryCount, 0)
+        XCTAssertEqual(plex.facts.outcome, .results)
+        XCTAssertEqual(plex.facts.resultCount, 2)
+        let text = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+        for secret in ["private", "Alice", "TOKEN", "host:8096"] {
+            XCTAssertFalse(text.contains(secret), secret)
+        }
+    }
+
+    func testSearchJournalDistinguishesEmptyFailureAndCancellation() async throws {
+        for (error, expected): (AppError?, SearchDiagnosticJournal.Outcome) in [
+            (nil, .empty), (.invalidResponse, .failed), (.cancelled, .cancelled)
+        ] {
+            let journal = SearchDiagnosticJournal()
+            journal.start()
+            let provider = SearchStubProvider(results: [], error: error, providerKind: .silo)
+            let account = ResolvedAccount(account: Account(id: provider.accountID, from: provider.session), provider: provider)
+            let model = SearchViewModel(accounts: [account], debounceMilliseconds: 0, searchDiagnostics: journal)
+            model.query = "movie"
+            await model.search()
+            XCTAssertEqual(journal.export(scope: DiagnosticExportScope()).entries.first?.facts.outcome, expected)
+        }
+    }
+
+    func testBlankSearchDoesNotCreateDiagnosticAttempt() async {
+        let journal = SearchDiagnosticJournal()
+        journal.start()
+        let model = SearchViewModel(accounts: [], debounceMilliseconds: 0, searchDiagnostics: journal)
+        model.query = " "
+        await model.search()
+        XCTAssertTrue(journal.export(scope: DiagnosticExportScope()).entries.isEmpty)
+    }
+
+    func testSearchDiagnosticsKeepCountsAndOutcomeWithoutQueryOrAccountContent() async throws {
+        for error: AppError? in [nil, .serverUnreachable] {
+            let diagnostics = PerformanceDiagnostics()
+            diagnostics.start()
+            let provider = SearchStubProvider(
+                results: [.init(id: "private-item", title: "Private title", kind: .movie)],
+                error: error, accountID: "private-account"
+            )
+            let account = ResolvedAccount(account: Account(id: provider.accountID, from: provider.session), provider: provider)
+            let model = SearchViewModel(accounts: [account], debounceMilliseconds: 0, diagnostics: diagnostics)
+            model.query = "private-search-phrase"
+            await model.search()
+            let snapshot = try XCTUnwrap(diagnostics.snapshot())
+            let record = try XCTUnwrap((snapshot.recent + snapshot.slow).first { $0.operation == .search })
+            XCTAssertEqual(record.outcome, error == nil ? .succeeded : .failed)
+            XCTAssertEqual(record.metrics.items, error == nil ? 1 : 0)
+            XCTAssertEqual(record.metrics.accounts, 1)
+            let text = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
+            for value in ["private", "Private", "Alice", "TOKEN", "host:8096"] {
+                XCTAssertFalse(text.contains(value), value)
+            }
+        }
+    }
+
     private func makeVM(_ providers: SearchStubProvider..., debounceMilliseconds: Int = 0) -> SearchViewModel {
         let accounts = providers.map { provider in
             ResolvedAccount(account: Account(id: provider.accountID, from: provider.session), provider: provider)

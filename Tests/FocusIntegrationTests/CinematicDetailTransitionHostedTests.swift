@@ -7,8 +7,18 @@ import XCTest
 
 @MainActor
 final class CinematicDetailTransitionHostedTests: XCTestCase {
-    func testNativeNavigationRevealsHeroWithoutZoomArtworkWaitOrReverseCover() async throws {
-        let fixture = try await makeFixture(zoomEnabled: false)
+    func testNativeNavigationIgnoresRetiredZoomPreferenceAndRevealsHeroWithoutCover() async throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "detailZoomEnabled")
+        defaults.set(true, forKey: "detailZoomEnabled")
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: "detailZoomEnabled")
+            } else {
+                defaults.removeObject(forKey: "detailZoomEnabled")
+            }
+        }
+        let fixture = try await makeFixture(zoomEnabled: false, installsZoomPreference: false)
         defer { fixture.close() }
         fixture.model.waitsForBackdrop = true
         fixture.model.revealsEpisodesLast = true
@@ -567,6 +577,9 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
             fixture.model.open(in: fixture.window, usesCard: usesCard)
             try await waitUntil { fixture.model.session != nil }
             let session = try XCTUnwrap(fixture.model.session)
+            if usesCard {
+                try await waitUntil { session.returnArtwork != nil }
+            }
             let retainedArtwork = session.returnArtwork
             // The source carousel can reconfigure or remove its selected slide
             // after navigation has captured the target.
@@ -1273,14 +1286,19 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         return bytes.map(Int.init)
     }
 
-    private func makeFixture(zoomEnabled: Bool = true) async throws -> CinematicFixtureWindow {
+    private func makeFixture(
+        zoomEnabled: Bool = true, installsZoomPreference: Bool = true
+    ) async throws -> CinematicFixtureWindow {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
         }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
         let policy = artworkPolicy()
-        let fixture = CinematicFixtureWindow(scene: scene, policy: policy, zoomEnabled: zoomEnabled)
+        let fixture = CinematicFixtureWindow(
+            scene: scene, policy: policy, zoomEnabled: zoomEnabled,
+            installsZoomPreference: installsZoomPreference
+        )
         let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 180)).image {
             UIColor.blue.setFill()
             $0.fill(CGRect(x: 0, y: 0, width: 320, height: 180))
@@ -1368,9 +1386,10 @@ private final class CinematicFixtureWindow {
 
     init(
         scene: UIWindowScene, policy: ArtworkPresentationPolicy = .init(area: .details),
-        zoomEnabled: Bool = true
+        zoomEnabled: Bool = true, installsZoomPreference: Bool = true
     ) {
         model.zoomEnabled = zoomEnabled
+        model.installsZoomPreference = installsZoomPreference
         previousWindow = scene.windows.first(where: \.isKeyWindow)
         window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
@@ -1403,6 +1422,7 @@ private final class CinematicFixtureModel {
     var revealsEpisodesLast = false
     var waitsForBackdrop = false
     var zoomEnabled = true
+    var installsZoomPreference = true
     @ObservationIgnored var pageVisible = false
     @ObservationIgnored var nativeDismiss: (() -> Void)?
     @ObservationIgnored var session: TVDetailEntranceSession?
@@ -1422,6 +1442,14 @@ private struct CinematicFixtureRoot: View {
     @Bindable var model: CinematicFixtureModel
 
     var body: some View {
+        if model.installsZoomPreference {
+            navigation.detailNavigationZoom(isEnabled: model.zoomEnabled)
+        } else {
+            navigation
+        }
+    }
+
+    private var navigation: some View {
         NavigationStack(path: $model.path) {
             Color.red
                 .frame(width: 200, height: 300)
@@ -1440,7 +1468,6 @@ private struct CinematicFixtureRoot: View {
                 }
         }
         .cinematicDetailNavigation(path: $model.path)
-        .detailNavigationZoom(isEnabled: model.zoomEnabled)
     }
 }
 

@@ -43,6 +43,40 @@ first-class backends; co-equal with `ProviderJellyfin`.
 - Home-user identity changes happen **in-memory only** — Plozz never
   rewrites the stored admin account's token; per-user tokens live in a
   short-lived override map.
+- An empty Home user's library access is not an expired login. After a server
+  rejects section discovery, a successful Plex cloud resources response that
+  omits that server confirms an empty video/music library inventory for this user.
+  A present grant, rejected cloud credential, malformed response, network failure,
+  or cancellation is never converted to an empty result. Resource-token lookup
+  reads the server grant directly, without requiring advertised connection URLs
+  or probing servers just to resolve credentials.
+  Browsing providers receive a live cloud-credential reader fenced to their
+  account and effective credential revision. Sharing verification uses that
+  Home-user token, never the server-scoped token, and rechecks identity after
+  the cloud response before publishing an empty inventory.
+
+## Live TV tuning
+
+Plex DVR tuning uses the lineup's native channel `id`, never its display number
+(`vcn`). Channels without display numbers remain playable. Native IDs are
+validated as a single path component; invalid IDs do not fall back to another
+channel or tuner.
+
+Failed tune requests use the consent-gated playback diagnostics sink under
+`plexLiveTune`. Evidence retains HTTP status, numeric Plex failure status,
+response format, and bounded transport error codes, never server messages,
+channel identifiers, URLs, credentials, or response bodies. Cancellation and
+successful tunes do not emit failure events. Existing owned-session cleanup
+and no-speculative-retry behavior remain unchanged.
+
+## Format badges
+
+Detail and version badges preserve the same source's Dolby Vision compatibility
+and HDR10+ hints together. A base compatibility ID of 1 does not downgrade
+confirmed HDR10+ to HDR10. HLG/SDR/none compatibility remains authoritative;
+profile 8 alone and false DoVi flags do not establish an HDR10 base layer.
+Selected audio profile/title hints use the shared normalization, including
+E-AC-3 JOC, without changing playback negotiation or adding metadata requests.
 
 ## Playback chapters
 

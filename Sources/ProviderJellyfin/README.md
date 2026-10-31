@@ -25,6 +25,25 @@ supported capability remains at parity.
   Aether-enabled profiles use `PlozzigenMediaFormats` for linked container,
   video and audio families rather than native hardware-only restrictions.
   Native-only profiles and server conversion limits remain independent.
+  On-demand Original quality sends explicit null bitrate limits to Jellyfin;
+  omitting those profile keys would restore its 8 Mbps defaults. Emby requires
+  numeric limits: Original sends its signed-64-bit protocol ceiling in both the
+  request and device profile. Null/omitted limits cause unnecessary conversion
+  on Emby 4.10.2.0, even for compatible low-bitrate originals. This does not restore
+  the old 120 Mbps client cap. User-selected lower qualities retain their exact
+  limits. Server/user policy, codec compatibility, Live TV and music negotiation
+  remain independent.
+  If Emby copies the unlimited ceiling into a required conversion's video target,
+  bound that saturated target to the original video bitrate (or container bitrate
+  when the video rate is unavailable). Preserve smaller server targets and all
+  other rendition restrictions. Missing source bitrate fails explicitly rather
+  than starting an effectively unbounded encode. Direct files are not capped.
+  Optional playback diagnostics retain bounded server-decision facts: source
+  bitrate, selected quality limit (nil for Original), direct-play/stream/transcode
+  flags, subtitle burn-in, and allowlisted reasons from the response or its
+  transcode URL. Addresses, tokens, paths, and unknown reason text are never
+  included. These facts explain why conversion was selected; they do not prove
+  why the resulting stream failed.
 - `JellyfinMusicProvider` — music-library queries (artists, albums, tracks)
   surfaced through the shared provider abstraction.
 
@@ -45,6 +64,21 @@ supported capability remains at parity.
 - **Co-equal with `ProviderPlex`.** Any new `MediaProvider` capability must be
   implemented here whenever it's implemented for Plex (and vice versa).
 
+## Home browsing
+
+Home browse feeds and collection membership request `DateCreated` so client-side
+Date added sorting uses library dates on both Jellyfin and Emby, without changing
+the server-authored feed membership or default order.
+
+## Format badges
+
+Existing detail and per-version badges share the same source classifier.
+Jellyfin's `DOVIWithHDR10Plus` and confirmed Emby compatibility survive mapping;
+the UI groups Dolby Vision and its declared HDR10+/HDR10/HLG compatibility into
+one badge. Selected audio stream profile, display title, and track title retain
+explicit Atmos/JOC or DTS:X hints. No other track or filename supplies those
+facts, and this does not add probes or requests.
+
 ## Playback chapters
 
 Playback detail's `Chapters` array supplies chapter navigation on both backends.
@@ -52,6 +86,45 @@ Offsets use 100-nanosecond ticks; chapter image paths retain the original array
 index even when invalid entries or Emby intro/credit markers are filtered out.
 Only ordinary chapter entries become `PlaybackRequest.chapters`; the skip-marker
 path remains separate. Missing chapter images never remove navigation entries.
+
+## Server-provided ratings
+
+Jellyfin item details display ratings supplied by the authenticated server.
+Optional rating reads are presentation-only: required item loads and playback
+inventory requests never make or await them. Details retain their native
+metadata immediately, without adding a placeholder or minimum display delay;
+the cancellable page task applies server metadata independently of load completion.
+Home uses only already-cached rating metadata during its existing hydration;
+it never requests optional ratings before publishing a carousel.
+The server-response adapter currently supports the cache format exposed by the
+[MDBList Ratings plugin](https://github.com/Druidblack/Jellyfin.Plugin.MDBList_Ratings)
+at `GET /Plugins/MdbListRatings/CachedByItemId?itemId=...`. This is a read-only
+server metadata request. Plozz does not call rating services, supply keys,
+request server-side refreshes, or load plugin scripts, artwork, or external links.
+
+Movies, series, seasons, and episodes use their own authorized server item ID.
+No plugin calls are made for listings, unsupported item types, non-Guid IDs,
+or Emby, where this Jellyfin-specific API is unavailable. Plex and Silo retain
+their existing server-rating integrations.
+
+A nonempty valid cached set replaces ambiguous native scores and uses the shared
+provider-display contract: plain-text service names (except the existing approved
+TMDb mark), stable server order, and normalized scores with explicit scales.
+Equivalent sources are deduplicated by positive vote count, keeping the first
+on ties. Existing Plozz rating visibility and spoiler controls still apply.
+No new setting is added, and the plugin's web-only presentation toggle is not
+used. External enrichment cannot add to or overwrite a supplied set.
+
+Absent caches, empty/unusable sets, unsupported endpoints, and logged plugin
+failures preserve ordinary native ratings and existing enrichment behavior.
+Background requests have a two-second cancellation deadline, never a loading
+or playback delay. Successful sets are reused for five minutes and cache misses
+for thirty seconds in a bounded, 64-item, provider-scoped memory cache.
+A missing endpoint is not
+probed again for five minutes in that provider instance. Cancellation propagates
+instead of returning a successful item. Malformed entries are logged and omitted
+without discarding other valid ratings. State is scoped to the authenticated
+provider instance; there is no global ratings cache for this integration.
 
 ## Episode identity and order
 
@@ -309,7 +382,7 @@ native-only remux path, and required conversions.
 This ownership was cross-checked against
 [Sodalite's stream selection](https://github.com/superuser404notfound/Sodalite/blob/31799bde53e2d93384216b3f9b2523600896ef2b/Sodalite/Player/PlaybackStreamSelection.swift),
 [Swiftfin's playback builder](https://github.com/jellyfin/Swiftfin/blob/b0cb3127b1cef57b6508581be1cfe9addd5539a2/Shared/Objects/MediaPlayerManager/MediaPlayerItem/MediaPlayerItem%2BBuild.swift),
-and the [linked engine's pipeline contract](https://github.com/superuser404notfound/AetherEngine/blob/5fe2d42d68524dcfbcfacf07cbefe5b28b618155/docs/architecture.md).
+and the [linked engine's pipeline contract](https://github.com/brandomoore/AetherEngine/blob/c1ce4cf48bad416e6be5230032a2b7f332e833d8/docs/architecture.md).
 These are protocol/design references, not copied implementations. Client
 differences do not establish the cause of an individual playback failure.
 

@@ -1,10 +1,59 @@
 # CoreUI
 
+Home row browsing uses `BrowseRowHeading` for a single accessible title/chevron
+touch target and `MediaRowBrowseCard` for a native TV rail action. Opt a rail in
+with `browsingRow`; existing collection-detail `onSeeAll` headers elsewhere keep
+their behavior. Passing `nil` opts into Home browsing without showing an action
+or falling back to the old header action. Browse actions carry no media identity
+or context-menu actions.
+
 Shared, **focusable** UI primitives, the app theme, and the artwork image
 cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 `#if canImport(SwiftUI)` so the package still compiles on Linux for tests.
 
 ## Responsibility
+
+`PlaybackResumePrompt` owns the native Resume / Start Over dialog on both
+platforms. It retains the full pending playback request through the choice so
+source, version and playlist context are preserved; cancellation starts nothing.
+Callers apply the profile's opt-in setting before presenting it.
+
+`TopNavigationScroll` connects each root vertical scroll owner to the custom
+top bar. `scrollsTopNavigation()` handles ordinary SwiftUI roots; native grids
+and Showcase report through their existing owners. Source tokens reject late
+callbacks from departed pages. Back resets the active owner to the page top;
+scroll updates invalidate only the bar's position, not the page builder.
+There is no top-navigation foreground mask. Native and pinned sidebars do not
+receive this coordinator and retain their existing behavior.
+
+`NavigationStyleSwatch` preserves the miniature-window illustrations for all
+three navigation choices: a full-height dotted pinned sidebar, a compact sidebar
+of stacked tabs, and a centered top bar. The shared 320-by-180 drawing scales to
+fit both compact Settings cards and onboarding, keeping the top bar centered and
+all three equal-sized posters visible. Preview sizing does not change the shared
+card's focus or selection treatment.
+
+`BrowseQueryControls`, `BrowseSortMenu`, and `BrowseFilterMenu` own the native
+query-control layout, sort choices/directions, and active-filter labels shared
+by Library and Watchlist on TV and mobile. Mobile controls wrap at narrow widths
+and keep their 44-point action targets; TV keeps the existing native menu style.
+`WatchlistSortMenu` and `WatchlistFilterMenu` supply Watchlist's supported choices,
+not a parallel menu design. `WatchlistBrowseControls` composes them for inline
+surfaces. On iPhone and iPad, Watchlist, library grids, and Home row browsers
+place their supported sort/filter actions in the trailing navigation toolbar,
+outside the scrolling content. Library content-mode tabs remain in the page;
+unsupported query actions stay hidden. Mobile filter icons fill when filters
+are active, including in icon-only toolbars.
+Callers retain their query behavior and accessibility identifiers.
+Sort and filter buttons show their icon and current choice, without `Sort:` or
+`Filter:` prefixes. An unfiltered button shows `All`; compound filters keep their
+summary and fall back to the active count at narrow widths. Descriptive prefixes
+remain in accessibility labels. `BrowseFilterLabel` also supplies this presentation
+to Recent Activity; native icon-only toolbars and titles inside menus remain intact.
+
+`ServerUserRow` keeps the user's name above its owner/PIN metadata. The metadata
+wraps independently, preserving the avatar, native focus treatment, and trailing
+selection indicator without squeezing the name alongside badges.
 
 `PlozzTypography` owns semantic text metrics, including additional line spacing,
 and composes local adjustments with `plozzAppTextScale` once at a surface boundary.
@@ -26,6 +75,14 @@ without geometry state or an extra hidden copy of the badge views.
 layout footprint. `PlayResumeButtonLabel.isLoading` uses it without changing the
 button's dimensions or the existing resume/placeholder layout.
 
+`TrailerActionButtonLabel` always renders icon-only on TV and mobile, preserving
+the destination description for accessibility regardless of available width.
+`TrailerActionIcon` keeps the film symbol for server files and adds a small
+outgoing arrow for external YouTube links. The arrow's surrounding stroke removes
+symbol pixels transparently, rather than painting a badge or background color,
+so native glass, focus, light/dark appearances, and reduced transparency still
+come from the existing button styles.
+
 The tvOS detail entrance checks cancellation after every timed reveal. A sleep
 that expired before cancellation can still be waiting for the main actor; it
 must not overwrite a finished entrance and hide already-visible controls.
@@ -46,6 +103,23 @@ which puts the shared minimum height and padding inside the TV focus fill.
 `SettingsFocusButtonStyle` is only for labels that already supply their own
 control geometry. Standalone and inline actions use `plozzActionButton`; do not
 use a text-height focus strip as a smaller action-button variant.
+The text-height disclosure-row treatment is deprecated: never apply
+`SettingsFocusButtonStyle` directly to a compact label such as
+`HomeEditorRowLabel`. Use a full-row wrapper such as `HomeEditorLink`, or a
+padding-free disclosure label with `SettingsFormButtonStyle`. Padding outside
+the button's focus fill does not replace its required internal row geometry.
+
+`SettingsPageHeader` accepts a trailing native action for page-scoped commands.
+Keep it in the header's full-width focus section and scroll the header with the
+page; do not add a separate action strip or shrink the native button.
+
+`SettingsStepper` retains every adjustment stop while limiting dense range tracks
+to 21 visual ticks. `ThemeMusicPreviewControlling` is the Settings-to-runtime
+preview seam; it carries ownership, availability, and errors without coupling
+Settings to the Home feature or a concrete audio player.
+The shared TV adjustment scope defaults to its standard hold-repeat speed.
+`settingsAdjustmentRepeatSpeed` lets dense percentage controls opt into faster
+repeat without changing their single-press increment or other settings controls.
 
 `ChannelLogoArtwork` renders generated Plozz channels with the shared Byline
 layout: a name-first title and inset pixel-mascot signature. Its optional
@@ -70,6 +144,10 @@ rasterizing the placeholder content or changing the sweep, masking, or intensity
 Inactive placeholders remain unmodified; Reduce Motion retains the static dim.
 The simulator lab's `skeletons-idle` and `skeletons-static` scenarios isolate this
 cost from loaded cards and network/provider work.
+
+Loading jokes wait 11 seconds before appearing by default, then retain their
+5.5-second cadence. `LoadingMessagesView` and the model share the sequencer's
+default delay; individual callers can still supply an explicit grace period.
 
 Continue Watching's profile-scoped Playback details choice applies to Artwork + logo,
 Thumbnail, and Poster, on Home and library rows.
@@ -171,9 +249,11 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   Adaptive hero rows own `PlaybackSourceMenuState` and its presentation above
   `ViewThatFits`; candidate rows contain only triggers. Late trailer, action or
   inventory updates can rearrange the row without destroying an open version page.
-  An optional `MediaVersionInventoryLoader` keeps lazy sources discoverable even
-  with no cached alternatives. Only a mounted version page/sheet starts discovery,
-  not the overflow root or focus changes. Shared loading/error/Retry content
+  Version actions require at least two known choices, including when a
+  `MediaVersionInventoryLoader` is available. Unknown or single-version inventory
+  does not create an action, reserve a menu row, or provide a focus target.
+  Only a mounted version page/sheet starts discovery, not the overflow root or
+  focus changes. Shared loading/error/Retry content
   never starts playback or retries automatically. Loader identity fences retained
   choices across owner, account and playable-target changes; dismissal cancels
   the reader, not any server work already admitted by its provider.
@@ -308,16 +388,16 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   boolean destinations retain native navigation outside this workspace,
   including iOS/iPadOS. `SettingsPageMotion` is also used by nested form and
   subtitle panels, with Reduce Motion respected by their hosts.
-- **Title navigation** — tvOS uses native page pushes and pops by default.
-  The profile's **Zoom when opening titles** preference opts into cinematic
-  transitions. `detailNavigationZoom(isEnabled:)` applies the same policy to
-  SwiftUI destinations and the window-scoped native card/router preparation.
-  Both modes share the logo, metadata, controls, and episode entrance sequence.
-  With zoom off it starts when the native page appears, without a cover, window
+- **Title navigation** — tvOS uses native page pushes and pops. The app no longer
+  installs `detailNavigationZoom(isEnabled:)` or reads the retired zoom preference.
+  The logo, metadata, controls, and episode entrance sequence remains.
+  It starts when the native page appears, without a cover, window
   input guard, artwork wait, or custom Back handler. Leaving cancels the reveal;
   returning to an existing page does not replay it. Reduce Motion shows everything
   immediately. iOS/iPadOS navigation is unchanged.
-- **Opt-in cinematic detail returns** — TV browse stacks install
+- **Retained cinematic transition infrastructure** — the zoom implementation and
+  its focused fixtures remain available for future work, but no production shell
+  enables it. TV browse stacks install
   `cinematicDetailNavigation(path:)` on the stack so its destinations inherit it.
   Back changes that bound path in the reverse transition's nonanimated transaction:
   SwiftUI's environment dismiss action can still animate a native pop underneath
@@ -365,6 +445,8 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   stepper, not placed outside its focus target. Left/Right adjusts,
   Select increments, and Up/Down remains native focus navigation. Bounds clamp
   unless a caller explicitly requests wrapping. Width reserves the longest value.
+  Numeric labels update immediately on every adjustment rather than rolling
+  through an animation that can hide changing digits during repeated presses.
   `SettingsAdjustmentFocusScope` shares the player's horizontal input ownership,
   held-press cancellation, and navigation-rail protection. VoiceOver adjustment
   uses the same stepping operation. Mobile retains separate buttons.
@@ -413,6 +495,10 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   the group's full-width row-button style. Place a standalone native action in
   a layout container so its accessibility bounds do not include the row's
   noninteractive space.
+- **Hidden watch indicators** suppress watched badges and unwatched flags in
+  shared media chrome and native episode cards, not episode counts, progress,
+  download badges, or library/request status. The existing profile-scoped
+  indicator value also invalidates native bitmap caches when it changes.
 - **Unwatched episode counts** — a default-on profile preference replaces the
   top-right watch-status mark with a number on series/season cards.
   Episode counts use charcoal tiles with white digits so they stay quieter than
@@ -429,7 +515,7 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   watch-indicator Settings previews reuse the same check badge and flag.
   Their middle poster represents an in-progress series with three remaining
   episodes. Its shared count badge follows the live count toggle and independent
-  Attached/Floating preference while progress stays visible. Count style crosses
+  Attached/Floating preference while progress follows its independent visibility setting. Count style crosses
   native hosting boundaries, controls overlay placement, and invalidates both
   native poster bitmap caches.
   `MediaWatchIndicatorStyle` owns the eight opaque watch-mark colors and contrasting
@@ -562,6 +648,19 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   accepting curated container logos must not admit landscape episode stills as
   movie/series posters. Library-tile collages likewise accept wide container covers
   while retaining their aspect guard for ordinary media posters.
+  Collection-cover groups resolve one uniform shape using Auto, Posters, or
+  Landscape. Auto samples at most nine initial primary covers, uses a strict
+  landscape majority, and falls back to posters for ties or unknown artwork.
+  Server-reported ratios avoid image requests; absent ratios use the normal
+  authenticated artwork loader before publication. Paging never changes the
+  browser's chosen shape. The native tvOS grid accepts and fits container covers
+  without relaxing the portrait filter for ordinary media.
+- **Home row recovery** — ordinary rails and compact empty/failed rows share
+  `MediaRowSection` and `MediaRowHeader`, including typography, header spacing,
+  pinned-navigation inset, and trailing safe space. `MediaRowStatusContent`
+  keeps the summary/source concise and wraps native recovery actions at narrow
+  widths. Detailed explanations stay behind Details. Inline Settings warnings
+  reuse the status content without adopting Home's full rail header.
 - **Mobile media corners** — posters and Continue Watching share a 12pt artwork
   radius at every display size and responsive width. Borderless cards use that
   radius directly; glass frames add their inset to remain concentric. Loaded
@@ -644,6 +743,11 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   reflections without changing the surrounding page's card policy.
   Shared hero/reflection first-paint results are qualified by source and provider
   policy so changing those settings cannot reuse a previous provider's winner.
+  A pinned show identity keeps its current image visible during hydration, not
+  permanently selected. New artwork references or source preferences resolve
+  again before replacing it at full quality, so an early poster fallback cannot
+  remain stretched across "Go to Show" after the proper backdrop arrives.
+  Unchanged inputs reuse the existing result without another lookup.
   Library-first and metadata-provider-first
   presets initialize source choices for Home, Continue Watching, Browse,
   Search, Watchlist, Details, Episodes, Playback, Music, Top Shelf, and Downloads
