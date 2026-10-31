@@ -165,7 +165,8 @@ public struct JellyfinProvider: MediaProvider, ServerRatingsProviding, SeriesRes
                 title: title,
                 localizedTitle: localizedTitle,
                 items: Array(items.prefix(limit)),
-                isHomeDefault: forHome ? false : nil
+                isHomeDefault: forHome ? false : nil,
+                browseID: "\(recommendation.RecommendationType):\(recommendation.CategoryId ?? subject ?? "")"
             )
         }
     }

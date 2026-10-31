@@ -7,6 +7,50 @@ an empty provider feed from local curation without recording media or account ID
 Home rows, item detail, series/season experience, and the online-trailer
 fallback when the user's server has no attached trailer.
 
+## Browsing Home rows
+
+Media rows have a title-chevron action on iPhone/iPad and a trailing **See all**
+card on Apple TV. The TV action is a separate native control, not a synthetic
+media item, and follows the rail's poster, landscape, or featured geometry.
+Both TV Home layouts retain the complete `HomePresentationRow` source when
+opening the shared browser. Libraries and Live TV keep their existing navigation.
+Browse actions appear only when the feed confirms additional eligible titles
+beyond the Home preview, not merely because the preview reaches its limit.
+Home requests one lookahead item in the existing bounded fetch; it does not
+probe every shelf again. Complete rows, including single-item shelves and
+uncapped Continue Watching snapshots, have no redundant browse action.
+Watchlist previews the first 20 titles in its existing Home order. When there
+are more, its action selects the existing Watchlist destination instead of
+opening a separate row browser. The full profile-scoped Watchlist and its saved
+sorting/filtering preferences remain intact. A hidden Watchlist navigation entry
+is available temporarily for this explicit visit without changing the saved layout.
+The shared row browser's sort and filter menus sit at the trailing end of the
+TV heading and in the top-right navigation toolbar on iPhone/iPad. Watchlist
+and library grids use that same mobile toolbar placement, keeping supported
+query actions available while the content scrolls without adding a pinned
+content header.
+
+`HomeRowBrowseModel` preserves source order by default and loads additional
+bounded pages as the grid advances. Library and collection rows use their existing
+container APIs. Provider Home feeds continue the exact feed: Plex uses its
+same-origin shelf key where available, while limit-only feeds extend their
+requested prefix. Recommendation membership is separate from arranger slot
+identity; a missing or changed source is an error, not permission to browse an
+unrelated library. Fixed server shelves end when the source has no continuation.
+Combined Recently Added also enforces its non-music library scope on returned
+items when a provider cannot scope the feed, without changing raw page offsets.
+Its hide-watched policy is reapplied after watch mutations for combined,
+per-library, and server rows; retained candidates can reappear when marked unwatched.
+
+Sorting and filtering first complete the shelf, then publish the whole-row
+result. Pending or failed queries never display a partially sorted page as a
+complete answer. This can require more requests and memory than opening the
+default-order grid, especially for large collections. Work is cancelled on
+navigation/supersession, and profile/source visibility is checked again after
+asynchronous work. Watchlist reuses Home's full retained data in its existing tab;
+the preview does not reinterpret its account-wide membership. Browse controls
+are destination-local and do not change the Home row's settings or order.
+
 ## Recently Added watched filtering
 
 Screens & Navigation > Home > Filtering offers **Recently Added** under

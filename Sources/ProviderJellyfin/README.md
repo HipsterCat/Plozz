@@ -64,6 +64,12 @@ supported capability remains at parity.
 - **Co-equal with `ProviderPlex`.** Any new `MediaProvider` capability must be
   implemented here whenever it's implemented for Plex (and vice versa).
 
+## Home browsing
+
+Home browse feeds and collection membership request `DateCreated` so client-side
+Date added sorting uses library dates on both Jellyfin and Emby, without changing
+the server-authored feed membership or default order.
+
 ## Format badges
 
 Existing detail and per-version badges share the same source classifier.
