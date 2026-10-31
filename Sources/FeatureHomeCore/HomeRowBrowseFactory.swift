@@ -16,11 +16,12 @@ enum HomeRowBrowseFactory {
         var localizedTitle = row.choice.localizedTitle
         var titleSuffix: String?
         var mergesSources = false
+        var isRecentlyAdded = false
         var watchlistDates = false
 
         func append(
             accountID: String, libraryID: String? = nil, history: Bool = false,
-            recentlyAdded: Bool = false, appliesWatchedFilter: Bool = true,
+            recentlyAdded: Bool = false,
             fetch: @escaping @Sendable (any MediaProvider, Int, Int) async throws -> HomeRowPage
         ) {
             loaders.append { start, limit in
@@ -32,11 +33,7 @@ enum HomeRowBrowseFactory {
                     ? try await account.provider.recentlyAddedWatchState(page.items) : page.items
                 return HomeRowPage(
                     items: items.map { $0.taggingSource(accountID).taggingLibrary($0.libraryID ?? libraryID) }
-                        .filter { history || $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled) }
-                        .filter {
-                            !appliesWatchedFilter || !recentlyAdded || !visibility.hideWatchedRecentlyAdded
-                                || !HomeRecentlyAddedPolicy.isWatched($0)
-                        },
+                        .filter { history || $0.isVisibleOnHome(isLibraryVisible: visibility.isEnabled) },
                     nextOffset: page.nextOffset
                 )
             }
@@ -48,22 +45,32 @@ enum HomeRowBrowseFactory {
             watchlistDates = home.kind == .watchlist
             if home.kind == .recentlyAdded {
                 mergesSources = true
+                isRecentlyAdded = true
                 for account in accounts {
-                    let disabled = visibility.disabledKeys.filter { $0.hasPrefix(account.account.id + ":") }
+                    let hasDisabledLibraries = visibility.disabledKeys.contains { $0.hasPrefix(account.account.id + ":") }
                     let known = libraries.filter { $0.accountID == account.account.id }
-                    append(accountID: account.account.id, recentlyAdded: true, appliesWatchedFilter: false) {
+                    append(accountID: account.account.id, recentlyAdded: true) {
                         provider, start, limit in
                         let allowed: [String]?
                         if !known.isEmpty {
                             allowed = known.filter { !$0.library.isMusic && visibility.isEnabled($0.key) }.map(\.library.id)
-                            if allowed?.isEmpty == true { return .init(items: [], nextOffset: nil) }
-                        } else if !disabled.isEmpty {
-                            allowed = try await provider.libraries().filter {
+                        } else {
+                            let discovered = try await provider.libraries()
+                            allowed = discovered.isEmpty && !hasDisabledLibraries ? nil : discovered.filter {
                                 !$0.isMusic && visibility.isEnabled("\(account.account.id):\($0.id)")
                             }.map(\.id)
-                            if allowed?.isEmpty == true { return .init(items: [], nextOffset: nil) }
-                        } else { allowed = nil }
-                        return try await provider.homeRowPage(.latest(libraryIDs: allowed), startIndex: start, limit: limit)
+                        }
+                        if allowed?.isEmpty == true { return .init(items: [], nextOffset: nil) }
+                        let page = try await provider.homeRowPage(
+                            .latest(libraryIDs: allowed), startIndex: start, limit: limit
+                        )
+                        let allowedIDs = allowed.map(Set.init)
+                        return .init(
+                            items: page.items.filter { item in
+                                item.libraryID.map { allowedIDs?.contains($0) ?? true } ?? true
+                            },
+                            nextOffset: page.nextOffset
+                        )
                     }
                 }
             }
@@ -87,6 +94,7 @@ enum HomeRowBrowseFactory {
                     )
                 }
             } else if let server = row.choice.serverRow {
+                isRecentlyAdded = server.section.kind == .recentlyAdded
                 let excluded = Set(visibility.disabledKeys.compactMap {
                     $0.hasPrefix(server.accountID + ":") ? String($0.dropFirst(server.accountID.count + 1)) : nil
                 })
@@ -103,6 +111,7 @@ enum HomeRowBrowseFactory {
                 }
             } else if let library = row.choice.library {
                 if section.id == LibraryHomeRowKind.recentlyAdded.rawValue {
+                    isRecentlyAdded = true
                     append(accountID: library.accountID, libraryID: library.library.id, recentlyAdded: true) {
                         provider, start, limit in
                         let page = try await provider.items(
@@ -134,6 +143,7 @@ enum HomeRowBrowseFactory {
             break
         }
         let mergeSources = mergesSources
+        let hidesWatched = isRecentlyAdded && visibility.hideWatchedRecentlyAdded
         let serverInfo = accounts.sourceServerInfo()
         let isAdmitted = visibility.isHomeRowVisible(row.choice)
             && row.choice.library.map { visibility.isEnabled($0.key) } != false
@@ -143,10 +153,10 @@ enum HomeRowBrowseFactory {
             snapshot: snapshot, loaders: loaders, snapshotProvider: snapshotProvider,
             watchlistDates: watchlistDates, isCurrent: { isAdmitted && isCurrent() }
         ) { groups in
-            guard mergeSources else { return groups.flatMap { $0 } }
-            return MediaItemMerger.merge(
+            let items = mergeSources ? MediaItemMerger.merge(
                 HomeAggregator.interleave(groups), serverInfo: { serverInfo[$0] }, identitySources: identitySources
-            ).filter { !visibility.hideWatchedRecentlyAdded || !HomeRecentlyAddedPolicy.isWatched($0) }
+            ) : groups.flatMap { $0 }
+            return items.filter { !hidesWatched || !HomeRecentlyAddedPolicy.isWatched($0) }
         }
     }
 }

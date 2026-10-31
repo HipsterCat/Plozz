@@ -296,7 +296,7 @@ public struct JellyfinClient: Sendable {
             URLQueryItem(name: "Limit", value: String(limit)),
             URLQueryItem(name: "StartIndex", value: String(startIndex)),
             URLQueryItem(name: "EnableTotalRecordCount", value: "true"),
-            URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,PrimaryImageAspectRatio,ProviderIds")
+            URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,PrimaryImageAspectRatio,ProviderIds,DateCreated")
         ]
         if let parentID { query.append(URLQueryItem(name: "ParentId", value: parentID)) }
         return try await http.decode(
@@ -317,7 +317,7 @@ public struct JellyfinClient: Sendable {
                 URLQueryItem(name: "Limit", value: String(limit)),
                 URLQueryItem(name: "IsInProgress", value: "true"),
                 URLQueryItem(name: "EnableTotalRecordCount", value: "false"),
-                URLQueryItem(name: "Fields", value: "Overview,PrimaryImageAspectRatio,ProviderIds")
+                URLQueryItem(name: "Fields", value: "Overview,PrimaryImageAspectRatio,ProviderIds,DateCreated")
             ],
             headers: authHeaders
         )
@@ -361,7 +361,7 @@ public struct JellyfinClient: Sendable {
         var queryItems = [
             URLQueryItem(name: "Limit", value: String(limit)),
             URLQueryItem(name: "MediaTypes", value: "Video"),
-            URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,PrimaryImageAspectRatio,ProviderIds")
+            URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,PrimaryImageAspectRatio,ProviderIds,DateCreated")
         ]
         if let startIndex {
             queryItems.append(URLQueryItem(name: "StartIndex", value: String(startIndex)))
@@ -429,7 +429,7 @@ public struct JellyfinClient: Sendable {
             URLQueryItem(name: "MediaTypes", value: "Video"),
             URLQueryItem(name: "EnableResumable", value: seriesID == nil ? "false" : "true"),
             URLQueryItem(name: "EnableRewatching", value: "false"),
-            URLQueryItem(name: "Fields", value: "Overview,PrimaryImageAspectRatio,ProviderIds")
+            URLQueryItem(name: "Fields", value: "Overview,PrimaryImageAspectRatio,ProviderIds,DateCreated")
         ]
         if let startIndex {
             queryItems.append(URLQueryItem(name: "StartIndex", value: String(startIndex)))
@@ -648,7 +648,7 @@ public struct JellyfinClient: Sendable {
     ) async throws -> [BaseItemDto] {
         var queryItems = [
             URLQueryItem(name: "Limit", value: String(limit)),
-            URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,ProviderIds")
+            URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,ProviderIds,DateCreated")
         ]
         if let parentID {
             queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
@@ -674,7 +674,7 @@ public struct JellyfinClient: Sendable {
                 URLQueryItem(name: "parentId", value: parentID),
                 URLQueryItem(name: "categoryLimit", value: "5"),
                 URLQueryItem(name: "itemLimit", value: String(limit)),
-                URLQueryItem(name: "fields", value: "Overview,OriginalTitle,ProviderIds")
+                URLQueryItem(name: "fields", value: "Overview,OriginalTitle,ProviderIds,DateCreated")
             ],
             headers: authHeaders
         )
@@ -788,7 +788,7 @@ public struct JellyfinClient: Sendable {
                 URLQueryItem(name: "Limit", value: String(page.limit)),
                 URLQueryItem(name: "EnableTotalRecordCount", value: "true"),
                 URLQueryItem(name: "EnableUserData", value: "true"),
-                URLQueryItem(name: "Fields", value: "Overview,MediaStreams,MediaSources,Genres,ProviderIds,UserData")
+                URLQueryItem(name: "Fields", value: "Overview,MediaStreams,MediaSources,Genres,ProviderIds,UserData,DateCreated")
             ],
             headers: authHeaders
         )

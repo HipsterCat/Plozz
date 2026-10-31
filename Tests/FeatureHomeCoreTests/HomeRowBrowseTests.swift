@@ -4,6 +4,110 @@ import XCTest
 
 @MainActor
 final class HomeRowBrowseTests: XCTestCase {
+    func testCombinedRecentlyAddedExcludesMusicWithoutChangingRawPageOffsets() async throws {
+        let all = (0..<125).map {
+            MediaItem(id: "\($0)", title: "Title \($0)", kind: .movie)
+                .taggingLibrary($0 < 60 ? "music" : "movies")
+        }
+        for hasKnownLibraries in [true, false] {
+            let provider = BrowseFactoryProvider(all)
+            let account = ResolvedAccount(account: Account(id: "account", from: provider.session), provider: provider)
+            let choice = try XCTUnwrap(HomeRowChoice.shared.first { $0.id == .global(.recentlyAdded) })
+            let visibility = HomeLibraryVisibility(
+                rowCustomization: .init(defaults: .custom, order: [choice.id], shown: [choice.id])
+            )
+            let model = HomeRowBrowseFactory.make(
+                .init(choice: choice, source: .home(.init(kind: .recentlyAdded))),
+                accounts: [account], visibility: visibility,
+                libraries: hasKnownLibraries ? [movieLibrary] : [], isCurrent: { true }
+            )
+            await model.load()
+            XCTAssertNil(model.error)
+            XCTAssertTrue(model.items.isEmpty)
+            XCTAssertTrue(model.hasMore)
+            await model.load()
+            XCTAssertEqual(model.items.map(\.id), (60..<120).map(String.init))
+            await model.load()
+            XCTAssertNil(model.error)
+            XCTAssertEqual(model.items.map(\.id), (60..<125).map(String.init))
+            XCTAssertFalse(model.hasMore)
+            let offsets = await provider.offsets
+            XCTAssertEqual(offsets, [0, 60, 120])
+        }
+    }
+
+    func testRecentlyAddedWatchMutationsReprojectAllRowScopesAndRestoreHiddenCandidates() async throws {
+        let all = [
+            MediaItem(id: "unwatched", title: "Unwatched", kind: .movie),
+            MediaItem(id: "watched", title: "Watched", kind: .movie, isPlayed: true)
+        ].map { $0.taggingLibrary("movies") }
+        for scope in ["combined", "library", "server", "nextUp"] {
+            let provider = BrowseFactoryProvider(all)
+            let account = ResolvedAccount(account: Account(id: "account", from: provider.session), provider: provider)
+            let row: HomePresentationRow
+            switch scope {
+            case "combined":
+                let choice = try XCTUnwrap(HomeRowChoice.shared.first { $0.id == .global(.recentlyAdded) })
+                row = .init(choice: choice, source: .home(.init(kind: .recentlyAdded)))
+            case "server":
+                let server = HomeServerRowDefinition(
+                    accountID: "account", serverName: "Server", providerKind: .plex,
+                    section: .init(id: "latest", kind: .recentlyAdded, libraryID: "movies")
+                )
+                row = .init(choice: .init(serverRow: server), source: .library(HomeServerRow(definition: server).row))
+            default:
+                let section = LibrarySection(id: scope == "nextUp" ? "nextUp" : "recentlyAdded", title: "Shelf", items: [])
+                row = .init(choice: .init(section: section, library: movieLibrary),
+                            source: .library(.init(section: section, isLoading: false, failure: nil)))
+            }
+            var visibility = HomeLibraryVisibility(
+                rowCustomization: .init(defaults: .custom, order: [row.id], shown: [row.id])
+            )
+            visibility.hideWatchedRecentlyAdded = true
+            let model = HomeRowBrowseFactory.make(
+                row, accounts: [account], visibility: visibility, libraries: [movieLibrary], isCurrent: { true }
+            )
+            await model.load()
+            XCTAssertNil(model.error, scope)
+            XCTAssertEqual(model.items.map(\.id), scope == "nextUp" ? ["unwatched", "watched"] : ["unwatched"], scope)
+            model.applyMutation(.init(itemIDs: ["unwatched"], scopedItemIDs: ["account:unwatched"], played: true))
+            XCTAssertEqual(model.items.count, scope == "nextUp" ? 2 : 0, scope)
+            await model.load()
+            XCTAssertEqual(model.items.count, scope == "nextUp" ? 2 : 0, scope)
+            model.applyMutation(.init(itemIDs: ["watched"], scopedItemIDs: ["other:watched"], played: false))
+            XCTAssertEqual(model.items.count, scope == "nextUp" ? 2 : 0, scope)
+            model.applyMutation(.init(itemIDs: ["watched"], scopedItemIDs: ["account:watched"], played: false))
+            XCTAssertEqual(model.items.map(\.id), scope == "nextUp" ? ["unwatched", "watched"] : ["watched"], scope)
+        }
+    }
+
+    func testMissingLibraryDiscoveryDoesNotBypassDisabledLibraryScope() async throws {
+        let provider = BrowseFactoryProvider(
+            [MediaItem(id: "unknown", title: "Unknown library", kind: .movie)], hasLibraries: false
+        )
+        let account = ResolvedAccount(account: Account(id: "account", from: provider.session), provider: provider)
+        let choice = try XCTUnwrap(HomeRowChoice.shared.first { $0.id == .global(.recentlyAdded) })
+        var visibility = HomeLibraryVisibility(
+            rowCustomization: .init(defaults: .custom, order: [choice.id], shown: [choice.id])
+        )
+        visibility.setEnabled(false, for: "account:hidden")
+        let model = HomeRowBrowseFactory.make(
+            .init(choice: choice, source: .home(.init(kind: .recentlyAdded))),
+            accounts: [account], visibility: visibility, isCurrent: { true }
+        )
+        await model.load()
+        XCTAssertNil(model.error)
+        XCTAssertTrue(model.items.isEmpty)
+        XCTAssertFalse(model.hasMore)
+        let offsets = await provider.offsets
+        XCTAssertTrue(offsets.isEmpty)
+    }
+
+    private var movieLibrary: AggregatedLibrary {
+        .init(accountID: "account", accountName: "Viewer", serverName: "Server", providerKind: .plex,
+              library: .init(id: "movies", title: "Movies", kind: .movie))
+    }
+
     func testBrowseActionRequiresConfirmedEligibleOverflow() throws {
         let id = HomeRowID.global(.recentlyAdded)
         var visibility = HomeLibraryVisibility(
@@ -232,6 +336,42 @@ private actor Pages {
         return page(start, limit)
     }
     func recover() { failureAt = nil }
+}
+
+private actor BrowseFactoryProvider: MediaProvider {
+    nonisolated let kind = ProviderKind.plex
+    nonisolated let session = UserSession(
+        server: .init(id: "server", name: "Server", baseURL: URL(string: "https://media.test")!, provider: .plex),
+        userID: "viewer", userName: "Viewer", deviceID: "device", accessToken: "test-token"
+    )
+    let media: [MediaItem]
+    let hasLibraries: Bool
+    private(set) var offsets: [Int] = []
+    init(_ media: [MediaItem], hasLibraries: Bool = true) {
+        self.media = media
+        self.hasLibraries = hasLibraries
+    }
+    func homeRowPage(_ feed: HomeRowFeed, startIndex: Int, limit: Int) async throws -> HomeRowPage {
+        offsets.append(startIndex)
+        return .prefix(media, startIndex: startIndex, limit: limit)
+    }
+    func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        .init(items: Array(media.dropFirst(page.startIndex).prefix(page.limit)),
+              startIndex: page.startIndex, totalCount: media.count)
+    }
+    func libraries() async throws -> [MediaLibrary] {
+        hasLibraries ? [.init(id: "movies", title: "Movies", kind: .movie),
+         .init(id: "music", title: "Music", kind: .video, isMusic: true)]
+            : []
+    }
+    func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
+    func latest(limit: Int) async throws -> [MediaItem] { Array(media.prefix(limit)) }
+    func item(id: String) async throws -> MediaItem { throw AppError.notFound }
+    func children(of itemID: String) async throws -> [MediaItem] { [] }
+    func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
+    func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }
+    func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
+    nonisolated func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }
 
 private actor PageGate {

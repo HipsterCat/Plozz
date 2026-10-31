@@ -51,7 +51,7 @@ public final class HomeRowBrowseModel: Identifiable, Hashable {
     @ObservationIgnored private var generation = 0
 
     public init(
-        title: String, localizedTitle: LocalizedStringResource? = nil, titleSuffix: String? = nil,
+        title: String, localizedTitle: LocalizedStringResource? = nil, titleSuffix: String? = nil, // l10n:content — original Home row heading; app copy uses localizedTitle
         snapshot: [MediaItem] = [], loaders: [PageLoader] = [],
         snapshotProvider: (@MainActor () -> [MediaItem]?)? = nil, watchlistDates: Bool = false,
         isCurrent: @escaping @MainActor () -> Bool = { true },

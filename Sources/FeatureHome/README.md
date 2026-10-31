@@ -37,6 +37,10 @@ same-origin shelf key where available, while limit-only feeds extend their
 requested prefix. Recommendation membership is separate from arranger slot
 identity; a missing or changed source is an error, not permission to browse an
 unrelated library. Fixed server shelves end when the source has no continuation.
+Combined Recently Added also enforces its non-music library scope on returned
+items when a provider cannot scope the feed, without changing raw page offsets.
+Its hide-watched policy is reapplied after watch mutations for combined,
+per-library, and server rows; retained candidates can reappear when marked unwatched.
 
 Sorting and filtering first complete the shelf, then publish the whole-row
 result. Pending or failed queries never display a partially sorted page as a
