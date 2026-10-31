@@ -107,6 +107,15 @@ up to 256 KiB retained per source, and potentially unnecessary prefix bytes for
 a consumer that starts elsewhere or requests a larger first window. Remote
 cache revalidation is unchanged.
 
+Before a playback lease exists, an anonymous delivery connection failure
+(`URLError.cannotConnectToHost`, -1004) permits exactly one fresh opening.
+That opening repeats DAV identity/size validation before resolving another
+delivery URL, then validates the complete new prefix. Recovery is recorded in
+the `webdav` unified log without URLs or account data. Timeouts, TLS errors,
+authentication/HTTP refusals, malformed ranges and cancellation do not trigger
+this recovery; neither do DAV-origin failures or non-playback roles. Active
+leases never refresh their pinned URL or validator, including after read failures.
+
 Last-Modified is **change-detecting, not immutable**: it has one-second
 precision and cannot detect a server replacing bytes while preserving both
 timestamp and size. Strong ETags remain preferred. The metadata recheck adds

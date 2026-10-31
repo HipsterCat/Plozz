@@ -2,6 +2,59 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/067.4",
+      "version": "2026.10.30",
+      "marketingVersion": "2026.10.30",
+      "build": "67.4",
+      "releasedAt": "2026-10-30",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Choose whether to ask to resume or start over in Playback settings. Off by default.",
+            {
+              "text": "Browse multiple video libraries together with All Libraries, available in App navigation settings.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Spatial audio conversion for supported tracks on iOS/iPadOS 26 or later, with a rendering layout choice in Playback > Advanced.",
+              "platforms": ["iOS"]
+            }
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            {
+              "text": "Partially watched movies and episodes now resume immediately by default.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Navigation defaults to Home, Downloads, and Search. Add other pages in App navigation settings.",
+              "platforms": ["iOS"]
+            },
+            "Improved startup for WebDAV videos and disc images."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Fixed some Plex Live TV channels failing with a tuner unavailable error.",
+            "Fixed some WebDAV videos failing to start after a temporary delivery-server connection failure.",
+            "Fixed subtitle searches continuing after network-share playback was cancelled.",
+            {
+              "text": "Fixed duplicate navigation bars and Settings navigation on pages opened from More.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Fixed Playback Diagnostics not following the app theme.",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/067.3",
       "version": "2026.10.29",
       "marketingVersion": "2026.10.24",

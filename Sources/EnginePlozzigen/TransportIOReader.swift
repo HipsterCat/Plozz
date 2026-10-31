@@ -260,9 +260,20 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
             let discarded = state.pendingRead
             let length: Int
             if maxBackendChunk > Self.defaultBackendChunk {
-                let sequential = !state.bufferData.isEmpty
-                    && offset == state.bufferStart + Int64(state.bufferData.count)
-                var window = sequential ? min(state.bufferData.count * 4, maxBackendChunk) : Self.probeWindowSize
+                let precedingWindowSize: Int
+                if !state.bufferData.isEmpty, offset == state.bufferStart + Int64(state.bufferData.count) {
+                    precedingWindowSize = state.bufferData.count
+                } else if !discImageProbeEnabled, let cached = state.probeWindows.last(where: {
+                    offset == $0.start + Int64($0.data.count)
+                }) {
+                    // Replaying the cached header after an index seek must not
+                    // restart the sequential growth staircase.
+                    precedingWindowSize = cached.data.count
+                } else {
+                    precedingWindowSize = 0
+                }
+                var window = precedingWindowSize > 0
+                    ? min(precedingWindowSize * 4, maxBackendChunk) : Self.probeWindowSize
                 // Ordinary containers can store their index at EOF. Finish a
                 // bounded tail in one request instead of a slow growth staircase.
                 if !discImageProbeEnabled, requestedLength >= Self.containerProbeWindowSize,
@@ -302,8 +313,7 @@ public final class TransportIOReader: IOReader, @unchecked Sendable {
                 }
                 state.bufferStart = operation.offset
                 state.bufferData = data
-                let cacheLimit = discImageProbeEnabled ? Self.probeWindowSize : Self.containerProbeWindowSize
-                if maxBackendChunk > Self.defaultBackendChunk, data.count <= cacheLimit {
+                if maxBackendChunk > Self.defaultBackendChunk, data.count <= Self.containerProbeWindowSize {
                     state.probeWindows.removeAll { $0.start == operation.offset }
                     state.probeWindows.append((operation.offset, data))
                     if state.probeWindows.count > Self.maximumProbeWindows {
