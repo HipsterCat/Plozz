@@ -151,6 +151,15 @@ checkpoints and suspends VOD and tears down live playback. Foreground recovery
 keeps its existing play/pause policy. iOS/iPadOS inactivity, PiP, AirPlay, and
 background-audio behavior are unchanged.
 
+Movie/episode loads explicitly select non-mixing `.playback` / `.moviePlayback`
+audio on tvOS and iOS/iPadOS, including when an engine instance is reused.
+Browsing trailers and theme music retain their non-interrupting mixing policy,
+but that process-wide setting must not carry into primary video playback.
+Plozzigen declares the category off-main before loading, preserves an existing
+playback route-sharing policy, and leaves activation to the engine. Muted or
+shared-session channel players do not claim this policy; live multiview keeps
+its existing ownership.
+
 Live source-reset recovery retains its three-attempt cap and 20-second minimum
 spacing. `LiveChannelRetuneBudget` replenishes attempts only after five minutes
 of observed playing state, a presented frame and advancing playback position.
