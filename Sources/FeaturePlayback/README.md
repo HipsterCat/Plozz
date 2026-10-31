@@ -50,6 +50,10 @@ bounded language-match/accessibility flags without track titles or URLs.
   does not replace the glyph paths for the accepted view size. Zero-width
   probes do not shape text; unchanged measurements and control-only repositioning
   reuse cached paths. Configuration changes clear the cache.
+  Shadow and outline exclusion subtracts the winding-rule glyph silhouette,
+  preserving real letter counters without exposing overlapping font contours.
+  The exclusion path shares the layout cache; translucent text joins receive
+  only their normal fill, including with raised or depressed edges.
   These updates do not depend on pausing or revealing controls, and do not
   change saved positioning, subtitle offsets, or cue end times.
 - **Native-only video assets** — when that engine is selected, tvOS feeds the resolved URL directly to
