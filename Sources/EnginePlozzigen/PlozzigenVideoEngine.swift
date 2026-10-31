@@ -520,8 +520,11 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         // The server has already selected/remapped the rendition's streams.
         let audioSourceStreamIndex = request.isTranscoding ? nil : request.preferredAudioTrackID.map(Int32.init)
 
-        var stage = "resolve"
+        var stage = "audioSession"
         do {
+            try await Self.configureOnDemandAudioSession(outputPolicy: outputPolicy)
+            guard probePublicationGate.accepts(probeGeneration), !Task.isCancelled else { return }
+            stage = "resolve"
             if case .some(.networkFile(let locator)) = request.playbackSource {
                 guard let networkFileResolver else {
                     throw MediaTransportError.unsupportedCapability(
@@ -635,7 +638,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                     + HandoffDiagnostics.redactedDetail(detail)
             )
             streamingFailure = PlozzigenPlaybackFailure.classify(
-                stage == "resolve" ? nil : engine.errorInfo, fallbackError: error
+                stage == "resolve" || stage == "audioSession" ? nil : engine.errorInfo,
+                fallbackError: error
             )
             let err: AppError = error as? AppError ?? .unknown(detail)
             status = .failed(err)
@@ -929,6 +933,28 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     nonisolated static func applyLiveOutputPolicy(_ policy: LiveChannelOutputPolicy, to options: inout LoadOptions) {
         options.suppressDisplayCriteria = policy.suppressesDisplayMatching
         options.matchContentEnabled = !policy.suppressesDisplayMatching
+    }
+
+    private nonisolated static func configureOnDemandAudioSession(
+        outputPolicy: LiveChannelOutputPolicy
+    ) async throws {
+        guard outputPolicy.isAudible, !outputPolicy.sharesAudioSession else { return }
+        try Task.checkCancellation()
+        #if os(iOS) || os(tvOS)
+        // Browsing previews mix with other audio. Aether preserves host category
+        // settings, so each movie load must clear that process-wide preview policy.
+        try await Task.detached(priority: .userInitiated) {
+            let session = AVAudioSession.sharedInstance()
+            #if os(tvOS)
+            let defaultPolicy: AVAudioSession.RouteSharingPolicy = .longFormAudio
+            #else
+            let defaultPolicy: AVAudioSession.RouteSharingPolicy = .default
+            #endif
+            let policy = session.category == .playback ? session.routeSharingPolicy : defaultPolicy
+            try session.setCategory(.playback, mode: .moviePlayback, policy: policy, options: [])
+        }.value
+        #endif
+        try Task.checkCancellation()
     }
 
     private nonisolated static func activateLiveAudioSession() throws {
