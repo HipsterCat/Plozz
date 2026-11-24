@@ -3,6 +3,56 @@ import XCTest
 
 final class NavigationStyleSettingsStoreTests: XCTestCase {
     @MainActor
+    func testAuthorizationRefusalRemovesRememberedLibrariesButOfflineRetainsThem() {
+        let defaults = makeDefaults()
+        let snapshot = NavigationLibrariesSnapshotStore(defaults: defaults)
+        let model = NavigationStyleSettingsModel(
+            store: NavigationStyleSettingsStore(defaults: defaults),
+            layoutStore: NavigationLibraryLayoutStore(defaults: defaults),
+            librariesSnapshotStore: snapshot
+        )
+        let library = AggregatedLibrary(
+            accountID: "server", accountName: "Viewer", serverName: "Server",
+            providerKind: .plex, library: .init(id: "movies", title: "Movies", kind: .movie)
+        )
+        for error in [AppError.serverUnreachable, .unauthorized, .invalidCredentials, .accessRestricted] {
+            model.updateContentLibraries([library], accountIDs: ["server"], unreachableAccountIDs: [])
+            model.updateContentLibraries(
+                [], accountIDs: ["server"], unreachableAccountIDs: ["server"], failures: ["server": error]
+            )
+            let expected = error == .serverUnreachable ? [library] : []
+            XCTAssertEqual(model.contentLibraries, expected)
+            XCTAssertEqual(snapshot.load(), expected)
+        }
+    }
+
+    @MainActor
+    func testShowingLiveTVOverridesAutomaticAndExplicitHidingWithoutChangingOtherLayout() {
+        let defaults = makeDefaults()
+        let store = NavigationLibraryLayoutStore(defaults: defaults, namespace: "viewer")
+        let original = NavigationLibraryLayout(
+            order: [NavigationLibraryLayout.searchKey, NavigationLibraryLayout.homeKey],
+            hiddenKeys: [NavigationLibraryLayout.liveTVKey, NavigationLibraryLayout.watchlistKey]
+        )
+        store.save(original)
+        let model = NavigationStyleSettingsModel(
+            store: NavigationStyleSettingsStore(defaults: defaults, namespace: "viewer"), layoutStore: store
+        )
+        model.automaticallyHiddenKeys = NavigationDestinationDefaults.iOSAutomaticallyHiddenKeys
+        XCTAssertFalse(model.showsLiveTV)
+
+        model.showsLiveTV = true
+
+        XCTAssertTrue(model.showsLiveTV)
+        XCTAssertTrue(store.load().shownKeys.contains(NavigationLibraryLayout.liveTVKey))
+        XCTAssertEqual(store.load().order, original.order)
+        XCTAssertEqual(store.load().hiddenKeys, [NavigationLibraryLayout.watchlistKey])
+        XCTAssertEqual(NavigationLibraryLayoutStore(defaults: defaults, namespace: "other").load(), .default)
+        model.showsLiveTV = false
+        XCTAssertFalse(model.showsLiveTV, "A later manual Hide must still be respected.")
+    }
+
+    @MainActor
     func testLibraryOrderingHintsTrackProfileArrangementAndDiscoveryWithoutHidingCards() {
         let defaults = makeDefaults()
         let layoutStore = NavigationLibraryLayoutStore(defaults: defaults, namespace: "viewer")
@@ -265,10 +315,10 @@ final class NavigationStyleSettingsStoreTests: XCTestCase {
             visible: Array(available.prefix(5))
         ).isEmpty)
         XCTAssertEqual(NavigationDestinationDefaults.iPhoneOverflowKeys(visible: available),
-                       Set(available.suffix(2)))
+                       Set(available.dropFirst(4)))
         let reordered = Array(available.reversed())
         XCTAssertEqual(NavigationDestinationDefaults.iPhoneOverflowKeys(visible: reordered),
-                       Set(reordered.suffix(2)))
+                       Set(reordered.dropFirst(4)))
     }
 
     func testMobileDefaultsNeverOverflowEvenWithWatchlistAndKeepTVSettingsVisible() {
@@ -373,7 +423,10 @@ final class NavigationStyleSettingsStoreTests: XCTestCase {
         XCTAssertFalse(model.showsWatchlist)
         XCTAssertFalse(model.showsMusic)
         model.resetLibraryLayout()
-        XCTAssertEqual(model.librarySections(available: available).enabled, available)
+        XCTAssertEqual(model.librarySections(available: available).enabled,
+                       available.filter { $0 != NavigationLibraryLayout.discoverKey })
+        XCTAssertEqual(model.librarySections(available: available).disabled,
+                       [NavigationLibraryLayout.discoverKey])
         XCTAssertTrue(model.showsWatchlist)
         XCTAssertTrue(model.showsMusic)
         XCTAssertEqual(NavigationLibraryLayoutStore(defaults: defaults).load(), .default)

@@ -124,13 +124,13 @@ def github_fixture(catalog):
     )
 
 
-def sync(discord, apple, publish=True, github=None, catalog=None):
+def sync(discord, apple, publish=True, github=None, catalog=None, roadmap_enabled=False):
     github = github or github_fixture(catalog_fixture())
     with redirect_stdout(io.StringIO()):
         APP.synchronize(
             discord, apple, github,
             catalog if catalog is not None else catalog_fixture(),
-            (56, 0, 0), publish=publish,
+            (56, 0, 0), publish=publish, roadmap_enabled=roadmap_enabled,
         )
 
 
@@ -144,6 +144,7 @@ class AvailabilityTests(unittest.TestCase):
         self.assertIn("Apple TV", embed["description"])
         self.assertIn("iPhone and iPad", embed["description"])
         self.assertIn("/releases/tag/release/056", embed["description"])
+        self.assertIn("**Updated**\n• Playback improvements.", embed["description"])
         sync(discord, apple)
         self.assertEqual(len(discord.writes), 1)
         self.assertTrue(discord.writes[0][2]["enforce_nonce"])
@@ -231,6 +232,68 @@ class AvailabilityTests(unittest.TestCase):
             APP.available_builds(Apple(build(), build()), (56, 0, 0))
 
 
+class RoadmapLinkTests(unittest.TestCase):
+    def test_every_announcement_variant_includes_link_only_after_activation(self):
+        for number in ("56", "56.5"):
+            catalog = catalog_fixture(number)
+            for platforms in ({"TV_OS"}, {"IOS"}, {"TV_OS", "IOS"}):
+                release = {"build": number, "marketing": "2026.9.25", "platforms": platforms}
+                for source in (catalog, {"releases": []}):
+                    for published in (False, True):
+                        if published and not source["releases"]:
+                            continue
+                        github_releases = [
+                            {"tag_name": APP.NOTES.release_tag(number), "draft": False}
+                        ] if published else []
+                        with self.subTest(number=number, platforms=platforms, published=published, source=source):
+                            baseline = APP.announcement(release, source, github_releases)
+                            self.assertNotIn(APP.ROADMAP, baseline["description"])
+                            self.assertEqual(baseline, APP.announcement(
+                                release, source, github_releases, roadmap_enabled=False,
+                            ))
+                            enabled = APP.announcement(release, source, github_releases, roadmap_enabled=True)
+                            self.assertEqual(enabled["description"].count(f"[Roadmap]({APP.ROADMAP})"), 1)
+                            self.assertEqual(enabled["title"], baseline["title"])
+                            self.assertEqual(enabled["url"], baseline["url"])
+
+    def test_activation_and_disabling_edit_existing_message_once(self):
+        discord, apple = Discord(), Apple(build(), build("IOS"))
+        sync(discord, apple)
+        original = copy.deepcopy(discord.messages[0])
+        discord.writes.clear()
+        sync(discord, apple, roadmap_enabled=True)
+        sync(discord, apple, roadmap_enabled=True)
+        self.assertEqual([write[0] for write in discord.writes], ["PATCH"])
+        self.assertEqual(len(discord.messages), 1)
+        self.assertEqual(discord.messages[0]["id"], original["id"])
+        self.assertEqual(discord.messages[0]["embeds"][0]["footer"], original["embeds"][0]["footer"])
+        self.assertEqual(discord.writes[0][2]["allowed_mentions"]["parse"], [])
+        discord.writes.clear()
+        sync(discord, apple)
+        sync(discord, apple)
+        self.assertEqual([write[0] for write in discord.writes], ["PATCH"])
+        self.assertEqual(discord.messages[0]["embeds"], original["embeds"])
+
+    def test_enabled_preview_does_not_write(self):
+        discord = Discord()
+        sync(discord, Apple(build()), publish=False, roadmap_enabled=True)
+        self.assertEqual(discord.writes, [])
+
+    def test_cli_uses_only_the_separate_explicit_link_activation(self):
+        for value in (None, "", "false", "TRUE", "true"):
+            environment = {"TESTFLIGHT_DISCORD_MIN_BUILD": "56", "DISCORD_ROADMAP_ENABLED": "true"}
+            if value is not None:
+                environment["DISCORD_ROADMAP_LINK_ENABLED"] = value
+            with self.subTest(value=value), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(APP.sys, "argv", ["script", "--mode", "check"]), \
+                    patch.object(APP.BRIDGE, "API"), patch.object(APP, "apple_token"), \
+                    patch.object(APP.NOTES, "load_catalog"), patch.object(APP, "synchronize") as synchronize:
+                self.assertEqual(APP.main(), 0)
+                self.assertEqual(synchronize.call_args.kwargs["roadmap_enabled"], value == "true")
+                self.assertFalse(synchronize.call_args.kwargs["publish"])
+        self.assertIn("DISCORD_ROADMAP_LINK_ENABLED: ${{ vars.DISCORD_ROADMAP_LINK_ENABLED }}", WORKFLOW)
+
+
 class ReleaseIdentityTests(unittest.TestCase):
     def test_published_tag_supplies_date_when_main_catalog_lacks_build(self):
         discord = Discord()
@@ -244,8 +307,12 @@ class ReleaseIdentityTests(unittest.TestCase):
 
     def test_tagged_catalog_wins_over_a_changed_main_entry(self):
         discord = Discord()
-        sync(discord, Apple(build()), catalog=catalog_fixture(version="2026.10.16", released_at="2026-10-16"))
+        changed_main = catalog_fixture(version="2026.10.16", released_at="2026-10-16")
+        changed_main["releases"][0]["sections"][0]["items"] = ["Unshipped changes on main."]
+        sync(discord, Apple(build()), catalog=changed_main)
         self.assertEqual(discord.messages[0]["embeds"][0]["title"], "Plozz 2026.10.14 (56) is on TestFlight")
+        self.assertIn("Playback improvements.", discord.messages[0]["embeds"][0]["description"])
+        self.assertNotIn("Unshipped changes", discord.messages[0]["embeds"][0]["description"])
 
     def test_existing_incorrect_announcement_is_repaired_once_without_duplicate(self):
         discord, apple = Discord(), Apple(build(number="57"), build("IOS", number="57"))
@@ -282,6 +349,7 @@ class ReleaseIdentityTests(unittest.TestCase):
                     discord, github = Discord(), Mock(pages=Mock(return_value=releases))
                     sync(discord, Apple(build()), github=github, catalog=catalog)
                     self.assertEqual(discord.messages[0]["embeds"][0]["title"], title)
+                    self.assertNotIn("Playback improvements.", discord.messages[0]["embeds"][0]["description"])
                     github.call.assert_not_called()
 
     def test_invalid_tagged_catalog_fails_without_falling_back_to_main(self):
@@ -330,6 +398,115 @@ class ReleaseIdentityTests(unittest.TestCase):
             sync(discord, Apple(build()), github=github)
         github.call.assert_not_called()
         self.assertEqual(discord.writes, [])
+
+
+class InlineNotesTests(unittest.TestCase):
+    def scoped_catalog(self):
+        catalog = catalog_fixture()
+        catalog["releases"][0]["sections"] = [
+            {"category": "New", "items": [
+                "A shared feature.",
+                {"text": "A TV feature.", "platforms": ["tvOS"]},
+                {"text": "A mobile feature.", "platforms": ["iOS"]},
+                {"text": "Explicitly shared.", "platforms": ["tvOS", "iOS"]},
+            ]},
+            {"category": "Updated", "items": ["Shared improvements."]},
+            {"category": "Fixed", "items": [{"text": "Mobile fix.", "platforms": ["iOS"]}]},
+        ]
+        return catalog
+
+    def test_shared_notes_once_and_scoped_notes_labeled_in_category_order(self):
+        catalog, discord = self.scoped_catalog(), Discord()
+        sync(discord, Apple(build(), build("IOS")), github=github_fixture(catalog), catalog=catalog)
+        description = discord.messages[0]["embeds"][0]["description"]
+        self.assertEqual(description.count("A shared feature."), 1)
+        self.assertIn("• **Apple TV:** A TV feature.", description)
+        self.assertIn("• **iPhone and iPad:** A mobile feature.", description)
+        self.assertIn("• Explicitly shared.", description)
+        self.assertLess(description.index("**New**"), description.index("**Updated**"))
+        self.assertLess(description.index("**Updated**"), description.index("**Fixed**"))
+
+    def test_pending_platform_notes_appear_only_when_available_on_the_same_message(self):
+        catalog, discord = self.scoped_catalog(), Discord()
+        github = github_fixture(catalog)
+        sync(discord, Apple(build(), build("IOS", external="WAITING_FOR_BETA_REVIEW")), github=github)
+        description = discord.messages[0]["embeds"][0]["description"]
+        self.assertIn("• A TV feature.", description)
+        self.assertNotIn("mobile feature", description)
+        self.assertNotIn("Mobile fix", description)
+        self.assertNotIn("**Fixed**", description)
+        sync(discord, Apple(build(), build("IOS")), github=github)
+        self.assertEqual([write[0] for write in discord.writes], ["POST", "PATCH"])
+        self.assertEqual(len(discord.messages), 1)
+        self.assertIn("Mobile fix", discord.messages[0]["embeds"][0]["description"])
+
+    def test_available_platform_with_no_changes_uses_the_release_fallback(self):
+        catalog = catalog_fixture()
+        catalog["releases"][0]["sections"][0]["items"] = [{"text": "Mobile only.", "platforms": ["iOS"]}]
+        discord = Discord()
+        sync(discord, Apple(build()), github=github_fixture(catalog))
+        description = discord.messages[0]["embeds"][0]["description"]
+        self.assertIn("No changes for this platform in this build.", description)
+        self.assertNotIn("Mobile only.", description)
+
+    def test_long_notes_keep_complete_bullets_and_stay_under_discord_limits(self):
+        catalog = catalog_fixture()
+        bullets = [f"Change {index}: " + "\U0001f3ac" * 150 + " Complete." for index in range(25)]
+        catalog["releases"][0]["sections"] = [{"category": "Updated", "items": bullets}]
+        discord = Discord()
+        sync(discord, Apple(build(), build("IOS")), github=github_fixture(catalog), roadmap_enabled=True)
+        embed = discord.messages[0]["embeds"][0]
+        description = embed["description"]
+        self.assertLessEqual(len(description.encode("utf-16-le")) // 2, 4096)
+        self.assertLessEqual(sum(len(value.encode("utf-16-le")) // 2 for value in [
+            embed["title"], description, embed["footer"]["text"],
+        ]), 6000)
+        included = [line.removeprefix("• ") for line in description.splitlines() if line.startswith("• ")]
+        self.assertGreater(len(included), 0)
+        self.assertEqual(included, bullets[:len(included)])
+        self.assertIn("Notes shortened to fit Discord.", description)
+        self.assertIn("/releases/tag/release/056", description)
+        self.assertIn(f"[Roadmap]({APP.ROADMAP})", description)
+        sync(discord, Apple(build(), build("IOS")), github=github_fixture(catalog), roadmap_enabled=True)
+        self.assertEqual(len(discord.writes), 1)
+
+    def test_one_oversized_bullet_is_not_cut_or_replaced_with_a_later_note(self):
+        catalog = catalog_fixture()
+        catalog["releases"][0]["sections"] = [
+            {"category": "New", "items": ["Long note " + "x" * 4096]},
+            {"category": "Fixed", "items": ["Later fix."]},
+        ]
+        discord = Discord()
+        sync(discord, Apple(build()), github=github_fixture(catalog))
+        description = discord.messages[0]["embeds"][0]["description"]
+        self.assertNotIn("Long note", description)
+        self.assertNotIn("Later fix", description)
+        self.assertNotIn("**New**", description)
+        self.assertIn("Notes shortened", description)
+
+    def test_exact_description_limit_is_complete_and_one_unit_over_is_explicit(self):
+        entry = catalog_fixture()["releases"][0]
+        prefix = "Available.\n\n**Updated**\n• "
+        text = "\U0001f3ac" * 100
+        text += "x" * (4096 - len((prefix + text).encode("utf-16-le")) // 2)
+        entry["sections"][0]["items"] = [text]
+        description = APP.with_release_notes("Available.", entry, {"TV_OS"}, "https://example.com/notes")
+        self.assertEqual(len(description.encode("utf-16-le")) // 2, 4096)
+        self.assertNotIn("shortened", description)
+        entry["sections"][0]["items"] = [text + "x"]
+        description = APP.with_release_notes("Available.", entry, {"TV_OS"}, "https://example.com/notes")
+        self.assertLessEqual(len(description.encode("utf-16-le")) // 2, 4096)
+        self.assertIn("Notes shortened", description)
+
+    def test_notes_are_added_to_existing_messages_without_duplicate_or_mentions(self):
+        discord = Discord()
+        sync(discord, Apple(build()), github=Mock(pages=Mock(return_value=[])))
+        catalog = catalog_fixture()
+        catalog["releases"][0]["sections"][0]["items"] = ["Improved @everyone and <@123> display."]
+        sync(discord, Apple(build()), github=github_fixture(catalog))
+        self.assertEqual(len(discord.messages), 1)
+        self.assertEqual([write[0] for write in discord.writes], ["POST", "PATCH"])
+        self.assertEqual(discord.writes[-1][2]["allowed_mentions"]["parse"], [])
 
 
 class PermissionTests(unittest.TestCase):

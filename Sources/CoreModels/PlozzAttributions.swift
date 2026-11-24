@@ -48,6 +48,25 @@ public struct PlozzAttribution: Identifiable, Sendable {
 }
 
 public enum PlozzAttributions {
+    private static let experimentalJavaEntries: [PlozzAttribution] = {
+        #if PLOZZ_EXPERIMENTAL_BDJ && DEBUG
+        [
+            PlozzAttribution(
+                title: "OpenJDK & DejaVu",
+                detail:
+                    "This experimental build uses the OpenJDK Zero interpreter under GPL-2.0, "
+                    + "with exceptions applying to designated components, plus DejaVu fonts. "
+                    + "Sources and build adaptations are recorded in "
+                    + "tools/disc-menu-lab/dependencies.json and tools/build-disc-runtime.py. "
+                    + "Complete component notices are bundled in DiscRuntime/legal.",
+                licenses: [.init("GPL-2.0; component-specific exceptions", family: .gpl)]
+            ),
+        ]
+        #else
+        []
+        #endif
+    }()
+
     public static let introduction =
         "Plozz is free and open source under the GPL-3.0 license with an App Store "
         + "exception. It is not affiliated with, endorsed, or certified by any of "
@@ -78,7 +97,7 @@ public enum PlozzAttributions {
                 "Playback is powered by AetherEngine by Vincent Herbst, under "
                 + "LGPL-3.0 with an Apple Store exception. "
                 + "Upstream: https://github.com/superuser404notfound/AetherEngine. "
-                + "Source: https://github.com/brandomoore/AetherEngine/tree/c1ce4cf48bad416e6be5230032a2b7f332e833d8",
+                + "Source: https://github.com/brandomoore/AetherEngine/tree/d98f93de1bc05635279ab5ce7831910327452e3f",
             licenses: [.init("LGPL-3.0", family: .lgpl)]
         ),
         PlozzAttribution(
@@ -86,23 +105,24 @@ public enum PlozzAttributions {
             detail:
                 "FFmpeg n8.1.3 provides libavcodec, libavformat, libavutil, "
                 + "libswresample, libswscale and libavfilter for media decoding "
-                + "and the playback bridge. Packaged by FFmpegBuild 3.10.1. "
+                + "and the playback bridge. Packaged by FFmpegBuild 3.15.0. "
                 + "Source and component notices: "
-                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.10.1. "
+                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.15.0. "
                 + "Upstream: https://ffmpeg.org.",
             licenses: [.init("LGPL-2.1+", family: .lgpl)]
         ),
         PlozzAttribution(
             title: "libdovi",
             detail:
-                "Dolby Vision metadata parsing uses libdovi, packaged by LibDovi 2.1.0. "
-                + "Source: https://github.com/superuser404notfound/LibDovi/tree/2.1.0.",
+                "Dolby Vision metadata parsing uses libdovi, packaged by LibDovi 2.2.0. "
+                + "Source: https://github.com/superuser404notfound/LibDovi/tree/2.2.0.",
             licenses: [.init("MIT", family: .mit)]
         ),
         PlozzAttribution(
             title: "LibTrueHD",
             detail:
-                "TrueHD decoding and optional spatial audio rendering use LibTrueHD 3.1.0. "
+                "LibTrueHD 3.1.0 supported optional spatial audio rendering in earlier builds "
+                + "and is not linked in this build. "
                 + "By Quick104 and "
                 + "Vincent Herbst, using truehdd and oamd by Rainbaby and contributors. "
                 + "Source: https://github.com/superuser404notfound/LibTrueHD/tree/3.1.0. "
@@ -129,11 +149,21 @@ public enum PlozzAttributions {
             ]
         ),
         PlozzAttribution(
+            title: "libbluray",
+            detail:
+                "Disc navigation uses libbluray 1.5.0 and its bundled libudfread. "
+                + "This build does not include decryption libraries. "
+                + "Source: https://download.videolan.org/pub/videolan/libbluray/1.5.0/. "
+                + "Complete license texts are bundled in LibblurayNotices.txt.",
+            licenses: [.init("LGPL-2.1-or-later", family: .lgpl)]
+        ),
+    ] + experimentalJavaEntries + [
+        PlozzAttribution(
             title: "dav1d",
             detail:
                 "AV1 video decoding uses dav1d 1.5.4 by VideoLAN and contributors. "
                 + "Source and notices are included in FFmpegBuild: "
-                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.10.1.",
+                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.15.0.",
             licenses: [.init("BSD-2-Clause", family: .bsd)]
         ),
         PlozzAttribution(
@@ -141,7 +171,7 @@ public enum PlozzAttributions {
             detail:
                 "Image scaling and color conversion use zimg 3.0.6 under the WTFPL. "
                 + "Source: https://github.com/sekrit-twc/zimg. "
-                + "License: https://github.com/superuser404notfound/FFmpegBuild/blob/3.10.1/LICENSES/zimg.WTFPL.txt."
+                + "License: https://github.com/superuser404notfound/FFmpegBuild/blob/3.15.0/LICENSES/zimg.WTFPL.txt."
         ),
         PlozzAttribution(
             title: "libzvbi",
@@ -150,7 +180,7 @@ public enum PlozzAttributions {
                 + "The library is LGPL-2.0-or-later, distributed under LGPL-2.1; "
                 + "ure.c uses the MIT license. "
                 + "Source, build modifications and notices: "
-                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.10.1/LICENSES.",
+                + "https://github.com/superuser404notfound/FFmpegBuild/tree/3.15.0/LICENSES.",
             licenses: [
                 .init("LGPL-2.1", family: .lgpl),
                 .init("MIT", family: .mit),
@@ -162,7 +192,7 @@ public enum PlozzAttributions {
                 "SMB network shares use SMBClient by Kishikawa Katsumi, "
                 + "with Plozz's SMB3 and connection-handling changes. "
                 + "Upstream: https://github.com/kishikawakatsumi/SMBClient. "
-                + "Source: https://github.com/thatcube/SMBClient/tree/5d5bceb6fa0833c98b0eecc676609c9476bd9423.",
+                + "Source: https://github.com/thatcube/SMBClient/tree/c778237de5e2525a46005241dc5e7926703bddcf.",
             licenses: [.init("MIT", family: .mit)]
         ),
         PlozzAttribution(

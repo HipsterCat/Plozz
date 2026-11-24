@@ -2,6 +2,34 @@ import XCTest
 @testable import CoreModels
 
 final class HomeRowCustomizationTests: XCTestCase {
+    func testComingSoonDefaultsOnWithoutReplacingSavedOrderOrExplicitHide() {
+        let order: [HomeRowID] = [.global(.watchlist), .global(.continueWatching)]
+        for preset: HomeRowCustomization.Defaults in [.combined, .provider, .legacy, .custom, .matchServer] {
+            var layout = HomeRowCustomization(defaults: preset, order: order)
+            XCTAssertTrue(layout.isVisible(.global(.comingSoon), providerDefault: true))
+            XCTAssertEqual(layout.order, order)
+            layout.hidden.insert(.global(.comingSoon))
+            XCTAssertFalse(layout.isVisible(.global(.comingSoon), providerDefault: true))
+            XCTAssertEqual(layout.order, order)
+        }
+    }
+
+    func testNativeShelfLocatorRoundTripsAndOldRowsRemainDecodable() throws {
+        let old = Data(#"{"id":"plex:1:movie.recentlyadded.1","kind":"recentlyAdded","libraryID":"1","includesNextUp":false}"#.utf8)
+        var section = try JSONDecoder().decode(ServerHomeSection.self, from: old)
+        XCTAssertNil(section.contentKey)
+        section.contentKey = "/library/sections/1/all?sort=addedAt:desc"
+        let definition = HomeServerRowDefinition(
+            accountID: "plex", serverName: "Server", providerKind: .plex, section: section
+        )
+        let settings = HomeRowCustomization(defaults: .custom, serverRows: [definition])
+        let restored = try JSONDecoder().decode(
+            HomeRowCustomization.self, from: JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(restored.serverRows, settings.serverRows)
+        XCTAssertEqual(restored.serverRows.first?.section.contentKey, section.contentKey)
+    }
+
     func testSectionCatalogPreservesEveryProviderAndDeduplicatesNativeRows() {
         let kinds: [ProviderKind] = [.jellyfin, .emby, .plex, .silo, .mediaShare]
         let libraries = kinds.flatMap { kind in
@@ -116,15 +144,15 @@ final class HomeRowCustomizationTests: XCTestCase {
         var unsupported = HomeRowCustomization(defaults: .matchServer)
         unsupported.resolvedDefaults = .init(mode: .providerFallback)
         let common: [HomeRowID] = [
-            .global(.continueWatching), .global(.watchlist), .global(.recentlyAdded), .liveTV
+            .global(.continueWatching), .global(.comingSoon), .global(.watchlist), .global(.recentlyAdded), .liveTV
         ]
         let cases: [(HomeRowCustomization, [HomeRowID])] = [
             (.init(defaults: .combined), common + [.libraries]),
-            (single, [.global(.continueWatching), .liveTV, .libraries]),
+            (single, [.global(.continueWatching), .liveTV, .global(.comingSoon), .libraries]),
             (multiple, common + [fallbackID, .libraries]),
-            (unsupported, [.global(.continueWatching), .global(.watchlist), fallbackID, .libraries]),
+            (unsupported, [.global(.continueWatching), .global(.comingSoon), .global(.watchlist), fallbackID, .libraries]),
             (.init(defaults: .matchServer),
-             [.global(.continueWatching), .global(.watchlist), fallbackID, .libraries])
+             [.global(.continueWatching), .global(.comingSoon), .global(.watchlist), fallbackID, .libraries])
         ]
         for (customization, expected) in cases {
             let visibility = HomeLibraryVisibility(rowCustomization: customization)
@@ -161,13 +189,13 @@ final class HomeRowCustomizationTests: XCTestCase {
         )
         customization.setVisible(false, for: .global(.continueWatching))
         XCTAssertEqual(customization.defaults, .custom)
-        XCTAssertEqual(customization.sections(choices: HomeRowChoice.shared).enabled, [.liveTV, .libraries])
+        XCTAssertEqual(customization.sections(choices: HomeRowChoice.shared).enabled, [.liveTV, .global(.comingSoon), .libraries])
     }
 
     func testDefaultLibraryPositionDoesNotEnableAServerHiddenLibraryRowOrRewriteOldOrders() {
         var matched = HomeRowCustomization(defaults: .matchServer)
         matched.resolvedDefaults = .init(mode: .server, order: [.global(.continueWatching)])
-        XCTAssertEqual(matched.sections(choices: HomeRowChoice.shared).enabled, [.global(.continueWatching)])
+        XCTAssertEqual(matched.sections(choices: HomeRowChoice.shared).enabled, [.global(.continueWatching), .global(.comingSoon)])
         for preset: HomeRowCustomization.Defaults in [.custom, .combined, .legacy, .provider] {
             let saved = HomeRowCustomization(
                 defaults: preset, order: [.libraries, .global(.continueWatching)],
@@ -465,7 +493,7 @@ final class HomeRowCustomizationTests: XCTestCase {
             target.removePersistentDomain(forName: targetSuite)
         }
         let model = HomeLibraryVisibilityModel(store: HomeLibraryVisibilityStore(defaults: source, namespace: "one"))
-        model.setContinueWatchingAction(.openDetails)
+        model.setContinueWatchingAction(.play)
         let choices = HomeRowChoice.shared
         model.applyRows(
             .init(enabled: [.libraries, .global(.continueWatching)],
@@ -476,7 +504,7 @@ final class HomeRowCustomizationTests: XCTestCase {
         ProfileSettingsTransfer.apply(entries, namespace: "one", defaults: target)
         let restored = HomeLibraryVisibilityStore(defaults: target, namespace: "one").load()
         XCTAssertEqual(restored, model.visibility)
-        XCTAssertEqual(restored.continueWatchingAction, .openDetails)
+        XCTAssertEqual(restored.continueWatchingAction, .play)
         XCTAssertEqual(HomeLibraryVisibilityStore(defaults: target, namespace: "two").load(), .default)
         XCTAssertEqual(
             ProfileSettingsTransfer.capture(namespace: "one", defaults: target), entries

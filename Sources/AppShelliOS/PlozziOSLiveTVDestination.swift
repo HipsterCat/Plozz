@@ -79,6 +79,7 @@ struct PlozziOSLiveTVDestination: View {
     private func liveTVContent(cache: LiveTVIndexedCache, runtime: LiveTVLibraryRuntime) -> some View {
         LiveTVPrototypeView(
             isActive: isActive,
+            preloadsCatalog: false,
             preferencesStore: preferencesStore,
             viewSettingsStore: viewSettingsStore,
             sourceStore: sourceStore,
@@ -97,6 +98,9 @@ struct PlozziOSLiveTVDestination: View {
             playbackUnavailableReason: effectiveNetworkBlock?.playbackMessage,
             restoreDestination: restoreDestination,
             catalogCache: cache,
+            lastSeenStore: LiveTVLastSeenStore(
+                profileID: profileID, secureStore: LiveTVSourceStorage.catalogSecrets()
+            ),
             sourceLoader: LiveTVCatalogStorage.loader(profileID: profileID, namespace: preferencesNamespace),
             importModel: importModel,
             profileID: profileID,
@@ -112,7 +116,7 @@ struct PlozziOSLiveTVDestination: View {
             homeModel: HomeLiveTVRuntime.model(profileID: profileID),
             homeAuthorizationID: HomeLiveTVRuntime.authorizationID(profileID: profileID, accounts: accountsProviders),
             onOpenTitle: navigateToItem.map { navigator in { navigator($0) } },
-            topBarAccessory: usesVerticalToolbar ? nil : AnyView(PlozziOSSettingsAvatarButton(action: onShowSettings))
+            onShowSettings: onShowSettings
         ) { playback in
             LiveChannelPlayerView(
                 channelID: playback.channel.id,
@@ -124,7 +128,10 @@ struct PlozziOSLiveTVDestination: View {
                     runtime.makeEngine(
                         engine: try PlozzigenVideoEngine(
                             authenticatedHTTPResolver: playback.authenticatedHTTPResolver,
-                            liveBufferPreference: { LivePlaybackBufferStore().load() }
+                            liveBufferPreference: { LivePlaybackBufferStore().load() },
+                            videoUpscalingPreference: { [preferencesNamespace] in
+                                PlaybackSettingsStore(namespace: preferencesNamespace).load().videoUpscaling
+                            }
                         ),
                         onCompleted: { [profiles, profileID, preferencesNamespace,
                                         completeLibraryChannelPlayback, weak runtime] item, token in
@@ -161,7 +168,6 @@ struct PlozziOSLiveTVDestination: View {
                 onPlaybackUpdate: playback.playbackUpdate,
                 onPlaybackFailed: playback.playbackFailed,
                 onVideoAspectRatioChange: playback.videoAspectRatioChanged,
-                preparingChannelName: playback.preparingChannelName,
                 onMultiview: playback.canOpenMultiview ? playback.openMultiview : nil,
                 outputGroup: liveOutputGroup,
                 outputID: playback.paneID,
@@ -169,6 +175,9 @@ struct PlozziOSLiveTVDestination: View {
                 countsAsWatching: playback.countsAsWatching,
                 isMultiview: playback.isMultiview,
                 trackPreferences: runtime.trackPreferences,
+                displayTransitionSettings: {
+                    PlaybackSettingsStore(namespace: preferencesNamespace).load()
+                },
                 touchSkipIntervals: {
                     let settings = PlaybackSettingsStore(namespace: preferencesNamespace).load()
                     return (settings.skipBackwardInterval, settings.skipForwardInterval)
@@ -323,7 +332,7 @@ private struct PlozziOSLiveTVSourcesContent: View {
                 sourceContent
             } else {
                 SettingsPageScroll { sourceContent }
-                    .navigationTitle("Sources")
+                    .navigationTitle(Text(SettingsCopy.tvSources))
             }
         }
         .navigationDestination(isPresented: $managesChannels) {

@@ -60,7 +60,7 @@ public enum WatchMutationFactory {
         // still resolved the origin's providerKind above (that's origin metadata,
         // not a fan-out target), but we skip unioning the item's own peer sources
         // and the identity-index union so no other server is touched.
-        guard crossServerSync else { return result }
+        guard crossServerSync, !item.isExtra, !item.isTrailer, !item.isYouTubeTrailer else { return result }
         // Episodes deliberately ignore pre-merged peers here. Some providers expose
         // show-level IDs on episodes, so a stale identity snapshot can contain a
         // different episode from the same series. The episode expansion resolver
@@ -74,7 +74,13 @@ public enum WatchMutationFactory {
         return result
     }
 
-    private static func canonicalID(for item: MediaItem) -> String {
+    private static func canonicalID(for item: MediaItem, primaryAccountID: String?) -> String {
+        if item.isTrailer || item.isYouTubeTrailer {
+            return "trailer:\(item.sourceAccountID ?? primaryAccountID ?? ""):\(item.id)"
+        }
+        if item.isExtra {
+            return "extra:\(item.sourceAccountID ?? primaryAccountID ?? ""):\(item.id)"
+        }
         // For episodes the title fallback (used only when no strong external id is
         // present) must key on the SERIES title, not the episode title: generic
         // episode titles like "Pilot" / "Episode 1" collide across unrelated shows,
@@ -117,7 +123,8 @@ public enum WatchMutationFactory {
         for item: MediaItem,
         primaryAccountID: String?
     ) -> (origin: EpisodeOrigin?, pending: Bool) {
-        guard item.kind == .episode, item.seasonNumber != nil, item.episodeNumber != nil,
+        guard !item.isExtra, !item.isTrailer, !item.isYouTubeTrailer,
+              item.kind == .episode, item.seasonNumber != nil, item.episodeNumber != nil,
               let accountID = item.sourceAccountID ?? primaryAccountID
         else { return (nil, false) }
         return (EpisodeOrigin(accountID: accountID, itemID: item.id), true)
@@ -136,15 +143,15 @@ public enum WatchMutationFactory {
     private static func identityExpansion(
         for item: MediaItem
     ) -> (identities: [MediaIdentity], pending: Bool, anchorTitle: String?, anchorYear: Int?) {
-        guard item.kind != .episode else { return ([], false, nil, nil) }
+        guard item.kind != .episode, !item.isExtra, !item.isTrailer, !item.isYouTubeTrailer else { return ([], false, nil, nil) }
         let identities = MediaItemIdentity.identities(for: item)
         let normalized = MediaItemIdentity.normalizedTitle(item.title)
         return (identities, !identities.isEmpty, normalized.isEmpty ? nil : normalized, item.productionYear)
     }
 
-    /// A mark-watched / mark-unwatched mutation. Marking watched clears resume
-    /// everywhere and mirrors to Trakt (write-if-missing); unwatch never touches
-    /// Trakt (no deletes) and leaves resume alone.
+    /// Both explicit watch-state actions clear resume everywhere. Only marking
+    /// watched mirrors to Trakt (write-if-missing); unwatch never deletes history
+    /// from external trackers.
     public static func playedToggle(item: MediaItem, played: Bool, primaryAccountID: String?, additionalSources: [MediaSourceRef] = [], crossServerSync: Bool = true, capturedAt: Date = Date()) -> WatchMutation? {
         let targets = targets(for: item, primaryAccountID: primaryAccountID, additionalSources: additionalSources, crossServerSync: crossServerSync)
         guard !targets.isEmpty else { return nil }
@@ -156,20 +163,23 @@ public enum WatchMutationFactory {
         let identity = crossServerSync ? identityExpansion(for: item) : (identities: [], pending: false, anchorTitle: nil, anchorYear: nil)
         return WatchMutation(
             capturedAt: capturedAt,
-            canonicalMediaID: canonicalID(for: item),
+            canonicalMediaID: canonicalID(for: item, primaryAccountID: primaryAccountID),
             seasonNumber: item.seasonNumber,
             episodeNumber: item.episodeNumber,
             played: played,
-            clearResume: played,
+            clearResume: true,
             targets: targets,
-            trakt: played ? traktIntent(for: item, progress: 100) : nil,
+            trakt: played && !item.isExtra && !item.isTrailer && !item.isYouTubeTrailer ? traktIntent(for: item, progress: 100) : nil,
             episodeOrigin: episode.origin,
             expansionPending: episode.pending || identity.pending,
             identities: identity.identities,
             kind: item.kind,
             anchorTitle: identity.anchorTitle,
             anchorYear: identity.anchorYear,
-            rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id))
+            rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id)),
+            observedLastPlayedAt: observedPlayback(item, primaryAccountID: primaryAccountID,
+                                                 additionalSources: additionalSources, targets: targets),
+            isExplicitReset: true
         )
     }
 
@@ -237,7 +247,7 @@ public enum WatchMutationFactory {
             : (identities: [], pending: false, anchorTitle: nil, anchorYear: nil)
         return WatchMutation(
             capturedAt: capturedAt,
-            canonicalMediaID: canonicalID(for: item),
+            canonicalMediaID: canonicalID(for: item, primaryAccountID: primaryAccountID),
             seasonNumber: item.seasonNumber,
             episodeNumber: item.episodeNumber,
             clearResume: true,
@@ -248,8 +258,27 @@ public enum WatchMutationFactory {
             kind: item.kind,
             anchorTitle: identity.anchorTitle,
             anchorYear: identity.anchorYear,
-            rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id))
+            rejectedSourceIDs: item.rejectedSourceIDs.subtracting(targets.map(\.id)),
+            observedLastPlayedAt: observedPlayback(item, primaryAccountID: primaryAccountID,
+                                                 additionalSources: additionalSources, targets: targets),
+            isExplicitReset: true
         )
+    }
+
+    private static func observedPlayback(
+        _ item: MediaItem, primaryAccountID: String?,
+        additionalSources: [MediaSourceRef], targets: [WatchMutationTarget]
+    ) -> [String: Date] {
+        Dictionary(uniqueKeysWithValues: targets.compactMap { target in
+            let source = (item.sources + additionalSources).first {
+                $0.accountID == target.accountID && $0.itemID == target.itemID
+            }
+            let isOrigin = target.accountID == (item.sourceAccountID ?? primaryAccountID) && target.itemID == item.id
+            guard let date = source?.lastPlayedAt ?? (source == nil && isOrigin ? item.lastPlayedAt : nil) else {
+                return nil
+            }
+            return (target.id, date)
+        })
     }
 
     /// External players cannot send Plozz's realtime scrobbles. Their return
@@ -264,13 +293,13 @@ public enum WatchMutationFactory {
         if watchedPercent >= finishedThreshold {
             return WatchMutation(
                 capturedAt: capturedAt,
-                canonicalMediaID: canonicalID(for: item),
+                canonicalMediaID: canonicalID(for: item, primaryAccountID: primaryAccountID),
                 seasonNumber: item.seasonNumber,
                 episodeNumber: item.episodeNumber,
                 played: true,
                 clearResume: true,
                 targets: targets,
-                trakt: traktIntent(for: item, progress: 100),
+                trakt: !item.isExtra && !item.isTrailer && !item.isYouTubeTrailer ? traktIntent(for: item, progress: 100) : nil,
                 episodeOrigin: episode.origin,
                 expansionPending: episode.pending || identity.pending,
                 identities: identity.identities,
@@ -285,12 +314,13 @@ public enum WatchMutationFactory {
         guard position > 1 else { return nil }
         return WatchMutation(
             capturedAt: capturedAt,
-            canonicalMediaID: canonicalID(for: item),
+            canonicalMediaID: canonicalID(for: item, primaryAccountID: primaryAccountID),
             seasonNumber: item.seasonNumber,
             episodeNumber: item.episodeNumber,
             resumePosition: position,
             targets: targets,
-            traktProgress: reportTraktProgress && watchedPercent.isFinite && watchedPercent > 0
+            traktProgress: reportTraktProgress && !item.isExtra && !item.isTrailer && !item.isYouTubeTrailer
+                && watchedPercent.isFinite && watchedPercent > 0
                 ? traktIntent(for: item, progress: watchedPercent) : nil,
             episodeOrigin: episode.origin,
             expansionPending: episode.pending || identity.pending,

@@ -31,6 +31,15 @@ public final class ProfileFlowModel {
     /// When `true`, `RootView` shows the profile picker instead of the signed-in
     /// UI (shown at launch with >1 profile, and from "Switch Profile").
     public private(set) var isChoosingProfile = false
+    /// Presentation ownership only; never authorizes profile or server access.
+    public private(set) var profilePickerSelectionID: String?
+    public var profilePickerOwnsAuthorization: Bool { profilePickerSelectionID != nil }
+    public var isPresentingProfileSelection: Bool {
+        isChoosingProfile || (profilePickerOwnsAuthorization && (
+            pendingLockedProfile != nil || pendingParentalSwitch != nil
+                || plexHomeUsers.pendingPlexPINRequest != nil
+        ))
+    }
     /// Whether the profile picker may be dismissed without choosing (false at the
     /// mandatory launch picker; true when opened from Settings behind an active
     /// profile).
@@ -135,6 +144,7 @@ public final class ProfileFlowModel {
     public func dismissPicker() {
         clearSettingsEntry()
         isChoosingProfile = false
+        profilePickerSelectionID = nil
     }
 
     /// Clears new-profile appearance setup once its cover is dismissed.
@@ -156,6 +166,7 @@ public final class ProfileFlowModel {
     /// Opens the profile picker (from Settings → "Switch Profile").
     public func requestProfileSelection() {
         clearSettingsEntry()
+        profilePickerSelectionID = nil
         isProfileSelectionCancelable = !isForegroundLocked
         isChoosingProfile = true
     }
@@ -166,6 +177,33 @@ public final class ProfileFlowModel {
         guard isProfileSelectionCancelable, !isForegroundLocked else { return }
         clearSettingsEntry()
         isChoosingProfile = false
+        profilePickerSelectionID = nil
+    }
+
+    public func selectProfileFromPicker(to id: String) {
+        cancelProfileLockPrompt()
+        cancelParentalSwitch()
+        switchProfile(to: id)
+        profilePickerSelectionID = id
+    }
+
+    public func cancelPickerAuthorization() {
+        if isForegroundLocked {
+            cancelForegroundProfileSelection()
+        } else if pendingParentalSwitch != nil {
+            cancelParentalSwitch()
+        } else if pendingLockedProfile != nil {
+            cancelProfileLockPrompt()
+        } else {
+            plexHomeUsers.cancelPlexPIN()
+        }
+        // A cancelled Plex activation can leave a guarded fallback pending.
+        // Keep selection above that gate until the next explicit choice.
+        isChoosingProfile = true
+    }
+
+    public func finishProfilePickerPresentation() {
+        profilePickerSelectionID = nil
     }
 
     /// Called only by the tvOS browsing lifecycle, never by an inactive-only interruption.
@@ -195,6 +233,7 @@ public final class ProfileFlowModel {
 
     public func cancelForegroundProfileSelection() {
         guard isForegroundLocked else { return }
+        profilePickerSelectionID = nil
         profilesModel.forgetProfileUnlock(profilesModel.activeProfileID)
         cancelProfileLockPrompt()
         cancelParentalSwitch()
@@ -209,6 +248,7 @@ public final class ProfileFlowModel {
             return
         }
         clearSettingsEntry()
+        profilePickerSelectionID = nil
         let id = profilesModel.activeProfileID
         if isProfileSelectionCancelable, !isForegroundLocked, !activeProfileAwaitsUnlock, parentalFallThrough == nil {
             pendingSettingsProfileID = id
@@ -649,11 +689,13 @@ public final class ProfileFlowModel {
     /// Resuming asks the question that was never answered, which is the only
     /// answer that's both safe and correct: importing anyway is the leak the gate
     /// exists to prevent, and clearing it without asking is the same thing.
-    public func resumeSetupIfNeeded() {
+    public func resumeSetupIfNeeded(manualICloudSetup: Bool = false) {
         guard pendingSetupProfile == nil, plexHomeUsers.pendingPlexUserSelection == nil else { return }
         let active = profilesModel.activeProfile
         if active.needsSetup {
             appearanceSetupStore.markPending(profileID: active.id)
+            pendingSetupProfile = active
+        } else if manualICloudSetup {
             pendingSetupProfile = active
         } else if appearanceSetupStore.isPending(profileID: active.id) {
             isPickingAppearanceForNewProfile = true
@@ -806,15 +848,15 @@ public final class ProfileFlowModel {
     /// ("Use this server" toggle on Settings → Servers & Libraries → server).
     public func setAccount(_ accountID: String, includedInActiveProfile included: Bool) {
         let profileID = profilesModel.activeProfileID
-        // Mutate the resolved set that the UI is actually showing, not the raw
-        // stored set. The latter can contain only stale account ids after a
-        // server is removed/re-added; reloadAccounts() intentionally resolves
-        // that situation to the current household set. Starting from the stale
-        // stored value would make removing a visible account a no-op, then the
-        // next reload would fall back to every account and leave the switch On.
+        // An explicit edit starts from the locally available selection shown by
+        // the UI, not absent accounts retained for sync or later reconnection.
         let current = accountsProviders.activeAccountIDs
         var next = current
         if included { next.insert(accountID) } else { next.remove(accountID) }
+        guard next != current
+            || profilesModel.storedActiveAccountIDs(for: profileID) == nil
+            || profilesModel.unconfirmedAccountSelectionProfileIDs.contains(profileID)
+        else { return }
         profilesModel.setActiveAccountIDs(Array(next), for: profileID)
         // Noted BEFORE the reload, which schedules a watchlist import: the whole
         // point is that the import waits for the answer, and a note taken after
@@ -826,7 +868,7 @@ public final class ProfileFlowModel {
             // unanswerable question would gate the import forever.
             resolveIdentityPrompt(for: accountID)
         }
-        accountsProviders.reloadAccounts()
+        accountsProviders.refreshActiveAccountSelection()
     }
 
     /// The server this profile has just enabled and not yet chosen an identity

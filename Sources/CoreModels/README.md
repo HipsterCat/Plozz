@@ -7,9 +7,21 @@ language every other module speaks.
 
 - Domain value types: `MediaItem`, `MediaLibrary`, `MediaServer`,
   `UserSession`, `Account`, `Profile`, `MusicTrack`, `Person`, etc.
+- `MediaItem` retains optional confirmed original language, series production
+  status and whole-title catalog season/episode totals. These are independent
+  of local ownership, unwatched counts, schedules and playable audio languages.
 - The dual-provider abstraction: `MediaProvider` protocol, `ProviderKind`,
   `ProviderRegistry` / `ProviderResolving`, `ResolvedAccount`.
 - Cross-cutting UI state: `LoadState`, `AppError`.
+- `ApplicationStorageLifecycle` fences process-wide storage admission before
+  asynchronously closing registered actor-owned stores. Owners register before
+  opening files, reject inactive access, and ignore stale cleanup after resume.
+  Registration is weak, so the registry does not retain retired stores.
+- `PerformanceDiagnostics` owns consent-scoped, bounded operation histories and
+  numeric Home responsiveness windows. Home load/merge/publication retention is
+  independent of HTTP/decode traffic. UI observers must hold a current Home
+  observation token; replacement and opt-out reject late samples. The recorder
+  does not schedule sampling or emit events.
 - `ThemeMusicVolume` persists a bounded 0–1 gain per profile. Legacy named levels
   decode to their original gain; only the old `"off"` token triggers the paired
   background-mode migration, not a new numeric zero.
@@ -17,6 +29,8 @@ language every other module speaks.
   network/storage preferences, not profile settings. Both default to Automatic
   and are excluded from profile transfer. `EngineSessionCache` carries active
   temporary-cache usage and the engine's effective playback-safe budget.
+- `PlaybackSettings.identifySongs` (#351) is a profile preference, on by
+  default; payloads written before it existed decode as on.
 - `LosslessAudioSettingsStore` defaults on and remains device-local across
   profile changes and transfers. The audio bridge reads it for each new load;
   missing source-channel metadata does not downgrade the chosen output mode.
@@ -25,11 +39,27 @@ language every other module speaks.
   distinguish preparation/opening/playback, and never export raw error text.
   Non-video live responses use fixed HTML/JSON/XML/empty classifications and
   factual messages, not response snippets or inferred credential expiry.
-- `PlaybackDiagnosticJournal` retains up to 256 events / 128 KiB for 48 hours.
+- `PlaybackDiagnosticJournal` retains up to 256 recent events / 128 KiB for 48
+  hours, plus the last three failed attempts independently (64 events / 64 KiB
+  each; the combined persisted journal is capped at 384 KiB). Failure snapshots
+  survive retries, ordinary event churn and relaunch, and accept late native
+  evidence only for their original session/attempt. They expire after 48 hours.
   Optional typed quality, stage and native evidence fields preserve older
   journals; validation applies both on admission and disk restore. The explicit
   Send diagnostics action includes this local journal, without enabling
   automatic on-demand failure uploads or claiming confirmed backend delivery.
+  Release builds retain the same allowlisted snapshots. Their export uses
+  per-submission aliases and relative ages, including only typed errors,
+  formats, routes, timings and bounded numeric engine buffer/frame/cache facts.
+  Engine descriptions, titles, URLs, credentials and raw traces are excluded.
+ - With `PLOZZ_DIAGNOSTICS` and handoff tracing enabled, `HandoffDiagnostics`
+  appends local text to four rotating 1 MiB segments in `Caches/Plozz`.
+  Typed playback failures, startup timeouts and unavailable engines freeze up
+  to 512 KiB of preceding text plus a session/attempt marker; the last three
+  snapshots survive successful retries. Records are capped at 16 KiB, pending
+  writes at 256 KiB / 512 records, and overflow/storage failures go to OSLog.
+  The existing text snapshot API remains capped at 64 KiB. These local cache
+  files are not added to automatic uploads or the structured manual export.
 - Shared decode/encode helpers: `JSONDecoder.plozz`, `JSONEncoder.plozz`.
 - `SearchDiagnosticJournal` retains consent-scoped per-source search outcomes and
   typed request/page evidence for manual reports, separately from general
@@ -46,6 +76,12 @@ language every other module speaks.
   uses immutable image identity and placement, never a pixel comparison.
 - Profiles persistence contract: `ProfilePersisting`, `ProfileStore`,
   `ProfilesModel`, plus the Plex Home-user mapping (`PlexHomeUser`).
+- Shared profile migration writes memberships before the roster and retires
+  legacy copies only after every write succeeds. Failed writes retain the legacy
+  roster as the local authority, including edits made before retry. A failed
+  shared read must not be interpreted as an absent household or seed a replacement
+  during bootstrap. The migration journal includes memberships delivered before
+  their profiles and pending clears; reset retires these alongside the roster.
 - Local PIN proof is in-memory and bound to the current verifier and selection.
   `ProfilesModel` clears it whenever the active profile changes, including
   deletion/sync fallbacks. Manual entry to another locked profile requires fresh
@@ -59,12 +95,25 @@ language every other module speaks.
 
 ## Invariants
 
+- New installations prepare `SyncSetupFeatureFlag` before profile bootstrap.
+  iCloud Sync stays off until the onboarding choice; Enable iCloud Sync is the primary
+  action, and Not now persists an opt-out. Pending choices survive restart.
+  Existing profile installations and explicit sync settings retain their behavior.
+  On installations shown the choice, declining also keeps non-Trakt tracker
+  sign-ins device-local instead of adopting or publishing iCloud Keychain items.
+  Existing installations retain their historical tracker sign-in policy.
+  An unreadable installation blocks app startup with Retry, rather than guessing
+  whether consent is needed. No preference is changed until classification succeeds.
 - **No SwiftUI / AVKit / UIKit imports.** This module compiles on Linux so
   pure-logic tests can run there. UI lives in `CoreUI` and feature modules.
 - **Never hold secrets.** Tokens are owned by `FeatureAuth` (Keychain). Types
   here (e.g. `Account`, `Profile`) carry only non-secret metadata.
 - **Provider-agnostic.** No type here may assume Jellyfin- or Plex-specific
   behavior; the only provider seam is `MediaProvider`.
+- Provider-ID lookup preserves alias priority and the first nonempty normalized
+  spelling without rebuilding the whole ID map for each lookup. ASCII keys use
+  a byte-based fast path; other spellings retain the same Unicode normalization.
+  No cross-item cache or metadata truncation is involved.
 - **Collections are server-defined groups, not alternate title sources.**
   Collection identity stays scoped to the owning account and item ID, even when
   two groups share a catalogue collection ID or physical server. Library
@@ -92,8 +141,34 @@ language every other module speaks.
   `CollectionPreviewLoader` shares bounded membership paging with Hero, validates
   page progress and identity, and never treats a selected library as inferred
   membership for returned titles.
+  `HomeContentPager` completes explicit sort/filter inventories with rolling
+  200-item library/collection/playlist requests, with at most three source-page
+  requests running across the entire traversal. A fresh library starts with
+  one fully enriched item to learn continuation before parallel page loading.
+  Each source bounds pending plus buffered lookahead to six pages, consuming
+  responses in cursor order rather than waiting for a whole batch.
+  `HomeRowPage.totalCountHint` and observed terminal pages constrain speculation
+  but never override actual continuation, including after server page caps or
+  visibility filtering. Changed strides drain and discard noncontiguous
+  lookahead before resuming at the actual offset. Home feeds retain sequential
+  60-item requests and ordinary browsing retains its small adaptive pages. Failure or cancellation
+  never commits a partial sorted inventory.
 
 ## Public surface, at a glance
+
+Automatic version and cross-server recommendations share
+`VersionSelectionAssessment`. Plozzigen uses the linked decoder-backed input
+list, not native passthrough eligibility: DTS/TrueHD bridging and software video
+decode do not make a version unsupported. Rich source-local metadata precedes
+flattened facts. Native-only callers can explicitly request the native policy.
+The existing quality weights remain, but the HDR bonus requires a usable range
+hint and is suppressed when AVPlayer reports HDR playback ineligible. Profile 7
+is evaluated as HDR10 under the adapter's base-layer policy; other Dolby Vision
+base layers require explicit compatibility metadata. No extra points promise
+FEL reconstruction, height-channel conversion or lossless passthrough.
+This is a metadata estimate, not a playback/performance or display-format test.
+Remembered/explicit choices, source locality/provider precedence, displayed
+file-size ordering and provider negotiation remain independent and unchanged.
 
 Technical badges use the same stream classifier for detail heroes, version
 pickers, and cached share facts. Confirmed Dolby Vision compatibility is one
@@ -119,8 +194,13 @@ readable and retain their original retry-key derivation.
 
 Failed server targets in the watch outbox have independent persisted retry
 deadlines: 30 seconds initially, doubling to a 15-minute maximum, or longer when
-the server explicitly requests it. Existing drain triggers retry once the deadline
-passes; no polling timer is added. Coalescing preserves the cooldown while keeping
+the server explicitly requests it. Both app shells arm one cancellation-safe wake
+for pending work, retry when connectivity returns, and resume delivery on foreground
+or profile admission. Automatic attempts require the active authorized profile and
+a connected network; suspension or force-quit cannot guarantee background delivery.
+The durable queue resumes on the next launch. Empty queues and live-session-only
+targets do not poll. Tracker/expansion work without a target deadline is paced at
+30 seconds. Coalescing preserves the cooldown while keeping
 the latest desired state, and relaunching cannot reset it. Successful destinations
 and tracker mirrors are not held behind a failed server. Cancellation is not a
 server failure, and authorization is still checked before any retry. Legacy
@@ -212,6 +292,15 @@ contracts before they can become templates in this editor. Do not overload an
 existing `HomeRowID` to represent independent instances or change provider IDs
 to make them unique in the UI.
 
+`LibraryInventoryStore` is a bounded, local names/IDs cache for already authorized
+server viewers, separate from profile choices and navigation's per-profile
+snapshot. Home and Settings warm it through live library discovery. It never
+resolves credentials or authorizes a profile; callers supply currently resolved
+accounts. Profile-local providers, including downloaded-media projections, bypass
+both cache reads and writes so they cannot replace the server's full inventory.
+See [Libraries behavior](../FeatureSettings/README.md#responsibility) for
+refresh, error, and storage limits.
+
 ## Profile deletion and namespace ownership
 
 Transferable preferences use byte-stable sync values. JSON object keys and
@@ -228,6 +317,12 @@ a persisted, non-publishing placeholder until a replacement arrives or is added;
 `profilesForSync` excludes it so a restart cannot recreate the deleted record.
 Live TV and media-state captures also exclude `pendingSyncedDeletionProfileIDs`,
 including preserved fallback records, without erasing the temporary local data.
+Live TV's persisted profile-removal markers apply only while the profile remains
+absent from the current roster. A restored profile supersedes an older marker in
+both portable state and playlist-source sync; merely opening an unconfigured
+device must not delete its peer's sources. Pending-deletion placeholders remain
+excluded. Profile removal callers update the roster in the same synchronous
+lifecycle operation as recording the removal.
 The revisioned household Parental PIN moves to the first surviving profile rather
 than disappearing with its former anchor.
 
@@ -279,7 +374,9 @@ These display facts never create selectable tracks or change track preferences.
 The compact row highlights a reported preferred language and counts the rest
 (`English | +9` in one chip) without discarding the complete language inventory.
 `MediaSourceDisplayName` formats ordinary filenames, paths and source labels.
-A filename in a URL's path wins over query hints. When the path has no filename,
+A recognized media-file extension in a URL's path wins over query hints;
+an arbitrary dot in a signed path component does not make it a filename.
+When the path has no filename,
 only `filename` and `file_name` query parameters are accepted, decoded once.
 Conflicting hints, control characters, nested URLs and unrelated query fields supply no filename;
 the picker falls back to the server's other labels and technical metadata.
@@ -287,11 +384,30 @@ Optimized app-hosted tests cover query filename display and control-character
 rejection in the same build configuration used by the version picker.
 Bare query text is never shown as a source label. Cached locator-like names are
 cleaned at presentation time without changing stored values, playback locators
-or source IDs. Only the resulting filename supplies release text or
+or source IDs. Long ASCII hash/token-shaped components without a recognized media
+extension are also excluded from raw names and filename hints, including cached basenames. A readable
+source description or metadata filename supplies the fallback; with none, the
+picker omits the release-name line and keeps the known technical facts. This is
+display-only filtering, not token decoding, provider-specific parsing or a network
+lookup. Ordinary long filenames, recognized media files and Unicode names remain
+intact. Only the resulting filename supplies release text or
 filename-derived edition/quality hints.
 Multiline remote-source labels can identify their release file on a folder-marked
 line, including continuation lines through the file extension; presentation
 extracts that filename rather than displaying the entire provider description.
+Unmarked media filenames are also extracted from multiline descriptions. When
+a structured description supplies a decorated title instead of a filename,
+presentation keeps the readable title and omits repeated resolution, language,
+subtitle and source-status rows. Plain filenames and edition labels remain
+intact. This shared display normalization also covers cached version metadata;
+it never rewrites source IDs, playback locators or stored labels.
+Resolution-only headers with decorative ratings (including partial circles and
+emoji variants) cannot replace the readable title below them. Titles that begin
+with a resolution but contain words or ordinary numbers remain intact.
+Version pickers show the full sanitized filename directly, including its original
+separators, technical suffix, release group and extension. Do not abbreviate it
+into an inferred title or hide it behind another action; the exact filename helps
+distinguish releases even when their structured facts and badges match.
 Original Unicode filenames are retained and the shared card wraps them without
 a line cap. Extensionless URL endpoints are not release filenames,
 so opaque stream paths cannot override a readable source name. Filename extraction
@@ -311,6 +427,27 @@ Settings choice; `rememberVersionPerSeries` defaults on. Legacy `rememberChoice`
 decodes as `automatic`. `VersionPreferenceStore` reads the live playback policy
 from its own namespace, so all existing request/detail resolvers honor the toggle
 without another unscoped preference. Automatic resolution never writes a memory.
+`serverOrder` selects the first non-external version in the selected server's
+fresh inventory, without quality ranking or remembered movie/series choices.
+Explicit file selections still win. The opened item's files precede discovered
+same-server editions; other accounts remain separate. Manual picker ordering and
+download recommendations are unchanged.
+Transient `explicitVersionSelection` distinguishes a manual file choice from
+`explicitSourceSelection`, which can also mean a pinned server/library/edition.
+Source-only pins must not freeze a recommendation across inventory refreshes or
+the first-use mode choice.
+
+`SeriesTrackPreferenceStore` retains its existing profile-scoped storage key for
+compatibility, including profile transfer. It stores series audio/subtitles,
+movie audio, and explicit movie/series `VideoZoomPreference` choices. Zoom is a
+typed mode plus a clamped Custom percentage, never a detected picture rectangle.
+Missing zoom fields in older records leave track memory intact; automatic defaults
+and temporary capability fallbacks are not saved. Invalid stored data is logged
+and preserved rather than overwritten by a later preference write.
+Normal is the initial zoom on all platforms. Unversioned Auto-crop choices decode
+as Normal without changing audio/subtitle memory, other modes or framing parameters.
+Newly encoded zoom preferences carry a schema version so explicit Auto-crop opt-ins
+survive subsequent loads and profile transfer.
 
 ## Artwork and profile presentation
 
@@ -409,3 +546,21 @@ server-user scope: their historical viewer cannot be reconstructed.
 - `MediaProvider.swift` — the protocol that defines every backend.
 - `ProviderRegistry.swift` — how features resolve a provider from a session.
 - `AppError.swift` — the single error currency used everywhere.
+
+## Skip-marker coverage
+
+`SegmentPlausibility` is the single coverage policy every skip marker must pass,
+whatever its source or kind:
+
+- a marker may cover at most half the known runtime (a skip leaves most of the
+  item playable);
+- only an opening (`intro`, `recap`) may begin inside the opening region; every
+  other kind must start after the opening has finished;
+- an opening may not reach the final frame.
+
+`normalizedSkipMarkers` applies that policy, then coalesces directly abutting
+same-kind pieces (servers split intros at chapter boundaries), collapses exact
+duplicates, clamps to the known duration, and keeps windows with a real gap
+separate. A marker that fails the policy is absent entirely, so no button,
+automatic skip or Up Next window is ever built from it. Runtime-coverage rules
+live here so provider, community and player paths cannot drift apart.

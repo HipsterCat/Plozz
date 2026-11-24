@@ -36,7 +36,6 @@ final class TopBarPresentationHostedTests: XCTestCase {
     func testScrollMovesOnlyTheBarAndKeepsOffscreenNavigationIneligible() async throws {
         let (window, previous) = try await makeWindow()
         let model = Model()
-        model.selection = .settings
         window.rootViewController = UIHostingController(rootView: Fixture(model: model))
         window.makeKeyAndVisible()
         defer {
@@ -44,7 +43,7 @@ final class TopBarPresentationHostedTests: XCTestCase {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        try await waitForPage(.settings, model: model, window: window)
+        try await openSettings(model: model, window: window)
         try await Task.sleep(for: .milliseconds(350))
         let scroll = try XCTUnwrap(model.scroll)
         let source = UUID()
@@ -56,7 +55,10 @@ final class TopBarPresentationHostedTests: XCTestCase {
             scroll.update(offset: offset, source: source)
             try await Task.sleep(for: .milliseconds(40))
             window.layoutIfNeeded()
-            XCTAssertEqual(marker.convert(marker.bounds, to: window).minY, initial.minY - offset, accuracy: 0.5)
+            XCTAssertEqual(
+                marker.convert(marker.bounds, to: window).minY,
+                initial.minY - min(offset, TopBarNavigationMetrics.foregroundTop), accuracy: 0.5
+            )
             XCTAssertEqual(model.contentBuilds, builds, "Scroll frames must not reconstruct page closures.")
             XCTAssertTrue(model.buttons[.settings]?.isFocused == true)
             if offset >= TopBarNavigationMetrics.foregroundTop {
@@ -84,16 +86,25 @@ final class TopBarPresentationHostedTests: XCTestCase {
         let deadline = ContinuousClock.now + .seconds(5)
         repeat {
             window.layoutIfNeeded()
-            window.setNeedsFocusUpdate()
-            window.updateFocusIfNeeded()
-            if system.focusedItem != nil, focusItems(in: window).count == model.destinations.count { break }
+            if model.buttons[.home]?.isFocused == true { break }
             try await Task.sleep(for: .milliseconds(20))
         } while ContinuousClock.now < deadline
+        XCTAssertTrue(model.buttons[.home]?.isFocused == true)
+        let selectedNavigationItem = try XCTUnwrap(navigationMarkers(in: window).compactMap {
+            NavigationRowFocusRequester.target(for: $0, in: window)
+        }.first)
+        XCTAssertTrue(owner.requestFocus(to: selectedNavigationItem, using: system))
+        let navigationDeadline = ContinuousClock.now + .seconds(5)
+        while navigationMarkers(in: window).compactMap({
+            NavigationRowFocusRequester.target(for: $0, in: window)
+        }).count != model.destinations.count, ContinuousClock.now < navigationDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         func focus(_ index: Int) throws {
-            let items = focusItems(in: window).sorted {
-                $0.frame.midX < $1.frame.midX
-            }
-            XCTAssertEqual(items.count, model.destinations.count, "Only navigation is eligible during traversal.")
+            let items = navigationMarkers(in: window).compactMap {
+                NavigationRowFocusRequester.target(for: $0, in: window)
+            }.sorted { $0.frame.midX < $1.frame.midX }
+            XCTAssertEqual(items.count, model.destinations.count)
             let target = try XCTUnwrap(items.indices.contains(index) ? items[index] : nil)
             XCTAssertTrue(owner.requestFocus(to: target, using: system))
         }
@@ -121,7 +132,6 @@ final class TopBarPresentationHostedTests: XCTestCase {
     func testOffscreenChromeHidesAndReturnsWithoutAnimation() async throws {
         let (window, previous) = try await makeWindow()
         let model = Model()
-        model.selection = .settings
         window.rootViewController = UIHostingController(rootView: Fixture(model: model))
         window.makeKeyAndVisible()
         defer {
@@ -129,7 +139,7 @@ final class TopBarPresentationHostedTests: XCTestCase {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        try await waitForPage(.settings, model: model, window: window)
+        try await openSettings(model: model, window: window)
         try await Task.sleep(for: .milliseconds(350))
         let scroll = try XCTUnwrap(model.scroll)
         let source = UUID()
@@ -267,7 +277,6 @@ final class TopBarPresentationHostedTests: XCTestCase {
         for reduceMotion in [false, true] {
             let (window, previous) = try await makeWindow()
             let model = Model()
-            model.selection = .settings
             model.reduceMotion = reduceMotion
             window.rootViewController = UIHostingController(rootView: Fixture(model: model))
             window.makeKeyAndVisible()
@@ -276,7 +285,7 @@ final class TopBarPresentationHostedTests: XCTestCase {
                 window.rootViewController = nil
                 previous?.makeKeyAndVisible()
             }
-            try await waitForPage(.settings, model: model, window: window)
+            try await openSettings(model: model, window: window)
             try await Task.sleep(for: .milliseconds(350))
             let marker = try XCTUnwrap(navigationMarkers(in: window).first)
             let initial = marker.convert(marker.bounds, to: window)
@@ -336,6 +345,30 @@ final class TopBarPresentationHostedTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(20))
         } while ContinuousClock.now < deadline
         XCTFail("Missing horizontal destination: \(destination)")
+    }
+
+    private func openSettings(model: Model, window: UIWindow) async throws {
+        try await waitForPage(.home, model: model, window: window)
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        var deadline = ContinuousClock.now + .seconds(5)
+        while system.focusedItem == nil, ContinuousClock.now < deadline {
+            window.setNeedsFocusUpdate()
+            window.updateFocusIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotNil(system.focusedItem)
+        model.selection = .settings
+        try await waitForPage(.settings, model: model, window: window)
+        let page = try XCTUnwrap(model.buttons[.settings])
+        let owner = try XCTUnwrap(NavigationRailFocusHostController.containing(page))
+        deadline = ContinuousClock.now + .seconds(5)
+        while !page.isFocused, ContinuousClock.now < deadline {
+            if page.canBecomeFocused {
+                owner.requestFocus(to: page, using: system)
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(page.isFocused, "Establish content focus before testing whether navigation preserves it.")
     }
 
     private func find<T: UIViewController>(_ type: T.Type, in controller: UIViewController) -> T? {

@@ -200,6 +200,9 @@ public final class PlaybackDiagnosticsSampler {
         latest?.audioPipelineDescription = nil
         latest?.audioOutput = nil
         latest?.sessionCache = nil
+        latest?.engineStatistics = nil
+        latest?.audioDelivery = nil
+        latest?.transferredBytes = nil
     }
 
     var isSampling: Bool { timerTask != nil }
@@ -295,6 +298,7 @@ public final class PlaybackDiagnosticsSampler {
                 if diagnostics.mode != .plozzigen, route == nil || route == .nativeHLS {
                     if let bitrate = event.indicatedBitrate, bitrate > 0 { diagnostics.indicatedBitrate = bitrate }
                     if let bitrate = event.observedBitrate, bitrate > 0 { diagnostics.observedBitrate = bitrate }
+                    diagnostics.transferredBytes = event.transferredBytes
                 }
                 if let frames = event.droppedFrames, frames >= 0 {
                     diagnostics.droppedVideoFrames = frames
@@ -352,8 +356,11 @@ public final class PlaybackDiagnosticsSampler {
             if diagnostics.mode == .plozzigen {
                 diagnostics.audioPipelineDescription = t.audioPipelineDescription
                 diagnostics.sessionCache = t.sessionCache
+                diagnostics.engineStatistics = t.statistics
             }
-            if let drops = t.droppedFrameCount, diagnostics.droppedVideoFrames == nil {
+            diagnostics.audioDelivery = t.audioDelivery
+            // The engine retains session totals across internal AVPlayer item replacements.
+            if let drops = t.droppedFrameCount, drops >= 0 {
                 diagnostics.droppedVideoFrames = drops
             }
             if let fps = t.observedFps, diagnostics.observedFps == nil {
@@ -377,13 +384,23 @@ public final class PlaybackDiagnosticsSampler {
             if diagnostics.resolution == nil, let w = f.videoWidth, let h = f.videoHeight, w > 0, h > 0 {
                 diagnostics.resolution = .init(width: w, height: h)
             }
-            if diagnostics.audioCodec == nil, let codec = f.audioCodec {
-                diagnostics.audioCodec = PlaybackDiagnostics.friendlyAudioName(
-                    codec: codec, profile: f.audioIsAtmos ? "atmos" : nil
-                )
-            }
-            if diagnostics.audioChannels == nil, let ch = f.audioChannels, ch > 0 {
-                diagnostics.audioChannels = ch
+            if liveStream == nil, let audio = f.activeAudioTrack {
+                let source = PlaybackDiagnostics.base(from: .init(audio: audio), mode: diagnostics.mode)
+                diagnostics.audioCodec = source.audioCodec
+                diagnostics.audioProfile = source.audioProfile
+                diagnostics.audioChannels = source.audioChannels
+                diagnostics.audioChannelLayout = source.audioChannelLayout
+                diagnostics.audioSampleRate = source.audioSampleRate
+                diagnostics.audioBitrate = source.audioBitrate
+            } else {
+                if diagnostics.audioCodec == nil, let codec = f.audioCodec {
+                    diagnostics.audioCodec = PlaybackDiagnostics.friendlyAudioName(
+                        codec: codec, profile: f.audioIsAtmos ? "atmos" : nil
+                    )
+                }
+                if diagnostics.audioChannels == nil, let ch = f.audioChannels, ch > 0 {
+                    diagnostics.audioChannels = ch
+                }
             }
         }
 

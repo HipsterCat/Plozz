@@ -19,6 +19,78 @@ private final class LiveChannelObservationChanges: @unchecked Sendable {
 
 @MainActor
 final class LiveChannelPlayerModelTests: XCTestCase {
+    func testNewChannelsRestoreThePlatformDefaultRatherThanThePreviousChannelZoom() async {
+        let engine = LiveEngineSpy()
+        let input = LiveChannelInput.stream(url: URL(string: "https://example.invalid/live.m3u8")!, httpHeaders: [:])
+        var expected = VideoZoomPreference(mode: .custom, customPercent: 117)
+        let model = LiveChannelPlayerModel(
+            engine: engine, channelID: "one", input: input, defaultVideoZoom: { expected }
+        )
+        defer { model.stop() }
+        XCTAssertEqual(model.videoZoom.settings, expected)
+        await model.start()
+        model.videoZoom.settings.mode = .fill
+        await model.changeSource(channelID: "two", input: input)
+        XCTAssertEqual(model.videoZoom.settings, expected)
+        expected = .init(mode: .stretch)
+        await model.changeSource(channelID: "three", input: input)
+        XCTAssertEqual(model.videoZoom.settings, expected, "New channels use the latest settings.")
+    }
+
+    func testPreviewPublishesSourceRangeAndChangesOutputWithoutRetuning() async {
+        let engine = LiveEngineSpy()
+        let model = LiveChannelPlayerModel(
+            engine: engine, streamURL: URL(string: "https://example.invalid/live.m3u8")!,
+            allowsDisplayMatching: false
+        )
+        defer { model.stop() }
+        await model.start()
+        XCTAssertNil(model.sourceDynamicRange)
+        engine.probedSourceFacts = .init(range: .dolbyVision)
+        model.refreshFromEngine()
+        XCTAssertEqual(model.sourceDynamicRange, .dolbyVision)
+        XCTAssertFalse(model.allowsDisplayMatching)
+        model.setDisplayMatchingAllowed(true)
+        XCTAssertTrue(model.allowsDisplayMatching)
+        XCTAssertFalse(engine.outputPolicy.suppressesDisplayMatching)
+        engine.probedSourceFacts = nil
+        model.refreshFromEngine()
+        XCTAssertEqual(model.sourceDynamicRange, .dolbyVision, "Retain exit facts during an output rebuild")
+        model.setDisplayMatchingAllowed(false)
+        XCTAssertTrue(engine.outputPolicy.suppressesDisplayMatching)
+        XCTAssertEqual(engine.liveLoads, 1)
+        XCTAssertEqual(engine.stopCount, 0)
+    }
+
+    func testAutoCropFramingCarriesBetweenLiveChannelsAndOtherVideos() async throws {
+        let suite = "LiveAutoCrop-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = PlaybackSettingsModel(store: PlaybackSettingsStore(defaults: defaults))
+        settings.settings.videoZoom.phone.mode = .picture
+        let engine = LiveEngineSpy()
+        engine.supportsActivePictureAnalysis = true
+        let input = LiveChannelInput.stream(url: URL(string: "https://example.invalid/live.m3u8")!, httpHeaders: [:])
+        let model = LiveChannelPlayerModel(
+            engine: engine, channelID: "one", input: input,
+            defaultVideoZoom: { settings.settings.videoZoom.phone }
+        )
+        defer { model.stop() }
+        model.videoZoom.bindAutoCropFraming(to: settings, platform: .phone)
+        await model.start()
+        model.videoZoom.setPinchZoom(fillsScreen: false)
+        XCTAssertTrue(settings.settings.videoZoom.phone.pictureFitsInsideSafeArea)
+        await model.changeSource(channelID: "two", input: input)
+        XCTAssertTrue(model.videoZoom.settings.pictureFitsInsideSafeArea)
+        let movie = PlayerVideoZoomModel()
+        movie.bindAutoCropFraming(to: settings, platform: .phone)
+        movie.restoreForPlayback(nil, defaultPreference: settings.settings.videoZoom.phone, supportsActivePicture: true)
+        XCTAssertTrue(movie.settings.pictureFitsInsideSafeArea)
+        movie.setPinchZoom(fillsScreen: true)
+        await model.changeSource(channelID: "three", input: input)
+        XCTAssertFalse(model.videoZoom.settings.pictureFitsInsideSafeArea)
+    }
+
     func testLocalJournalCapturesLiveFailuresWithoutServerSessionReporting() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let journal = PlaybackDiagnosticJournal(url: root.appendingPathComponent("playback.json"))
@@ -35,7 +107,9 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         ))
         attempt.fail(stage: .load, reason: .authentication, engineFailure: .sourceRefused, httpStatus: 403)
         engine.livePlaybackFailureDiagnostic = attempt.diagnostic
+        engine.liveTelemetry = .init(droppedFrameCount: 9, bufferedSecondsAhead: 0)
         engine.onFailure?(.unauthorized)
+        XCTAssertNil(engine.liveTelemetry, "Engine teardown clears live telemetry.")
         engine.onFailure?(.unauthorized)
         model.stop()
         await journal.flush()
@@ -45,10 +119,34 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         let entries = try JSONDecoder().decode(PlaybackDiagnosticJournal.Journal.self, from: Data(json.utf8)).entries
         XCTAssertEqual(entries.filter { $0.event == .failed }.count, 1)
         XCTAssertEqual(entries.first { $0.event == .failed }?.liveFailure?.httpStatus, 403)
+        XCTAssertEqual(entries.first { $0.event == .failed }?.pipeline?.droppedFrames, 9)
         XCTAssertTrue(entries.contains { $0.event == .firstFrame })
         XCTAssertTrue(entries.allSatisfy { $0.facts.content == .live && $0.facts.provider == nil })
         XCTAssertFalse(report.contains("private"))
         XCTAssertFalse(report.contains("Authorization"))
+    }
+
+    func testEndedStreamPreservesTelemetryBeforeEngineTeardown() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = PlaybackDiagnosticJournal(url: root.appendingPathComponent("playback.json"))
+        let engine = LiveEngineSpy()
+        let model = LiveChannelPlayerModel(
+            engine: engine, input: .stream(url: URL(string: "https://example.invalid/live.m3u8")!, httpHeaders: [:]),
+            playbackJournal: journal
+        )
+        await model.start()
+        engine.liveTelemetry = .init(droppedFrameCount: 12, bufferedSecondsAhead: 0.5)
+        engine.onEnded?()
+        XCTAssertNil(engine.liveTelemetry)
+        model.stop()
+        await journal.flush()
+        let report = await journal.report()
+        let json = try XCTUnwrap(report.split(separator: "\n", maxSplits: 2).last)
+        let value = try JSONDecoder().decode(PlaybackDiagnosticJournal.Journal.self, from: Data(json.utf8))
+        let failure = try XCTUnwrap(value.failureSnapshots?.first?.entries.first { $0.event == .failed })
+        XCTAssertEqual(failure.pipeline?.droppedFrames, 12)
+        XCTAssertEqual(failure.pipeline?.bufferedSeconds, 0.5)
     }
 
     func testLateVideoDimensionsPublishWithoutRetuningOrRepeatedNotifications() async {
@@ -1871,9 +1969,12 @@ private struct LiveFullscreenHarness: View {
 
 @MainActor
 final class LiveEngineSpy: LiveChannelEngine {
+    var supportsActivePictureAnalysis = false
+    var probedSourceFacts: EngineProbedSourceFacts?
     var videoAspectRatio: Double?
     var liveStartupBuffer: LivePlaybackBuffer = .automatic
     var livePlaybackFailureDiagnostic: PlaybackFailureDiagnostic?
+    var liveTelemetry: EngineLiveTelemetry?
     var isCapturingLiveFailureDiagnostic = false
     let outputView = UIView()
     var liveSnapshot = LiveChannelEngineSnapshot(
@@ -1983,6 +2084,7 @@ final class LiveEngineSpy: LiveChannelEngine {
     func stop() {
         stopCount += 1
         livePlaybackFailureDiagnostic = nil
+        liveTelemetry = nil
         status = .idle
         onLoad = nil
         onGoLive = nil

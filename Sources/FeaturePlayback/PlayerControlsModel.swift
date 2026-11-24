@@ -8,6 +8,17 @@ import PlozzCoreUI
 
 @MainActor
 @Observable
+public final class PlayerUpscalingModel {
+    public var selection: VideoUpscaling = .default
+    public var isAvailable = false
+    public var isChanging = false
+    public var error: LocalizedStringResource?
+
+    public init() {}
+}
+
+@MainActor
+@Observable
 public final class SubtitleAppearanceModel {
     public var style: SubtitleStyle = .default
     public var rendersHDR = false
@@ -142,6 +153,8 @@ public final class ControlBarEntryModel {
     public var infoCardOpen: Bool = false
     /// Episode browsing gets a longer idle window than the other bottom cards.
     public var episodeBrowserOpen: Bool = false
+    public var discVideosOpen: Bool = false
+    var hasDiscActions = false
 
     public init() {}
 }
@@ -315,6 +328,8 @@ public final class SkipGestureModel {
     public var hintForward: Bool = true
     /// True while the transient skip indicator is on screen.
     public var hintVisible: Bool = false
+    /// Signed remote scan level; zero means the preview is not advancing.
+    public var scanLevel: Int = 0
     /// Bumped on every skip so the indicator's pop-in transition replays even when
     /// it's already visible (rapid repeated skips).
     public var hintToken: Int = 0
@@ -344,6 +359,36 @@ public final class SkipSegmentsModel {
     /// so it doesn't keep re-grabbing focus for the rest of that window.
     public var dismissedSegmentID: String?
 
+    /// The dismissed segment's window, independent of its provider/report id.
+    /// Community markers replace server markers after first paint, so the same
+    /// intro returns with a new id; comparing ids made the button reappear and
+    /// require a second press.
+    public struct DismissedWindow: Equatable, Sendable {
+        let kind: String
+        let start: TimeInterval
+        let end: TimeInterval
+
+        init(_ segment: MediaSegment) {
+            kind = segment.kind.rawValue
+            start = segment.start
+            end = segment.end
+        }
+
+        /// The same kind covering any part of the dismissed window. Community
+        /// reports refine a server marker's end by a fraction of a second and use
+        /// a different id, so exact equality would resurrect the button.
+        func overlaps(_ segment: MediaSegment) -> Bool {
+            kind == segment.kind.rawValue && start < segment.end && end > segment.start
+        }
+    }
+    public var dismissedWindow: DismissedWindow?
+
+    /// Where the last Skip (manual or automatic) landed. Nothing is offered for
+    /// the opening grace window after it: the button that was pressed must leave,
+    /// and a marker that begins at the landing (closing credits following an
+    /// intro) must not appear as a second press in the same gesture.
+    public var skippedLanding: TimeInterval?
+
     /// Mirrors `CustomPlayerContainer.presentingSkipButton`: true only while the
     /// container has actually *presented* the Skip button (focused or the passive
     /// grace-seek present). The SwiftUI `SkipSegmentButton` renders on this — not
@@ -371,6 +416,11 @@ public final class SkipSegmentsModel {
 @MainActor
 @Observable
 public final class PlayerControlsModel {
+    public struct FELConversionState {
+        public var isAvailable = false
+        public var isEnabled = PlaybackSettings.default.dolbyVisionFELConversion
+    }
+    public var felConversion = FELConversionState()
     public var artworkPolicy = ArtworkPresentationPolicy(area: .playback)
     // MARK: Live playback (written by the view model)
     public var duration: TimeInterval = 0
@@ -487,6 +537,17 @@ public final class PlayerControlsModel {
     public var playbackSpeed: Double = 1.0
     /// Audio offset in seconds (positive = audio later than video).
     public var audioDelaySeconds: TimeInterval = 0
+    public let audioSyncAdjustment: PlayerAudioSyncEditor
+    public static let audioDelayRange = PlayerAudioSyncAdjustment.range
+    public var audioSyncHint: LocalizedStringResource {
+        Self.audioSyncHint(for: audioDelaySeconds)
+    }
+    public static func audioSyncHint(for seconds: TimeInterval) -> LocalizedStringResource {
+        if seconds < 0 { return "Audio plays earlier than the video." }
+        if seconds > 0 { return "Audio plays later than the video." }
+        return "Adjust audio earlier or later to match the video."
+    }
+    public let upscaling = PlayerUpscalingModel()
     /// Subtitle offset in seconds (positive = subs later than video).
     public var subtitleDelaySeconds: TimeInterval = 0
     /// Whether subtitle timing can actually be shifted right now: true when the
@@ -553,6 +614,7 @@ public final class PlayerControlsModel {
     /// Whether the live playback-diagnostics overlay is shown. Toggleable from
     /// the in-player control bar; seeded from the caller's initial preference.
     public var diagnosticsEnabled: Bool = false
+    public let songRecognition = SongRecognitionModel()
 
     // MARK: Up Next (closing-credits next-episode card)
     /// The closing-credits next-episode card's own state. A facet for the stored
@@ -567,10 +629,12 @@ public final class PlayerControlsModel {
 
     init(systemAudio: SystemPlaybackAudio) {
         self.systemAudio = systemAudio
+        audioSyncAdjustment = PlayerAudioSyncEditor()
     }
     #endif
 
-    public init() {
+    public init(audioDelayRange: ClosedRange<TimeInterval> = PlayerAudioSyncAdjustment.range) {
+        audioSyncAdjustment = PlayerAudioSyncEditor(range: audioDelayRange)
         #if os(tvOS)
         systemAudio = .shared
         #endif
@@ -595,7 +659,7 @@ public final class PlayerControlsModel {
         #if os(tvOS)
         if !systemAudio.availableSettings.isEmpty { return true }
         #endif
-        return hasSelectableAudio || engineCapabilities.contains(.dialogEnhance)
+        return hasSelectableAudio || !engineCapabilities.intersection([.dialogEnhance, .audioDelay]).isEmpty
     }
     public var hasSelectableSubtitles: Bool { !subtitleOptions.isEmpty }
 
@@ -605,8 +669,16 @@ public final class PlayerControlsModel {
     /// as a deliberate jump into the segment and therefore respect by offering no
     /// button at all. Drives whether the in-player Skip button is shown/focusable.
     public var activeSkipSegment: MediaSegment? {
+        // A skip's own landing offers nothing until playback has actually moved
+        // into whatever window begins there.
+        if let landing = skipSegments.skippedLanding,
+           currentSeconds >= landing - 0.25,
+           currentSeconds < landing + MediaSegment.seekGraceWindow {
+            return nil
+        }
         guard let segment = skipSegments.segments.activeSkippable(at: currentSeconds) else { return nil }
         if segment.id == skipSegments.dismissedSegmentID { return nil }
+        if skipSegments.dismissedWindow?.overlaps(segment) == true { return nil }
         // Deep-seek suppression: a seek that landed beyond the grace window of
         // this exact segment means the viewer jumped *into* it on purpose — honor
         // the seek and surface nothing. (Grace-window landings keep the segment so
@@ -655,13 +727,17 @@ public final class PlayerControlsModel {
         return segment
     }
 
-    /// Credits with a queued next episode are "owned" by Up Next: the Skip
+    /// Terminal credits with a queued next episode are "owned" by Up Next: the Skip
     /// Credits button is never offered for that window — the card, an auto-advance,
     /// or a dismissal handles it — so the two affordances can never both appear.
     /// (A deep seek into credits clears ``activeCreditsSegment``, so a deliberate
     /// jump still falls through to normal handling.)
     public var creditsOwnedByUpNext: Bool {
-        upNextCard.info != nil && activeCreditsSegment != nil
+        guard upNextCard.info != nil, let credits = activeCreditsSegment,
+              duration.isFinite, duration > 0 else { return false }
+        // A finite credits window can end at another scene, even when it is the
+        // last reported marker. Only a window reaching EOF can hand off early.
+        return credits.end >= duration
     }
 
     /// Seconds before the end at which the Up Next card appears when there is NO

@@ -80,12 +80,49 @@ public final class NavigationStyleSettingsModel {
 
     public var automaticallyHiddenKeys: Set<String> = []
     public var hasWatchlistItems = false
+    public var hasWatchlistTitles = false
     public private(set) var contentLibraries: [AggregatedLibrary]
     public private(set) var discoveredAccountIDs: Set<String>
     public private(set) var offlineAccountIDs: Set<String> = []
+    @ObservationIgnored private var discoveryAllowed: @MainActor () -> Bool = { true }
+    @ObservationIgnored private var seerrConfigured: @MainActor () -> Bool = { false }
+
+    public var allowsDiscover: Bool { discoveryAllowed() }
+
+    public func setDiscoveryPolicy(
+        allowed: @escaping @MainActor () -> Bool,
+        isSeerrConfigured: @escaping @MainActor () -> Bool
+    ) {
+        discoveryAllowed = allowed
+        seerrConfigured = isSeerrConfigured
+    }
+
+    public func availableNavigationKeys(_ keys: [String]) -> [String] {
+        keys.filter { $0 != NavigationLibraryLayout.discoverKey || allowsDiscover }
+    }
+
+    private func resolvedHiddenKeys(_ additional: Set<String>) -> Set<String> {
+        var hidden = automaticallyHiddenKeys.union(additional)
+        hidden.remove(NavigationLibraryLayout.discoverKey)
+        if !seerrConfigured() { hidden.insert(NavigationLibraryLayout.discoverKey) }
+        return hidden
+    }
 
     public var resolvedLibraryLayout: NavigationLibraryLayout {
-        libraryLayout.resolvingAutomaticVisibility(hidden: automaticallyHiddenKeys)
+        resolvedLayout()
+    }
+
+    public func resolvedLayout(
+        additionallyHiddenKeys: Set<String> = [],
+        retainingWatchlist: Bool = false
+    ) -> NavigationLibraryLayout {
+        var layout = libraryLayout.resolvingAutomaticVisibility(
+            hidden: resolvedHiddenKeys(additionallyHiddenKeys),
+            retainingWatchlist: retainingWatchlist
+        )
+        // A child restriction wins over explicit Show and synced layout intent.
+        if !allowsDiscover { layout.hiddenKeys.insert(NavigationLibraryLayout.discoverKey) }
+        return layout
     }
 
     /// Ordering hints for library cards outside navigation; their visibility remains independent.
@@ -101,6 +138,11 @@ public final class NavigationStyleSettingsModel {
     public var showsMusic: Bool {
         get { libraryLayout.isVisible(NavigationLibraryLayout.musicKey) }
         set { setDestination(newValue, key: NavigationLibraryLayout.musicKey) }
+    }
+
+    public var showsLiveTV: Bool {
+        get { resolvedLibraryLayout.isVisible(NavigationLibraryLayout.liveTVKey) }
+        set { setDestination(newValue, key: NavigationLibraryLayout.liveTVKey) }
     }
 
     private let store: NavigationStyleSettingsStoring
@@ -131,7 +173,9 @@ public final class NavigationStyleSettingsModel {
     ) {
         let libraries = NavigationContentAvailability.reconcileLibraries(
             discovered: discovered,
-            unreachableAccountIDs: unreachableAccountIDs,
+            unreachableAccountIDs: unreachableAccountIDs.filter {
+                failures[$0]?.requiresSignIn != true && failures[$0] != .accessRestricted
+            },
             remembered: contentLibraries
         ).filter { accountIDs.contains($0.accountID) }
         if contentLibraries != libraries { contentLibraries = libraries }
@@ -157,9 +201,9 @@ public final class NavigationStyleSettingsModel {
     public func librarySections(
         available: [String], automaticallyHiddenKeys additionalHiddenKeys: Set<String> = []
     ) -> OrderedVisibilityList.Sections<String> {
-        libraryLayout.resolvingAutomaticVisibility(
-            hidden: automaticallyHiddenKeys.union(additionalHiddenKeys)
-        ).sections(available: available, requiredEnabled: requiredNavigationKeys)
+        resolvedLayout(additionallyHiddenKeys: additionalHiddenKeys).sections(
+            available: availableNavigationKeys(available), requiredEnabled: requiredNavigationKeys
+        )
     }
 
     /// Applies an edit from the reorder control and persists it.
@@ -170,8 +214,8 @@ public final class NavigationStyleSettingsModel {
     ) {
         var next = libraryLayout
         next.apply(
-            sections, available: available, requiredEnabled: requiredNavigationKeys,
-            automaticallyHiddenKeys: automaticallyHiddenKeys.union(additionalHiddenKeys)
+            sections, available: availableNavigationKeys(available), requiredEnabled: requiredNavigationKeys,
+            automaticallyHiddenKeys: resolvedHiddenKeys(additionalHiddenKeys)
         )
         guard next != libraryLayout else { return }
         libraryLayout = next
@@ -188,10 +232,23 @@ public final class NavigationStyleSettingsModel {
 
     /// Restores every destination's default visibility and order.
     public func resetLibraryLayout() {
-        let next = NavigationLibraryLayout.default
+        var next = NavigationLibraryLayout.default
+        for (key, name) in libraryLayout.customNames { next.setCustomName(name, for: key) }
         guard libraryLayout != next else { return }
         libraryLayout = next
         layoutStore.save(libraryLayout)
+    }
+
+    public func renameDestination(_ key: String, to name: String, homeVisibility: HomeLibraryVisibilityModel) {
+        if key == NavigationLibraryLayout.watchlistKey {
+            homeVisibility.setHomeRowName(name, for: .global(.watchlist))
+            return
+        }
+        var next = libraryLayout
+        next.setCustomName(name, for: key)
+        guard next != libraryLayout else { return }
+        libraryLayout = next
+        layoutStore.save(next)
     }
 
     private func setDestination(_ visible: Bool, key: String) {

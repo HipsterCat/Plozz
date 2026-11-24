@@ -8,16 +8,48 @@ enum HomeRowBrowseFactory {
         libraries: [AggregatedLibrary] = [],
         identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] },
         snapshotProvider: (@MainActor () -> [MediaItem]?)? = nil,
+        recommendationScope: HomeRecommendationScope? = nil,
+        homeSnapshot: @escaping HomeContentPageLoader.HomeSnapshot = { _ in throw AppError.notFound },
+        allowHiddenSource: Bool = false,
         isCurrent: @escaping @MainActor () -> Bool
     ) -> HomeRowBrowseModel {
+        if let definition = row.choice.collectionSection {
+            let sources = definition.availableSources(accounts: accounts, visibility: visibility)
+            let session = HomeContentPageLoader.Session(
+                accounts: accounts, visibility: visibility, recommendationScope: recommendationScope,
+                expandsRecentlyAdded: !definition.query.isDefault, identitySources: identitySources, homeSnapshot: homeSnapshot
+            )
+            let recent: HomeRowBrowseModel? = definition.query.isDefault && sources.contains(where: { $0.home == .recentlyAdded }) ? make(
+                .init(choice: .init(id: .global(.recentlyAdded), title: "", isProviderDefault: false),
+                      source: .home(.init(kind: .recentlyAdded, items: []))),
+                accounts: accounts, visibility: visibility, libraries: libraries,
+                identitySources: identitySources, allowHiddenSource: true, isCurrent: isCurrent
+            ) : nil
+            let pager = HomeContentPager(
+                sources: sources, serverInfo: accounts.sourceServerInfo(), identitySources: identitySources
+            ) { source, start, limit in
+                if source.home == .recentlyAdded, let recent {
+                    return try await recent.page(start: start, limit: limit)
+                }
+                return try await session.load(source, start: start, limit: limit)
+            }
+            let admitted = !sources.isEmpty && visibility.isHomeRowVisible(row.choice)
+            return HomeRowBrowseModel(
+                title: definition.title, localizedTitle: definition.localizedTitle, style: .poster,
+                contentPager: pager, watchlistDates: definition.usesWatchlistDates,
+                query: definition.query, isCurrent: { admitted && isCurrent() }
+            )
+        }
         var loaders: [HomeRowBrowseModel.PageLoader] = []
         var snapshot: [MediaItem] = []
         var title = row.choice.title
         var localizedTitle = row.choice.localizedTitle
         var titleSuffix: String?
+        var style: LibrarySection.Style = .poster
         var mergesSources = false
         var isRecentlyAdded = false
         var watchlistDates = false
+        var isContinueWatching = false
 
         func append(
             accountID: String, libraryID: String? = nil, history: Bool = false,
@@ -28,7 +60,10 @@ enum HomeRowBrowseFactory {
                 guard let account = accounts.first(where: { $0.account.id == accountID }) else {
                     throw AppError.notFound
                 }
-                let page = try await fetch(account.provider, start, limit)
+                guard recommendationScope?.isActive != false else { throw CancellationError() }
+                let page = try await HomeRecommendationScope.$current.withValue(recommendationScope) {
+                    try await fetch(account.provider, start, limit)
+                }
                 let items = recentlyAdded && visibility.hideWatchedRecentlyAdded
                     ? try await account.provider.recentlyAddedWatchState(page.items) : page.items
                 return HomeRowPage(
@@ -42,6 +77,7 @@ enum HomeRowBrowseFactory {
         switch row.source {
         case .home(let home):
             snapshot = home.items
+            isContinueWatching = home.kind == .continueWatching
             watchlistDates = home.kind == .watchlist
             if home.kind == .recentlyAdded {
                 mergesSources = true
@@ -76,24 +112,18 @@ enum HomeRowBrowseFactory {
             }
         case .library(let libraryRow):
             let section = libraryRow.section
+            isContinueWatching = section.id == "continueWatching"
+                || row.choice.serverRow?.section.kind == .continueWatching
+            // Collection-cover shape reflects its artwork and cover preference,
+            // not the special presentation of a history or collection-member rail.
+            if CollectionCoverLayout.isCollectionGroup(section.items) {
+                style = section.style
+            }
             title = section.title
             localizedTitle = section.localizedTitle
             titleSuffix = section.localizedTitleSuffix
             snapshot = section.items
-            if let collection = row.choice.collectionSection {
-                append(accountID: collection.source.accountID, libraryID: collection.source.libraryID) {
-                    provider, start, limit in
-                    let page = try await provider.collectionMembers(
-                        of: collection.source.collectionID, page: .init(startIndex: start, limit: limit)
-                    )
-                    guard page.startIndex == start, page.items.count <= limit else { throw AppError.invalidResponse }
-                    let result = try HomeRowPage(page)
-                    return .init(
-                        items: result.items.filter { $0.kind == .movie || $0.kind == .series },
-                        nextOffset: result.nextOffset
-                    )
-                }
-            } else if let server = row.choice.serverRow {
+            if let server = row.choice.serverRow {
                 isRecentlyAdded = server.section.kind == .recentlyAdded
                 let excluded = Set(visibility.disabledKeys.compactMap {
                     $0.hasPrefix(server.accountID + ":") ? String($0.dropFirst(server.accountID.count + 1)) : nil
@@ -104,7 +134,7 @@ enum HomeRowBrowseFactory {
                     try await provider.homeRowPage(
                         .server(
                             server.section, excludedLibraryIDs: server.section.isAccountWideHistory ? [] : excluded,
-                            anchorIDs: section.items.map(\.id)
+                            anchorIDs: section.items.map(\.id), browseID: section.browseID
                         ),
                         startIndex: start, limit: limit
                     )
@@ -114,12 +144,9 @@ enum HomeRowBrowseFactory {
                     isRecentlyAdded = true
                     append(accountID: library.accountID, libraryID: library.library.id, recentlyAdded: true) {
                         provider, start, limit in
-                        let page = try await provider.items(
-                            in: library.library.id, kind: library.library.kind,
-                            page: .init(startIndex: start, limit: limit, sort: .init(field: .dateAdded, direction: .descending))
+                        try await provider.libraryRecentlyAddedPage(
+                            in: library.library.id, kind: library.library.kind, startIndex: start, limit: limit
                         )
-                        guard page.startIndex == start, page.items.count <= limit else { throw AppError.invalidResponse }
-                        return try HomeRowPage(page)
                     }
                 } else if section.id == LibraryHomeRowKind.nextUp.rawValue {
                     append(accountID: library.accountID, libraryID: library.library.id) { provider, start, limit in
@@ -144,19 +171,24 @@ enum HomeRowBrowseFactory {
         }
         let mergeSources = mergesSources
         let hidesWatched = isRecentlyAdded && visibility.hideWatchedRecentlyAdded
+        let curatesProgress = isContinueWatching
+        if curatesProgress { snapshot = snapshot.filter(ContinueWatchingPolicy.admits) }
         let serverInfo = accounts.sourceServerInfo()
-        let isAdmitted = visibility.isHomeRowVisible(row.choice)
+        let isAdmitted = (allowHiddenSource || visibility.isHomeRowVisible(row.choice))
             && row.choice.library.map { visibility.isEnabled($0.key) } != false
-            && row.choice.collectionSection?.source.libraryKey.map(visibility.isEnabled) != false
         return HomeRowBrowseModel(
             title: title, localizedTitle: localizedTitle, titleSuffix: titleSuffix,
+            style: style,
             snapshot: snapshot, loaders: loaders, snapshotProvider: snapshotProvider,
             watchlistDates: watchlistDates, isCurrent: { isAdmitted && isCurrent() }
         ) { groups in
             let items = mergeSources ? MediaItemMerger.merge(
                 HomeAggregator.interleave(groups), serverInfo: { serverInfo[$0] }, identitySources: identitySources
             ) : groups.flatMap { $0 }
-            return items.filter { !hidesWatched || !HomeRecentlyAddedPolicy.isWatched($0) }
+            return items.filter {
+                (!hidesWatched || !HomeRecentlyAddedPolicy.isWatched($0))
+                    && (!curatesProgress || ContinueWatchingPolicy.admits($0))
+            }
         }
     }
 }

@@ -48,6 +48,38 @@ final class HomeHeroInteractionTests: XCTestCase {
         assertDetail("Details for series from emby")
     }
 
+    func testOpeningEpisodeShowsSeededDetailWhileItsShowLoads() {
+        app.terminate()
+        app.launchArguments += ["--hero-native-chrome", "--hero-series-loading"]
+        app.launch()
+        let artwork = app.buttons["home-hero-artwork-detail"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 15))
+        artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+        assertLoadingSeriesDetail()
+        capture("series-artwork-during-resolution")
+        app.buttons["hero-complete-series-lookup"].tap()
+        assertDetail("Details for series from emby")
+    }
+
+    func testFailedShowLookupStillOffersRetryFromSeededDetail() throws {
+        app.terminate()
+        app.launchArguments += ["--hero-native-chrome", "--hero-series-loading", "--hero-series-failure"]
+        app.launch()
+        let artwork = app.buttons["home-hero-artwork-detail"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 15))
+        artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+        assertLoadingSeriesDetail()
+        app.buttons["hero-complete-series-lookup"].tap()
+        XCTAssertTrue(app.staticTexts["Unable to load details"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Try Again"].isHittable)
+        let count = app.staticTexts["hero-series-lookup-count"]
+        let previous = try XCTUnwrap(Int(count.label))
+        app.buttons["Try Again"].tap()
+        XCTAssertTrue(count.wait(for: \.label, toEqual: String(previous + 1), timeout: 5))
+        app.buttons["hero-complete-series-lookup"].tap()
+        XCTAssertTrue(app.staticTexts["Unable to load details"].waitForExistence(timeout: 8))
+    }
+
     func testForegroundActionsAndVerticalScrollingRemainIndependent() {
         let artwork = app.buttons["home-hero-artwork-detail"]
         XCTAssertTrue(artwork.waitForExistence(timeout: 15), app.debugDescription)
@@ -89,6 +121,7 @@ final class HomeHeroInteractionTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+
         play.tap()
         XCTAssertTrue(app.staticTexts["hero-play-count"].wait(for: \.label, toEqual: "1", timeout: 5))
         app.buttons["Add to Watchlist"].tap()
@@ -101,6 +134,70 @@ final class HomeHeroInteractionTests: XCTestCase {
         XCTAssertTrue(artwork.wait(for: \.isHittable, toEqual: true, timeout: 5))
     }
 
+    func testReturningFromPlayingTrailerKeepsMovieAndResumeAction() {
+        app.terminate()
+        app.launchArguments += ["--hero-native-chrome", "--hero-logo", "--hero-detail-trailer"]
+        app.launch()
+        let artwork = app.buttons["home-hero-artwork-detail"]
+        let play = app.buttons["home-hero-play"]
+        XCTAssertTrue(play.wait(for: \.isHittable, toEqual: true, timeout: 15))
+        let originalLabel = play.label
+        artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+        let mute = app.buttons["Unmute trailer"]
+        XCTAssertTrue(mute.wait(for: \.isHittable, toEqual: true, timeout: 20), app.debugDescription)
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.004, dy: 0.48))
+        let partial = app.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.48))
+        edge.press(forDuration: 0.1, thenDragTo: partial, withVelocity: .slow, thenHoldForDuration: 0.8)
+        XCTAssertTrue(mute.isHittable, "Cancelling must leave the detail trailer playing.")
+        let finish = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.48))
+        edge.press(forDuration: 0.1, thenDragTo: finish, withVelocity: .slow, thenHoldForDuration: 0.8)
+        XCTAssertTrue(play.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        XCTAssertEqual(artwork.value as? String, "Hero Movie")
+        XCTAssertEqual(play.label, originalLabel)
+        XCTAssertFalse(mute.exists, "The detail-only trailer must not appear on Home.")
+    }
+
+    func testCompactHomeActionsScrollAwayAndRemainUsableWithOrWithoutHero() {
+        for heroEnabled in [true, false] {
+            app.terminate()
+            app.launchArguments = [
+                "--home-hero-fixture", "--hero-native-chrome", "--hero-header-audio", "--back-interaction"
+            ] + (heroEnabled ? [] : ["--hero-disabled"])
+            app.launch()
+            let profile = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Settings for ")).firstMatch
+            XCTAssertTrue(profile.wait(for: \.isHittable, toEqual: true, timeout: 15), app.debugDescription)
+            XCTAssertFalse(app.navigationBars.buttons.firstMatch.exists,
+                           "Profile and mute must be in the scroll view, not pinned in the navigation bar.")
+            if heroEnabled {
+                XCTAssertEqual(app.buttons["home-hero-artwork-detail"].frame.minY, app.frame.minY, accuracy: 1,
+                               "Sharing the native bar must not reserve a row above the hero.")
+            }
+            let initialFrame = profile.frame
+            XCTAssertEqual(initialFrame.width, 44, accuracy: 1)
+            XCTAssertEqual(initialFrame.height, 44, accuracy: 1)
+            profile.tap()
+            XCTAssertTrue(app.staticTexts["hero-settings-count"].wait(for: \.label, toEqual: "1", timeout: 5))
+            let unmute = app.buttons["Unmute trailer"]
+            XCTAssertTrue(unmute.isHittable, app.debugDescription)
+            unmute.tap()
+            XCTAssertTrue(app.buttons["Mute trailer"].waitForExistence(timeout: 5), app.debugDescription)
+            capture("scrolling-home-actions-hero-\(heroEnabled)-rest")
+            let scroll = app.scrollViews.firstMatch
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.65))
+            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.25))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            XCTAssertTrue(profile.wait(for: \.isHittable, toEqual: false, timeout: 5),
+                          "Profile must scroll away instead of staying pinned above the page.")
+            XCTAssertFalse(app.buttons["Mute trailer"].isHittable)
+            capture("scrolling-home-actions-hero-\(heroEnabled)-scrolled")
+            scroll.swipeDown()
+            XCTAssertTrue(profile.wait(for: \.isHittable, toEqual: true, timeout: 5))
+            XCTAssertEqual(profile.frame.minY, initialFrame.minY, accuracy: 1)
+            profile.tap()
+            XCTAssertTrue(app.staticTexts["hero-settings-count"].wait(for: \.label, toEqual: "2", timeout: 5))
+        }
+    }
+
     func testTitleAndDescriptionOpenDetailsWithoutStartingPlayback() {
         let artwork = app.buttons["home-hero-artwork-detail"]
         XCTAssertTrue(artwork.waitForExistence(timeout: 15), app.debugDescription)
@@ -110,8 +207,18 @@ final class HomeHeroInteractionTests: XCTestCase {
             capture("home-hero-glass")
             text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             assertDetail("Details for movie from jellyfin")
+            let play = app.buttons["detail-hero-play"]
+            XCTAssertTrue(play.isHittable)
+            XCTAssertLessThan(play.frame.width, 130, "Plain movie Play should fit its icon and label.")
+            XCTAssertGreaterThanOrEqual(play.frame.height, 44)
             capture("detail-hero-glass")
-            app.navigationBars.buttons.firstMatch.tap()
+            let back = app.navigationBars.buttons.firstMatch
+            let backFrame = back.frame
+            app.scrollViews.firstMatch.swipeUp()
+            XCTAssertTrue(back.isHittable)
+            XCTAssertEqual(back.frame.minY, backFrame.minY, accuracy: 1)
+            XCTAssertEqual(back.frame.minX, backFrame.minX, accuracy: 1)
+            back.tap()
             XCTAssertTrue(artwork.wait(for: \.isHittable, toEqual: true, timeout: 5))
         }
     }
@@ -165,6 +272,15 @@ final class HomeHeroInteractionTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func assertLoadingSeriesDetail() {
+        XCTAssertTrue(app.staticTexts["Hero Series"].waitForExistence(timeout: 5))
+        let play = app.buttons["detail-hero-play"]
+        XCTAssertTrue(play.exists)
+        XCTAssertFalse(play.isEnabled, "Unresolved series playback must remain unavailable.")
+        XCTAssertFalse(app.staticTexts["Details for series from emby"].exists)
+        XCTAssertFalse(app.activityIndicators.firstMatch.exists)
     }
 
     private func assertDetail(_ text: String) {

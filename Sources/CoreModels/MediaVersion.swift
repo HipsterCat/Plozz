@@ -31,7 +31,7 @@ public enum MediaFileSizeFormatter {
 /// Beyond the label/size the brief requires, this also carries the handful of
 /// technical facts (`videoCodec`, `videoRange`, `audioCodec`, `audioChannels`)
 /// needed to (a) render a tasteful "4K · Dolby Vision · Atmos" diff per row and
-/// (b) provide a conservative native-profile ordering hint. The actual delivery
+/// (b) provide an engine-aware ordering hint. The actual delivery
 /// mode is known only after provider resolution and is shown in Playback
 /// Diagnostics, never guessed in the version menu.
 public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
@@ -61,7 +61,7 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
     /// Runtime of this specific file in seconds, when known.
     public var duration: TimeInterval?
     /// The server's default/primary source — used as the selection fallback when
-    /// no version direct-plays and as a tie-breaker.
+    /// no version has known supported input and as a tie-breaker.
     public var isDefault: Bool
 
     // Technical facts for the visual diff + device compatibility prediction.
@@ -78,6 +78,12 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
     public var audioProfile: String?
     /// Original container, e.g. `mkv`, `mp4`.
     public var container: String?
+    public var externalLink: ExternalMediaLink?
+    public var discMenuAvailability: DiscMenuAvailability?
+
+    public var isExternalSource: Bool {
+        container?.lowercased() == "strmlnk"
+    }
 
     /// When this version is backed by a **different** provider item than the one
     /// containing it (the same-account-duplicate case: two separate Jellyfin
@@ -124,7 +130,8 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
         sourceItemID: String? = nil,
         sourceAccountID: String? = nil,
         providerMediaSourceID: String? = nil,
-        sourceMetadata: MediaSourceMetadata? = nil
+        sourceMetadata: MediaSourceMetadata? = nil,
+        externalLink: ExternalMediaLink? = nil
     ) {
         self.id = id
         self.name = name
@@ -146,6 +153,7 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
         self.sourceAccountID = sourceAccountID
         self.providerMediaSourceID = providerMediaSourceID
         self.sourceMetadata = sourceMetadata
+        self.externalLink = externalLink
     }
 
     public var playbackMediaSourceID: String? {
@@ -325,6 +333,7 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
     /// never baked in here where it would render as permanent English via
     /// `Text(String)`.
     public var displayLabel: String? {  // l10n:content — joined technical facts, or the provider's source name; nil means "no facts known", so the caller supplies the (copy) "Version" fallback itself
+        if isExternalSource { return externalLink?.service.name ?? fileName }
         var parts: [String] = []
         if let editionLabel { parts.append(editionLabel) }
         if let resolutionLabel { parts.append(resolutionLabel) }
@@ -340,6 +349,7 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
     /// as ``displayLabel``'s: no fact/name is known, so the caller shows its
     /// own "Version" fallback resource instead.
     public var menuTitle: String? {  // l10n:content — edition/resolution fact, or the provider's source name; nil means "no facts known", so the caller supplies the (copy) "Version" fallback itself
+        if isExternalSource { return displayLabel }
         if let editionLabel { return editionLabel }
         if let resolutionLabel { return resolutionLabel }
         return MediaSourceDisplayName.name(from: name)
@@ -398,6 +408,15 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
         }
 
         public init(_ version: MediaVersion, locale: Locale = .current) {
+            if version.isExternalSource {
+                title = version.displayLabel
+                supplementalFacts = []
+                releaseName = version.externalLink == nil ? nil : version.fileName
+                formatBadges = []
+                audioLanguages = []
+                supplementalFactsWithoutBadges = []
+                return
+            }
             let fileName = MediaSourceDisplayName.fileName(from: version.fileName)
                 ?? MediaSourceDisplayName.fileName(from: version.sourceMetadata?.fileName)
             title = version.displayLabel
@@ -486,9 +505,8 @@ public struct MediaVersion: Codable, Hashable, Identifiable, Sendable {
         )
     }
 
-    /// A coarse quality score used to order versions and pick a default. Driven
-    /// primarily by resolution, then HDR, then bitrate — so "best available"
-    /// sorts first. Deterministic and dependency-free.
+    /// Coarse source quality for display ordering and remembered-shape tiebreaks.
+    /// Automatic selection separately accounts for usable HDR and engine input.
     public var qualityScore: Int {
         var score = 0
         score += (height ?? 0)
@@ -556,24 +574,33 @@ public extension MediaVersion {
 }
 
 public extension Array where Element == MediaVersion {
-    /// The version a freshly opened picker should select by default: the
-    /// highest-quality version whose known facts fit the native device profile.
-    /// This is a conservative ordering hint, not a claim about the provider's
-    /// resolved delivery mode (Plozzigen may directly decode a version outside
-    /// that profile). Falls back to the server default, then highest quality.
-    ///
-    /// This is the heart of the "smart selection" creative addition — it turns a
-    /// dumb list into a one-tap "right thing for *this* TV" while still letting
-    /// the user override to any other version.
-    func recommendedSelection(for capabilities: MediaCapabilities) -> MediaVersion? {
+    /// The highest-scoring known engine input, then the server default or best
+    /// remaining estimate. Neither codec support nor this score promises playback
+    /// success, real-time software decoding, or a particular output format.
+    func recommendedSelection(
+        for capabilities: MediaCapabilities,
+        engine: PlaybackEngineKind = .plozzigen
+    ) -> MediaVersion? {
         guard !isEmpty else { return nil }
-        let nativeCompatible = filter { $0.compatibility(with: capabilities) == .directPlay }
-        if let best = nativeCompatible.max(by: { $0.qualityScore < $1.qualityScore }) {
-            return best
+        let playable = filter { !$0.isExternalSource }
+        if playable.count != count {
+            return playable.isEmpty ? first : playable.recommendedSelection(for: capabilities, engine: engine)
+        }
+        let assessed = map { (version: $0, assessment: $0.selectionAssessment(for: capabilities, engine: engine)) }
+        func ranksBefore(
+            _ lhs: (version: MediaVersion, assessment: VersionSelectionAssessment),
+            _ rhs: (version: MediaVersion, assessment: VersionSelectionAssessment)
+        ) -> Bool {
+            if lhs.assessment.qualityScore != rhs.assessment.qualityScore {
+                return lhs.assessment.qualityScore < rhs.assessment.qualityScore
+            }
+            return lhs.version.id > rhs.version.id
+        }
+        if let best = assessed.filter({ $0.assessment.hasSupportedInput }).max(by: ranksBefore) {
+            return best.version
         }
         if let serverDefault = first(where: { $0.isDefault }) { return serverDefault }
-        if let best = self.max(by: { $0.qualityScore < $1.qualityScore }) { return best }
-        return first
+        return assessed.max(by: ranksBefore)?.version
     }
 
     /// A deterministic display order for the version picker. Known file sizes
@@ -582,6 +609,7 @@ public extension Array where Element == MediaVersion {
     /// tiebreaks keep the order independent of insertion/arrival order.
     func sortedForPicker() -> [MediaVersion] {
         sorted { lhs, rhs in
+            if lhs.isExternalSource != rhs.isExternalSource { return !lhs.isExternalSource }
             let lhsSize = lhs.sizeBytes.flatMap { $0 > 0 ? $0 : nil }
             let rhsSize = rhs.sizeBytes.flatMap { $0 > 0 ? $0 : nil }
             if lhsSize != rhsSize {

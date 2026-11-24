@@ -9,7 +9,285 @@ import XCTest
 @testable import FeatureSettings
 
 @MainActor
+private final class PlayerSupportFocusController<Content: View>: UIHostingController<Content> {
+    var target: (any UIFocusEnvironment)?
+    override var preferredFocusEnvironments: [any UIFocusEnvironment] {
+        target.map { [$0] } ?? super.preferredFocusEnvironments
+    }
+}
+
+@MainActor
 final class PlaybackSettingsHostedTests: XCTestCase {
+    func testDefaultZoomUpdatesItsNativeControlsWithoutChangingOtherPlatforms() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "DefaultVideoZoomTV-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let playback = PlaybackSettingsModel(store: PlaybackSettingsStore(defaults: defaults))
+        let page = PlaybackDetailView(
+            playback: playback,
+            subtitleBehavior: SubtitleBehaviorModel(store: SubtitleBehaviorStore(defaults: defaults)),
+            subtitleStyle: SubtitleStyleModel(store: SubtitleStyleStore(defaults: defaults)),
+            subtitlePolicy: SubtitlePolicyModel(store: SubtitlePolicyStore(defaults: defaults)),
+            audioPolicy: AudioPolicyModel(store: AudioPolicyStore(defaults: defaults))
+        )
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let host = PlayerSupportFocusController(rootView:
+            SettingsFormLayout(title: Text("Playback"), rows: page.zoomRows)
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        try await Task.sleep(for: .milliseconds(350))
+        let initial = try visibleText(in: window, attachment: nil)
+        XCTAssertTrue(initial.contains("Default zoom"), initial)
+        XCTAssertEqual(playback.settings.videoZoom.television.mode, .fit)
+        XCTAssertTrue(initial.contains("Normal"), initial)
+        XCTAssertEqual(nativeFocusItems(in: window).count, 1)
+        playback.settings.videoZoom.television = .init(mode: .custom, customPercent: 117)
+        try await Task.sleep(for: .milliseconds(350))
+        let custom = try visibleText(in: window, attachment: nil)
+        XCTAssertTrue(custom.contains("Custom"), custom)
+        XCTAssertTrue(custom.contains("117%"), custom)
+        let targets = nativeFocusItems(in: window).sorted {
+            (nativeFocusFrame($0, in: window)?.minY ?? 0) < (nativeFocusFrame($1, in: window)?.minY ?? 0)
+        }
+        XCTAssertGreaterThan(targets.count, 1)
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        let target = try XCTUnwrap(targets.last)
+        host.target = target
+        system.requestFocusUpdate(to: host)
+        system.updateFocusIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertTrue(system.focusedItem === target)
+        XCTAssertEqual(playback.settings.videoZoom.phone, .onDemandDefault)
+        XCTAssertEqual(playback.settings.videoZoom.tablet, .onDemandDefault)
+        XCTAssertEqual(playback.settings.videoZoom.television.customPercent, 117, "Focus must not adjust zoom.")
+    }
+
+    func testUpscalingRowShowsAutomaticAndReflectsProfileChoiceWithNativeFocus() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "VideoUpscalingTV-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = PlaybackSettingsStore(defaults: defaults)
+        let playback = PlaybackSettingsModel(store: store)
+        let page = PlaybackDetailView(
+            playback: playback,
+            subtitleBehavior: SubtitleBehaviorModel(store: SubtitleBehaviorStore(defaults: defaults)),
+            subtitleStyle: SubtitleStyleModel(store: SubtitleStyleStore(defaults: defaults)),
+            subtitlePolicy: SubtitlePolicyModel(store: SubtitlePolicyStore(defaults: defaults)),
+            audioPolicy: AudioPolicyModel(store: AudioPolicyStore(defaults: defaults))
+        )
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            SettingsFormLayout(title: Text("Playback"), rows: page.videoUpscalingRows)
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let initial = try visibleText(in: window, attachment: "Video-upscaling-default-TV")
+        XCTAssertTrue(initial.contains("Video upscaling"), initial)
+        XCTAssertTrue(initial.contains("Automatic"), initial)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 1)
+        XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+        playback.settings.videoUpscaling = .off
+        try await Task.sleep(for: .milliseconds(250))
+        let disabled = try visibleText(in: window, attachment: "Video-upscaling-off-TV")
+        XCTAssertTrue(disabled.contains("Off"), disabled)
+        XCTAssertEqual(store.load().videoUpscaling, .off)
+    }
+
+    func testVersionSelectionIsOneLabeledMenuForEverySavedMode() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "VersionSelectionMenuTV-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let playback = PlaybackSettingsModel(store: PlaybackSettingsStore(defaults: defaults))
+        let page = PlaybackDetailView(
+            playback: playback,
+            subtitleBehavior: SubtitleBehaviorModel(store: SubtitleBehaviorStore(defaults: defaults)),
+            subtitleStyle: SubtitleStyleModel(store: SubtitleStyleStore(defaults: defaults)),
+            subtitlePolicy: SubtitlePolicyModel(store: SubtitlePolicyStore(defaults: defaults)),
+            audioPolicy: AudioPolicyModel(store: AudioPolicyStore(defaults: defaults))
+        )
+        let row = try XCTUnwrap(page.versionSelectionRows.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            SettingsFormLayout(title: Text("Playback"), rows: [row])
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let modes: [(PlaybackVersionSelectionMode?, String)] = [
+            (nil, "Choose on first play"), (.askEveryTime, "Ask every time"),
+            (.automatic, "Choose automatically"), (.serverOrder, "Use first from server")
+        ]
+        for (mode, value) in modes {
+            playback.settings.versionSelectionMode = mode
+            try await Task.sleep(for: .milliseconds(400))
+            let text = try visibleText(in: window, attachment: "Version-selection-menu-\(mode?.rawValue ?? "unset")")
+            XCTAssertEqual(text.components(separatedBy: "Version selection").count - 1, 1, text)
+            XCTAssertTrue(text.contains(value), text)
+            for (other, otherValue) in modes where other != mode {
+                XCTAssertFalse(text.contains(otherValue), "Unselected choices belong inside the menu: \(text)")
+            }
+            XCTAssertEqual(profileFocusFrames(in: window).count, 2, "Only the menu and existing help button are focusable.")
+            XCTAssertEqual(playback.settings.versionSelectionMode, mode, "Rendering must not select a mode.")
+        }
+    }
+
+    func testExternalPlayerFocusPreviewsOnlyLimitationsWithoutChangingSelection() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "ExternalPlayerSupportTV-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let model = ExternalPlayerSettingsModel(defaults: defaults)
+        model.settings.player = .nativePlayer
+        let row = try XCTUnwrap(ExternalPlayerSettingsRows.external(
+            model: model, installedPlayers: Set(ExternalPlayer.supported)
+        ).first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let host = PlayerSupportFocusController(rootView:
+            SettingsFormLayout(title: Text("External player"), rows: [row])
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        let targets = try nativeFocusItems(in: window).map { item in
+            (item: item, frame: try XCTUnwrap(nativeFocusFrame(item, in: window)))
+        }.sorted { $0.frame.minY < $1.frame.minY }.map(\.item)
+        XCTAssertEqual(targets.count, ExternalPlayer.supported.count)
+        guard targets.count == ExternalPlayer.supported.count else { return }
+        func focus(_ player: ExternalPlayer) async throws {
+            let index = try XCTUnwrap(ExternalPlayer.supported.firstIndex(of: player))
+            let target = targets[index]
+            host.target = target
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            try await Task.sleep(for: .milliseconds(250))
+            host.target = nil
+            XCTAssertTrue(system.focusedItem === target)
+            XCTAssertEqual(model.settings.player, .nativePlayer, "Focus must not change the default.")
+        }
+        try await focus(.nativePlayer)
+        let native = try visibleText(in: window, attachment: "External-player-Native-support")
+        for phrase in ["Native Player limitations", "Live TV", "non-WebDAV",
+                       "WebDAV passwords", "extra login headers", "pinned certificates"] {
+            XCTAssertTrue(native.contains(phrase), native)
+        }
+        XCTAssertFalse(native.contains("library videos"), native)
+        XCTAssertFalse(native.contains("server-converted"), native)
+        XCTAssertFalse(native.contains("Native Player support"), native)
+        try await focus(.infuse)
+        let infuse = try visibleText(in: window, attachment: "External-player-Infuse-support")
+        XCTAssertTrue(infuse.contains("WebDAV passwords"), infuse)
+        XCTAssertTrue(infuse.contains("Infuse limitations"), infuse)
+        XCTAssertFalse(infuse.contains("Native Player limitations"), infuse)
+        try await focus(.vlc)
+        let vlc = try visibleText(in: window, attachment: "External-player-VLC-support")
+        XCTAssertTrue(vlc.contains("SMB, NFS, SFTP, FTPS"), vlc)
+        XCTAssertTrue(vlc.contains("VLC limitations"), vlc)
+        XCTAssertTrue(vlc.contains("Watch progress isn't returned"), vlc)
+        XCTAssertFalse(vlc.contains("library videos"), vlc)
+        try await focus(.builtIn)
+        let builtIn = try visibleText(in: window, attachment: "External-player-built-in")
+        XCTAssertFalse(builtIn.contains("server-converted"), builtIn)
+        XCTAssertFalse(builtIn.contains("limitations"), builtIn)
+        XCTAssertFalse(builtIn.contains("WebDAV"), builtIn)
+    }
+
+    func testPlayerTabsShareOneSettingsGroupWithoutAnInfoToggle() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let suite = "PlayerTabsTV-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let playback = PlaybackSettingsModel(store: PlaybackSettingsStore(defaults: defaults))
+        let page = PlaybackDetailView(
+            playback: playback,
+            subtitleBehavior: SubtitleBehaviorModel(store: SubtitleBehaviorStore(defaults: defaults)),
+            subtitleStyle: SubtitleStyleModel(store: SubtitleStyleStore(defaults: defaults)),
+            subtitlePolicy: SubtitlePolicyModel(store: SubtitlePolicyStore(defaults: defaults)),
+            audioPolicy: AudioPolicyModel(store: AudioPolicyStore(defaults: defaults))
+        )
+        XCTAssertEqual(page.playerTabRows.map(\.id), ["player-tabs"])
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        window.rootViewController = UIHostingController(rootView:
+            SettingsFormLayout(title: Text("Playback"), rows: page.playerTabRows)
+                .environment(\.themePalette, .dark)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .frame(width: SettingsFormMetrics.pageWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+        )
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        let text = try visibleText(in: window, attachment: "Player-tabs-settings-TV")
+        for label in ["Player tabs", "Chapters", "Cast", "Episodes", "Playlist", "Continue Watching"] {
+            XCTAssertTrue(text.contains(label), text)
+        }
+        XCTAssertFalse(text.contains("Info"), text)
+        XCTAssertEqual(profileFocusFrames(in: window).count, 5)
+        XCTAssertNotNil(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+    }
+
     func testProfileSettingsKeepAutomaticSignInSeparateFromProfiles() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
@@ -90,7 +368,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             subtitlePolicy: SubtitlePolicyModel(store: SubtitlePolicyStore(defaults: defaults)),
             audioPolicy: AudioPolicyModel(store: AudioPolicyStore(defaults: defaults))
         )
-        XCTAssertEqual(page.audioRows.map(\.id), ["audio-defaults", "lossless-surround"])
+        XCTAssertEqual(page.audioRows.map(\.id), ["audio-defaults", "lossless-surround", "dolby-vision-fel"])
         let outputRow = try XCTUnwrap(page.audioRows.first { $0.id == "lossless-surround" })
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
@@ -114,13 +392,9 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         for label in ["Prefer lossless audio", "regular HDMI ARC", "compressed audio"] {
             XCTAssertTrue(text.contains(label), text)
         }
-        if #available(tvOS 26.0, *) {
-            for label in ["Spatial audio", "height channel support", "TrueHD Atmos",
-                          "DTS:X", "PCM", "AirPlay", "lossy"] {
-                XCTAssertTrue(text.contains(label), text)
-            }
-        } else {
-            XCTAssertFalse(text.contains("Spatial audio"), text)
+        for label in ["Spatial audio", "height channel support", "TrueHD Atmos",
+                      "DTS:X", "Rendering layout"] {
+            XCTAssertFalse(text.contains(label), text)
         }
     }
 
@@ -263,19 +537,16 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         XCTAssertEqual(PlaybackSettingsStore(defaults: defaults).load(), .default)
     }
 
-    func testAdvancedPlaybackShowsFELControlAndAudioTradeoff() async throws {
+    func testAdvancedPlaybackOmitsRetiredConversionControls() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive })
         let previous = scene.windows.first(where: \.isKeyWindow)
         let suite = "FELSettingsHosted-\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let playback = PlaybackSettingsModel(store: PlaybackSettingsStore(defaults: defaults, namespace: "guest"))
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         window.rootViewController = UIHostingController(rootView:
-            PlaybackAdvancedSettingsView(
-                playback: playback, model: ExternalPlayerSettingsModel(defaults: defaults)
-            )
+            PlaybackAdvancedSettingsView(model: ExternalPlayerSettingsModel(defaults: defaults))
             .environment(\.settingsInWorkspace, true)
             .environment(\.themePalette, .dark)
             .environment(\.locale, Locale(identifier: "en_US"))
@@ -291,78 +562,16 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             defaults.removePersistentDomain(forName: suite)
         }
         try await Task.sleep(for: .milliseconds(400))
-        let text = try visibleText(in: window, attachment: "FEL advanced playback setting")
-        for label in ["FEL", "experimental", "May impact performance."] {
-            XCTAssertTrue(text.contains(label), "The setting and tradeoff must be visible: \(text)")
-        }
-        if #available(tvOS 26.0, *) {
-            XCTAssertFalse(text.contains("Disables spatial audio."), text)
-            let page = try await allPageText(in: window, attachment: "Advanced-spatial-layout")
-            for label in ["Rendering layout", "9.1.6", "DTS:X heights require 7.1.4 or 9.1.6."] {
-                XCTAssertTrue(page.contains(label), page)
-            }
-        } else {
-            XCTAssertTrue(text.contains("Disables spatial audio."), text)
-            XCTAssertFalse(text.contains("DTS:X"), text)
+        let text = try visibleText(in: window, attachment: "Advanced playback settings")
+        XCTAssertTrue(text.contains("External player"), text)
+        let page = try await allPageText(in: window, attachment: "Advanced-without-conversion")
+        for label in [
+            "FEL", "experimental", "May impact performance.", "Disables spatial audio.",
+            "Rendering layout", "9.1.6", "DTS:X", "height channel support"
+        ] {
+            XCTAssertFalse(page.contains(label), page)
         }
         XCTAssertFalse(text.contains("Dolby Atmos"), text)
-        XCTAssertFalse(playback.settings.dolbyVisionFELEnabled)
-    }
-
-    func testSpatialLayoutControlUpdatesFromDeviceStoreAndFitsLargeText() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive })
-        let previous = scene.windows.first(where: \.isKeyWindow)
-        let suite = "SpatialLayoutHosted-\(UUID())"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let store = SpatialAudioLayoutStore(defaults: defaults)
-        let window = UIWindow(windowScene: scene)
-        defer {
-            window.isHidden = true
-            window.rootViewController = nil
-            previous?.makeKeyAndVisible()
-            defaults.removePersistentDomain(forName: suite)
-        }
-        for (size, typeSize): (CGSize, DynamicTypeSize) in [
-            (.init(width: 1100, height: 440), .large),
-            (.init(width: 760, height: 700), .accessibility3)
-        ] {
-            window.frame = CGRect(origin: .zero, size: size)
-            window.rootViewController = UIHostingController(rootView:
-                SpatialAudioLayoutControl(defaults: defaults)
-                    .padding(24)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .environment(\.dynamicTypeSize, typeSize)
-                    .environment(\.themePalette, .dark)
-                    .environment(\.colorScheme, .dark)
-                    .environment(\.locale, Locale(identifier: "en_US"))
-                    .background(.black)
-            )
-            window.makeKeyAndVisible()
-            for layout in SpatialAudioLayout.allCases {
-                store.save(layout)
-                try await Task.sleep(for: .milliseconds(200))
-                try await waitForHostedLayout(window)
-                let text = try visibleText(in: window, attachment: "Spatial-layout-\(layout.rawValue)-\(typeSize)")
-                let normalizedText = text.replacingOccurrences(of: ": ", with: ":")
-                for label in ["Rendering layout", "Applies to this device.",
-                              "DTS:X heights require 7.1.4 or 9.1.6."] {
-                    XCTAssertTrue(normalizedText.contains(label), text)
-                }
-                let controlFrames = self.profileFocusFrames(in: window)
-                XCTAssertEqual(controlFrames.count, 1)
-                let frame = try XCTUnwrap(controlFrames.first)
-                XCTAssertTrue(window.bounds.contains(frame))
-                let valueText = try visibleText(
-                    in: window, attachment: "Spatial-layout-value-\(layout.rawValue)-\(typeSize)",
-                    crop: CGRect(x: frame.minX + frame.width * 0.65, y: frame.minY,
-                                 width: frame.width * 0.35, height: frame.height)
-                )
-                XCTAssertTrue(valueText.contains(layout.rawValue), valueText)
-                XCTAssertFalse(text.contains("…"), text)
-                XCTAssertEqual(store.load(), layout)
-            }
-        }
     }
 
     func testLibrarySourcesShowConfiguredNamesAndUpdateWithProfileSelection() async throws {
@@ -498,20 +707,20 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 if offset >= bottom { break }
             }
             for label in [
-                "Version selection", "Choose on first play", "Ask every time", "Choose automatically",
+                "Version selection", "Choose on first play",
                 "Remember series version choices",
                 "Remember audio language per series",
                 "Autoplay next episode", "Autoplay next playlist item",
                 "Show Up Next card", "Time before the end",
                 "Skip intros, credits & more",
                 "Video buffer", "Live TV buffer", "Automatic", "temporary storage",
-                "adds live delay", "Spatial audio", "height channel support",
-                "TrueHD Atmos", "DTS:X", "PCM", "AirPlay", "lossy"
+                "adds live delay"
             ] {
                 XCTAssertTrue(visible.contains(label), "Missing inline control \(label): \(visible)")
             }
-            for option in ["1 minute", "5 minutes", "10 minutes", "Maximum available", "45 seconds"] {
-                XCTAssertFalse(visible.contains(option), "Buffer choices must stay inside their menus: \(visible)")
+            for option in ["Ask every time", "Choose automatically", "Use first from server",
+                           "1 minute", "5 minutes", "10 minutes", "Maximum available", "45 seconds"] {
+                XCTAssertFalse(visible.contains(option), "Choices must stay inside their menus: \(visible)")
             }
             XCTAssertFalse(visible.contains("Turn off if playback stutters"), visible)
             XCTAssertFalse(visible.contains("Applies to new playback sessions"), visible)
@@ -520,7 +729,9 @@ final class PlaybackSettingsHostedTests: XCTestCase {
             XCTAssertFalse(visible.contains("The player closes when an episode finishes"), visible)
             XCTAssertFalse(visible.contains("Show a Skip button, or skip automatically"), visible)
             XCTAssertFalse(visible.contains("When your server has no intro or credits marker"), visible)
-            XCTAssertTrue(playback.settings.trueHDAtmosEnabled)
+            for label in ["height channel support", "TrueHD Atmos", "DTS:X", "Rendering layout"] {
+                XCTAssertFalse(visible.contains(label), visible)
+            }
             XCTAssertEqual(visible.contains("Customize"), enabled, visible)
             XCTAssertFalse(visible.contains("Skip markers"), visible)
             for label in ["Set each marker separately", "Use community markers", "Show skip button",
@@ -560,7 +771,7 @@ final class PlaybackSettingsHostedTests: XCTestCase {
         return text
     }
 
-    private func profileFocusFrames(in window: UIWindow) -> [CGRect] {
+    private func nativeFocusItems(in window: UIWindow) -> [any UIFocusItem] {
         var containers: [any UIFocusItemContainer] = [window]
         var visited = Set<ObjectIdentifier>()
         var items: [ObjectIdentifier: any UIFocusItem] = [:]
@@ -572,30 +783,40 @@ final class PlaybackSettingsHostedTests: XCTestCase {
                 if item.canBecomeFocused, !(item is UIScrollView) { items[ObjectIdentifier(item)] = item }
             }
         }
-        return items.values.compactMap { item in
-            var environment: (any UIFocusEnvironment)? = item
-            while let current = environment {
-                if let container = current.focusItemContainer {
-                    return container.coordinateSpace.convert(item.frame, to: window)
-                }
-                environment = current.parentFocusEnvironment
-            }
-            XCTFail("The profile control must have a native focus coordinate space.")
-            return nil
+        return Array(items.values)
+    }
+
+    private func profileFocusFrames(in window: UIWindow) -> [CGRect] {
+        nativeFocusItems(in: window).compactMap { item in
+            nativeFocusFrame(item, in: window)
         }.sorted { $0.minY < $1.minY }
     }
 
-    private func visibleText(in window: UIWindow, attachment name: String, crop: CGRect? = nil) throws -> String {
+    private func nativeFocusFrame(_ item: any UIFocusItem, in window: UIWindow) -> CGRect? {
+        var environment: (any UIFocusEnvironment)? = item
+        while let current = environment {
+            if let container = current.focusItemContainer {
+                return container.coordinateSpace.convert(item.frame, to: window)
+            }
+            environment = current.parentFocusEnvironment
+        }
+        XCTFail("The control must have a native focus coordinate space.")
+        return nil
+    }
+
+    private func visibleText(in window: UIWindow, attachment name: String?, crop: CGRect? = nil) throws -> String {
         window.layoutIfNeeded()
         let format = UIGraphicsImageRendererFormat()
-        if crop != nil { format.scale = 2 }
+        format.scale = 2
         let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
             XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
         }
-        let attachment = XCTAttachment(image: image)
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        if let name {
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         let request = VNRecognizeTextRequest()
         // Character recognition avoids prose-model corrections to numeric layouts.
         request.recognitionLevel = crop == nil ? .accurate : .fast

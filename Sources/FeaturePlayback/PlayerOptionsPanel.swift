@@ -31,7 +31,7 @@ struct PlayerOptionsPanel: View {
     @Binding var playbackScreen: PlaybackScreen
     @Binding var audioScreen: AudioScreen
     let videoZoom: PlayerVideoZoomModel
-    let offersPlaybackSpeed: Bool
+    let additionalPlaybackRows: [PlayerOptionsRowSpec]
     /// Each menu's last measured height, remembered across opens so a reopen
     /// lays out at its settled size from the first frame (see `bodyHeight`).
     @Binding var heightCache: [Category: CGFloat]
@@ -54,6 +54,7 @@ struct PlayerOptionsPanel: View {
     /// Which menu `bodyHeight` was last measured for: a first measurement snaps,
     /// a later one within the same menu (tracks ↔ Style) animates.
     @State private var measuredFor: Category?
+    @State private var syncControlHasReceivedFocus = false
 
     init(
         category: Category, model: PlayerControlsModel, palette: ThemePalette,
@@ -63,8 +64,8 @@ struct PlayerOptionsPanel: View {
         offersDualSubtitles: Bool = true,
         playbackScreen: Binding<PlaybackScreen> = .constant(.options),
         videoZoom: PlayerVideoZoomModel? = nil,
-        offersPlaybackSpeed: Bool = true,
-        audioScreen: Binding<AudioScreen> = .constant(.options)
+        audioScreen: Binding<AudioScreen> = .constant(.options),
+        additionalPlaybackRows: [PlayerOptionsRowSpec] = []
     ) {
         self.category = category
         self.model = model
@@ -74,7 +75,7 @@ struct PlayerOptionsPanel: View {
         _playbackScreen = playbackScreen
         _audioScreen = audioScreen
         self.videoZoom = videoZoom ?? model.videoZoom
-        self.offersPlaybackSpeed = offersPlaybackSpeed
+        self.additionalPlaybackRows = additionalPlaybackRows
         _heightCache = heightCache
         _focus = focus
         self.close = close
@@ -93,6 +94,14 @@ struct PlayerOptionsPanel: View {
 
     var body: some View {
         morphingPanel(for: category)
+            .alert("Couldn't change upscaling", isPresented: Binding(
+                get: { model.upscaling.error != nil },
+                set: { if !$0 { model.upscaling.error = nil } }
+            )) {
+                Button("OK", role: .cancel) { model.upscaling.error = nil }
+            } message: {
+                if let error = model.upscaling.error { Text(error) }
+            }
             .onAppear { reconcileSubtitleScreen() }
             #if os(tvOS)
             .onAppear {
@@ -144,12 +153,18 @@ struct PlayerOptionsPanel: View {
         category == .subtitles && subtitleScreen.isStyleFamily
     }
 
+    private var awaitingSyncControlFocus: Bool {
+        ((category == .audio && audioScreen == .sync)
+            || (category == .subtitles && subtitleScreen == .sync))
+            && !syncControlHasReceivedFocus
+    }
+
     /// Where focus lands in this menu as it opens or changes screen.
     var preferredFocus: FocusSlot? {
         Self.preferredFocus(
             for: category, subtitleScreen: subtitleScreen, model: model,
             offersDualSubtitles: offersDualSubtitles, playbackScreen: playbackScreen,
-            offersPlaybackSpeed: offersPlaybackSpeed, zoomMode: videoZoom.settings.mode, audioScreen: audioScreen
+            zoomMode: videoZoom.settings.mode, audioScreen: audioScreen, additionalPlaybackRows: additionalPlaybackRows
         )
     }
 
@@ -160,15 +175,15 @@ struct PlayerOptionsPanel: View {
         for panel: Category, subtitleScreen: SubtitleScreen, model: PlayerControlsModel,
         offersDualSubtitles: Bool = true,
         playbackScreen: PlaybackScreen = .options,
-        offersPlaybackSpeed: Bool = true,
         zoomMode: PlayerVideoZoom.Mode? = nil,
-        audioScreen: AudioScreen = .options
+        audioScreen: AudioScreen = .options,
+        additionalPlaybackRows: [PlayerOptionsRowSpec] = []
     ) -> FocusSlot? {
         let subtitleScreen = model.subtitleStyleAdjustable ? subtitleScreen : availableSubtitleScreen(
             subtitleScreen, model: model, offersDualSubtitles: offersDualSubtitles
         )
         switch panel {
-        case .info, .cast, .chapters, .episodes, .playlist:
+        case .info, .cast, .chapters, .episodes, .playlist, .continueWatching:
             // The tab, not the card: the row above the card behaves like a
             // segmented control, so opening lands there and a further Down press
             // steps into the card's actions.
@@ -184,11 +199,9 @@ struct PlayerOptionsPanel: View {
                 if case .results = model.subtitleDownload.state { return .row(0) }
                 return .subBack
             case .sync:
-                // Land on the − nudge (leftmost control); the value and + sit to
-                // its right.
                 return .row(0)
             case .style:
-                return model.secondarySubtitleImagePrimaryFormat == nil ? .row(0) : .subBack
+                return .row(0)
             case .styleFont:
                 let style = SystemCaptionStyle.shared.resolved(model.subtitleStyle)
                 return .row(style.systemFont == nil && style.fontDescriptor == nil
@@ -202,17 +215,25 @@ struct PlayerOptionsPanel: View {
             case .styleOutline, .styleBackground, .styleFileFormatting:
                 return .row(0)
             }
+        case .speed:
+            return .row(PlaybackOptionsPane.speedSlot)
         case .playback:
+            if playbackScreen == .version {
+                return .row(selectedRowIndex(for: .version, model: model))
+            }
+            if playbackScreen == .upscaling {
+                return .row(VideoUpscaling.allCases.firstIndex(of: model.upscaling.selection) ?? 0)
+            }
             if playbackScreen == .zoom {
                 let mode = zoomMode ?? model.videoZoom.settings.mode
                 return .row(PlaybackOptionsPane.modeSlot(mode))
             }
-            if model.engineCapabilities.contains(.videoZoom) { return .row(PlaybackOptionsPane.zoomSlot) }
-            if offersPlaybackSpeed, model.engineCapabilities.contains(.playbackSpeed) {
-                return .row(PlaybackOptionsPane.speedSlot)
-            }
-            return nil
+            return PlaybackOptionsPane.rows(
+                model: model, zoom: model.videoZoom, actions: .init(),
+                additionalRows: additionalPlaybackRows, openScreen: { _ in }
+            ).first.map { .row($0.slot) }
         case .audio:
+            if audioScreen == .sync { return .row(0) }
             #if os(tvOS)
             if audioScreen == .dialogue {
                 return dialogueRows(model: model).first(where: \.isSelected).map { .row($0.id) } ?? .subBack
@@ -242,7 +263,7 @@ struct PlayerOptionsPanel: View {
     /// Playback keeps its parent width in submenus so the Back control and localized
     /// title fit without wrapping or moving the menu's horizontal anchor.
     func panelWidth(for category: Category) -> CGFloat {
-        Self.width(for: category, subtitleScreen: subtitleScreen)
+        Self.width(for: category == .playback && playbackScreen == .version ? .version : category, subtitleScreen: subtitleScreen)
     }
 
     static func width(for category: Category, subtitleScreen: SubtitleScreen) -> CGFloat {
@@ -439,7 +460,7 @@ struct PlayerOptionsPanel: View {
 
     @ViewBuilder
     private func panelBodyContent(for category: Category) -> some View {
-        switch category {
+        switch category == .playback && playbackScreen == .version ? .version : category {
         case .version:
             VStack(alignment: .leading, spacing: 12) {
                 PlayerMenuRowStack(rows: Self.versionRows(model: model, locale: locale, close: close), palette: palette, focus: $focus)
@@ -452,16 +473,16 @@ struct PlayerOptionsPanel: View {
         case .subtitles: subtitleBody
         case .audio:
             audioBody
-        case .playback:
+        case .playback, .speed:
             PlaybackOptionsPane(
                 model: model, zoom: videoZoom, palette: palette, actions: actions,
                 screen: playbackScreen, focus: $focus,
-                offersPlaybackSpeed: offersPlaybackSpeed,
+                speedOnly: category == .speed, additionalRows: additionalPlaybackRows,
                 openScreen: openPlaybackScreen
             )
         case .sync: SyncPaneView(model: model, actions: actions, focus: $focus)
         // Card tabs render in the bottom card, never in the floating menu.
-        case .info, .cast, .chapters, .episodes, .playlist: EmptyView()
+        case .info, .cast, .chapters, .episodes, .playlist, .continueWatching: EmptyView()
         }
     }
 
@@ -491,6 +512,8 @@ struct PlayerOptionsPanel: View {
                 .buttonStyle(PlozzPanelHeaderButtonStyle())
                 .focusEffectDisabled()
                 .focused($focus, equals: .subBack)
+                .accessibilityIdentifier("player-options-back")
+                .disabled(awaitingSyncControlFocus)
                 // Pull the chip past the header gutter so it hugs the panel's
                 // leading edge, concentric with the rounded corner.
                 .padding(.leading, -10)
@@ -501,6 +524,15 @@ struct PlayerOptionsPanel: View {
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(Color.primary)
             Spacer(minLength: 12)
+            if category == .audio, audioScreen == .options, model.engineCapabilities.contains(.audioDelay) {
+                Button { openAudioScreen(.sync) } label: {
+                    Image(systemName: "clock")
+                        .accessibilityLabel("Audio Sync")
+                }
+                .buttonStyle(PlozzPanelHeaderButtonStyle())
+                .focusEffectDisabled()
+                .focused($focus, equals: .subSync)
+            }
             if category == .subtitles && subtitleScreen == .tracks {
                 // Timing (Sync) chip — only when the app's overlay owns the active
                 // subtitle, so the app-side offset can actually shift it. Sits left
@@ -555,10 +587,13 @@ struct PlayerOptionsPanel: View {
         audioScreen: AudioScreen = .options
     ) -> LocalizedStringResource {
         if category == .audio, audioScreen == .dialogue { return "Enhance Dialogue" }
+        if category == .audio, audioScreen == .sync { return "Audio Sync" }
         if category == .playback {
             switch playbackScreen {
             case .options: return category.title
             case .zoom: return "Zoom Mode"
+            case .upscaling: return "Upscaling"
+            case .version: return Category.version.title
             }
         }
         guard category == .subtitles else { return category.title }
@@ -599,7 +634,12 @@ struct PlayerOptionsPanel: View {
             // (the enclosing morphingBody caps + scrolls at this same height).
             SubtitleDownloadScreen(model: model, actions: actions, focus: $focus)
                 .frame(minHeight: maximumBodyHeight, alignment: .top)
-        case .sync: SubtitleSyncScreen(model: model, actions: actions, focus: $focus)
+        case .sync:
+            SubtitleSyncScreen(
+                model: model, actions: actions, focus: $focus,
+                allowsResetFocus: !awaitingSyncControlFocus,
+                onControlFocus: { syncControlHasReceivedFocus = true }
+            )
         case .style, .styleFont, .styleSystemFont, .styleOutline, .styleBackground, .styleDual, .styleFileFormatting:
             SubtitleStylePanel(
                 screen: subtitleScreen,
@@ -664,14 +704,28 @@ struct PlayerOptionsPanel: View {
     }
 
     private func openPlaybackScreen(_ screen: PlaybackScreen) {
+        let previous = playbackScreen
         withAnimation(.easeInOut(duration: 0.28)) {
             playbackScreen = screen
         }
-        restoreFocus(screen == .options ? .row(PlaybackOptionsPane.zoomSlot) : preferredFocus)
+        if screen == .options {
+            switch previous {
+            case .zoom: restoreFocus(.row(PlaybackOptionsPane.zoomSlot))
+            case .upscaling: restoreFocus(.row(PlaybackOptionsPane.upscalingSlot))
+            case .version: restoreFocus(.row(PlaybackOptionsPane.versionSlot))
+            case .options: restoreFocus(preferredFocus)
+            }
+        } else {
+            restoreFocus(preferredFocus)
+        }
     }
 
     private func openAudioScreen(_ screen: AudioScreen) {
+        syncControlHasReceivedFocus = false
         withAnimation(.easeInOut(duration: 0.28)) { audioScreen = screen }
+        // The stepper owns a native hosting boundary, not the panel's FocusState.
+        // Keep competing controls ineligible until it reports actual entry.
+        if screen == .sync { return }
         #if os(tvOS)
         if screen == .options, model.systemAudio.values[.enhanceDialogue] != nil {
             restoreFocus(.row(SystemPlaybackAudioSetting.enhanceDialogue.rawValue))
@@ -683,25 +737,33 @@ struct PlayerOptionsPanel: View {
 
     @ViewBuilder
     private var audioBody: some View {
-        #if os(tvOS)
-        if audioScreen == .dialogue {
-            PlayerMenuRowStack(
-                rows: Self.dialogueRows(model: model, selected: {
-                    if audioScreen == .dialogue { openAudioScreen(.options) }
-                }),
-                palette: palette, focus: $focus
+        if audioScreen == .sync {
+            AudioSyncScreen(
+                model: model, actions: actions, focus: $focus,
+                allowsResetFocus: !awaitingSyncControlFocus,
+                onControlFocus: { syncControlHasReceivedFocus = true }
             )
-            .padding(.horizontal, 14)
         } else {
-            let rows = Self.audioRows(model: model, actions: actions, openDialogue: { openAudioScreen(.dialogue) })
-            PlayerOptionsInputScope(
-                screen: audioScreen, rows: rows.compactMap(\.submenu), focus: $focus,
-                content: AudioPaneView(rows: rows, palette: palette, focus: $focus, close: close)
-            )
+            #if os(tvOS)
+            if audioScreen == .dialogue {
+                PlayerMenuRowStack(
+                    rows: Self.dialogueRows(model: model, selected: {
+                        if audioScreen == .dialogue { openAudioScreen(.options) }
+                    }),
+                    palette: palette, focus: $focus
+                )
+                .padding(.horizontal, 14)
+            } else {
+                let rows = Self.audioRows(model: model, actions: actions, openDialogue: { openAudioScreen(.dialogue) })
+                PlayerOptionsInputScope(
+                    screen: audioScreen, rows: rows.compactMap(\.submenu), focus: $focus,
+                    content: AudioPaneView(rows: rows, palette: palette, focus: $focus, close: close)
+                )
+            }
+            #else
+            AudioPaneView(rows: Self.audioRows(model: model, actions: actions), palette: palette, focus: $focus, close: close)
+            #endif
         }
-        #else
-        AudioPaneView(rows: Self.audioRows(model: model, actions: actions), palette: palette, focus: $focus, close: close)
-        #endif
     }
 
     #if os(tvOS)
@@ -746,6 +808,7 @@ struct PlayerOptionsPanel: View {
         let screen = Self.availableSubtitleScreen(
             screen, model: model, offersDualSubtitles: offersDualSubtitles
         )
+        syncControlHasReceivedFocus = false
         // Entering the Style editor from the (non-style) track list flips the body
         // from the compact list cap to the larger Style viewport. At this point
         // `bodyHeight` still holds the track list's full measured content height,
@@ -772,6 +835,7 @@ struct PlayerOptionsPanel: View {
         withAnimation(.easeInOut(duration: 0.28)) {
             subtitleScreen = screen
         }
+        if screen == .sync { return }
         // Defer the focus write to the next runloop tick (same mechanism as
         // panel-open, via `restoreFocus`). Swapping the header chips + rows for the
         // new sub-screen makes tvOS's focus engine run its own default pass in this
@@ -908,11 +972,12 @@ struct PlayerOptionsPanel: View {
         case .audio:
             let rows = audioRows(model: model, actions: actions)
             return rows.first(where: { !$0.isToggle && $0.isSelected })?.id ?? rows.first?.id ?? 0
+        case .speed: return PlaybackOptionsPane.speedSlot
         case .playback:
-            return model.engineCapabilities.contains(.videoZoom) ? PlaybackOptionsPane.zoomSlot : PlaybackOptionsPane.speedSlot
+            return PlaybackOptionsPane.rows(model: model, zoom: model.videoZoom, actions: actions, openScreen: { _ in }).first?.slot ?? 0
         case .sync:
             return 0
-        case .info, .cast, .chapters, .episodes, .playlist:
+        case .info, .cast, .chapters, .episodes, .playlist, .continueWatching:
             return 0
         }
     }

@@ -1,21 +1,36 @@
 import CoreModels
 
 public struct HomeServerRow: Equatable, Sendable {
+    static func plannedDefinitions(
+        accounts: [ResolvedAccount], visibility: HomeLibraryVisibility
+    ) -> [HomeServerRowDefinition] {
+        let accountIDs = Set(accounts.map(\.account.id))
+        return (visibility.rowCustomization?.availableServerRows ?? []).filter { definition in
+            guard case .server = definition.id, accountIDs.contains(definition.accountID) else { return false }
+            return visibility.isHomeRowVisible(HomeRowChoice(serverRow: definition))
+                && definition.section.libraryID.map {
+                    visibility.isEnabled("\(definition.accountID):\($0)")
+                } != false
+        }
+    }
+
     public var definition: HomeServerRowDefinition
     public var items: [MediaItem]
     public var isLoading: Bool
     public var failure: AppError?
     public var hasMore: Bool
+    public var browseID: String?
 
     public init(
         definition: HomeServerRowDefinition, items: [MediaItem] = [],
-        isLoading: Bool = false, failure: AppError? = nil, hasMore: Bool = false
+        isLoading: Bool = false, failure: AppError? = nil, hasMore: Bool = false, browseID: String? = nil
     ) {
         self.definition = definition
         self.items = items
         self.isLoading = isLoading
         self.failure = failure
         self.hasMore = hasMore
+        self.browseID = browseID
     }
 
     public var row: HomeLibrarySectionGroup.Row {
@@ -25,7 +40,7 @@ public struct HomeServerRow: Equatable, Sendable {
                 title: definition.section.title ?? definition.section.kind.rawValue,
                 localizedTitle: definition.section.title == nil ? definition.section.kind.title : nil,
                 style: definition.section.kind == .nextUp ? .landscape : .poster,
-                items: items, hasMore: hasMore
+                items: items, browseID: browseID, hasMore: hasMore
             ),
             isLoading: isLoading, failure: failure
         )

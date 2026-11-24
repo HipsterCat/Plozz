@@ -12,6 +12,262 @@ workloads once, keeps five measured repetitions, checks work-count invariants,
 and compares source-identified baseline/candidate evidence without hardware
 deployment or automatic retries. Normal suites skip those opt-in probes.
 
+State/lifecycle coordination follows [state management](state-management.md).
+Drive it with a deterministic harness (fake clock and synthetic foreground/
+surface transitions), not UI timing. Run the same scenario matrix for each
+platform profile. Shared fixtures and constants live in `Tests/TestSupport*`.
+
+Tests use named constants or shared fixtures for repeated values, thresholds,
+surface identities, item IDs, and expected actions where sharing improves the
+test. Keep expected values independent of production code when that behavior
+is what the test verifies. Hosted adapter tests complement the pure lifecycle
+harness; the latter cannot prove real notification delivery or task cancellation.
+
+Render-dependent playback transitions belong in the app-hosted suite. Use a
+mounted video surface and a real HLS fixture for native-player continuity; a
+local MP4 may select the software decoder and cannot prove AVPlayer item reuse.
+Capture a native pause baseline from `AVPlayer.currentTime()`, not the engine's
+last periodic progress notification.
+Keep decoded-frame sampling independent of concurrent guide/network requests so
+their retry waits are not counted as video stalls. Hosted focus comparisons must
+establish the starting focus and observe presented geometry, not just a layout
+target published before an animation finishes. Top-bar chrome fixtures open
+Settings through the mounted destination handoff and request focus through the
+containing native owner, not directly from an unfocused leaf. Fade captures must
+prove an intermediate rendered state; screenshot capture time can allow a later
+sample to reach the final state sooner than its nominal sleep interval suggests.
+
+Asynchronous transport fixture waits use bounded elapsed deadlines, not a count
+of `Task.yield()` calls. Yield counts do not guarantee that cancellation,
+shutdown, or lease-release workers have received time to finish.
+
+Plex authentication tests await `waitForPlexPINRequirementCheck()` before
+asserting switch completion. The switch includes off-main offline PIN-verifier
+generation; yielding the test actor does not wait for that work to finish.
+
+Native subtitle coverage adopts externally selected HLS renditions both
+immediately and after fixed callback-scheduling delays. Every case must retain
+the paused position and fence the previous extraction output; the delays are
+separate required cases, not retries. Failure diagnostics retain decoded cue
+timing, visible text, and the actual native selection, plus the last 32 cue
+updates with their selection phase, extraction-output identity, and native
+rendering suppression. This distinguishes missing delivery from cues that
+arrived and were subsequently cleared without logging production captions.
+
+## Live Emby transcoding
+
+The Emby cases in `ServerLiveTranscodingTests` in the iOS presentation suite are
+opt-in real-server checks, not hermetic CI fixtures. Supply `PLOZZ_LIVE_EMBY_CONFIGURATION` to the
+test process as JSON containing `baseURL`, `username`, and one to three explicit
+`itemIDs`. Use an authorized passwordless, non-administrator internal test user;
+never supply a personal owner's identity or external review credentials.
+Do not commit the configuration or put a token in it.
+
+Choose representative SDR, HDR10, and Dolby Vision sources. The H.264 case uses
+`JellyfinProvider`; the HEVC case uses the production `JellyfinClient`, rendition
+bounds, and authenticated locator with an explicit HEVC-capable device profile.
+Simulators can report no hardware HEVC support, so that second case verifies
+the capable-device protocol and native decoder, not hardware detection.
+Both use the app's authenticated resolver and `NativeVideoEngine`.
+
+The checks inspect the actual decoded codec, retain secret-free range/dimension
+and startup measurements, and require more than ten seconds of progress in a
+twelve-second interval after AVPlayer enters playing. A displayed first frame
+is not proof that cold-encoder buffering has finished. The server's returned
+range is recorded rather than assumed to be SDR from a request parameter.
+Each owned encoding session and test login is released, including on failure.
+
+The native presenting layer must be ready and attached to the active player.
+Where the OS supports PiP, the test also starts and stops the real controller.
+Where it does not, the evidence explicitly records that limitation; layer
+readiness is not a successful PiP activation. These bounded smoke checks do not
+establish physical-device HDR output, long-duration performance, or correctness
+for every item on the server.
+
+### Live Plex and Jellyfin transcoding
+
+The same suite has forced H.264 and HEVC playback cases for Plex and Jellyfin,
+using the authenticated resolver and native player. H.264 uses the production
+providers; HEVC exercises the production clients and rendition locators with an
+explicit HEVC-capable profile because simulator hardware detection reports no
+HEVC support. This does not verify physical-device capability detection.
+The cases require
+more than 28 seconds of playback progress over a 30-second measurement after
+playback starts, verify the decoded codec and H.264 SDR output, and record the
+actual dynamic range, AVPlayer stall/dropped-frame counts and transfer bitrate. Select explicit
+SDR, HDR and Dolby Vision sources; an SDR original does not prove tone mapping.
+PiP uses the same conditional activation checks and simulator limitations as
+the Emby cases above.
+
+Set `PLOZZ_LIVE_TRANSCODE_BROKER` to a bounded, private loopback HTTP endpoint.
+Its `/plex` and `/jellyfin` responses contain `baseURL`, `username`, `userID`,
+`serverID`, `deviceID`, `token`, and one to three explicit `itemIDs`. The broker
+must validate dedicated internal test identities, resolve credentials into
+memory, disable request logging and response caching, and close when the run
+ends. It owns any temporary login and releases it after the test process exits;
+the tests maintain and release each encoding session. Never put passwords or tokens in
+environment variables, command arguments, configuration files or attachments.
+The broker endpoint must use an unguessable run-specific path and bind only to
+`127.0.0.1`; never publish it as a preview or expose it to the LAN.
+
+### Plex Live TV
+
+`ServerLiveTranscodingTests.testPlexLiveTVChannelSwitchAndReopenRealPlayback`
+uses `PLOZZ_LIVE_TV_BROKER` with the same private `/plex` broker contract.
+Supply exactly two authorized synthetic channel IDs in `itemIDs`, rather than
+library item IDs. The test checks channel and guide discovery, tunes each channel,
+then reopens the first. Each tune must produce a decoded video frame and more
+than ten seconds of playback progress over a twelve-second measurement.
+Supply H.264 first and MPEG-2 second to assert direct playback and compatibility
+conversion respectively. Live TS playlists do not always expose the native
+engine's output-codec diagnostic; this check requires rendered frames and sustained
+progress rather than interpreting missing diagnostics as a playback failure.
+The test closes each lease on success or failure.
+
+The operator owns provisioning and removal of the temporary tuner/guide and must
+stop its synthetic streams and broker after testing. Virtual tuners exercise
+Plex's real DVR APIs but do not establish hardware-specific HDHomeRun behavior.
+
+## Live watch-state verification
+
+`LiveHomeContentTests` in `AppRuntimeTests` uses the same private broker contract
+with `TEST_RUNNER_PLOZZ_LIVE_HOME_BROKER`. It is read-only and does not enable the
+watch-history tests. It checks production Plex/Jellyfin/Emby custom-row loading:
+small successive pages for libraries, recommendations, populated collections and
+playlists, then combined preview/browse pages with a real history snapshot.
+It also combines all three providers' libraries and checks retained playback
+references across merged titles. Page timings are recorded as live-server
+observations, not repeatable benchmark thresholds or physical-device UI evidence.
+Discovery samples one movie library and up to two recommendations, and requires
+two discoverable populated collections and two video playlists per provider.
+Missing required containers fail acceptance rather than silently dropping a
+source type. Collection-only, playlist-only, and mixed-container rows check
+deduplication and retained native member identities without a library feed
+masking missing content. Fixtures must be provisioned separately with permission;
+the tests never create or modify server content.
+
+Native Silo coverage uses the broker's `/silo` response with the common fields
+plus ephemeral `siloTokens` and `siloProfile` objects. It validates library and
+native server-row composition through the production provider, not the Jellyfin
+compatibility port. It does not claim Silo collection, video-playlist, or
+file-share coverage. Fresh Silo credentials must outlive the bounded run; an
+unexpected rotation fails rather than changing the broker-owned login.
+The broker owns temporary logins and must close and revoke them after the run.
+
+The opt-in performance scenarios `home-live-{jellyfin,emby,plex,silo,combined}-queries`
+use that same broker via `PLOZZ_LIVE_HOME_BROKER`. Each sample starts a fresh
+production provider/pager, completes one movie and one TV library per account,
+and includes two populated collections and playlists for Plex/Jellyfin/Emby.
+Traversal is capped at 600 source-page calls per sample. They verify all four
+saved sort fields in both directions, media/watch filters, preview/grid agreement,
+cancelled query replacement and zero warm page refetches. Timings distinguish
+fresh client inventory loading from eight warm query projections; the server's
+own caches are not cleared. Main-actor wake-up gaps are simulator scheduling
+observations, not rendered-frame or physical-iPhone evidence.
+
+`LiveWatchProgressTests` in `AppRuntimeTests` exercises production Jellyfin,
+Emby and Plex resume writers, metadata reads, Continue Watching feeds and the
+shared Home admission policy. Set `TEST_RUNNER_PLOZZ_LIVE_WATCH_BROKER` to a
+private, run-specific loopback broker when invoking Xcode. Its provider routes
+return `baseURL`, `username`, `userID`, `serverID`, `deviceID`, `token` and
+`allowWatchStateWrites`. Follow the credential-broker protections above and
+require dedicated internal identities with explicitly authorized disposable
+watch history. These tests are skipped without the broker.
+
+The bounded movie sample covers 2/59/60/61/90-second writes and restores original
+watched/resume values, not all historical timestamps. Provider trailers longer
+than 20 seconds in at most five sampled titles additionally exercise trailer-only
+writes and unchanged parent state; absent fixtures are reported as a coverage gap,
+not a trailer pass. Plex tests compare the native offset with the extra-only local
+fallback and recreate the provider and durable store to verify retained progress.
+These are real-server protocol checks, not decoded playback or device-UI tests.
+The Plex fixture explicitly covers its observed refusal to retain stopped resume
+offsets at 60 seconds or less. That native policy is separate from Plozz's adaptive
+row threshold; accepting the write is not evidence that the server saved it.
+
+The unwatched-reset cases exercise movies and episodes through the shared action
+coordinator, durable outbox and actual Home loads, including previously completed
+items, queued resets, fresh provider/store/model instances and an untouched control
+item. The broker may supply two explicit `resetEpisodeIDs` from a bounded approved
+sample. These cases verify persisted zero progress and an unplayed flag, not just
+successful HTTP writes. They restore the sampled item's watched/resume values.
+
+## Live share and music smoke tests
+
+`LiveProviderSmokeTests` in `PlozziOSPresentationTests` uses
+`PLOZZ_PROVIDER_SMOKE_BROKER` in the test process. Follow the private loopback
+broker protections above; its `/smb`, `/sftp`, `/ftp`, `/nfs`, `/webdav`, and
+`/subsonic` routes resolve only authorized internal configurations in memory.
+Share routes supply the fields required by their production account setup:
+`host`, optional `port`, `share` or `exportPath`, scoped `path`, or `baseURL`,
+plus `username` and `password` when required. SFTP also requires
+`hostKeySHA256` as a base64-encoded 32-byte fingerprint; never bypass host-key
+verification. Subsonic supplies `baseURL`, `username`, and `password`.
+
+Use a fresh owned iOS simulator and a read-only demo directory containing an
+MP4. Each share check uses production account persistence, provider browsing,
+detail resolution, and network-file playback. Browsing is bounded to eight
+folders and thirty entries per folder. Playback must render a frame within
+forty seconds, advance more than three seconds in five seconds, and remain
+stable while paused. The Subsonic check signs in, browses albums and tracks,
+and verifies audio playback progress and pause. Tests retire their share
+runtime and stop their players; the operator owns broker and simulator cleanup.
+These checks do not establish physical-device audio/video fidelity, cloud
+credential delivery, exhaustive format support, or offline download behavior.
+
+## Live WebDAV Watchlist journeys
+
+`LiveWebDAVWatchlistInteractionTests` in `PlozzHomeRemoteTests` is an opt-in
+tvOS simulator journey through the production shell, account configuration,
+profile stores, WebDAV provider, and file-backed Watchlist. Ordinary runs skip
+it. Use a fresh, caller-owned simulator and the `PlozzHomeFixtureTests` scheme
+with normal ad-hoc simulator signing: an unsigned host cannot exercise Keychain
+persistence. This fixture disables CloudKit, so it measures local persistence,
+not cloud delivery or recovery.
+
+Set `TEST_RUNNER_PLOZZ_WEBDAV_JOURNEY_BROKER` to a private loopback endpoint
+following the credential-broker protections above. Its JSON response contains
+`baseURL`, `username`, and `password`, resolved in memory. The authorized root
+must contain `Movies/` with a playable movie and `TV/` with the demo series
+`Caminandes`. Use licensed, disposable test media and dedicated internal
+credentials; the test does not write to the WebDAV server.
+
+Select `testLiveWebDAVWatchlistUserJourneys` first. It saves the series,
+backgrounds and cold-launches the app three times, adds/removes/re-adds a movie,
+observes playback progress, verifies separate profile Watchlists, and exits
+immediately after saving. It checks restored cards as well as model counts.
+The full journey requires fresh state rather than silently deleting or repairing
+an earlier run's data.
+
+For the separate reboot check, shut down and boot **that same owned simulator**
+without erasing it, set `TEST_RUNNER_PLOZZ_WEBDAV_JOURNEY_RESTORE_ONLY=1`, and select
+`testPreviouslySavedItemsRestoreAfterDeviceRestart`. This phase only inspects the
+existing saved items; it never re-adds them. The diagnostic receipt and local
+`com.plozz.app` logs identify saved counts and storage location; include info
+messages and bound log capture to the run. Retain XCTest screenshots, hierarchy
+attachments, and the authoritative result summary, including on failure.
+
+Close the private broker and owned simulator after collecting evidence.
+A passing LAN WebDAV journey does not prove AllDebrid behavior, physical Apple TV
+power-cycle behavior, or recovery after tvOS storage eviction.
+
+`WatchlistCloudReplayTests` separately exercises the production `SyncLedger`
+and file-backed `WatchlistModel` with controlled incoming cloud records. It
+does not contact CloudKit. Its restart-before-publish and missing-sync-ledger
+cases ensure older cloud removals cannot overwrite newer uncaptured local
+actions. The media sync channel supplies persisted local-capture digests, so
+already-captured actions continue to use the sync ledger's logical-clock result.
+Device-local authorship is saved atomically with the intent and cleared by a
+remote apply; a peer's `.local` origin is not evidence that this device edited
+the item. Legacy files without authorship data remain readable but do not
+invent that evidence.
+Preserved actions are captured for upload again, rather than silently diverging
+from the cloud. The controls cover newer remote removals, clock disagreement,
+uncaptured local removals, native re-add supersession, native imports, empty
+fetches, profile isolation, alias redirects, consecutive remote deliveries, and
+two-peer convergence. This verifies the reproduced failure mechanism, not
+attribution of an individual user's report or actual CloudKit delivery.
+
 ## The two speed wins
 
 ### 1. Build once, run many (`tools/run-tests.sh`)
@@ -162,13 +418,24 @@ build lease through remaining delivery and retain exact artifacts as usual.
 
 For hosted UI speed, replace setup sleeps only with observable readiness.
 `waitForHostedLayout` bounds waits for stable layer geometry and completed
-animations in static library/multiview matrices. Keep loading/shimmer waits and
+animations in static library/multiview matrices. Stable geometry does not mean
+tvOS has assigned focus: the PIN keypad fixture waits for native focus inside
+its host before settling the layout and capturing each appearance. Keep loading/shimmer waits and
 negative focus-observation windows intact; continuously animated fixtures are
 not candidates for this helper. Viewport, Dynamic Type, OCR, and pixel assertions
 must remain unchanged. Record actual timings rather than assuming a shorter
 sleep improves a run.
 
 ### TestFlight: risk-based checks and a frozen candidate
+
+Lifecycle coverage must include an older supported runtime, not only the newest
+simulator. With Xcode 27.2, `isolated deinit` back deployment aborts in Swift's
+task-local cleanup on tvOS 26.2 while the same tests pass on tvOS 27.0.
+Use the existing captured-resource main-actor cleanup pattern instead: clean up
+synchronously on the main thread, otherwise enqueue the captured resources on
+the main actor without retaining the object being destroyed. Preserve cancellation,
+observer removal and ownership checks. Theme music, video surfaces, source
+admission and the Home sampler have lifecycle regression coverage.
 
 TestFlight preparation is not an automatic full-matrix main gate. Select checks
 from the net change since the last distributed build and the evidence already
@@ -285,9 +552,14 @@ On iOS, Settings can be hidden from the tab bar because page-header controls
 remain available. The default tvOS policy still keeps Settings visible.
 `NavigationStyleSettingsStoreTests` covers cross-platform persistence, the
 last-destination safeguard, and iPhone overflow labels when six tabs are enabled.
-On iPhone and compact iPad layouts, overflow uses four direct native tabs plus a
-Plozz More destination with themed shortcut rows. Overflow destinations share
-that tab's navigation stack; Settings opens its existing sheet directly.
+On compact layouts with overflow, UIKit's More list pushes the existing tab
+stacks. Check placement before selecting a row: Search should already use its
+subpage header, and the same placement should survive the push and return.
+A pending More row selection must not push another page once the list has left
+or while it is returning. After Back settles, the same row must open again.
+More uses the same page background as Search, including the flat fill when
+Gradient Backgrounds is off, both on entry and after returning from a row.
+Settings opens its existing sheet directly.
 Returning to More stops the hidden Live TV preview, and changing the enabled
 order re-resolves the current destination. Regular-width iPad tabs remain native.
 
@@ -321,6 +593,12 @@ Runner verdict regressions use the existing host-side unittest runner:
 `python3 -m unittest discover -s tools/tests -p 'test_xcresult_summary.py'`.
 
 ## App-hosted focus integration
+
+The guide’s elapsed-time boundary test runs in the app-hosted targets: tvOS’s
+native button labels and scroll views need a scene-backed capture. It samples
+both sides of the time line for an empty row and a gap before a later listing.
+The pinned-rail fixture measures the hero through loading and the page bounds
+through native guide entry, when the category pane intentionally collapses.
 
 Episode-panel fixtures activate native window focus before reissuing their
 SwiftUI Browse entry request. Repeated window handoffs must start on Browse and
@@ -378,6 +656,11 @@ the original root without widening its browse boundary. Deep scrolling must
 realize onscreen native focus targets. The bounded folder viewport uses recycled
 native cells: fewer than 20 are visible for the large fixture, short lists retain
 their natural height, and the table/cells do not clip horizontal focus overflow.
+Before each folder open, the root's presented geometry and finite animations
+must settle. Fixture presentation is outside the unchanged 150 ms navigation
+ceiling; the timed window still includes the folder request and its resulting
+native layout. The worst sample also reports wake delay and forced-layout
+duration separately; neither component is subtracted from the asserted delay.
 This is isolated UI coverage, not a live-server network benchmark.
 
 `ShareFolderNavigationTests` launches `PlozzFocusHost --share-folder-fixture`
@@ -412,6 +695,32 @@ variables need the `TEST_RUNNER_` prefix when forwarded through `xcodebuild`.
 Its separate status-inspection method uses `PLOZZ_CAPTURE_INSPECT_STATUS=1`
 and `PLOZZ_CAPTURE_BUNDLE_ID` to retain the actual TV badge screenshot and
 accessibility tree without sending input.
+
+For iPhone Duo captures, build the host with the **iOS 27.1 SDK or newer**.
+Selecting a 27.1 simulator alone is not enough: a 27.0-linked host runs in a
+678 × 386 pt compatibility window on the folded 678 × 466 pt landscape display.
+Select Xcode per command with `DEVELOPER_DIR`; verify the installed host's
+`DTSDKName`. Do not change the deployment target or compensate with player insets.
+Launch `PlozziOSPresentationHost` with `--player-layout-fixture --live-player --video --capture-player-landscape`
+for a repeatable live-controls capture; use `--capture-player-landscape-left`
+instead of `--capture-player-landscape` for the opposite camera corner.
+`PlayerLayoutInteractionTests.testLandscapePlayerCaptureFillsPhoneDisplay`
+compares the app frame with the raw display before any screenshot resizing.
+`testLandscapePlayerMarginsInBothRotations` checks the main and behind-live
+controls against both edges and the folded Duo's reserved camera corner,
+including both time-label edges, their alignment with the ellipsis, and clearance
+for the full 44-point hit area. Use its AX frames for measurements.
+`testCompactLivePresentationRowDropsFullscreenCameraClearance` collapses the
+same Live player with its presentation-controls row over the upper-left corner.
+The fullscreen row must clear the camera; the compact row must use only its
+preview-local spacing.
+For visual evidence capture the whole folded display with
+`xcrun simctl io "$PLOZZ_SIM_ID" screenshot --display=1 player.png`, not an
+XCTest app crop. For the Big Buck Bunny footage capture, place a rights-cleared
+excerpt of the [Blender Foundation trailer](https://download.blender.org/peach/trailer/)
+in the test host's `Documents/player-capture.mp4` and add `--capture-open-movie`
+to `--video`. Omit `--live-player` for the main player. Credit the film and
+its [CC BY 3.0 license](https://creativecommons.org/licenses/by/3.0/) with the captures.
 
 The `PlozziOSPresentationTests` scheme supplies a separate iOS app scene for
 native Form/picker and sheet rendering. Run it on an explicitly owned iOS
@@ -452,6 +761,11 @@ their actions; compositor coverage checks the bridge and both tap targets.
 `PlayerOrientationTests` checks the UIKit player owner's close path without
 another update from the hidden SwiftUI presenter, including disappearance
 cleanup, closing during presentation, reopening, and stale close callbacks.
+Its dismissal-frame regression checks that browsing is already portrait and
+untransformed when revealed from portrait or either landscape direction on
+iPhone, including a full-size, one-axis slide for landscape exits. Player
+entry checks landscape bounds from the first presented frame, without a
+portrait-first player or a second orientation change after opening.
 Its in-place Live TV fixture checks real scene rotation for Landscape/Portrait,
 Auto and preference changes, restoration on collapse, per-window ownership,
 stale-owner teardown, and retained content lifecycle across expansion. The
@@ -460,6 +774,10 @@ standalone grid and checks the current-program surface pixels with normal and
 reduced transparency at phone/tablet widths and larger text.
 `PlayerRotationInteractionTests` verifies actual X taps and return to a hittable
 presenting screen across rotation preferences and nested navigation. Its
+pre-play cases finish or cancel version selection inside the already-presented
+player, and its slow-player case compares loading and ready Close-button frames.
+Its near-end local-video fixture also checks natural end-of-video dismissal in portrait
+and landscape, without synthesizing an engine-ended event. Its
 synthetic Emby-quality fixture serves local HTTP video so quality changes are
 available; cancelling preserves the rendition, and applying a changed selection
 reloads once before X closes the player. This is presentation coverage, not
@@ -1001,6 +1319,10 @@ Presentation-layer samples also require at least eight intermediate positions
 and 300-600ms between 5% and 95% of the normal-motion return. The 0.6-second
 page animation must not inherit the much shorter focus-effect duration; its
 visible duration must match an unforced native downward reveal within 150ms.
+Compare native Up and Down over the same settled endpoints, separately from
+the manually positioned deep-return cases. Both directions retain 1.2 seconds
+of samples and verify the captured endpoint has settled; a partial downward
+trace must not redefine the 5%-95% distance.
 Nine-move native-focus bursts at 0, 30, 80, 150, and 300ms intervals end on each
 row, across all three focus styles. The final focused item must be fully visible,
 its page destination correct, and scrolling enabled. These exact-target bursts
@@ -1377,8 +1699,11 @@ instead of choosing an older installed runtime. The full package matrix has a
 Run `39888935447` spent about 23 minutes on setup and compilation, then passed
 41 complete test bundles before the former 40-minute limit interrupted the
 still-progressing CoreModels bundle. The longer total budget preserves the
-runner's existing no-progress watchdog and result-finalization checks, with
-outer headroom for setup, termination, and retained diagnostic uploads.
+runner's result-finalization checks and leaves outer headroom for setup,
+termination, and retained diagnostic uploads. Cold Swift batch compilation has
+a ten-minute no-output limit. When the built test manifest starts executing,
+the silence clock resets and the three-minute test limit applies. Neither
+phase gets more time on the combined shard deadline.
 Hosted integration builds once with
 `build-for-testing`, then runs `test-without-building`, with separate build/test
 deadlines and retained build/test logs and result bundles. It uses optimized
@@ -1388,11 +1713,23 @@ logic tests retain their ordinary Debug configuration. For hosted tests, cold
 compilation must not consume the test execution budget: run `38059892922` spent about 19 minutes
 building before the former combined 40-minute limit killed still-progressing
 tests. Run `39857697957` also exhausted a full 40-minute execution window while
-still progressing through the expanded hosted suite. CI now allows 40 minutes
-for compilation and 90 minutes for hosted execution, within a 140-minute job
-limit including setup and evidence retention. The local execution default
-remains 40 minutes unless `PLOZZ_FOCUS_TEST_TIMEOUT` is set;
+still progressing through the expanded hosted suite. Both attempts of run
+`41421118241` reached the 40-minute compilation deadline before tests could
+start; the retry was still compiling the hosted test target. CI now allows
+60 minutes for compilation and 120 minutes for hosted execution, within a
+200-minute job limit including setup and evidence retention. Run `43265633256`
+completed 966 of 1,131 hosted methods before the former 90-minute execution
+limit interrupted a still-progressing streaming test. Its completed methods
+alone consumed 88.4 minutes; the native-reopen case completed rather than
+hanging. The longer suite budget does not change individual-test allowances,
+test assertions, or performance thresholds. Local build and execution defaults remain 40 minutes unless
+`PLOZZ_FOCUS_BUILD_TIMEOUT` or `PLOZZ_FOCUS_TEST_TIMEOUT` is set;
 test failures, timeouts, and unreadable `xcresult` summaries still fail closed.
+Individual hosted tests also have a ten-minute XCTest execution allowance,
+with failure diagnostics enabled. This exceeds the 330-second rolling-playback
+scenario while preventing one blocked AVFoundation call from consuming the
+entire suite deadline without a test verdict. It does not replace the outer
+build/execution deadlines or turn a timed-out test into a pass.
 Each lane uploads
 uniquely named diagnostics on success or failure, retained for seven days.
 The simulator app build also retains its raw log without replacing a build

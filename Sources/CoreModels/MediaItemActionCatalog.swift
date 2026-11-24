@@ -72,7 +72,11 @@ public enum MediaItemActionCatalog {
         // Watched-state actions: only when the provider can mutate them and the
         // item is a kind that carries a watched state.
         if supportsWatchState, isWatchStateEligible(item) {
-            actions.append(item.isPlayed ? .markUnwatched : .markWatched)
+            if hasResumePoint(item) {
+                actions.append(contentsOf: [.markWatched, .markUnwatched])
+            } else {
+                actions.append(item.isPlayed ? .markUnwatched : .markWatched)
+            }
 
             // "Up to here" only makes sense for an episode whose position in its
             // list is known and where something up to that point is still
@@ -161,7 +165,7 @@ public enum MediaItemActionCatalog {
     /// Downloadable kinds: a single playable file. A series or folder resolves to
     /// many files, so it has no one download to start, pause or remove.
     private static func isDownloadEligible(_ item: MediaItem) -> Bool {
-        item.kind == .movie || item.kind == .episode
+        !item.opensExternalSource && (item.kind == .movie || item.kind == .episode)
     }
 
     /// Whether "Episode Info" applies: any episode, wherever it is shown.

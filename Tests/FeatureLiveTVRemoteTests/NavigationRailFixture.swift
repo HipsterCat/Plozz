@@ -24,12 +24,16 @@ struct NavigationRailFixture<SearchContent: View>: View {
                 if model.selection == .search {
                     searchContent
                         .modifier(NavigationRailSearchRootInset())
+                } else if model.selection == .liveTV,
+                          ProcessInfo.processInfo.arguments.contains("--navigation-guide") {
+                    searchContent
                 } else {
                     NavigationRailFixturePage(model: model)
                 }
             },
             contentDestination: model.selection
         )
+        .environment(\.layoutDirection, ProcessInfo.processInfo.arguments.contains("--rtl") ? .rightToLeft : .leftToRight)
     }
 }
 

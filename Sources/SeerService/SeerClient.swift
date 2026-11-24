@@ -15,7 +15,7 @@ struct SeerClient: Sendable {
 
     init(config: SeerConfig, http: HTTPClient) {
         self.config = config
-        self.http = http
+        self.http = SeerCredentialHTTPClient(underlying: http, config: config)
     }
 
     private var baseURL: URL {
@@ -63,14 +63,31 @@ struct SeerClient: Sendable {
         try await discover(path: "/api/v1/discover/tv", page: page, language: language)
     }
 
+    func discover(_ feed: DiscoverFeed, page: Int, language: String) async throws -> SeerDiscoverPage {
+        let path: String
+        switch feed {
+        case .trending: path = "trending"
+        case .popularMovies: path = "movies"
+        case .upcomingMovies: path = "movies/upcoming"
+        case .popularSeries: path = "tv"
+        case .upcomingSeries: path = "tv/upcoming"
+        }
+        return try await discover(path: "/api/v1/discover/\(path)", page: page, language: language)
+    }
+
     private func discover(path: String, page: Int, language: String) async throws -> SeerDiscoverPage {
+        var queryItems = [URLQueryItem(name: "page", value: String(page))]
+        // These two routes treat `language` as an original-language filter,
+        // not a display locale. Their translated metadata uses Seerr's locale.
+        if path != "/api/v1/discover/movies", path != "/api/v1/discover/tv" {
+            queryItems.append(URLQueryItem(
+                name: "language", value: language.replacingOccurrences(of: "_", with: "-")
+            ))
+        }
         let endpoint = Endpoint(
             method: .get,
             path: path,
-            queryItems: [
-                URLQueryItem(name: "page", value: String(page)),
-                URLQueryItem(name: "language", value: language)
-            ],
+            queryItems: queryItems,
             headers: headers()
         )
         return try await http.decode(SeerDiscoverPage.self, from: endpoint, baseURL: baseURL)
@@ -131,6 +148,12 @@ struct SeerClient: Sendable {
         return try await http.decode(SeerUserPage.self, from: endpoint, baseURL: baseURL)
     }
 
+    func currentUser() async throws -> SeerUserDTO {
+        try await http.decode(
+            SeerUserDTO.self, from: Endpoint(path: "/api/v1/auth/me", headers: headers()), baseURL: baseURL
+        )
+    }
+
     // MARK: - Radarr / Sonarr defaults
 
     /// `GET /api/v1/service/radarr` — configured Radarr servers (for defaults).
@@ -146,6 +169,42 @@ struct SeerClient: Sendable {
     }
 
     // MARK: - Requests
+
+    func authenticatedUser() async throws -> SeerUserDTO {
+        try await http.decode(
+            SeerUserDTO.self,
+            from: Endpoint(method: .get, path: "/api/v1/auth/me", headers: headers()),
+            baseURL: baseURL
+        )
+    }
+
+    func personalRequests(userID: Int, skip: Int) async throws -> SeerPersonalRequestPage {
+        let endpoint = Endpoint(
+            method: .get, path: "/api/v1/user/\(userID)/requests",
+            queryItems: [
+                URLQueryItem(name: "take", value: "100"),
+                URLQueryItem(name: "skip", value: String(skip))
+            ],
+            headers: headers(actingUserID: userID)
+        )
+        return try await http.decode(SeerPersonalRequestPage.self, from: endpoint, baseURL: baseURL)
+    }
+
+    func requestedTitle(mediaType: String, tmdbID: Int, language: String) async throws -> SeerDiscoverResult {
+        guard mediaType == "movie" || mediaType == "tv" else { throw AppError.invalidResponse }
+        var result = try await http.decode(
+            SeerDiscoverResult.self,
+            from: Endpoint(
+                method: .get, path: "/api/v1/\(mediaType)/\(tmdbID)",
+                queryItems: [URLQueryItem(name: "language", value: language)],
+                headers: headers()
+            ),
+            baseURL: baseURL
+        )
+        // Detail endpoints may omit the discriminator present on search results.
+        if result.mediaTypeWasOmitted { result.mediaType = mediaType }
+        return result
+    }
 
     /// The low-level result of `POST /api/v1/request`: either created (2xx, with
     /// the decoded response when present) or a server-rejected status + message.

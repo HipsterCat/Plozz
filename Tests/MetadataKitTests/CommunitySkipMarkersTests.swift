@@ -77,6 +77,46 @@ final class CommunitySkipMarkersTests: XCTestCase {
 
     // MARK: TheIntroDB
 
+    func testIntroDBProtectsAnExplicitSceneWithoutExtendingCredits() throws {
+        let response = try JSONDecoder().decode(IntroDBClient.Response.self, from: Data(#"""
+        {"outro":{"start_ms":100000,"end_ms":300000},
+         "post_credits":{"start_ms":200000,"end_ms":250000}}
+        """#.utf8))
+        let segments = IntroDBClient.segments(from: response)
+        XCTAssertEqual(segments.map(\.start), [100, 250])
+        XCTAssertEqual(segments.map(\.end), [200, 300])
+        XCTAssertNil(segments.activeSkippable(at: 225))
+    }
+
+    func testMalformedIntroDBPostCreditsAndPartialIntroPreserveValidOutro() throws {
+        for post in [
+            #"{"start_ms":0,"end_ms":147000}"#,
+            #"{"start_ms":null,"end_ms":147000}"#,
+            #"{"start_ms":200000,"end_ms":150000}"#
+        ] {
+            let json = """
+            {"intro":{"start_ms":null,"end_ms":10000},
+             "outro":{"start_ms":100000,"end_ms":200000},"post_credits":\(post)}
+            """
+            let response = try JSONDecoder().decode(IntroDBClient.Response.self, from: Data(json.utf8))
+            let segments = IntroDBClient.segments(from: response)
+            XCTAssertEqual(segments.map(\.kind), [.credits])
+            XCTAssertEqual(segments.first?.end, 200)
+        }
+    }
+
+    func testTheIntroDBKeepsDistinctCreditsWindowsAroundAScene() throws {
+        let response = try JSONDecoder().decode(TheIntroDBClient.Response.self, from: Data(#"""
+        {"credits":[{"start_ms":100000,"end_ms":200000},
+                    {"start_ms":100000,"end_ms":200000},
+                    {"start_ms":250000,"end_ms":null}]}
+        """#.utf8))
+        let segments = TheIntroDBClient.segments(from: response, duration: 300)
+        XCTAssertEqual(segments.map(\.start), [100, 250])
+        XCTAssertEqual(segments.map(\.end), [200, 300])
+        XCTAssertNil(segments.activeSkippable(at: 225))
+    }
+
     func testTheIntroDBRequestsIdentifyPlozz() async throws {
         let session = URLSession(configuration: StubURLProtocol.makeEphemeralSession())
         defer {
@@ -147,6 +187,58 @@ final class CommunitySkipMarkersTests: XCTestCase {
         // Without a duration an open-ended segment has no skip target, so it's dropped.
         let withoutDuration = TheIntroDBClient.segments(from: response, duration: nil)
         XCTAssertEqual(withoutDuration.map(\.kind), [.intro, .preview])
+    }
+
+    func testAFullLengthIntroMarkerIsRejected() throws {
+        let segments = [
+            MediaSegment(id: "bad-intro", kind: .intro, start: 0, end: 3500),
+            MediaSegment(id: "intro", kind: .intro, start: 10, end: 40)
+        ].normalizedSkipMarkers(duration: 3500)
+        XCTAssertEqual(segments.map(\.id), ["intro"])
+    }
+
+    func testEveryKindMustCoverABoundedPartOfTheItem() throws {
+        // A bogus server analysis runs the closing credits from the intro's end
+        // to EOF: pressing it would jump through the episode.
+        let withIntro = [
+            MediaSegment(id: "intro", kind: .intro, start: 54, end: 82.5),
+            MediaSegment(id: "bad-credits", kind: .credits, start: 82.5, end: 2_640)
+        ].normalizedSkipMarkers(duration: 2_640)
+        XCTAssertEqual(withIntro.map(\.id), ["intro"])
+
+        // The same span limit applies to an opening: an intro covering most of
+        // the item is not an opener.
+        let badIntro = [
+            MediaSegment(id: "bad-intro", kind: .intro, start: 100, end: 2_000),
+            MediaSegment(id: "intro", kind: .intro, start: 54, end: 82.5)
+        ].normalizedSkipMarkers(duration: 2_640)
+        XCTAssertEqual(badIntro.map(\.id), ["intro"])
+
+        // Without an opening, a window that is most of the item is still rejected.
+        let shapeOnly = [
+            MediaSegment(id: "bad-credits", kind: .credits, start: 100, end: 2_640),
+            MediaSegment(id: "credits", kind: .credits, start: 2_300, end: 2_640)
+        ].normalizedSkipMarkers(duration: 2_640)
+        XCTAssertEqual(shapeOnly.map(\.id), ["credits"])
+
+        // Nothing but the opening may begin inside it, however short the marker.
+        let insideOpening = [
+            MediaSegment(id: "intro", kind: .intro, start: 54, end: 82.5),
+            MediaSegment(id: "bad-credits", kind: .credits, start: 82.5, end: 400)
+        ].normalizedSkipMarkers(duration: 2_640)
+        XCTAssertEqual(insideOpening.map(\.id), ["intro"])
+    }
+
+    func testTheIntroDBDropsAnOpenEndedIntroInsteadOfRunningToEpisodeEnd() throws {
+        let response = try JSONDecoder().decode(TheIntroDBClient.Response.self, from: Data(#"""
+        {"intro":[{"start_ms":10000,"end_ms":null}],
+         "recap":[{"start_ms":0,"end_ms":null}],
+         "credits":[{"start_ms":3400000,"end_ms":null}]}
+        """#.utf8))
+        let segments = TheIntroDBClient.segments(from: response, duration: 3500)
+        XCTAssertEqual(segments.map(\.kind), [.credits])
+        XCTAssertEqual(segments.first?.end, 3500,
+                       "Only closing credits may run to the end of the item.")
     }
 
     func testTVDBSeriesAndEpisodeIdentityStaySeparate() throws {

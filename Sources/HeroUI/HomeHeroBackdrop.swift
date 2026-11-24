@@ -73,6 +73,7 @@ public struct HomeHeroBackdrop: View {
     /// Last-resort async art lookup (e.g. TMDb) when none of `urls` load.
     let asyncFallbackURL: (@Sendable () async -> URL?)?
     @Environment(\.plozzArtworkPolicy) private var artworkPolicy
+    let artworkPlacement: ArtworkPlacement?
     let sharedResolutionIdentity: String?
     /// Stable identity of the fronted slide (the item id). A *change* in this is
     /// what triggers a wipe — never a mere `urls` array rebuild for the same slide.
@@ -82,6 +83,8 @@ public struct HomeHeroBackdrop: View {
     let forward: Bool
     let width: CGFloat
     let height: CGFloat
+    /// Extra image above the resting viewport for an incoming vertical transition.
+    let topOverscan: CGFloat
     /// Legibility scrim tone — dark in dark mode, light in light mode.
     let scrimTone: Color
     /// How far UP (points) to translate the backdrop when the hero recedes: 0 at
@@ -122,6 +125,7 @@ public struct HomeHeroBackdrop: View {
         forward: Bool,
         width: CGFloat,
         height: CGFloat,
+        topOverscan: CGFloat = 0,
         scrimTone: Color,
         recedeLift: CGFloat = 0,
         receded: Bool = false,
@@ -132,15 +136,18 @@ public struct HomeHeroBackdrop: View {
         scrimOpacity: Double = 1,
         sharedResolutionIdentity: String? = nil,
         transition: Transition = .wipe,
-        scrimStyle: ScrimStyle = .carousel
+        scrimStyle: ScrimStyle = .carousel,
+        artworkPlacement: ArtworkPlacement? = nil
     ) {
         self.references = references
+        self.artworkPlacement = artworkPlacement
         self.asyncFallbackURL = asyncFallbackURL
         self.sharedResolutionIdentity = sharedResolutionIdentity
         self.slideID = slideID
         self.forward = forward
         self.width = width
         self.height = height
+        self.topOverscan = topOverscan
         self.scrimTone = scrimTone
         self.recedeLift = recedeLift
         self.receded = receded
@@ -160,6 +167,7 @@ public struct HomeHeroBackdrop: View {
         forward: Bool,
         width: CGFloat,
         height: CGFloat,
+        topOverscan: CGFloat = 0,
         scrimTone: Color,
         recedeLift: CGFloat = 0,
         receded: Bool = false,
@@ -179,6 +187,7 @@ public struct HomeHeroBackdrop: View {
             forward: forward,
             width: width,
             height: height,
+            topOverscan: topOverscan,
             scrimTone: scrimTone,
             recedeLift: recedeLift,
             receded: receded,
@@ -222,7 +231,7 @@ public struct HomeHeroBackdrop: View {
         dissolvedSurface
             .frame(maxWidth: .infinity, alignment: artworkAlignment)
             // Keep the translation inside the safe-area breakout.
-            .modifier(HomeVerticalMotion(y: -recedeLift))
+            .modifier(HomeVerticalMotion(y: -recedeLift - topOverscan))
             .animation(reduceMotion ? nil : .smooth(duration: 0.96), value: recedeLift)
             .animation(reduceMotion ? nil : .smooth(duration: 0.96), value: receded)
             .ignoresSafeArea(
@@ -238,25 +247,15 @@ public struct HomeHeroBackdrop: View {
 
     private var backdropSurface: some View {
         backdropImage
-            .frame(width: width, height: height)
+            .opacity(showsTrailer ? 0 : 1)
+            .frame(width: width, height: height + topOverscan)
             .clipped()
             .overlay {
                 if showsTrailer, let trailerController {
-                    ZStack {
-                        HeroTrailerVideoLayer(
-                            controller: trailerController,
-                            role: .home
-                        )
-                        // Keep detail's separate layer decoding/current before the
-                        // push. Nearly transparent rather than hidden so AVPlayerLayer
-                        // stays in the render tree and has a frame ready.
-                        HeroTrailerVideoLayer(
-                            controller: trailerController,
-                            role: .detail
-                        )
-                        .opacity(0.001)
-                        .allowsHitTesting(false)
-                    }
+                    HeroTrailerVideoLayer(
+                        controller: trailerController,
+                        role: .home
+                    )
                     .transition(.opacity)
                 }
             }
@@ -268,18 +267,20 @@ public struct HomeHeroBackdrop: View {
     @ViewBuilder
     private var backdropImage: some View {
         #if canImport(UIKit)
+        let policy = artworkPolicy.forPlacement(artworkPlacement ?? artworkPolicy.placement)
         WipeImageView(
             references: references,
             asyncFallbackURL: asyncFallbackURL,
-            prefersOnlineArtwork: artworkPolicy.prefersOnlineArtwork,
-            sharedResolutionIdentity: sharedResolutionIdentity.map { "\($0)|\(artworkPolicy.identity)" },
+            prefersOnlineArtwork: policy.prefersOnlineArtwork,
+            sharedResolutionIdentity: sharedResolutionIdentity.map { "\($0)|\(policy.identity)" },
             slideID: slideID,
             forward: forward,
             transition: transition,
             width: width,
-            height: height
+            height: height + topOverscan,
+            browseTopOverscan: scrimStyle == .browse ? topOverscan : nil
         )
-        .id(artworkPolicy.identity)
+        .id(policy.identity)
         #else
         Rectangle().fill(.tertiary)
         #endif
@@ -413,7 +414,8 @@ public enum HeroBackdropArtworkPolicy {
         guard !Task.isCancelled else { return nil }
         if allowsCachedLibraryArtwork, let reference = references.first {
             for variant in [ArtworkImageVariant.heroBackdrop, .landscapeCard, .heroPreview] {
-                if let image = cachedImage(reference, variant), isUsable(image) {
+                if let image = cachedImage(reference, variant), isUsable(image),
+                   image.size.width > image.size.height {
                     return FirstPaintArtwork(image: image, reference: reference, variant: variant)
                 }
             }
@@ -475,6 +477,7 @@ private struct WipeImageView: UIViewRepresentable {
     let transition: HomeHeroBackdrop.Transition
     let width: CGFloat
     let height: CGFloat
+    let browseTopOverscan: CGFloat?
 
     /// Slightly longer than a push so the easeOut "settle" tail reads clearly.
     /// Tuned by feel: 0.85 → 0.95 → 1.20 → 1.05. Both the wipe and the (slightly
@@ -510,6 +513,7 @@ private struct WipeImageView: UIViewRepresentable {
             parallaxIn: Self.parallaxIn,
             driftFraction: Self.driftFraction
         )
+        view.browseTopOverscan = browseTopOverscan
         context.coordinator.container = view
         context.coordinator.configure(
             width: width, height: height, reduceMotion: context.environment.accessibilityReduceMotion
@@ -528,6 +532,7 @@ private struct WipeImageView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: HeroWipeContainerView, context: Context) {
+        uiView.browseTopOverscan = browseTopOverscan
         context.coordinator.container = uiView
         context.coordinator.configure(
             width: width, height: height, reduceMotion: context.environment.accessibilityReduceMotion
@@ -664,6 +669,20 @@ private struct WipeImageView: UIViewRepresentable {
             // (higher-res / router-resolved) candidate has since been cached.
             if slideID == targetID {
                 if references != targetReferences {
+                    // Reference trace (PLZXFAN-gated; hash only). The carried and
+                    // filtered SETS are stable on device (HEROFRAME/HOMECAROUSEL), so
+                    // an image that still swaps after first paint must come from the
+                    // same slide's artwork references changing — enrichment adding or
+                    // reordering selections. This line proves or rules that out.
+                    if FanoutDiagnostics.isEnabled {
+                        let joined: String = references.map { String(describing: $0) }.joined(separator: "|")
+                        let stamp: Int = Int(ProcessInfo.processInfo.systemUptime * 1000)
+                        FanoutDiagnostics.emit(
+                            "HEROARTREF t=\(stamp) id=\(slideID.prefix(8)) "
+                            + "count=\(references.count) sig=\(joined.hashValue) "
+                            + "displayed=\(displayedID?.prefix(8) ?? "none")"
+                        )
+                    }
                     targetReferences = references
                     resolveSameSlideUpgrade(
                         references: references,
@@ -679,6 +698,25 @@ private struct WipeImageView: UIViewRepresentable {
             }
             targetID = slideID
             targetReferences = references
+            // Paint an already-decoded image for this slide SYNCHRONOUSLY, before
+            // any async resolution. On a relaunch the artwork is usually in the
+            // decoded cache already, but the progressive path still resolves it on a
+            // later turn — which is the "hero shows the no-image cover for a moment,
+            // then the image appears" flash (rows, incl. Continue Watching, are
+            // already painted from cache at that instant). Placing the cached image
+            // here costs a dictionary lookup; progressive resolution still runs to
+            // upgrade the preview to full size.
+            if container?.hasPages == false, let cached = firstUsableCached(references, variant: .heroBackdrop) {
+                applyResolved(
+                    cached.0, reference: cached.1, quality: .full,
+                    id: slideID, forward: forward
+                )
+            } else if container?.hasPages == false, let cached = firstUsableCached(references, variant: .heroPreview) {
+                applyResolved(
+                    cached.0, reference: cached.1, quality: .preview,
+                    id: slideID, forward: forward
+                )
+            }
             beginProgressiveResolution(
                 references: references,
                 slideID: slideID,
@@ -718,6 +756,7 @@ private struct WipeImageView: UIViewRepresentable {
                         references: references,
                         variant: .heroPreview,
                         maxAspectRatio: HeroBackdropArtworkPolicy.maxAspectRatio,
+                        prefersLandscape: true,
                         asyncOnlineURL: asyncFallbackURL,
                         prefersOnlineArtwork: prefersOnlineArtwork,
                         sharedKey: sharedResolutionIdentity
@@ -726,6 +765,13 @@ private struct WipeImageView: UIViewRepresentable {
                 guard let firstPaint else {
                     guard !Task.isCancelled, token == self.loadToken else { return }
                     self.loadTask = nil
+                    // A refresh replaces a slide with a fresh copy whose artwork URLs
+                    // are re-signed, so the new references can miss the cache for a
+                    // moment. Clearing here was the visible "hero shows its image,
+                    // flips to the no-image cover, then loads the image again" flash.
+                    // This slide still has usable art on screen: keep it and let the
+                    // upgrade path replace it when the new art is ready.
+                    if self.displayedID == slideID, self.displayedReference != nil { return }
                     self.noArtResolved(for: slideID)
                     return
                 }
@@ -1042,6 +1088,13 @@ final class HeroWipeContainerView: UIView {
     private var pages: [SlidePage] = []
     private var revealingPages = Set<ObjectIdentifier>()
 
+    var browseTopOverscan: CGFloat? {
+        didSet {
+            guard browseTopOverscan != oldValue else { return }
+            for page in pages { page.browseTopOverscan = browseTopOverscan }
+        }
+    }
+
     var hasPages: Bool { !pages.isEmpty }
     var pageCount: Int { pages.count }
     var activeWipeCount: Int { revealingPages.count }
@@ -1203,6 +1256,7 @@ final class HeroWipeContainerView: UIView {
     private func makePage(image: UIImage?) -> SlidePage {
         let page = SlidePage()
         page.bleed = bleed
+        page.browseTopOverscan = browseTopOverscan
         page.image = image
         return page
     }
@@ -1216,7 +1270,11 @@ final class HeroWipeContainerView: UIView {
 fileprivate final class SlidePage: UIView {
     private let contentView = UIView()
     private let imageView = UIImageView()
+    private let overscanImage = UIImageView()
     var bleed: CGFloat = 0
+    var browseTopOverscan: CGFloat? {
+        didSet { layoutImage() }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1226,6 +1284,8 @@ fileprivate final class SlidePage: UIView {
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         imageView.backgroundColor = .clear
+        overscanImage.clipsToBounds = true
+        contentView.addSubview(overscanImage)
         contentView.addSubview(imageView)
         addSubview(contentView)
     }
@@ -1234,7 +1294,11 @@ fileprivate final class SlidePage: UIView {
 
     var image: UIImage? {
         get { imageView.image }
-        set { imageView.image = newValue }
+        set {
+            imageView.image = newValue
+            overscanImage.image = browseTopOverscan == nil ? nil : newValue
+            layoutImage()
+        }
     }
 
     /// Set this page's clip `window` (container coords) and position the image so
@@ -1255,7 +1319,30 @@ fileprivate final class SlidePage: UIView {
             x: contentX - bleed - window.origin.x + contentSize.width / 2,
             y: contentSize.height / 2
         )
-        imageView.frame = contentView.bounds
+        layoutImage()
+    }
+
+    private func layoutImage() {
+        guard let topOverscan = browseTopOverscan, let image = imageView.image,
+              image.size.width > 0, image.size.height > 0 else {
+            imageView.frame = contentView.bounds
+            overscanImage.isHidden = true
+            return
+        }
+        let slot = CGRect(
+            x: bleed, y: topOverscan,
+            width: max(0, contentView.bounds.width - 2 * bleed),
+            height: max(0, contentView.bounds.height - topOverscan)
+        )
+        let scale = min(slot.width / image.size.width, slot.height / image.size.height)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        imageView.frame = CGRect(x: slot.maxX - size.width, y: slot.minY, width: size.width, height: size.height)
+        // Transition coverage extends the image's top edge without enlarging
+        // or lifting the resting artwork. It is above the screen after settling.
+        overscanImage.isHidden = topOverscan <= 0
+        overscanImage.image = image
+        overscanImage.layer.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1 / (image.size.height * image.scale))
+        overscanImage.frame = CGRect(x: imageView.frame.minX, y: 0, width: size.width, height: topOverscan)
     }
 
     func setOutgoingDrift(_ x: CGFloat) {

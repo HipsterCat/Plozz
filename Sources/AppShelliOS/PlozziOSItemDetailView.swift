@@ -1,6 +1,7 @@
 #if os(iOS)
 import AppRuntime
 import CoreModels
+import CoreNetworking
 import PlozzCoreUI
 import FeatureHomeCore
 import FeaturePlayback
@@ -11,30 +12,34 @@ import SeerService
 import TraktService
 import SwiftUI
 
+private struct PlozziOSDetailViewModelKey: Hashable {
+    let itemID: String
+    let libraryOrigin: String?
+}
+
 struct PlozziOSItemDetailView: View {
+    /// One view model per title/origin, retained across body re-evaluations. The
+    /// factory used to run inside `canonicalDetail`'s view builder, so every render
+    /// pass could construct another `ItemDetailViewModel` and start its loads again
+    /// — the entering freeze and the metadata/play label repopulating in place.
+    @State private var detailViewModels =
+        KeyedViewStateCache<PlozziOSDetailViewModelKey, ItemDetailViewModel>()
+
     @Environment(HomeViewModel.self) private var homeViewModel: HomeViewModel?
+    @Environment(\.locale) private var locale
     let appModel: PlozziOSAppModel
     let provider: any MediaProvider
     let item: MediaItem
     let seerService: SeerService?
     let originSourceAccountID: String?
     let playlistOrigin: VideoPlaylistPlaybackOrigin?
+    let openingArtwork: PlozziOSHeroArtworkSeed?
     /// Show this episode as the page's own subject instead of redirecting to its
     /// series.
     ///
-    /// Every other way of reaching an episode — a tapped card, a deep link —
-    /// means "show me this episode in context", which is the series page with it
-    /// fronted. "Episode Info" means the opposite: this episode's own synopsis,
-    /// air date and the file that would play.
+    /// "Go to Episode" opens the standalone episode page. Ordinary browsing,
+    /// including Continue Watching, opens the series with its current resume target.
     let presentsEpisodeAsSubject: Bool
-
-    @State private var resolvedSeries: MediaItem?
-    @State private var resolvedContextItem: MediaItem?
-    /// Pre-built `Text` because the two sources differ in kind: an `AppError`
-    /// carries our own localizable resource, while `localizedDescription` is a
-    /// string Foundation has ALREADY localized and must not be re-looked-up.
-    @State private var resolutionError: Text?
-    @State private var retryToken = 0
 
     init(
         appModel: PlozziOSAppModel,
@@ -43,7 +48,8 @@ struct PlozziOSItemDetailView: View {
         seerService: SeerService? = nil,
         originSourceAccountID: String? = nil,
         presentsEpisodeAsSubject: Bool = false,
-        playlistOrigin: VideoPlaylistPlaybackOrigin? = nil
+        playlistOrigin: VideoPlaylistPlaybackOrigin? = nil,
+        openingArtwork: PlozziOSHeroArtworkSeed? = nil
     ) {
         self.appModel = appModel
         self.provider = provider
@@ -52,10 +58,26 @@ struct PlozziOSItemDetailView: View {
         self.presentsEpisodeAsSubject = presentsEpisodeAsSubject
         self.originSourceAccountID = originSourceAccountID
         self.playlistOrigin = playlistOrigin
+        self.openingArtwork = openingArtwork
     }
 
     var body: some View {
         detailBody
+            .environment(\.plozziOSDetailArtworkReplay, appModel.detailArtworkReplay)
+            .modifier(PlozziOSDetailScrollEdge())
+            // Detail-path telemetry anchor (PLZXFAN-gated; kind only). Deliberately
+            // at the page body: the episode browser sits inside a lazy container, so
+            // an anchor there never fires unless the viewer scrolls it into view —
+            // which is why the series fixture produced zero detail lines. This fires
+            // on every detail open, which is what the return-path capture needs.
+            .onAppear {
+                if FanoutDiagnostics.isEnabled {
+                    FanoutDiagnostics.emit(
+                        "DETAILVIEW t=\(Int(ProcessInfo.processInfo.systemUptime * 1000)) appeared kind=\(item.kind.rawValue) "
+                        + "series=\(item.kind == .series)"
+                    )
+                }
+            }
             .detailOpenFeedback()
             .environment(\.plozzArtworkArea, .details)
             // Each detail page installs its own router. A pushed destination —
@@ -95,27 +117,10 @@ struct PlozziOSItemDetailView: View {
                 scanStatus: appModel.shareScanStatus
             )
         } else if shouldResolveSeries {
-            if let resolvedSeries {
-                canonicalDetail(for: resolvedSeries)
-            } else if let resolutionError {
-                ContentUnavailableView {
-                    Label(
-                        "Unable to load show",
-                        systemImage: "exclamationmark.triangle"
-                    )
-                } description: {
-                    resolutionError
-                } actions: {
-                    Button("Try Again") {
-                        self.resolutionError = nil
-                        retryToken &+= 1
-                    }
-                }
-                .task(id: retryToken) { await resolveSeries() }
-            } else {
-                ProgressView("Loading show…")
-                    .task(id: retryToken) { await resolveSeries() }
-            }
+            canonicalDetail(for: SeriesEpisodeEntry.seriesSeed(
+                from: item, seriesID: item.seriesID ?? item.id,
+                sourceAccountID: item.sourceAccountID ?? originSourceAccountID
+            ))
         } else {
             canonicalDetail(for: item)
         }
@@ -128,55 +133,132 @@ struct PlozziOSItemDetailView: View {
             && item.seriesID != nil
     }
 
+    @ViewBuilder
     private func canonicalDetail(for resolvedItem: MediaItem) -> some View {
-        let contextItem = resolvedContextItem ?? item
-        return PlozziOSCanonicalItemDetailView(
-            appModel: appModel,
-            provider: provider,
-            item: resolvedItem,
-            continueWatching: homeViewModel?.continueWatchingForDetail ?? [],
-            seerService: seerService,
-            originSourceAccountID: originSourceAccountID,
-            playlistOrigin: playlistOrigin,
-            initialSeasonID: contextItem.kind == .season
-                ? contextItem.id
-                : contextItem.seasonID,
-            initialEpisode: contextItem.kind == .episode
-                ? contextItem
-                : nil,
-            presentsEpisodeAsSubject: presentsEpisodeAsSubject
+        let contextItem = item
+        let key = PlozziOSDetailViewModelKey(
+            itemID: resolvedItem.stablePresentationID,
+            libraryOrigin: originSourceAccountID
+        )
+        let model = try? detailViewModels.value(forKey: key) {
+            try detailEnvironment.makeViewModel(
+                for: resolvedItem, libraryOrigin: originSourceAccountID
+            )
+        }
+        if let model {
+                PlozziOSCanonicalItemDetailView(
+                    appModel: appModel,
+                    provider: provider,
+                    viewModel: model,
+                    seerService: seerService,
+                    playlistOrigin: playlistOrigin,
+                    initialSeasonID: contextItem.kind == .season
+                        ? contextItem.id
+                        : contextItem.kind == .episode ? nil : contextItem.seasonID,
+                    initialEpisode: presentsEpisodeAsSubject && contextItem.kind == .episode
+                        ? contextItem
+                        : nil,
+                    presentsEpisodeAsSubject: presentsEpisodeAsSubject,
+                    openingArtwork: openingArtwork
+                )
+            } else {
+            MediaSourceUnavailableView()
+        }
+    }
+
+    private var detailEnvironment: DetailOpenEnvironment {
+        let accounts = appModel.accountsProviders.homeAccounts
+        let identitySources = appModel.identityIndex.identitySourcesProvider
+        let language = locale.identifier
+        return DetailOpenEnvironment(
+            resolveProvider: { accountID in
+                guard let accountID else { return provider }
+                guard let resolved = appModel.accountsProviders.provider(forAccountID: accountID) else {
+                    throw AppError.unauthorized
+                }
+                return resolved
+            },
+            resolveOptionalProvider: { appModel.accountsProviders.provider(forAccountID: $0) },
+            identitySources: identitySources,
+            crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
+            continueWatchingSnapshot: { homeViewModel?.continueWatchingForDetail ?? [] },
+            ratingsProvider: RatingsServiceFactory.make(),
+            metadataLanguage: language,
+            localizedDetailMetadataResolver: {
+                await DetailMetadataResolver.household.resolve($0, language: $1)
+            },
+            onlineTrailerResolver: {
+                guard !OfflineMode.shared.isEnabled else { return [] }
+                return await DetailMetadataResolver.household.trailers(for: $0)
+            },
+            trailerSettings: appModel.settings.heroBackground,
+            discoveryStatusRefresh: { await seerService?.requestAvailability(for: $0) },
+            loadSeasonEpisodeRoster: { [seer = appModel.seerService] item, number in
+                guard !OfflineMode.shared.isEnabled else { return .unavailable }
+                return await seer.seasonEpisodeRoster(for: item, seasonNumber: number)
+            },
+            makeRelatedTitlesLoader: { mode in
+                guard !appModel.isOfflineMode, let search = relatedTitleLibrarySearch(in: accounts) else { return nil }
+                return RelatedTitlesLoader(
+                    resolver: .production(traktClientID: TraktConfig.resolved().clientID),
+                    search: search,
+                    indexedLibrarySources: identitySources,
+                    loadIndexedItem: relatedTitleLibraryItemLoader(in: accounts),
+                    loadIndexedBatches: relatedTitleLibraryBatchLoaders(in: accounts),
+                    // The iOS detail page always offers recommendations. Owned
+                    // matches open in place; the rest stay requestable. Keep the
+                    // core loader's library-only policy for callers/tests that
+                    // explicitly ask for it.
+                    displayMode: .includeExternal
+                )
+            },
+            snapshotCache: appModel.detailSnapshotCache
         )
     }
 
-    private func resolveSeries() async {
-        do {
-            var contextItem = (try? await provider.item(id: item.id)) ?? item
-            if contextItem.sourceAccountID == nil,
-               let sourceAccountID = item.sourceAccountID {
-                contextItem = contextItem.taggingSource(sourceAccountID)
-            }
-            guard let seriesID = contextItem.seriesID else {
-                throw AppError.notFound
-            }
-            var series = try await provider.item(id: seriesID)
-            guard !Task.isCancelled else { return }
-            if series.sourceAccountID == nil,
-               let sourceAccountID = item.sourceAccountID {
-                series = series.taggingSource(sourceAccountID)
-            }
-            resolvedContextItem = contextItem
-            resolvedSeries = series
-            resolutionError = nil
-        } catch {
-            guard !Task.isCancelled else { return }
-            resolutionError = (error as? AppError).map { Text($0.userMessage) }
-                ?? Text(verbatim: error.localizedDescription)
-        }
+}
+
+
+/// First-paint schedule text only; the resolver still owns freshness and corrections.
+@MainActor
+final class PlozziOSDetailScheduleReplay {
+    private struct Entry {
+        let subject: String
+        let scope: String
+        let account: String?
+        let title: String // l10n:content — provider-supplied series title
+        let ids: [String: String]
+        let record: SeriesScheduleRecord
+    }
+    private var entries: [Entry] = []
+
+    func remember(_ record: SeriesScheduleRecord?, for item: MediaItem, scope: String) {
+        guard let record, item.kind == .series else { return }
+        let subject = item.stablePresentationID
+        entries.removeAll { $0.subject == subject && $0.scope == scope && $0.account == item.sourceAccountID }
+        guard record.upcomingEpisode != nil, !record.isRefreshDue() else { return }
+        if entries.count >= 32 { entries.removeFirst() }
+        entries.append(Entry(subject: subject, scope: scope, account: item.sourceAccountID, title: item.title,
+                             ids: MetadataQuery(item).logoSubjectIDs, record: record))
+    }
+
+    func record(for item: MediaItem, scope: String, now: Date = .now) -> SeriesScheduleRecord? {
+        guard item.kind == .series, let entry = entries.last(where: {
+            $0.subject == item.stablePresentationID && $0.scope == scope && $0.account == item.sourceAccountID
+        }) else { return nil }
+        let ids = MetadataQuery(item).logoSubjectIDs
+        guard !entry.record.isRefreshDue(now: now), entry.title == item.title,
+              ids.allSatisfy({ entry.ids[$0.key] == nil || entry.ids[$0.key] == $0.value }) else { return nil }
+        return entry.record
     }
 }
 
 private struct PlozziOSCanonicalItemDetailView: View {
+    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzArtworkPolicy) private var artworkPolicy
+    @Environment(\.locale) private var locale
     @State private var trailerOpening = YouTubeTrailerOpening()
+    @State private var externalOpening = ExternalMediaOpening()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -188,9 +270,12 @@ private struct PlozziOSCanonicalItemDetailView: View {
     /// subview because a `navigationDestination` is hosted by the stack, so it
     /// inherits the STACK's environment — the router has to be read where the page
     /// itself is declared.
-    @Environment(\.mediaItemNavigator) private var itemNavigator
+    @Environment(\.mediaItemArtworkNavigator) private var artworkItemNavigator
     @State private var viewModel: ItemDetailViewModel
     @State private var isPageVisible = false
+    @State private var playbackPreparation = DetailPlaybackPreparationCoordinator()
+    @State private var preparationSourceSwitch = UUID()
+    @State private var isPreparationSourceSwitching = false
     @State private var playbackRequest: PlozziOSPlaybackRequest?
     @State private var pendingResumeRequest: PlozziOSPlaybackRequest?
     @State private var downloadRecord: DownloadedMediaRecord?
@@ -212,17 +297,17 @@ private struct PlozziOSCanonicalItemDetailView: View {
     @State private var seriesPlayTarget: MediaItem?
     @State private var hasResolvedSeriesPlayTarget = false
     @State private var presentsSeriesDownloads = false
-    /// Whether the hero describes the **show** rather than `seriesPlayTarget`.
-    ///
-    /// True when there is no resume point to offer — nothing watched, or all of it
-    /// watched and the pointer stale. Play still starts an episode in both cases,
-    /// so the two cannot be the same value: the hero is editorial (the show), the
-    /// play target is technical (the file that will run).
-    @State private var seriesHeroShowsSeries = false
     @State private var heroPullDistance: CGFloat = 0
+    /// True for the duration of a native edge back-swipe. A small vertical
+    /// component of that pan used to reach the scroll view and stretch the hero
+    /// while the page was leaving, so the picture appeared to resize/bounce.
+    @State private var isInteractivePopActive = false
+    /// Whether the page's own scroll view is moving. Pull-stretch is a vertical
+    /// scroll gesture; geometry changes from a navigation or inset update must not
+    /// move the hero.
+    @State private var isHeroScrollActive = false
     private let seerService: SeerService?
     private var isDiscoveryItem: Bool { viewModel.isDiscoveryItem }
-    private let initialSources: [MediaSourceRef]
     private let initialSeasonID: String?
     private let initialEpisode: MediaItem?
     private let playlistOrigin: VideoPlaylistPlaybackOrigin?
@@ -230,19 +315,19 @@ private struct PlozziOSCanonicalItemDetailView: View {
     /// Whether the episode is this page's own subject rather than a season/series
     /// page's fronted child — see `showsEpisodeSubjectHero`.
     private let presentsEpisodeAsSubject: Bool
+    private let openingArtwork: PlozziOSHeroArtworkSeed?
     private let capabilities = MediaCapabilities.detected()
 
     init(
         appModel: PlozziOSAppModel,
         provider: any MediaProvider,
-        item: MediaItem,
-        continueWatching: [MediaItem] = [],
+        viewModel: ItemDetailViewModel,
         seerService: SeerService? = nil,
-        originSourceAccountID: String? = nil,
         playlistOrigin: VideoPlaylistPlaybackOrigin? = nil,
         initialSeasonID: String? = nil,
         initialEpisode: MediaItem? = nil,
-        presentsEpisodeAsSubject: Bool = false
+        presentsEpisodeAsSubject: Bool = false,
+        openingArtwork: PlozziOSHeroArtworkSeed? = nil
     ) {
         self.seerService = seerService
         self.initialSeasonID = initialSeasonID
@@ -250,82 +335,42 @@ private struct PlozziOSCanonicalItemDetailView: View {
         self.playlistOrigin = playlistOrigin
         self.originProvider = provider
         self.presentsEpisodeAsSubject = presentsEpisodeAsSubject
-        let identitySources = appModel.identityIndex.identitySourcesProvider
-        let isDiscoveryItem = DetailOpenEnvironment.isDiscovery(
-            item,
-            identitySources: identitySources
-        )
-        let discoveryStatusRefresh:
-            (@Sendable (MediaItem) async -> MediaRequestAvailability?)?
-        if isDiscoveryItem {
-            discoveryStatusRefresh = { [seerService] item in
-                await seerService?.requestAvailability(for: item)
-            }
-        } else {
-            discoveryStatusRefresh = nil
+        self.openingArtwork = openingArtwork
+        _viewModel = State(initialValue: viewModel)
+        if let selectedItem = viewModel.state.value?.item {
+            _seriesPlayTarget = State(initialValue:
+                SeriesEpisodeEntry.openingSeed(
+                    for: selectedItem, initialEpisode: initialEpisode,
+                    initialSeasonID: initialSeasonID, resumeEpisode: viewModel.serverResumeEpisode
+                )
+            )
         }
-        let selection = DetailOpenEnvironment.initialSourceSelection(
-            for: item,
-            isDiscovery: isDiscoveryItem,
-            libraryOrigin: originSourceAccountID,
-            identitySources: appModel.identityIndex.identitySourcesProvider,
-            sourceLocality: {
-                appModel.accountsProviders.provider(forAccountID: $0)?.connectionLocality
-            }
+    }
+
+    private var contentRefreshSurfaceID: ContentRefreshSurfaceID? {
+        guard !viewModel.isDiscoveryItem, let item = viewModel.state.value?.item else { return nil }
+        let kind: ContentRefreshSurfaceKind
+        switch item.kind {
+        case .series: kind = .seriesDetail
+        case .episode: kind = .episodeDetail
+        case .movie, .video: kind = .movieDetail
+        default: return nil
+        }
+        return ContentRefreshSurfaceID(
+            kind: kind,
+            accountID: item.sourceAccountID,
+            itemID: item.id
         )
-        let initialSources = selection.sources
-        let selectedSource = selection.selected
-        let selectedItem = DetailOpenEnvironment.initialItem(for: item, selectedSource: selectedSource)
-        let resume = DetailPlaybackSelection.resumeItem(for: selectedItem, in: continueWatching)
-        _seriesPlayTarget = State(initialValue:
-            SeriesEpisodeEntry.openingSeed(
-                for: selectedItem, initialEpisode: initialEpisode,
-                initialSeasonID: initialSeasonID, resumeEpisode: resume
-            )
-        )
-        let selectedProvider = selectedSource.flatMap {
-            appModel.accountsProviders.provider(forAccountID: $0.accountID)
-        } ?? provider
-        self.initialSources = initialSources
-        let accounts = appModel.accountsProviders.homeAccounts
-        _viewModel = State(
-            initialValue: ItemDetailViewModel(
-                provider: selectedProvider,
-                itemID: selectedSource?.itemID ?? item.id,
-                initialItem: DetailPlaybackSelection.applyingResumeItem(resume, to: selectedItem),
-                initialResumeEpisode: selectedItem.kind == .series ? resume : nil,
-                isDiscoveryItem: isDiscoveryItem,
-                discoveryStatusRefresh: discoveryStatusRefresh,
-                loadSeasonEpisodeRoster: { [seer = appModel.seerService] item, number in
-                    await seer.seasonEpisodeRoster(for: item, seasonNumber: number)
-                },
-                ratingsProvider: RatingsServiceFactory.make(),
-                detailMetadataResolver: { await DetailMetadataResolver.household.resolve($0) },
-                sourceAccountID: selectedSource?.accountID ?? item.sourceAccountID,
-                originSourceAccountID: originSourceAccountID,
-                onlineTrailerResolver: { await DetailMetadataResolver.household.trailers(for: $0) },
-                initialSources: initialSources,
-                alternateProviderResolver: { accountID in
-                    appModel.accountsProviders.provider(forAccountID: accountID)
-                },
-                crossServerSourceResolver: crossServerSourceResolver(
-                    in: accounts,
-                    identitySources: identitySources
-                ),
-                identitySources: identitySources,
-                relatedTitlesLoader:
-                    relatedTitleLibrarySearch(in: accounts).map { search in
-                        RelatedTitlesLoader(
-                            resolver: .production(traktClientID: TraktConfig.resolved().clientID),
-                            search: search,
-                            indexedLibrarySources: identitySources,
-                            displayMode: DetailOpenEnvironment.relatedTitlesDisplayMode(
-                                isDiscoveryItem: isDiscoveryItem
-                            )
-                        )
-                    }
-            )
-        )
+    }
+
+    private var contentRefreshSurfaceIsVisible: Bool {
+        guard isPageVisible, playbackRequest == nil, pendingResumeRequest == nil,
+              !presentsSeriesDownloads,
+              let kind = viewModel.state.value?.item.kind else { return false }
+        switch kind {
+        case .series, .episode, .movie, .video: return true
+        default: return false
+        }
     }
 
     var body: some View {
@@ -354,6 +399,9 @@ private struct PlozziOSCanonicalItemDetailView: View {
             }
         }
         .artworkGradientBackground(scope: ObjectIdentifier(viewModel), isVisible: isPageVisible)
+        .task(id: appModel.settings.heroBackground.settings.trailerSources) {
+            await viewModel.refreshTrailerPolicy()
+        }
         .background(palette.backgroundBase.ignoresSafeArea())
         .onAppear {
             isPageVisible = true
@@ -368,7 +416,9 @@ private struct PlozziOSCanonicalItemDetailView: View {
             source: viewModel.currentSourceForDisplay,
             isActive: isPageVisible && playbackRequest == nil
         )
+        .navigationTitle(Text(verbatim: ""))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 PlozziOSDetailAudioMuteControl(
@@ -386,7 +436,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                             Image(systemName: "arrow.down.circle")
                         }
                         .accessibilityLabel("Manage Seasons")
-                    } else if let downloadItem = detailPlayableItem(for: detail.item) {
+                    } else if let downloadItem = detailPlayableItem(for: detail.item), !downloadItem.opensExternalSource {
                         let options = detailPlaybackOptions(for: detail.item)
                         PlozziOSDetailDownloadButton(
                             downloadItem: downloadItem,
@@ -447,7 +497,29 @@ private struct PlozziOSCanonicalItemDetailView: View {
         .onChange(of: presentsSeriesDownloads) { _, isPresented in
             if isPresented { seasonRequestRetryToken &+= 1 }
         }
-        .task { await viewModel.load() }
+        .task(id: locale.identifier) {
+            viewModel.updateMetadataLanguage(locale.identifier)
+            await viewModel.load()
+        }
+        .contentRefreshSurface(
+            id: contentRefreshSurfaceID,
+            isVisible: contentRefreshSurfaceIsVisible
+        ) { request in
+            switch request.action {
+            case .reloadSeriesContext:
+                await viewModel.refreshSeriesContextAfterReturn()
+            case .refreshWatchStateOnly:
+                await viewModel.refreshWatchStateOnly()
+            case .reloadHome:
+                break
+            }
+        }
+        .detailPlaybackPreparation(
+            for: preparationItem,
+            isActive: isPageVisible && playbackRequest == nil && pendingResumeRequest == nil
+                && !isPreparationSourceSwitching,
+            coordinator: playbackPreparation
+        )
         .onChange(of: viewModel.serverResumeEpisode) { _, resume in
             guard seriesPlayTarget == nil,
                   let series = viewModel.state.value?.item,
@@ -456,10 +528,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
                       initialSeasonID: initialSeasonID, resumeEpisode: resume
                   ) else { return }
             seriesPlayTarget = seed
-            seriesHeroShowsSeries = false
         }
         .modifier(requestPresentation(inDownloadSheet: false))
         .youTubeTrailerOpeningFailures(trailerOpening)
+        .externalMediaOpeningFailures(externalOpening)
         .alert("Couldn't load versions", isPresented: Binding(
             get: { viewModel.playbackInventoryRetryError != nil },
             set: { if !$0 { viewModel.playbackInventoryRetryError = nil } }
@@ -498,9 +570,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
 
     private func detailContent(_ detail: ItemDetailViewModel.Detail) -> some View {
         let versionTarget = viewModel.episodeWithEnrichedBadges(seriesPlayTarget ?? detail.item)
-        let heroTarget = seriesHeroShowsSeries
-            ? detail.item
-            : versionTarget
+        let heroTarget = HeroContentPolicy.detailSubject(focused: versionTarget, root: detail.item)
         let playableHeroTarget = seriesPlayTarget.map(playbackItem(for:))
             ?? detailPlayableItem(for: detail.item)
         let seasons = detail.children.filter { $0.kind == .season }
@@ -535,10 +605,25 @@ private struct PlozziOSCanonicalItemDetailView: View {
             dynamicTypeSize: dynamicTypeSize
         ) / 2
         return ScrollView {
-            VStack(alignment: .leading, spacing: PlozziOSMediaRailLayout.sectionSpacing) {
-                PlozziOSDetailHeroSection(
+            // Only the hero and the first sections exist on the push frame. The
+            // information grid, cast, extras and related rows are offscreen work;
+            // building them synchronously during the transition is what made the
+            // page feel locked while it "loaded everything".
+            // Each section is type-erased deliberately. Built concretely, the
+            // LazyVStack's content closure carries the whole section tuple in one
+            // stack frame; on device that frame and the surrounding SwiftUI update
+            // overflow the main thread's stack while the page is being built
+            // (SIGSEGV in __chkstk_darwin / the type-metadata demangler). Keeping
+            // the builder's value type small is what makes the page open.
+            LazyVStack(alignment: .leading, spacing: PlozziOSMediaRailLayout.sectionGap(metrics: metrics)) {
+                AnyView(PlozziOSDetailHeroSection(
                     item: heroTarget,
                     backdropItem: detail.item,
+                    seedArtwork: openingArtwork?.image(
+                        for: detail.item, profileID: appModel.profiles.activeProfileID,
+                        policy: artworkPolicy.forPlacement(rootPresentation.artworkPlacement),
+                        style: heroStyle
+                    ),
                     playableItem: playableHeroTarget,
                     showsPlayPlaceholder: showsPlayPlaceholder,
                     onRetryPlaybackInventory: viewModel.hasNoPlaybackStreams(for: versionTarget) ? {
@@ -549,10 +634,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     scheduleLine: isDiscoveryItem
                         ? (
                             detail.item.kind == .series
-                                ? upcomingHeroLine
+                                ? upcomingHeroLine(for: detail)
                                 : detail.externalAvailability?.primaryLine()
                         )
-                        : upcomingHeroLine,
+                        : upcomingHeroLine(for: detail),
                     selectedSourceAccountID: options.selectedSourceAccountID,
                     versions: options.versions,
                     selectedVersionID: options.selectedVersionID,
@@ -571,26 +656,40 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     // live state here guarantees playback derives from the same
                     // source of truth the UI most recently showed. (tvOS's
                     // ItemDetailView does this and documents it as CRITICAL.)
-                    onPlay: { _, fromBeginning in
+                    onPlay: { selection, fromBeginning in
                         let liveTarget = seriesPlayTarget ?? detail.item
-                        play(playbackItem(for: liveTarget), fromBeginning: fromBeginning)
+                        let fresh = playbackItem(for: liveTarget)
+                        var selected = selection.discPlaybackOverride.map {
+                            fresh.requestingDiscPlayback($0)
+                        } ?? fresh
+                        if let player = selection.externalPlayerOverride {
+                            selected = selected.requestingExternalPlayer(player)
+                        }
+                        play(selected, fromBeginning: fromBeginning)
                     },
                     trailerItem: viewModel.trailers.first,
-                    onPlayTrailer: { play($0, fromBeginning: true) },
+                    onPlayTrailer: { play($0) },
                     heroRequest: heroRequest(
                         for: detail,
                         hasPlayAction: playableHeroTarget != nil || showsPlayPlaceholder
                     ),
-                    // An episode's own page can be reached from Continue Watching
-                    // or Search, where Back leaves the show entirely — so offer a
-                    // way over to it.
+                    // "Go to Episode" opens the episode's own page, so offer
+                    // a way over to its show.
                     offersParentNavigation: showsEpisodeSubjectHero(detail.item),
                     presentsEpisodeStill: showsEpisodeSubjectHero(detail.item),
                     pullDistance: heroPullDistance
                 )
+                .environment(\.plozzArtworkSourceReady, viewModel.artworkSourceIsReady)
+                .detailHeroLogoVisit(scope: appModel.detailArtworkScopeID, subject: detail.item.stablePresentationID)
+                .onChange(of: detail.upcomingSchedule, initial: true) { _, record in
+                    appModel.detailSchedules.remember(record, for: detail.item, scope: detailScheduleScope)
+                }
+                .environment(\.openingHeroLogo, openingArtwork?.logo(
+                    for: detail.item, profileID: appModel.profiles.activeProfileID
+                )))
 
                 if detail.item.kind == .series, !isDiscoveryItem {
-                    PlozziOSInlineSeriesBrowser(
+                    AnyView(PlozziOSInlineSeriesBrowser(
                         viewModel: viewModel,
                         seasons: detail.children.filter { $0.kind == .season },
                         looseEpisodes: detail.children.filter { $0.kind == .episode },
@@ -600,13 +699,12 @@ private struct PlozziOSCanonicalItemDetailView: View {
                             seriesPlayTarget = $0
                             hasResolvedSeriesPlayTarget = true
                         },
-                        onHeroShowsSeriesChange: { seriesHeroShowsSeries = $0 },
                         onPlay: play
-                    )
+                    ))
                 }
 
                 if isDiscoveryItem, detail.item.kind != .movie, detail.item.kind != .series {
-                    PlozziOSRequestAction(
+                    AnyView(PlozziOSRequestAction(
                         item: detail.item,
                         availability: requestStatusOverride ?? detail.item.availability ?? .unknown,
                         isRequesting: isRequesting,
@@ -614,36 +712,34 @@ private struct PlozziOSCanonicalItemDetailView: View {
                         actingName: appModel.activeSeerrRequestActingName,
                         onRequest: { beginRequest($0) }
                     )
-                    .padding(.horizontal, pageInset)
+                    .padding(.horizontal, pageInset))
                 }
 
-                // Above the cast, matching tvOS: what else to watch is the decision
-                // being made now; who was in it is looked up afterwards.
-                PlozziOSExtrasSection(
+                AnyView(PlozziOSExtrasSection(
                     state: viewModel.extrasState,
                     inset: pageInset,
                     onSelect: { play($0.playbackItem) },
                     onRetry: {
                         Task { await viewModel.retryExtras() }
                     }
-                )
+                ))
 
-                if let entries = viewModel.relatedTitlesLoader?.entries, !entries.isEmpty {
-                    PlozziOSRelatedSection(
-                        entries: entries,
-                        inset: pageInset,
-                        onSelect: { itemNavigator?($0) }
-                    )
-                }
-
-                if !detail.item.people.filter(\.isCast).isEmpty {
-                    PlozziOSCastSection(
-                        people: detail.item.people.filter(\.isCast),
+                if !detail.item.detailCredits.isEmpty {
+                    AnyView(PlozziOSCastSection(
+                        people: detail.item.people,
                         sourceAccountID: detail.item.sourceAccountID
-                    )
+                    ))
                 }
 
-                DetailInformationSections(
+                if let loader = viewModel.relatedTitlesLoader, !loader.entries.isEmpty {
+                    AnyView(PlozziOSRelatedSection(
+                        entries: loader.entries,
+                        inset: pageInset,
+                        onSelect: { item, source in artworkItemNavigator?(item, source) }
+                    ))
+                }
+
+                AnyView(DetailInformationSections(
                     item: detail.item,
                     horizontalInset: pageInset,
                     selectedSource: options.sources.first {
@@ -659,30 +755,48 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     overviewAlreadyShown: heroStyle == .compactPortrait
                         ? HeroContentPolicy.detailDescription(focused: headerPresentation, root: rootPresentation)
                         : nil
-                )
+                ))
             }
             // No trailing padding here. The information band is the last thing in
             // this stack and paints its own tint, so a gap added out here is page
             // background sitting under the band: the tint stopped short of the
             // bottom of the page. The band carries the trailing space itself.
             .frame(maxWidth: .infinity, alignment: .leading)
+            .plozzDesktopMediaRailLayout()
         }
 
         .scrollClipDisabled()
+        .scrollDisabled(isInteractivePopActive)
+        .background {
+            PlozziOSInteractivePopObserver(isActive: $isInteractivePopActive)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+        .onChange(of: isInteractivePopActive) { _, active in
+            if active { heroPullDistance = 0 }
+        }
+        .onScrollPhaseChange { _, phase in
+            isHeroScrollActive = phase == .interacting || phase == .decelerating
+        }
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y > trailerPauseThreshold
         } action: { _, isPastHalfHero in
-            trailerController.setPaused(isPastHalfHero)
+            trailerController.setPaused(isPastHalfHero, surfaceRole: .detail)
         }
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             let topOffset = geometry.contentOffset.y
                 + geometry.contentInsets.top
             return max(0, -topOffset)
         } action: { _, pullDistance in
+            // Only a vertical overscroll stretches the hero. While the native
+            // back-swipe owns the touch, the page must stay fixed.
+            guard !isInteractivePopActive else { return }
+            guard pullDistance == 0 || isHeroScrollActive else { return }
             heroPullDistance = pullDistance
         }
         .ignoresSafeArea(.container, edges: .top)
-        .navigationTitle(Text(verbatim: ""))
+        .modifier(PlozziOSNavigationBackground())
+        .modifier(PlozziOSReducedTransparencyScrollFade())
         .task(id: seasonRequestRefreshKey(for: detail)) {
             await refreshVisibleSeasonRequests(for: detail)
         }
@@ -720,17 +834,17 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     /// The hero's air-schedule line ("New episode every Wednesday"), or `nil`.
-    private var upcomingHeroLine: LocalizedStringResource? {
-        guard let schedule = viewModel.state.value?.upcomingSchedule else { return nil }
-        return SeriesUpcoming.heroLine(
-            nextEpisode: schedule.upcomingEpisode,
-            cadence: schedule.cadence,
-            schedule: schedule.upcomingEpisodes
-        )
+    private func upcomingHeroLine(for detail: ItemDetailViewModel.Detail) -> LocalizedStringResource? {
+        guard let schedule = detail.upcomingSchedule ?? appModel.detailSchedules.record(for: detail.item, scope: detailScheduleScope) else { return nil }
+        return SeriesUpcoming.heroLine(nextEpisode: schedule.upcomingEpisode, cadence: schedule.cadence, schedule: schedule.upcomingEpisodes)
+    }
+
+    private var detailScheduleScope: String {
+        "\(appModel.detailArtworkScopeID)|\(locale.identifier)"
     }
 
     private var pageInset: CGFloat {
-        PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass)
+        PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass, usesDesktopSizing: metrics.usesDesktopSizing)
     }
 
     /// Whether this page's subject is an episode in its own right, rather than a
@@ -813,34 +927,13 @@ private struct PlozziOSCanonicalItemDetailView: View {
         for item: MediaItem
     ) -> DetailPlaybackOptions {
         let item = viewModel.episodeWithEnrichedBadges(item)
-        let available = availableSources
-        let source = DetailPlaybackSelection.preferredSource(
-            sourceOverride: sourceOverride,
-            libraryOrigin: viewModel.originSourceAccountID,
-            itemSourceAccountID: item.sourceAccountID,
-            sources: available,
-            capabilities: capabilities,
-            openingSource: item.editionOpeningSource
-        )
-        let sources = DetailPlaybackSelection.serverChoices(from: available)
-        let versions = DetailPlaybackSelection.versions(
-            for: item,
-            sources: available,
-            activeAccountID: source?.accountID
-        )
-        let selectedVersionID = DetailPlaybackSelection.preferredVersionID(
-            for: item,
-            versions: versions,
-            versionOverride: versionOverride,
-            preferences: appModel.versionPreferences,
-            capabilities: capabilities
-        )
+        let selection = playbackSelection(for: item)
         return DetailPlaybackOptions(
-            sources: sources,
-            selectedSourceAccountID: source?.accountID
+            sources: selection.serverChoices,
+            selectedSourceAccountID: selection.source?.accountID
                 ?? item.sourceAccountID,
-            versions: versions,
-            selectedVersionID: selectedVersionID
+            versions: selection.versions,
+            selectedVersionID: selection.selectedVersionID
         )
     }
 
@@ -929,34 +1022,13 @@ private struct PlozziOSCanonicalItemDetailView: View {
 
     @ViewBuilder
     private func sourceAndVersionControls(for item: MediaItem) -> some View {
-        let sources = availableSources
-        let source = DetailPlaybackSelection.preferredSource(
-            sourceOverride: sourceOverride,
-            libraryOrigin: viewModel.originSourceAccountID,
-            itemSourceAccountID: item.sourceAccountID,
-            sources: sources,
-            capabilities: capabilities,
-            openingSource: item.editionOpeningSource
-        )
-        let choices = DetailPlaybackSelection.serverChoices(from: sources)
-        let versions = DetailPlaybackSelection.versions(
-            for: item,
-            sources: sources,
-            activeAccountID: source?.accountID
-        )
-        let versionID = DetailPlaybackSelection.preferredVersionID(
-            for: item,
-            versions: versions,
-            versionOverride: versionOverride,
-            preferences: appModel.versionPreferences,
-            capabilities: capabilities
-        )
-        if choices.count > 1 || versions.count > 1 {
+        let selection = playbackSelection(for: item)
+        if selection.serverChoices.count > 1 || selection.versions.count > 1 {
             PlozziOSSourceVersionControls(
-                sources: choices,
-                selectedSourceID: source?.accountID ?? item.sourceAccountID,
-                versions: versions,
-                selectedVersionID: versionID,
+                sources: selection.serverChoices,
+                selectedSourceID: selection.source?.accountID ?? item.sourceAccountID,
+                versions: selection.versions,
+                selectedVersionID: selection.selectedVersionID,
                 onSelectSource: selectSource,
                 onSelectVersion: { selectVersion($0, for: item) },
                 loadVersions: viewModel.playbackVersionsLoader(for: item)
@@ -990,6 +1062,12 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func play(_ item: MediaItem, fromBeginning: Bool = false) {
+        guard !appModel.isOfflineMode || !item.isTrailer else { return }
+        guard !item.isTrailer || appModel.settings.heroBackground.settings.trailerSources.allows(item) else {
+            PlozzLog.app.info("Trailer action suppressed by profile settings")
+            return
+        }
+        if !item.opensExternalSource { playbackPreparation.handoff(item) }
         if item.isYouTubeTrailer {
             Task { await trailerOpening.open(item) }
             return
@@ -1028,7 +1106,22 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func presentPlay(_ request: PlozziOSPlaybackRequest) {
-        if appModel.settings.playback.settings.shouldAskBeforeResuming(at: request.startPosition) {
+        if request.item.opensExternalSource {
+            guard let provider = appModel.provider(for: request.item) else {
+                externalOpening.failed = true
+                return
+            }
+            let profileID = appModel.profiles.activeProfileID
+            Task {
+                await externalOpening.open(request.item, provider: provider) {
+                    appModel.profiles.activeProfileID == profileID && appModel.isActiveProfileAuthorized
+                        && appModel.provider(for: request.item)?.session == provider.session
+                }
+            }
+            return
+        }
+        if request.item.effectiveDiscPlayback(default: appModel.settings.playback.settings.discPlayback) != .openMenu,
+           appModel.settings.playback.settings.shouldAskBeforeResuming(at: request.startPosition) {
             pendingResumeRequest = request
         } else {
             playbackRequest = request
@@ -1036,41 +1129,25 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private var availableSources: [MediaSourceRef] {
-        viewModel.sources.isEmpty ? initialSources : viewModel.sources
+        viewModel.playbackSources
+    }
+
+    private func playbackSelection(for item: MediaItem) -> DetailPlaybackSelection.Resolution {
+        DetailPlaybackSelection.resolve(
+            for: item,
+            sources: availableSources,
+            sourceOverride: sourceOverride,
+            versionOverride: versionOverride,
+            libraryOrigin: viewModel.originSourceAccountID,
+            isLibraryOriginPinned: viewModel.isLibraryOriginPinned,
+            preferences: appModel.versionPreferences,
+            capabilities: capabilities
+        )
     }
 
     private func playbackItem(for item: MediaItem) -> MediaItem {
         let item = viewModel.episodeWithEnrichedBadges(item)
-        let sources = availableSources
-        let source = DetailPlaybackSelection.preferredSource(
-            sourceOverride: sourceOverride,
-            libraryOrigin: viewModel.originSourceAccountID,
-            itemSourceAccountID: item.sourceAccountID,
-            sources: sources,
-            capabilities: capabilities,
-            openingSource: item.editionOpeningSource
-        )
-        let versions = DetailPlaybackSelection.versions(
-            for: item,
-            sources: sources,
-            activeAccountID: source?.accountID
-        )
-        let versionID = DetailPlaybackSelection.preferredVersionID(
-            for: item,
-            versions: versions,
-            versionOverride: versionOverride,
-            preferences: appModel.versionPreferences,
-            capabilities: capabilities
-        )
-        let selected = DetailPlaybackSelection.playItem(
-            for: item,
-            sources: sources,
-            activeAccountID: source?.accountID,
-            versionID: versionID,
-            explicit: viewModel.isLibraryOriginPinned
-                || sourceOverride != nil
-                || versionOverride != nil
-        )
+        let selected = playbackSelection(for: item).playItem
         return PlaybackSourceSelection.bestPlayItem(
             selected,
             accounts: appModel.accountsProviders.resolvedActiveAccounts,
@@ -1088,12 +1165,20 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func selectSource(_ accountID: String) {
+        playbackPreparation.invalidate()
         sourceOverride = accountID
         versionOverride = nil
-        Task { await viewModel.switchToSource(accountID: accountID) }
+        let generation = UUID()
+        preparationSourceSwitch = generation
+        isPreparationSourceSwitching = true
+        Task { @MainActor in
+            await viewModel.switchToSource(accountID: accountID)
+            if preparationSourceSwitch == generation { isPreparationSourceSwitching = false }
+        }
     }
 
     private func selectVersion(_ id: String, for item: MediaItem) {
+        playbackPreparation.invalidate()
         versionOverride = id
         guard appModel.versionPreferences.shouldRememberVersion(for: item) else { return }
         let key = DetailPlaybackSelection.versionPreferenceKey(for: item)
@@ -1104,6 +1189,15 @@ private struct PlozziOSCanonicalItemDetailView: View {
             return
         }
         appModel.versionPreferences.rememberVersion(version, forTitle: key)
+    }
+
+    private var preparationItem: MediaItem? {
+        guard !isDiscoveryItem, let detail = viewModel.state.value,
+              let target = detail.item.kind == .series ? seriesPlayTarget : detail.item,
+              !target.isUpcomingUnaired, !viewModel.hasNoPlaybackStreams(for: target),
+              target.sourceAccountID == viewModel.currentSourceForDisplay?.accountID,
+              detail.item.kind != .series || target.seriesID == detail.item.id else { return nil }
+        return playbackItem(for: target)
     }
 
     private func beginRequest(_ item: MediaItem, seasons: [Int]? = nil) {
@@ -1128,7 +1222,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
         } else {
             selectedSeasons = nil
         }
-        if appModel.activeSeerrRequestIdentity == .admin,
+        if appModel.seerService.needsAdminConfirmation,
            appModel.profiles.profiles.count > 1 {
             requestConfirmationItem = item
             requestConfirmationSeasons = selectedSeasons
@@ -1155,13 +1249,22 @@ private struct PlozziOSCanonicalItemDetailView: View {
         requestError = nil
         defer { isRequesting = false }
         let requestScope = seasonRequestScope
+        let requestProfileID = appModel.profiles.activeProfileID
+        let requestGeneration = seerService.requestAuthorizationGeneration
         let outcome = await seerService.request(
             item,
             seasons: seasons,
             identity: appModel.activeSeerrRequestIdentity
         )
+        guard requestProfileID == appModel.profiles.activeProfileID,
+              requestGeneration == seerService.requestAuthorizationGeneration else { return }
+        if case let .successElsewhere(message) = outcome {
+            appModel.transientStatusPresenter.present(icon: "checkmark", text: message)
+            return
+        }
         guard context == appModel.plozziOSSeasonRequestContextID else { return }
         switch outcome {
+        case .successElsewhere: break
         case let .success(status):
             if let seasons {
                 guard requestScope == seasonRequestScope else { return }
@@ -1194,6 +1297,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 }
                 await viewModel.load()
             }
+        case .failure(.cancelled):
+            break
         case let .failure(reason):
             requestError = reason.userMessage
         }
@@ -1707,7 +1812,10 @@ struct PlozziOSInlineSeriesBrowser: View {
     /// The season the resting target was settled from, so browsing elsewhere
     /// leaves the hero where the viewer actually is.
     @State private var resolvedSeasonID: String?
-    @State private var hasInteractedWithEpisodeBrowser = false
+    /// Set only for an explicit opening route or a season-tab tap. Scrolling the
+    /// episode rail is browsing, not a season choice, so a return refresh may
+    /// still move to the server's current resume season.
+    @State private var hasExplicitSeasonSelection: Bool
 
     let viewModel: ItemDetailViewModel
     let seasons: [MediaItem]
@@ -1715,8 +1823,6 @@ struct PlozziOSInlineSeriesBrowser: View {
     let initialEpisode: MediaItem?
     let initialSeasonID: String?
     let onPlayTargetChange: (MediaItem?) -> Void
-    /// Whether the hero should describe the show rather than the play target.
-    let onHeroShowsSeriesChange: (Bool) -> Void
     let onPlay: (MediaItem, Bool) -> Void
 
     init(
@@ -1726,7 +1832,6 @@ struct PlozziOSInlineSeriesBrowser: View {
         initialSeasonID: String?,
         initialEpisode: MediaItem?,
         onPlayTargetChange: @escaping (MediaItem?) -> Void,
-        onHeroShowsSeriesChange: @escaping (Bool) -> Void,
         onPlay: @escaping (MediaItem, Bool) -> Void
     ) {
         self.viewModel = viewModel
@@ -1735,7 +1840,6 @@ struct PlozziOSInlineSeriesBrowser: View {
         self.initialEpisode = initialEpisode
         self.initialSeasonID = initialSeasonID
         self.onPlayTargetChange = onPlayTargetChange
-        self.onHeroShowsSeriesChange = onHeroShowsSeriesChange
         self.onPlay = onPlay
         _selectedSeasonID = State(
             initialValue: SeriesEpisodeEntry.seasonID(
@@ -1745,11 +1849,29 @@ struct PlozziOSInlineSeriesBrowser: View {
             )
         )
         _railTargetID = State(initialValue: initialEpisode?.id)
+        _hasExplicitSeasonSelection = State(
+            initialValue: initialSeasonID != nil || initialEpisode != nil
+        )
     }
 
     var body: some View {
         if !seasons.isEmpty || !looseEpisodes.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
+                // Detail-path telemetry anchor (PLZXFAN-gated; counts only). Fires
+                // whenever a series page actually builds its episode browser, which
+                // is the surface the "detail reflow" report is about; the return
+                // refresh itself is logged by `DETAILRETURN`.
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .onAppear {
+                        if FanoutDiagnostics.isEnabled {
+                            FanoutDiagnostics.emit(
+                                "DETAILRAIL appeared seasons=\(seasons.count) "
+                                + "loose=\(looseEpisodes.count) "
+                                + "episodes=\(displayedEpisodes?.count ?? -1)"
+                            )
+                        }
+                    }
                 if !seasons.isEmpty {
                     PlozzContentTabs(
                         options: seasons, id: \.id, selection: selectedSeasonID,
@@ -1757,7 +1879,7 @@ struct PlozziOSInlineSeriesBrowser: View {
                         title: { Text(verbatim: $0.title) },
                         tabIdentifier: { "season-\($0.id)" }
                     ) { season in
-                        hasInteractedWithEpisodeBrowser = true
+                        hasExplicitSeasonSelection = true
                         selectedSeasonID = season.id
                     }
                     .accessibilityLabel("Season")
@@ -1768,9 +1890,19 @@ struct PlozziOSInlineSeriesBrowser: View {
                     episodes: displayedEpisodes,
                     isLoading: !seasons.isEmpty
                         && selectedSeasonID != nil
-                        && displayedEpisodes == nil,
+                        && displayedEpisodes == nil
+                        // A cached page is being restored from disk: hold rather than
+                        // paint a skeleton that would be replaced a moment later.
+                        && !viewModel.isRestoringSnapshot,
+                    // Reserve the rail's height on every load AND paint the
+                    // shimmering placeholder cards while the episodes are in flight:
+                    // an empty reserved band reads as broken, and the sweep is the
+                    // only affordance saying the row is coming. The placeholder is
+                    // present from the rail's first frame, so nothing appears or
+                    // disappears mid-page — it is replaced in place by the cards.
+                    showsSkeleton: true,
                     currentEpisodeID: railTargetID,
-                    onInteraction: { hasInteractedWithEpisodeBrowser = true },
+                    onInteraction: {},
                     onPlay: onPlay
                 )
             }
@@ -1780,7 +1912,7 @@ struct PlozziOSInlineSeriesBrowser: View {
                     seasons: seasons,
                     episodes: looseEpisodes,
                     selectedSeasonID: selectedSeasonID,
-                    preserveSelection: hasInteractedWithEpisodeBrowser,
+                    preserveSelection: hasExplicitSeasonSelection,
                     initialSeasonID: initialSeasonID,
                     initialEpisode: initialEpisode,
                     resumeEpisode: viewModel.serverResumeEpisode
@@ -1794,27 +1926,89 @@ struct PlozziOSInlineSeriesBrowser: View {
                     resolvedSeasonID = nil
                     railTargetID = nil
                 }
-                if !hasInteractedWithEpisodeBrowser, initialEpisode == nil,
-                   let series = viewModel.state.value?.item,
-                   let seed = SeriesEpisodeEntry.openingSeed(
-                       for: series, initialEpisode: initialEpisode,
-                       initialSeasonID: initialSeasonID, resumeEpisode: viewModel.serverResumeEpisode
-                   ) {
+                if !hasExplicitSeasonSelection, initialEpisode == nil {
                     resolvedSeasonID = nil
-                    onPlayTargetChange(seed)
-                    onHeroShowsSeriesChange(false)
+                    if let series = viewModel.state.value?.item,
+                       let seed = SeriesEpisodeEntry.openingSeed(
+                           for: series, initialEpisode: initialEpisode,
+                           initialSeasonID: initialSeasonID, resumeEpisode: viewModel.serverResumeEpisode
+                       ) {
+                        onPlayTargetChange(seed)
+                    } else {
+                        publishPlayTarget()
+                    }
                 }
             }
-            .task(id: selectedSeasonID) {
+            // Key the load to the season *and* the season list. The first task can
+            // run before the children publish (the browser is mounted as soon as the
+            // hero does), in which case the container check returns without loading;
+            // the id then never changed, so the rail stayed on its skeleton until the
+            // viewer switched seasons and back. Re-run when the season set lands too.
+            .task(id: seasonEpisodeLoadKey) {
                 if let selectedSeasonID {
                     await viewModel.loadEpisodes(for: selectedSeasonID)
+                    // A transient failed/aborted first request leaves the season
+                    // unloaded with the same task key; retry once so the rail does
+                    // not require switching seasons to recover.
+                    if !Task.isCancelled, viewModel.episodes(for: selectedSeasonID) == nil {
+                        await viewModel.loadEpisodes(for: selectedSeasonID, forceRefresh: true)
+                    }
                 }
                 publishPlayTarget()
+            }
+            .onAppear {
+                // Returning from the player (or any covered state) resumes the model
+                // after a season task may already have exited while suspended.
+                if let selectedSeasonID, viewModel.episodes(for: selectedSeasonID) == nil {
+                    Task { await viewModel.loadEpisodes(for: selectedSeasonID) }
+                }
             }
             .onChange(of: displayedEpisodes, initial: true) {
                 publishPlayTarget()
             }
+            // Rail telemetry (PLZXFAN-gated; counts only). The detail half of the
+            // reported reflow is unmeasured, and this is its gate: the rail paints a
+            // skeleton exactly when `displayedEpisodes == nil`, and a return refresh
+            // that clears the season list would make it reappear under the viewer.
+            // Cards-arrived trace: pairs with DETAILVIEW's timestamp to give the
+            // real open latency (item -> seasons -> episodes) instead of a guess.
+            .onChange(of: displayedEpisodes?.count ?? -1, initial: true) { _, count in
+                guard FanoutDiagnostics.isEnabled else { return }
+                let stamp: Int = Int(ProcessInfo.processInfo.systemUptime * 1000)
+                FanoutDiagnostics.emit("DETAILCARDS t=\(stamp) count=\(count)")
+            }
+            // Cast and Related arrive from their own network round trips, so they get
+            // their own arrival timestamps: "cast is slow" is only actionable with a
+            // number next to DETAILVIEW's.
+            .onChange(of: viewModel.state.value?.item.detailCredits.count ?? -1, initial: true) { _, count in
+                guard FanoutDiagnostics.isEnabled else { return }
+                let stamp: Int = Int(ProcessInfo.processInfo.systemUptime * 1000)
+                FanoutDiagnostics.emit("DETAILCAST t=\(stamp) count=\(count)")
+            }
+            .onChange(of: viewModel.relatedTitlesLoader?.entries.count ?? -1, initial: true) { _, count in
+                guard FanoutDiagnostics.isEnabled else { return }
+                let stamp: Int = Int(ProcessInfo.processInfo.systemUptime * 1000)
+                FanoutDiagnostics.emit("DETAILRELATED t=\(stamp) count=\(count)")
+            }
+            .onChange(
+                of: !seasons.isEmpty && selectedSeasonID != nil && displayedEpisodes == nil
+                    && !viewModel.isRestoringSnapshot && hasExplicitSeasonSelection,
+                initial: true
+            ) { _, skeleton in
+                if FanoutDiagnostics.isEnabled {
+                    FanoutDiagnostics.emit(
+                        "DETAILRAIL t=\(Int(ProcessInfo.processInfo.systemUptime * 1000)) skeleton=\(skeleton) "
+                        + "episodes=\(displayedEpisodes?.count ?? -1) "
+                        + "seasons=\(seasons.count) "
+                        + "loose=\(looseEpisodes.count)"
+                    )
+                }
+            }
         }
+    }
+
+    private var seasonEpisodeLoadKey: String {
+        "\(selectedSeasonID ?? "-")#\(seasons.map(\.id).joined(separator: ","))"
     }
 
     private var openingSelectionKey: String {
@@ -1859,12 +2053,7 @@ struct PlozziOSInlineSeriesBrowser: View {
         PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass)
     }
 
-    /// Settles what Play starts, and whether the hero describes that episode or
-    /// the show itself.
-    ///
-    /// Pinned once resolved: browsing to another season must not repoint the hero,
-    /// because the resume point has not moved. Apple's TV app shows exactly this —
-    /// hero on S1 · E1 while the season selector reads Season 2.
+    /// Browsing another season does not change the pinned Play/Resume target.
     private func publishPlayTarget() {
         // `displayedEpisodes` is nil only while a season is loading — switching
         // season or server passes through it. Publishing nil there cleared the
@@ -1883,7 +2072,6 @@ struct PlozziOSInlineSeriesBrowser: View {
             resolvedSeasonID = selectedSeasonID
             railTargetID = loaded.id
             onPlayTargetChange(loaded)
-            onHeroShowsSeriesChange(false)
             return
         }
         // Already settled from the opening season: a later season change is
@@ -1901,7 +2089,6 @@ struct PlozziOSInlineSeriesBrowser: View {
             : displayedEpisodes.first
         railTargetID = target?.id
         onPlayTargetChange(target)
-        onHeroShowsSeriesChange(!hasResumePoint)
     }
 }
 
@@ -1963,6 +2150,14 @@ private struct PlozziOSSeriesDownloadPicker: View {
         )
     }
 
+    private var isPreparingBulkDownload: Bool {
+        isBusy && prompt?.isBulk != false
+    }
+
+    private var preparingEpisodeIDs: Set<String> {
+        prompt?.preparingEpisodeIDs ?? []
+    }
+
     var body: some View {
         let seasonList = self.seasonList
         NavigationStack {
@@ -1980,7 +2175,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
                 ) {
                     PlozziOSShowDownloadAction(
                         series: series, seasons: seasons, looseEpisodes: looseEpisodes,
-                        viewModel: viewModel, isBusy: isBusy, onDownload: beginShowDownload
+                        viewModel: viewModel, isBusy: isPreparingBulkDownload, onDownload: beginShowDownload
                     )
                 }
 
@@ -2009,12 +2204,15 @@ private struct PlozziOSSeriesDownloadPicker: View {
 
                 if !seasonList.unassignedEpisodes.isEmpty {
                     Section("Episodes") {
-                        ForEach(seasonList.unassignedEpisodes, id: \.stablePresentationID) { episode in
-                            PlozziOSEpisodeDownloadRow(
-                                episode: episode,
-                                isBusy: isBusy,
-                                onDownload: startEpisodeDownload
-                            )
+                        let groups = EpisodeDownloadSelection.groupedItems(seasonList.unassignedEpisodes)
+                        ForEach(groups.indices, id: \.self) { index in
+                            if let episode = groups[index].first {
+                                PlozziOSEpisodeDownloadRow(
+                                    episode: episode, alternatives: groups[index],
+                                    preparingEpisodeIDs: preparingEpisodeIDs,
+                                    isBusy: isBusy, onDownload: beginEpisodeDownload
+                                )
+                            }
                         }
                     }
                 }
@@ -2026,7 +2224,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
+                    Button("Close", systemImage: "xmark") {
                         dismiss()
                     }
                     .disabled(isBusy)
@@ -2043,52 +2241,16 @@ private struct PlozziOSSeriesDownloadPicker: View {
             }
         }
         .interactiveDismissDisabled(isBusy)
-        .confirmationDialog(
-            downloadConfirmationTitle,
-            isPresented: Binding(
-                get: { prompt != nil },
-                set: {
-                    if !$0 {
-                        prompt = nil
-                    }
-                }
-            ),
-            titleVisibility: .visible
-        ) {
+        .background {
             if let prompt {
-                Button("Original • Episodes: \(prompt.count.formatted())") {
-                    self.prompt = nil
-                    performDownload(prompt, quality: .original)
+                PlozziOSDownloadSelectionSheet(
+                    title: prompt.title, items: prompt.batches.flatMap(\.episodes),
+                    resolvesSingleItem: !prompt.isBulk, isBulk: prompt.isBulk,
+                    onFinish: { self.prompt = nil }
+                ) { options, quality in
+                    try await performDownload(prompt, options: options, quality: quality)
                 }
-                if appModel.downloads.supportsReducedQuality(for: series) {
-                    Button("1080p • 20 Mbps") {
-                        self.prompt = nil
-                        performDownload(prompt, quality: .hd1080)
-                    }
-                    Button("720p • 4 Mbps") {
-                        self.prompt = nil
-                        performDownload(prompt, quality: .hd720)
-                    }
-                    Button("480p • 1.5 Mbps") {
-                        self.prompt = nil
-                        performDownload(prompt, quality: .sd480)
-                    }
-                    if let custom = appModel.downloads.customDownloadQuality,
-                       let title = appModel.downloads.customDownloadQualityTitle {
-                        Button(title) {
-                            self.prompt = nil
-                            performDownload(prompt, quality: custom)
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    self.prompt = nil
-                }
-            }
-        } message: {
-            if let prompt {
-                Text(prompt.message)
-                    + Text(" Reduced qualities are transcoded by your media server.")
+                .id(prompt.id)
             }
         }
         .alert(
@@ -2102,13 +2264,6 @@ private struct PlozziOSSeriesDownloadPicker: View {
         } message: {
             Text(verbatim: errorMessage ?? "")
         }
-    }
-
-    private var downloadConfirmationTitle: Text {
-        if let prompt {
-            return prompt.title
-        }
-        return Text("Download?")
     }
 
     @ViewBuilder
@@ -2171,6 +2326,8 @@ private struct PlozziOSSeriesDownloadPicker: View {
             selection: selection,
             viewModel: viewModel,
             isBusy: isBusy,
+            isPreparingBulkDownload: isPreparingBulkDownload,
+            preparingEpisodeIDs: preparingEpisodeIDs,
             canRequestSeasons: presentation.canRequestSeasons,
             requestState: seasonList.rows.first { $0.id == row.id }?.requestState,
             isRequestingSeasons: isRequestingSeasons,
@@ -2184,11 +2341,12 @@ private struct PlozziOSSeriesDownloadPicker: View {
             onDownloadSeason: {
                 beginSeasonDownload(container, title: row.title, episodes: $0)
             },
-            onDownloadEpisode: startEpisodeDownload
+            onDownloadEpisode: beginEpisodeDownload
         )
     }
 
     private func beginShowDownload() {
+        guard prompt == nil, !isBusy else { return }
         if let batchID = activeShowBatchID {
             Task { await appModel.downloads.pauseBatch(batchID) }
             return
@@ -2199,15 +2357,18 @@ private struct PlozziOSSeriesDownloadPicker: View {
         }
         isBusy = true
         Task {
+            let profileID = appModel.profiles.activeProfileID
+            defer { isBusy = false }
             var batches: [PlozziOSSeasonDownloadPrompt.Batch] = []
             var seen = Set<String>()
             for season in seasons where season.locallyValidatedPlayableSource {
                 await viewModel.loadEpisodes(for: season.id)
+                guard appModel.profiles.activeProfileID == profileID,
+                      appModel.isActiveProfileAuthorized, !Task.isCancelled else { return }
                 guard let episodes = viewModel.seasonLoadState(for: season.id)
                     .authoritativeEpisodes else {
                     errorMessage =
                         "Couldn’t load \(season.title). Check the server and try again."
-                    isBusy = false
                     return
                 }
                 let available = SeasonEpisodeList.downloadableEpisodes(from: episodes, for: series)
@@ -2222,17 +2383,11 @@ private struct PlozziOSSeriesDownloadPicker: View {
                 batches.append(.init(season: series, episodes: availableLoose))
             }
 
-            isBusy = false
+            guard appModel.profiles.activeProfileID == profileID,
+                  appModel.isActiveProfileAuthorized, !Task.isCancelled else { return }
             guard !batches.isEmpty else {
                 errorMessage = "This show has no episodes available to download."
                 return
-            }
-            if let episode = batches.first?.episodes.first,
-               let provider = appModel.provider(for: episode) {
-                await appModel.downloads.refreshReducedQualitySupport(
-                    for: episode,
-                    provider: provider
-                )
             }
             prompt = PlozziOSSeasonDownloadPrompt(
                 scope: .show(series.title),
@@ -2246,81 +2401,76 @@ private struct PlozziOSSeriesDownloadPicker: View {
         title: SeriesDownloadSeasonTitle,
         episodes: [MediaItem]
     ) {
-        guard !episodes.isEmpty else { return }
-        if episodes.count == 1, let episode = episodes.first {
-            startEpisodeDownload(
-                episode,
-                quality: appModel.downloads.downloadQuality
-            )
-        } else {
-            Task {
-                if let episode = episodes.first,
-                   let provider = appModel.provider(for: episode) {
-                    await appModel.downloads.refreshReducedQualitySupport(
-                        for: episode,
-                        provider: provider
-                    )
-                }
-                prompt = PlozziOSSeasonDownloadPrompt(
-                    scope: .season(title),
-                    batches: [.init(season: season, episodes: episodes)]
-                )
-            }
-        }
+        guard !episodes.isEmpty, prompt == nil else { return }
+        prompt = PlozziOSSeasonDownloadPrompt(
+            scope: .season(title), batches: [.init(season: season, episodes: episodes)]
+        )
     }
 
-    private func startEpisodeDownload(
-        _ episode: MediaItem,
-        quality: DownloadQuality
-    ) {
-        isBusy = true
-        Task {
-            do {
-                try await onDownloadEpisode(episode, quality)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isBusy = false
-        }
+    private func beginEpisodeDownload(_ episodes: [MediaItem]) {
+        guard let episode = episodes.first, prompt == nil else { return }
+        let spoilers = appModel.settings.spoilers.settings
+        let title = spoilers.shouldHideText(for: episode)
+            ? String(localized: spoilers.maskedTitle(for: episode)) // l10n:content - stored prompt title
+            : episode.title
+        prompt = PlozziOSSeasonDownloadPrompt(
+            scope: .episode(title),
+            batches: [.init(season: series, episodes: episodes)]
+        )
     }
 
     private func performDownload(
         _ prompt: PlozziOSSeasonDownloadPrompt,
+        options: [EpisodeDownloadSelection.Option],
         quality: DownloadQuality
-    ) {
-        isBusy = true
-        Task {
-            let batchID = UUID().uuidString
-            let batchKind: DownloadBatchKind
-            let batchTitle: String
-            switch prompt.scope {
-            case .season(let title):
-                batchKind = .season
-                switch title {
-                case .content(let value):
-                    batchTitle = value
-                case .localized(var resource):
-                    resource.locale = locale
-                    batchTitle = String(localized: resource) // l10n:content - persisted batch label, resolved only on confirmation
-                }
-            case .show(let title):
-                batchKind = .show
-                batchTitle = title
-            }
-            do {
-                _ = try await onDownloadBatch(
-                    prompt.batches,
-                    batchID,
-                    batchKind,
-                    batchTitle,
-                    prompt.count,
-                    quality
-                )
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isBusy = false
+    ) async throws {
+        guard !options.isEmpty else {
+            throw PlozziOSDownloadError.unavailable("Select at least one version.")
         }
+        isBusy = true
+        defer { isBusy = false }
+        if case .episode = prompt.scope, options.count == 1, let option = options.first {
+            try await onDownloadEpisode(option.item, quality)
+            return
+        }
+        let batchKind: DownloadBatchKind
+        let batchTitle: String
+        switch prompt.scope {
+        case .season(let title):
+            batchKind = .season
+            switch title {
+            case .content(let value):
+                batchTitle = value
+            case .localized(var resource):
+                resource.locale = locale
+                batchTitle = String(localized: resource) // l10n:content - persisted batch label
+            }
+        case .episode(let title):
+            batchKind = .season
+            batchTitle = title
+        case .show(let title):
+            batchKind = .show
+            batchTitle = title
+        }
+        var seen = Set<String>()
+        let batches: [PlozziOSSeasonDownloadPrompt.Batch]
+        if case .episode = prompt.scope, let batch = prompt.batches.first {
+            batches = [.init(season: batch.season, episodes: options.map(\.item))]
+        } else {
+            batches = prompt.batches.compactMap { batch -> PlozziOSSeasonDownloadPrompt.Batch? in
+                let origins = Set(batch.episodes.map(\.stablePresentationID))
+                let episodes = options.filter {
+                    origins.contains($0.originID) && seen.insert($0.id).inserted
+                }.map(\.item)
+                return episodes.isEmpty ? nil : .init(season: batch.season, episodes: episodes)
+            }
+        }
+        guard batches.reduce(0, { $0 + $1.episodes.count }) == options.count else {
+            throw PlozziOSDownloadError.unavailable("The episode selection changed. Open Downloads and try again.")
+        }
+        _ = try await onDownloadBatch(
+            batches, UUID().uuidString, batchKind, batchTitle, options.count, quality
+        )
     }
 
     private var showBatchRecords: [DownloadedMediaRecord] {
@@ -2375,7 +2525,8 @@ private struct PlozziOSShowDownloadAction: View {
         let state = downloadCollectionBadgeState(
             records: records,
             expectedCount: episodes?.count,
-            scopeKind: .show
+            scopeKind: .show,
+            allEpisodesDownloaded: episodes.map { allDownloadEpisodesCompleted($0, downloads: appModel.downloads) }
         )
         let allRecords = matchingDownloadRecords(
             downloads: appModel.downloads, episodes: nil, seriesID: series.id,
@@ -2469,7 +2620,8 @@ private struct PlozziOSSeasonDownloadRow: View {
         downloadCollectionBadgeState(
             records: downloadRecords,
             expectedCount: episodes?.count,
-            scopeKind: .season
+            scopeKind: .season,
+            allEpisodesDownloaded: episodes.map { allDownloadEpisodesCompleted($0, downloads: appModel.downloads) }
         )
     }
 
@@ -2486,11 +2638,13 @@ private enum PlozziOSSeasonDownloadSelection: Equatable {
 
 private enum PlozziOSSeasonEpisodeEntry: Identifiable {
     case roster(SeasonEpisodeRow)
+    case library([MediaItem])
     case unavailable(MediaItem)
 
     var id: String {
         switch self {
         case .roster(let row): "roster:\(row.id)"
+        case .library(let items): "library:\(items.first?.stablePresentationID ?? "")"
         case .unavailable(let episode): "unavailable:\(episode.stablePresentationID)"
         }
     }
@@ -2498,6 +2652,7 @@ private enum PlozziOSSeasonEpisodeEntry: Identifiable {
     var episodeNumber: Int? {
         switch self {
         case .roster(let row): row.episodeNumber
+        case .library(let items): items.first?.episodeNumber
         case .unavailable(let episode): episode.episodeNumber
         }
     }
@@ -2514,6 +2669,8 @@ private struct PlozziOSSeasonDownloadPicker: View {
     let selection: PlozziOSSeasonDownloadSelection
     let viewModel: ItemDetailViewModel
     let isBusy: Bool
+    let isPreparingBulkDownload: Bool
+    let preparingEpisodeIDs: Set<String>
     let canRequestSeasons: Bool
     let requestState: MediaSeasonRequestState?
     let isRequestingSeasons: Bool
@@ -2523,7 +2680,7 @@ private struct PlozziOSSeasonDownloadPicker: View {
     let onRefreshSeasonRequests: () -> Void
     let onRequestSeason: () -> Void
     let onDownloadSeason: ([MediaItem]) -> Void
-    let onDownloadEpisode: (MediaItem, DownloadQuality) -> Void
+    let onDownloadEpisode: ([MediaItem]) -> Void
 
     private var selectedLibrarySeasons: [MediaItem] {
         switch selection {
@@ -2651,7 +2808,7 @@ private struct PlozziOSSeasonDownloadPicker: View {
                                 seasonNumber: season.number,
                                 title: Text(season.title),
                                 episodeCount: episodes.coverage?.total ?? entries.count,
-                                isBusy: isBusy,
+                                isBusy: isPreparingBulkDownload,
                                 isRefreshing: isRefreshingEpisodes,
                                 onDownload: onDownloadSeason
                             )
@@ -2695,9 +2852,19 @@ private struct PlozziOSSeasonDownloadPicker: View {
                                 PlozziOSSeasonEpisodeRow(
                                     row: row,
                                     selectedEpisodeIDs: selectedEpisodeIDs,
+                                    preparingEpisodeIDs: preparingEpisodeIDs,
                                     isBusy: isBusy || isRefreshingEpisodes,
                                     onDownload: onDownloadEpisode
                                 )
+                            case .library(let items):
+                                if let episode = items.first {
+                                    PlozziOSEpisodeDownloadRow(
+                                        episode: episode, alternatives: items,
+                                        preparingEpisodeIDs: preparingEpisodeIDs,
+                                        isBusy: isBusy || isRefreshingEpisodes,
+                                        onDownload: onDownloadEpisode
+                                    )
+                                }
                             case .unavailable(let episode):
                                 PlozziOSUnavailableEpisodeRow(episode: episode)
                             }
@@ -2740,12 +2907,21 @@ private struct PlozziOSSeasonDownloadPicker: View {
         var seen = Set<String>()
         let selection = selectedEpisodeIDs
         return list.rows.flatMap(\.libraryEpisodes).filter {
-            selection.contains($0.stablePresentationID) && seen.insert($0.stablePresentationID).inserted
+            !$0.opensExternalSource && selection.contains($0.stablePresentationID)
+                && seen.insert($0.stablePresentationID).inserted
         }
     }
 
     private func episodeEntries(in list: SeasonEpisodeList) -> [PlozziOSSeasonEpisodeEntry] {
-        let entries = list.rows.map(PlozziOSSeasonEpisodeEntry.roster)
+        let libraryRows: [PlozziOSSeasonEpisodeEntry]
+        if list.coverage == nil {
+            libraryRows = EpisodeDownloadSelection.groupedItems(
+                downloadableEpisodes(in: list)
+            ).map(PlozziOSSeasonEpisodeEntry.library)
+        } else {
+            libraryRows = list.rows.map(PlozziOSSeasonEpisodeEntry.roster)
+        }
+        let entries = libraryRows
             + upcomingPlaceholders(in: list).map(PlozziOSSeasonEpisodeEntry.unavailable)
         return entries.sorted {
             let lhs = $0.episodeNumber ?? Int.max
@@ -2826,7 +3002,8 @@ private struct PlozziOSSeasonDownloadAction: View {
             : activeBatchID != nil ? .pause
             : pausedBatchID != nil ? .resume : .download
         let state = downloadCollectionBadgeState(
-            records: records, expectedCount: episodes.count, scopeKind: .season
+            records: records, expectedCount: episodes.count, scopeKind: .season,
+            allEpisodesDownloaded: allDownloadEpisodesCompleted(episodes, downloads: appModel.downloads)
         )
         PlozziOSSeasonDownloadActionLabel(title: title, episodeCount: episodeCount) {
             PlozziOSDownloadThumbnail(item: artworkItem, style: .season)
@@ -2946,7 +3123,10 @@ struct PlozziOSBulkDownloadActionControl: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            PlozziOSDownloadControl(state: state, isPreparing: action == .preparing)
+            PlozziOSDownloadControl(
+                state: state, isPreparing: action == .preparing,
+                showsPauseIcon: action == .pause, showsResumeIcon: action == .resume
+            )
             Group {
                 if state == .completed, action != .preparing {
                     Text("Downloaded")
@@ -2975,8 +3155,9 @@ private struct PlozziOSSeasonEpisodeRow: View {
     @Environment(PlozziOSAppModel.self) private var appModel
     let row: SeasonEpisodeRow
     let selectedEpisodeIDs: Set<String>
+    let preparingEpisodeIDs: Set<String>
     let isBusy: Bool
-    let onDownload: (MediaItem, DownloadQuality) -> Void
+    let onDownload: ([MediaItem]) -> Void
 
     var body: some View {
         let selected = row.libraryEpisodes.filter { selectedEpisodeIDs.contains($0.stablePresentationID) }
@@ -3002,11 +3183,16 @@ private struct PlozziOSSeasonEpisodeRow: View {
             } accessory: {}
         } else {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(selected, id: \.stablePresentationID) { episode in
-                    PlozziOSEpisodeDownloadRow(
-                        episode: episode, displayedEpisodeNumber: row.episodeNumber,
-                        isBusy: isBusy, onDownload: onDownload
-                    )
+                let groups = EpisodeDownloadSelection.groupedItems(selected)
+                ForEach(groups.indices, id: \.self) { index in
+                    if let episode = groups[index].first {
+                        PlozziOSEpisodeDownloadRow(
+                            episode: episode, alternatives: groups[index],
+                            displayedEpisodeNumber: row.episodeNumber,
+                            preparingEpisodeIDs: preparingEpisodeIDs,
+                            isBusy: isBusy, onDownload: onDownload
+                        )
+                    }
                 }
             }
         }
@@ -3041,38 +3227,45 @@ private struct PlozziOSUnavailableEpisodeRow: View {
 
 private struct PlozziOSEpisodeDownloadRow: View {
     @Environment(PlozziOSAppModel.self) private var appModel
-    @State private var showsDownloadConfirmation = false
-
     let episode: MediaItem
+    var alternatives: [MediaItem] = []
     var displayedEpisodeNumber: Int? = nil
+    var preparingEpisodeIDs: Set<String> = []
     let isBusy: Bool
-    let onDownload: (MediaItem, DownloadQuality) -> Void
+    let onDownload: ([MediaItem]) -> Void
 
     var body: some View {
         let record = currentDownloadRecord
+        let isPreparing = downloadItems.contains { preparingEpisodeIDs.contains($0.stablePresentationID) }
         SeasonEpisodeRowContent(
             number: displayedEpisodeNumber ?? episode.episodeNumber,
-            title: appModel.settings.spoilers.settings.shouldHideText(for: episode) ? nil : episode.title
+            title: appModel.settings.spoilers.settings.shouldHideText(for: episode) ? nil : episode.title,
+            reservesStatusSpace: true,
+            showsStatus: isPreparing || record != nil
         ) {
             PlozziOSDownloadThumbnail(
                 item: episode,
                 style: .episode
             )
         } status: {
-            if let record {
+            if isPreparing {
+                Text("Preparing Download")
+            } else if let record {
                 downloadStatusText(for: record)
             } else {
                 SeasonEpisodeAvailabilityLabel(availability: .inLibrary)
             }
         } accessory: {
-            if let record {
+            if isPreparing {
+                PlozziOSDownloadControl(isPreparing: true)
+            } else if let record {
                 if record.status == .queued
                     || record.status == .preparing
                     || record.status == .downloading {
                     Button {
                         Task { await appModel.downloads.pause(record) }
                     } label: {
-                        PlozziOSDownloadControl(state: record.badgeState)
+                        PlozziOSDownloadControl(state: record.badgeState, showsPauseIcon: true)
                     }
                     .buttonStyle(.plain)
                     .disabled(isBusy)
@@ -3083,6 +3276,7 @@ private struct PlozziOSEpisodeDownloadRow: View {
                     } label: {
                         PlozziOSDownloadControl(
                             state: record.badgeState,
+                            showsResumeIcon: true,
                             fallbackSystemImage: "arrow.clockwise"
                         )
                     }
@@ -3090,53 +3284,30 @@ private struct PlozziOSEpisodeDownloadRow: View {
                     .disabled(isBusy)
                     .accessibilityLabel("Resume Download")
                 } else if let state = record.badgeState {
-                    PlozziOSDownloadControl(state: state)
+                    let profileID = appModel.profiles.activeProfileID
+                    PlozziOSRemoveDownloadButton {
+                        Task { await appModel.removeConfirmedDownload(record, profileID: profileID) }
+                    } label: {
+                        PlozziOSDownloadControl(state: state)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isBusy)
+                    .id("\(profileID):\(record.identityKey)")
+                    .contextMenu {
+                        if alternatives.count > 1 || episode.hasMultipleVersions {
+                            Button("Choose Versions") { onDownload(downloadItems) }
+                        }
+                    }
                 }
             } else {
                 Button {
-                    if appModel.downloads.asksBeforeDownloading {
-                        showsDownloadConfirmation = true
-                    } else {
-                        onDownload(
-                            episode,
-                            appModel.downloads.downloadQuality
-                        )
-                    }
+                    onDownload(downloadItems)
                 } label: {
                     PlozziOSDownloadControl()
                 }
                 .buttonStyle(.plain)
                 .disabled(isBusy)
                 .accessibilityLabel(Text("Download \(displayTitle)"))
-                .confirmationDialog(
-                    Text("Download \(displayTitle)?"),
-                    isPresented: $showsDownloadConfirmation,
-                    titleVisibility: .visible
-                ) {
-                    Button("Original") {
-                        onDownload(episode, .original)
-                    }
-                    if appModel.downloads.supportsReducedQuality(for: episode) {
-                        Button("1080p • 20 Mbps") {
-                            onDownload(episode, .hd1080)
-                        }
-                        Button("720p • 4 Mbps") {
-                            onDownload(episode, .hd720)
-                        }
-                        Button("480p • 1.5 Mbps") {
-                            onDownload(episode, .sd480)
-                        }
-                        if let custom = appModel.downloads.customDownloadQuality,
-                           let title = appModel.downloads.customDownloadQualityTitle {
-                            Button(title) {
-                                onDownload(episode, custom)
-                            }
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("Reduced qualities are transcoded by your media server.")
-                }
             }
         }
         .task(id: "\(episode.sourceAccountID ?? "")|\(episode.id)") {
@@ -3162,8 +3333,12 @@ private struct PlozziOSEpisodeDownloadRow: View {
     }
 
     private var currentDownloadRecord: DownloadedMediaRecord? {
-        appModel.downloads.cachedRecord(forSelectedVersionOf: episode)
+        downloadItems.lazy.compactMap {
+            appModel.downloads.cachedRecord(forSelectedVersionOf: $0)
+        }.first
     }
+
+    private var downloadItems: [MediaItem] { alternatives.isEmpty ? [episode] : alternatives }
 
     @ViewBuilder
     private func downloadStatusText(
@@ -3198,21 +3373,20 @@ private struct PlozziOSEpisodeDownloadRow: View {
     ) -> some View {
         // Metrics are formatted data, not another translatable status template.
         if let fraction = record.fractionCompleted {
-            Text(MediaDownloadDestination.current.downloadingTitle)
-                + Text(verbatim: " ")
-                + Text(fraction, format: .percent.precision(.fractionLength(0)))
-                + transferMetricsText(for: record)
+            Text(fraction, format: .percent.precision(.fractionLength(0)))
+                + (transferMetricsText(for: record, includesSeparator: true) ?? Text(verbatim: ""))
         } else {
-            Text(MediaDownloadDestination.current.downloadingTitle) + transferMetricsText(for: record)
+            transferMetricsText(for: record, includesSeparator: false) ?? Text("Downloading")
         }
     }
 
     private func transferMetricsText(
-        for record: DownloadedMediaRecord
-    ) -> Text {
+        for record: DownloadedMediaRecord,
+        includesSeparator: Bool
+    ) -> Text? {
         guard let metrics = appModel.downloads.transferMetrics(for: record),
               metrics.bytesPerSecond > 0 else {
-            return Text(verbatim: "")
+            return nil
         }
         var detail = metrics.bytesPerSecond.formatted(
             .byteCount(style: .file)
@@ -3226,7 +3400,7 @@ private struct PlozziOSEpisodeDownloadRow: View {
                 )
             ) + " remaining"
         }
-        return Text(verbatim: " • \(detail)")
+        return Text(verbatim: (includesSeparator ? " • " : "") + detail)
     }
 }
 
@@ -3286,6 +3460,8 @@ struct PlozziOSDownloadThumbnail: View {
 struct PlozziOSDownloadControl: View {
     var state: MediaDownloadBadgeState?
     var isPreparing = false
+    var showsPauseIcon = false
+    var showsResumeIcon = false
     var fallbackSystemImage = "arrow.down"
 
     var body: some View {
@@ -3297,6 +3473,19 @@ struct PlozziOSDownloadControl: View {
                     .accessibilityLabel("Preparing Download")
             } else if let state {
                 statusIcon(state)
+                    .overlay {
+                        if showsPauseIcon, case .inProgress = state {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .accessibilityHidden(true)
+                        } else if showsResumeIcon, case .paused = state {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .accessibilityHidden(true)
+                        }
+                    }
             } else {
                 Image(systemName: "\(fallbackSystemImage).circle")
                     .font(.system(size: 25, weight: .regular))
@@ -3326,6 +3515,11 @@ struct PlozziOSDownloadControl: View {
                             format: .percent.precision(.fractionLength(0))
                         )
                     )
+            } else if showsPauseIcon {
+                Circle()
+                    .stroke(Color.primary.opacity(0.25), lineWidth: 3)
+                    .frame(width: 25, height: 25)
+                    .accessibilityLabel(Text(MediaDownloadDestination.current.downloadingTitle))
             } else {
                 ProgressView()
                     .controlSize(.small)
@@ -3334,7 +3528,7 @@ struct PlozziOSDownloadControl: View {
             }
         case .paused(let fraction):
             if let fraction {
-                progressRing(fraction: fraction, color: .orange)
+                progressRing(fraction: fraction, color: .primary)
                     .accessibilityLabel("Download Paused")
                     .accessibilityValue(
                         Text(
@@ -3343,10 +3537,17 @@ struct PlozziOSDownloadControl: View {
                         )
                     )
             } else {
-                Image(systemName: "pause.circle.fill")
-                    .font(.system(size: 25, weight: .regular))
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel("Download Paused")
+                if showsResumeIcon {
+                    Circle()
+                        .stroke(Color.primary.opacity(0.25), lineWidth: 3)
+                        .frame(width: 25, height: 25)
+                        .accessibilityLabel("Download Paused")
+                } else {
+                    Image(systemName: "pause.circle.fill")
+                        .font(.system(size: 25, weight: .regular))
+                        .foregroundStyle(.primary)
+                        .accessibilityLabel("Download Paused")
+                }
             }
         case .failed:
             Image(systemName: "exclamationmark.circle")
@@ -3385,9 +3586,15 @@ private func matchingDownloadRecords(
     seasonNumber: Int?
 ) -> [DownloadedMediaRecord] {
     if let episodes {
-        return episodes.compactMap {
-            downloads.cachedRecord(forSelectedVersionOf: $0)
+        let candidates = episodes.flatMap { episode in
+            [episode] + PlayerVersionSelection.versions(for: episode).compactMap {
+                PlayerVersionSelection.selecting($0.id, in: episode)
+            }
         }
+        var seen = Set<String>()
+        return candidates.compactMap {
+            downloads.cachedRecord(forSelectedVersionOf: $0)
+        }.filter { seen.insert($0.identityKey).inserted }
     }
     guard let seriesID else { return [] }
     return downloads.records.filter { record in
@@ -3399,10 +3606,24 @@ private func matchingDownloadRecords(
     }
 }
 
+@MainActor
+private func allDownloadEpisodesCompleted(
+    _ episodes: [MediaItem], downloads: PlozziOSDownloadsModel
+) -> Bool {
+    let groups = EpisodeDownloadSelection.groupedItems(episodes)
+    return !groups.isEmpty && groups.allSatisfy {
+        matchingDownloadRecords(
+            downloads: downloads, episodes: $0, seriesID: nil,
+            sourceAccountID: nil, seasonNumber: nil
+        ).contains { $0.status == .completed }
+    }
+}
+
 private func downloadCollectionBadgeState(
     records: [DownloadedMediaRecord],
     expectedCount: Int?,
-    scopeKind: DownloadBatchKind
+    scopeKind: DownloadBatchKind,
+    allEpisodesDownloaded: Bool? = nil
 ) -> MediaDownloadBadgeState? {
     guard !records.isEmpty else { return nil }
     let explicitBatch = records.filter {
@@ -3450,7 +3671,10 @@ private func downloadCollectionBadgeState(
     if progressRecords.contains(where: { $0.status == .paused }) {
         return .paused(fraction: fraction)
     }
-    if let expectedCount,
+    if allEpisodesDownloaded == true, records.allSatisfy({ $0.status == .completed }) {
+        return .completed
+    }
+    if allEpisodesDownloaded == nil, let expectedCount,
        expectedCount > 0,
        records.count == expectedCount,
        records.allSatisfy({ $0.status == .completed }) {
@@ -3460,7 +3684,17 @@ private func downloadCollectionBadgeState(
 }
 
 /// Backing data for a bulk season/show download confirmation.
-private struct PlozziOSSeasonDownloadPrompt: Identifiable {
+struct PlozziOSSeasonDownloadPrompt: Identifiable {
+    var isBulk: Bool {
+        if case .episode = scope { return false }
+        return true
+    }
+
+    var preparingEpisodeIDs: Set<String> {
+        guard !isBulk else { return [] }
+        return Set(batches.flatMap(\.episodes).map(\.stablePresentationID))
+    }
+
     struct Batch {
         let season: MediaItem
         let episodes: [MediaItem]
@@ -3469,55 +3703,39 @@ private struct PlozziOSSeasonDownloadPrompt: Identifiable {
     enum Scope {
         case season(SeriesDownloadSeasonTitle)
         case show(String)
+        case episode(String)
     }
 
     let scope: Scope
     let batches: [Batch]
 
     var id: String { batches.map(\.season.id).joined(separator: "|") }
-    var count: Int { batches.reduce(0) { $0 + $1.episodes.count } }
 
     var title: Text {
         switch scope {
         case .season(let title):
-            Text("Download \(Text(title))?")
-        case .show(let title):
-            Text("Download all of \(title)?")
+            Text(title)
+        case .show(let title), .episode(let title):
+            Text(verbatim: title)
         }
     }
 
-    var message: LocalizedStringResource {
-        guard let free = Self.freeSpaceText() else {
-            return """
-                This downloads all \(count) episodes at original quality and can use \
-                significant storage and data. You can remove them anytime from Downloads.
-                """
-        }
-        return """
-            This downloads all \(count) episodes at original quality and can use \
-            significant storage and data. You can remove them anytime from Downloads.
-
-            \(free) free on this device.
-            """
-    }
-
-    /// Best-effort human-readable free space so a bulk grab shows headroom
-    /// awareness. Returns `nil` when the capacity can't be read.
-    private static func freeSpaceText() -> String? {
-        let url = URL.documentsDirectory
-        guard let capacity = try? DownloadStorageCapacity.device.availableBytes(at: url)
-        else {
-            return nil
-        }
-        return capacity.formatted(.byteCount(style: .file))
-    }
 }
 
 struct PlozziOSInlineEpisodeRail: View {
+    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var scrollPositionID: String?
     let episodes: [MediaItem]?
     let isLoading: Bool
+    /// Whether the reserved rail shows its skeleton or only holds the space.
+    ///
+    /// A first load holds the geometry invisibly: the cards must not push the page
+    /// down when they arrive (the same reflow Home's preallocated hero avoids), but
+    /// the viewer has not asked for anything, so there is nothing to animate. An
+    /// explicit season switch shows the skeleton as feedback.
+    var showsSkeleton: Bool = true
     var currentEpisodeID: String? = nil
     let onInteraction: () -> Void
     let onPlay: (MediaItem, Bool) -> Void
@@ -3525,12 +3743,14 @@ struct PlozziOSInlineEpisodeRail: View {
     init(
         episodes: [MediaItem]?,
         isLoading: Bool,
+        showsSkeleton: Bool = true,
         currentEpisodeID: String? = nil,
         onInteraction: @escaping () -> Void = {},
         onPlay: @escaping (MediaItem, Bool) -> Void
     ) {
         self.episodes = episodes
         self.isLoading = isLoading
+        self.showsSkeleton = showsSkeleton
         self.currentEpisodeID = currentEpisodeID
         self.onInteraction = onInteraction
         self.onPlay = onPlay
@@ -3538,9 +3758,18 @@ struct PlozziOSInlineEpisodeRail: View {
     }
 
     var body: some View {
-        if isLoading {
+        // Shared guardrail (CoreUI): the placeholder always reserves the rail's real
+        // height, and is only painted when the viewer asked for the change. A local
+        // copy of this rule is how the page ended up reflowing when cards arrived.
+        PlozzReservedPlaceholder(isPending: isLoading, revealsPlaceholder: showsSkeleton) {
             PlozziOSInlineEpisodeSkeletonRail()
-        } else if let episodes, episodes.isEmpty {
+        } content: {
+            railContent
+        }
+    }
+
+    @ViewBuilder private var railContent: some View {
+        if let episodes, episodes.isEmpty {
             ContentUnavailableView(
                 "No episodes",
                 systemImage: "play.rectangle"
@@ -3550,7 +3779,7 @@ struct PlozziOSInlineEpisodeRail: View {
             ScrollView(.horizontal) {
                 LazyHStack(
                     alignment: .top,
-                    spacing: PlozziOSMediaRailLayout.visibleSpacing
+                    spacing: PlozziOSMediaRailLayout.visibleGap(metrics: metrics)
                 ) {
                     ForEach(episodes) { episode in
                         PlozziOSInlineEpisodeEntry(
@@ -3569,8 +3798,8 @@ struct PlozziOSInlineEpisodeRail: View {
             .contentMargins(
                 .horizontal,
                 PlozziOSPageLayout.horizontalInset(
-                    for: horizontalSizeClass
-                ),
+                    for: horizontalSizeClass, usesDesktopSizing: metrics.usesDesktopSizing
+                ) - (metrics.usesDesktopSizing && cardStyle == .framed ? metrics.cardInset : 0),
                 for: .scrollContent
             )
             .scrollIndicators(.hidden)
@@ -3589,13 +3818,15 @@ struct PlozziOSInlineEpisodeRail: View {
 }
 
 private struct PlozziOSInlineEpisodeSkeletonRail: View {
+    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ScrollView(.horizontal) {
             HStack(
                 alignment: .top,
-                spacing: PlozziOSMediaRailLayout.visibleSpacing
+                spacing: PlozziOSMediaRailLayout.visibleGap(metrics: metrics)
             ) {
                 ForEach(0..<6, id: \.self) { _ in
                     PlozziOSInlineEpisodeSkeleton()
@@ -3604,7 +3835,8 @@ private struct PlozziOSInlineEpisodeSkeletonRail: View {
         }
         .contentMargins(
             .horizontal,
-            PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass),
+            PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass, usesDesktopSizing: metrics.usesDesktopSizing)
+                - (metrics.usesDesktopSizing && cardStyle == .framed ? metrics.cardInset : 0),
             for: .scrollContent
         )
         .scrollIndicators(.hidden)
@@ -3656,7 +3888,7 @@ private struct PlozziOSInlineEpisodeSkeleton: View {
             }
         }
         .frame(width: cardWidth, alignment: .leading)
-        .padding(cardStyle == .framed ? 10 : 0)
+        .padding(cardStyle == .framed && !metrics.usesDesktopSizing ? 10 : 0)
         .shimmering()
     }
 
@@ -3667,7 +3899,7 @@ private struct PlozziOSInlineEpisodeSkeleton: View {
     }
 
     private var cardWidth: CGFloat {
-        horizontalSizeClass == .regular ? 360 : 300
+        PlozziOSMediaLayout.episodeWidth(metrics: metrics, sizeClass: horizontalSizeClass)
     }
 }
 
@@ -3679,6 +3911,7 @@ struct PlozziOSInlineEpisodeEntry: View {
     @Environment(\.themePalette) private var palette
     @Environment(PlozziOSAppModel.self) private var appModel
     @Environment(\.mediaItemNavigator) private var navigator
+    @State private var pendingNavigationTarget: MediaItem?
     @State private var downloadRecord: DownloadedMediaRecord?
     @State private var downloadError: String?
 
@@ -3686,17 +3919,19 @@ struct PlozziOSInlineEpisodeEntry: View {
     let episodes: [MediaItem]
     let onPlay: (MediaItem, Bool) -> Void
 
-    @ViewBuilder
     var body: some View {
-        if cardStyle == .framed {
-            content
-                .plozzFramedMediaCard(
-                    innerCornerRadius: metrics.landscapeArtworkCornerRadius
-                )
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-        } else {
-            content
+        Group {
+            if cardStyle == .framed {
+                content
+                    .plozzFramedMediaCard(
+                        innerCornerRadius: metrics.landscapeArtworkCornerRadius
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+            } else {
+                content
+            }
         }
+        .mediaArtworkZoomOrigin(id: episode.stablePresentationID)
     }
 
     private var content: some View {
@@ -3791,8 +4026,9 @@ struct PlozziOSInlineEpisodeEntry: View {
             }
         }
         .frame(width: cardWidth, alignment: .leading)
-        .padding(cardStyle == .framed ? 10 : 0)
+        .padding(cardStyle == .framed && !metrics.usesDesktopSizing ? 10 : 0)
         .contextMenu { episodeMenuActions }
+        .mediaItemMenuNavigation(target: $pendingNavigationTarget)
         .task(id: "\(episode.id)|\(episode.selectedVersionID ?? "")") {
             downloadRecord = await appModel.downloads
                 .record(forSelectedVersionOf: episode)
@@ -3811,7 +4047,7 @@ struct PlozziOSInlineEpisodeEntry: View {
     }
 
     private var cardWidth: CGFloat {
-        horizontalSizeClass == .regular ? 360 : 300
+        PlozziOSMediaLayout.episodeWidth(metrics: metrics, sizeClass: horizontalSizeClass)
     }
 
     private var episodeArtwork: some View {
@@ -3852,6 +4088,7 @@ struct PlozziOSInlineEpisodeEntry: View {
             cornerRadius: metrics.landscapeArtworkCornerRadius,
             isEnabled: MediaArtworkPlaceholder.Symbol(for: episode) == .playback
         )
+        .mediaArtworkZoomSource(cornerRadius: metrics.landscapeArtworkCornerRadius)
     }
 
     @ViewBuilder
@@ -3865,7 +4102,7 @@ struct PlozziOSInlineEpisodeEntry: View {
                 // deliberately ignores it, so routing everything through the
                 // handler would leave "Episode Info" visible but inert.
                 if action.isNavigation {
-                    navigator?(episode)
+                    pendingNavigationTarget = episode.navigationTarget(for: action)
                 } else {
                     appModel.mediaItemActionHandler.perform(
                         action,
@@ -3965,9 +4202,10 @@ struct PlozziOSInlineEpisodeEntry: View {
 /// downloading (unmistakably progress, not a button), and a **filled gray
 /// down-arrow** when complete (a settled status, not an action). Hidden when the
 /// episode isn't downloaded — download itself is started from the ⋯ menu.
-private struct PlozziOSCastSection: View {
+struct PlozziOSCastSection: View {
+    @Environment(\.locale) private var locale
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.themePalette) private var palette
     // Scales the trailing whitespace with the OS text size so the space under the
     // (variably wrapped) cast names stays proportional at every Dynamic Type level,
@@ -3982,14 +4220,34 @@ private struct PlozziOSCastSection: View {
     /// list holds.
     let sourceAccountID: String?
 
+    private var credits: [MediaPersonCredit] { MediaPersonCredit.ordered(people) }
+
     var body: some View {
-        PlozziOSMediaSection(title: Text("Cast"), horizontalInset: pageInset) {
+        PlozziOSHomeRailLayout { metrics in
+            section(metrics: metrics)
+        }
+    }
+
+    private func section(metrics: PlozzMetrics) -> some View {
+        let pageInset = PlozziOSPageLayout.horizontalInset(
+            for: horizontalSizeClass, usesDesktopSizing: metrics.usesDesktopSizing
+        )
+        let tileDiameter = metrics.usesDesktopSizing ? metrics.castTileDiameter : metrics.posterWidth
+        let spacing = metrics.usesDesktopSizing
+            ? PlozziOSMediaRailLayout.visibleGap(metrics: metrics)
+            : metrics.cardSlotWidth(for: .poster, cardStyle: cardStyle) - metrics.posterWidth
+                + PlozziOSMediaRailLayout.stackSpacing(metrics: metrics, cardStyle: cardStyle)
+        return PlozziOSMediaSection(
+            title: credits.contains { !$0.crewRoles.isEmpty } ? Text("Cast & Crew") : Text("Cast"),
+            horizontalInset: pageInset
+        ) {
             ScrollView(.horizontal) {
                 LazyHStack(
                     alignment: .top,
-                    spacing: PlozziOSMediaRailLayout.visibleSpacing
+                    spacing: spacing
                 ) {
-                    ForEach(people.prefix(20)) { person in
+                    ForEach(credits) { credit in
+                        let person = credit.person
                         Button {
                             openPerson?(person, sourceAccountID)
                         } label: {
@@ -4011,15 +4269,15 @@ private struct PlozziOSCastSection: View {
                             .frame(width: tileDiameter, alignment: .top)
 
                             Text(person.name)
-                                .font(.subheadline.weight(.semibold))
+                                .font(.system(size: metrics.posterTitleFontSize, weight: .semibold))
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(
                                     maxWidth: .infinity,
                                     alignment: .top
                                 )
-                            if let role = person.role {
+                            if let role = credit.caption(locale: locale) {
                                 Text(role)
-                                    .font(.caption)
+                                    .font(.system(size: metrics.posterSubtitleFontSize))
                                     .plozzForeground(.secondary)
                                     .fixedSize(
                                         horizontal: false,
@@ -4049,6 +4307,7 @@ private struct PlozziOSCastSection: View {
                 for: .scrollContent
             )
             .scrollIndicators(.hidden)
+            .accessibilityIdentifier("detail-cast-rail")
         }
         // Symmetric scaled whitespace above and below the cast rail so it sits with
         // balanced breathing room between the hero and the info band — and the gap
@@ -4060,11 +4319,19 @@ private struct PlozziOSCastSection: View {
         horizontalSizeClass == .compact ? compactBottomPadding : regularBottomPadding
     }
 
-    private var pageInset: CGFloat {
-        PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass)
-    }
+}
 
-    /// Match Home's poster artwork scale without the card's surrounding glass.
-    private var tileDiameter: CGFloat { metrics.posterWidth }
+
+/// Detail pages paint their own hero scrim. The native scroll-edge backdrop
+/// appeared a beat after the page and read as a dim popping in over the status
+/// bar; hide it so the page keeps its own, already-stable shading.
+private struct PlozziOSDetailScrollEdge: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.scrollEdgeEffectHidden(true, for: .top)
+        } else {
+            content
+        }
+    }
 }
 #endif

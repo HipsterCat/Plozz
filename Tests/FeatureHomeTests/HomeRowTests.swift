@@ -55,9 +55,7 @@ final class HomeRowTests: XCTestCase {
     func testContinueWatchingSelectionUsesPreferenceWithoutChangingOtherRows() {
         for kind in HomeRowKind.allCases {
             let row = HomeRow(kind: kind)
-            XCTAssertEqual(
-                row.playsOnSelect(continueWatchingAction: .default), kind == .continueWatching
-            )
+            XCTAssertFalse(row.playsOnSelect(continueWatchingAction: .default))
             XCTAssertEqual(
                 row.playsOnSelect(continueWatchingAction: .play), kind == .continueWatching
             )
@@ -255,6 +253,31 @@ final class HomeRowTests: XCTestCase {
         )
         let rows = HomeRow.rows(for: c) { _ in true }
         XCTAssertEqual(rows.map(\.kind), [.continueWatching, .watchlist, .recentlyAdded, .libraries])
+    }
+
+    func testServerAndCollectionRefreshKeepsUsableCardsInteractive() {
+        let definition = HomeServerRowDefinition(
+            accountID: "a", serverName: "Server", providerKind: .plex,
+            section: .init(id: "recent", kind: .recentlyAdded, libraryID: "movies")
+        )
+        let collection = CollectionSection(source: .init(
+            accountID: "a", collectionID: "collection", title: "Collection", serverUserID: "viewer"
+        ))
+        for items in [[], [item("movie")]] {
+            for error in [nil, AppError.serverUnreachable] {
+                let server = HomeServerRow(definition: definition, items: items, isLoading: true, failure: error)
+                let preview = HomeCollectionRow(definition: collection, items: items, isLoading: true, failure: error)
+                for row in [server.row, preview.row] {
+                    XCTAssertEqual(row.section.items, items)
+                    XCTAssertEqual(row.isLoading, items.isEmpty)
+                    XCTAssertEqual(row.failure, items.isEmpty ? error : nil)
+                }
+                XCTAssertTrue(server.isLoading)
+                XCTAssertEqual(server.failure, error, "Refresh diagnostics must retain the actual failure.")
+                XCTAssertTrue(preview.isLoading)
+                XCTAssertEqual(preview.failure, error)
+            }
+        }
     }
 
     func testEmptyMediaRowsAreOmitted() {

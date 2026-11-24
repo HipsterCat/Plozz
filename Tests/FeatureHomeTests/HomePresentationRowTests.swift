@@ -74,6 +74,10 @@ final class HomePresentationRowTests: XCTestCase {
             ), name: "News", sourceName: "Source", number: 1
         )
         let snapshot = HomeLiveTVSnapshot(recentChannels: [], channels: [card])
+        let upcoming = UpcomingRelease(
+            id: "release", titleKey: "movie", item: item, date: Date(timeIntervalSince1970: 0),
+            datePrecision: .dateOnly, kind: .digital, interests: [.watchlist]
+        )
         for preset: HomeRowCustomization.Defaults in [.matchServer, .combined] {
             var customization = HomeRowCustomization(defaults: preset)
             if preset == .matchServer {
@@ -87,11 +91,13 @@ final class HomePresentationRowTests: XCTestCase {
                 isGlobalRowEnabled: visibility.isGlobalRowEnabled
             )
             let presented = HomePresentationRow.resolve(
-                rows: home, content: content, visibility: visibility, liveTV: snapshot
+                rows: home, content: content, visibility: visibility, liveTV: snapshot, upcoming: [upcoming]
             )
             let arranged = visibility.rowSections(
                 choices: HomeRowChoice.shared + HomeRowChoice.baseRows(for: source)
             ).enabled
+            // This fixture supplies an Upcoming item, so Coming Soon is both
+            // offered to the arranger and presented as a row.
             XCTAssertEqual(presented.map(\.id), arranged)
             XCTAssertEqual(presented.last?.id, .libraries)
             XCTAssertTrue(presented.contains { $0.id == .liveTV })
@@ -124,8 +130,10 @@ final class HomePresentationRowTests: XCTestCase {
             XCTAssertEqual(rows.map(\.id), [unscoped.id])
             guard case let .library(row) = rows.first?.source else { return XCTFail("Missing retained row") }
             XCTAssertEqual(row.section.items.map(\.id), ["shown"])
-            XCTAssertEqual(row.isLoading, failure == nil)
-            XCTAssertEqual(row.failure, failure)
+            XCTAssertFalse(row.isLoading, "Retained usable cards must remain interactive during refresh.")
+            XCTAssertNil(row.failure, "Refresh diagnostics must not replace retained usable cards.")
+            XCTAssertEqual(content.serverRows[1].isLoading, failure == nil)
+            XCTAssertEqual(content.serverRows[1].failure, failure)
         }
         let allHidden = HomeViewModel.Content(serverRows: [.init(definition: unscoped, items: [hidden])])
         XCTAssertTrue(HomePresentationRow.resolve(rows: [], content: allHidden, visibility: visibility).isEmpty)
@@ -142,12 +150,11 @@ final class HomePresentationRowTests: XCTestCase {
         let order: [HomeRowID] = [.liveTV, .global(.continueWatching)]
         let visibility = HomeLibraryVisibility(rowCustomization: .init(order: order, shown: Set(order)))
         let rows = HomePresentationRow.resolve(rows: [], content: .init(), visibility: visibility, liveTV: snapshot)
-        XCTAssertEqual(rows.map(\.id), order)
-        guard case .liveTV(let channels) = rows.first?.source,
-              case .home(let recent) = rows.last?.source else { return XCTFail("Expected typed Live TV and mixed recent row") }
+        XCTAssertEqual(rows.map(\.id), [.liveTV])
+        guard case .liveTV(let channels) = rows.first?.source else {
+            return XCTFail("Expected the dedicated Live TV row only")
+        }
         XCTAssertEqual(channels, [card])
-        XCTAssertEqual(recent.kind, .continueWatching)
-        XCTAssertTrue(recent.items.isEmpty, "A live channel must never masquerade as a MediaItem.")
         if case .loaded = HomePresentationRow.displayState(.empty, liveTV: snapshot, visibility: visibility) {
         } else { XCTFail("Cached Live TV can populate an otherwise empty Home.") }
 
@@ -160,6 +167,58 @@ final class HomePresentationRowTests: XCTestCase {
             HomePresentationRow.resolve(rows: [], content: .init(), visibility: noRecent, liveTV: snapshot).map(\.id),
             [.liveTV]
         )
+        let noLiveTV = HomeLibraryVisibility(rowCustomization: .init(
+            order: order, hidden: [.liveTV], shown: [.global(.continueWatching)]
+        ))
+        XCTAssertFalse(HomePresentationRow.hasLiveTVRows(snapshot, visibility: noLiveTV))
+        if case .empty = HomePresentationRow.displayState(.empty, liveTV: snapshot, visibility: noLiveTV) {
+        } else { XCTFail("Recent channels must not populate Continue Watching when Live TV is hidden.") }
+    }
+
+    func testCachedRecentChannelsDoNotCreateContinueWatchingWithoutALiveTVRow() {
+        let card = HomeLiveTVChannel(
+            route: .init(
+                profileID: "profile", channelID: "live", sourceID: "playlist",
+                sourceAuthorizationID: "approval", serverAuthorizationID: "servers"
+            ), name: "News", sourceName: "Playlist", number: 1
+        )
+        let snapshot = HomeLiveTVSnapshot(recentChannels: [card])
+        XCTAssertFalse(HomePresentationRow.hasLiveTVRows(snapshot, visibility: .default))
+        XCTAssertTrue(HomePresentationRow.resolve(
+            rows: [], content: .init(), visibility: .default, liveTV: snapshot
+        ).isEmpty)
+        let movie = MediaItem(id: "movie", title: "Resume Movie", kind: .movie, resumePosition: 180)
+        let content = HomeViewModel.Content(continueWatching: [movie])
+        let rows = HomePresentationRow.resolve(
+            rows: HomeRow.rows(for: content, isLibraryVisible: { _ in true }),
+            content: content, visibility: .default, liveTV: snapshot
+        )
+        XCTAssertEqual(rows.map(\.id), [.global(.continueWatching)])
+        guard case let .home(row) = rows.first?.source else { return XCTFail("Missing movie history") }
+        XCTAssertEqual(row.items, [movie])
+        XCTAssertEqual(snapshot.recentChannels, [card], "Presentation must not erase channel history.")
+    }
+
+    func testRecentChannelsDoNotMaskContinueWatchingFailure() throws {
+        let choice = try XCTUnwrap(HomeRowChoice.shared.first { $0.id == .global(.continueWatching) })
+        let issue = HomeSectionIssue(choice: choice, reason: .failed(.serverUnreachable))
+        var content = HomeViewModel.Content()
+        content.sectionIssues = [issue]
+        let channel = HomeLiveTVChannel(
+            route: .init(
+                profileID: "profile", channelID: "live", sourceID: "playlist",
+                sourceAuthorizationID: "approval", serverAuthorizationID: "servers"
+            ), name: "News", sourceName: "Playlist", number: 1
+        )
+        let rows = HomePresentationRow.resolve(
+            rows: [HomeRow(kind: .continueWatching, failure: .serverUnreachable)],
+            content: content, visibility: .default,
+            liveTV: .init(recentChannels: [channel])
+        )
+        guard case let .library(row) = rows.first?.source else {
+            return XCTFail("Keep the real Continue Watching failure, not an empty live-channel row.")
+        }
+        XCTAssertEqual(row.issue, issue)
     }
 
     func testEmptyNativeAudioRowDisappearsEvenWhenItsSavedDefinitionIsShown() {

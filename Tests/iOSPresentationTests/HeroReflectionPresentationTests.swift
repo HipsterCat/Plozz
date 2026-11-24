@@ -8,11 +8,29 @@ import XCTest
 
 @MainActor
 final class HeroReflectionPresentationTests: XCTestCase {
-    func testTopBandReflectsTheImageBeforeTheOriginalStarts24PointsDown() throws {
+    func testCompactDetailArtworkUsesTheExtendedHomeArtworkHeight() {
+        for windowHeight: CGFloat in [667, 844, 956] {
+            for textSize: DynamicTypeSize in [.large, .accessibility3] {
+                let detail = PlozziOSHeroMetrics.height(
+                    style: .compactPortrait, surfaceRole: .detail, dynamicTypeSize: textSize,
+                    containerHeight: windowHeight
+                )
+                let home = PlozziOSHeroMetrics.height(
+                    style: .compactPortrait, surfaceRole: .home, dynamicTypeSize: textSize,
+                    containerHeight: windowHeight
+                )
+                XCTAssertEqual(detail, home)
+                XCTAssertGreaterThanOrEqual(detail, 520)
+                XCTAssertLessThanOrEqual(detail, windowHeight - 96)
+            }
+        }
+    }
+
+    func testReducedTransparencyKeepsTheSharpTopReflectionAndOriginalGeometry() throws {
         for height in [CGFloat(200), 340] {
             for scheme in [ColorScheme.light, .dark] {
                 let image = try render(
-                    PlozziOSExtendedHeroArtwork(height: height) { layout in
+                    PlozziOSExtendedHeroArtwork(height: height, surfaceRole: .home) { layout in
                         VStack(spacing: 0) {
                             Color(red: 1, green: 0, blue: 0).frame(height: 12)
                             Color(red: 0, green: 0, blue: 1).frame(height: 12)
@@ -21,6 +39,7 @@ final class HeroReflectionPresentationTests: XCTestCase {
                         }
                         .frame(width: layout.width, height: layout.height)
                     }
+                    .environment(\.plozzReduceTransparency, true)
                     .environment(\.colorScheme, scheme)
                     .background(scheme == .dark ? Color.black : Color.white),
                     height: height
@@ -44,10 +63,109 @@ final class HeroReflectionPresentationTests: XCTestCase {
         }
     }
 
+    func testTopReflectionGraduallyBlursStartingEightPointsBeforeTheSeam() throws {
+        func artwork(reduced: Bool) -> some View {
+            PlozziOSExtendedHeroArtwork(height: 340, surfaceRole: .home) { layout in
+                HStack(spacing: 0) {
+                    ForEach(0..<50) { index in
+                        (index.isMultiple(of: 2) ? Color.white : Color.black).frame(width: 4)
+                    }
+                }
+                .frame(width: layout.width, height: layout.height)
+            }
+            .environment(\.plozzReduceTransparency, reduced)
+            .background(Color.black)
+        }
+        let reference = try render(artwork(reduced: true), height: 340)
+        let blurred = try render(artwork(reduced: false), height: 340)
+        func contrast(_ image: UIImage, y: CGFloat) throws -> CGFloat {
+            abs(try rgb(image, x: 98, y: y)[0] - rgb(image, x: 102, y: y)[0])
+        }
+        for y: CGFloat in [32, 40, 80, 200, 310] {
+            XCTAssertEqual(try contrast(blurred, y: y), try contrast(reference, y: y), accuracy: 0.01,
+                           "The original below the eight-point lead-in and the bottom reflection must stay sharp.")
+        }
+        let onset = try contrast(blurred, y: 31)
+        let beforeSeam = try contrast(blurred, y: 28)
+        let reflected = try contrast(blurred, y: 18)
+        let top = try contrast(blurred, y: 4)
+        XCTAssertGreaterThan(onset, 0.9, "Blur must begin gently, not with a visible band.")
+        XCTAssertLessThan(beforeSeam, onset - 0.01)
+        XCTAssertLessThan(reflected, beforeSeam - 0.1)
+        XCTAssertLessThan(top, reflected)
+        XCTAssertLessThan(top, 0.2, "The top of the reflection should be strongly softened.")
+        for (name, image) in [("sharp-reflection", reference), ("progressive-reflection", blurred)] {
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    func testDetailReflectionMatchesHomeBlurAndReducedTransparencyFallback() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            func artwork(role: HeroTrailerSurfaceRole, reduced: Bool) -> some View {
+                PlozziOSExtendedHeroArtwork(height: 340, surfaceRole: role) { layout in
+                    HStack(spacing: 0) {
+                        ForEach(0..<50) { index in
+                            (index.isMultiple(of: 2) ? Color.white : Color.black).frame(width: 4)
+                        }
+                    }
+                    .frame(width: layout.width, height: layout.height)
+                }
+                .environment(\.plozzReduceTransparency, reduced)
+                .opacity(0.5)
+                .background(scheme == .dark ? Color.black : Color.white)
+            }
+            for reduced in [false, true] {
+                let reference = try render(artwork(role: .home, reduced: reduced), height: 340)
+                let detail = try render(artwork(role: .detail, reduced: reduced), height: 340)
+                for x: CGFloat in [98, 102] {
+                    for y: CGFloat in [4, 18, 24, 28, 32, 80, 310] {
+                        for (actual, expected) in zip(try rgb(detail, x: x, y: y), try rgb(reference, x: x, y: y)) {
+                            XCTAssertEqual(actual, expected, accuracy: 0.01,
+                                           "Detail must match Home's blur, fallback, opacity, and original artwork.")
+                        }
+                    }
+                }
+                for (role, image) in [("home", reference), ("detail", detail)] {
+                    let attachment = XCTAttachment(image: image)
+                    attachment.name = "\(role)-top-blur-\(scheme)-reduced-\(reduced)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
+            }
+        }
+    }
+
+    func testTopReflectionBlurPreservesColorAndAlphaInsteadOfAddingATint() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            func artwork(reduced: Bool) -> some View {
+                PlozziOSExtendedHeroArtwork(height: 340, surfaceRole: .home) { layout in
+                    Color(red: 0.2, green: 0.6, blue: 0.9)
+                        .frame(width: layout.width, height: layout.height)
+                }
+                .environment(\.plozzReduceTransparency, reduced)
+                .opacity(0.5)
+                .background(scheme == .dark ? Color.black : Color.white)
+            }
+            let reference = try render(artwork(reduced: true), height: 340)
+            let blurred = try render(artwork(reduced: false), height: 340)
+            for x: CGFloat in [1, 100, 199] {
+                for y: CGFloat in [1, 8, 18, 24, 28, 32, 60] {
+                    for (actual, expected) in zip(try rgb(blurred, x: x, y: y), try rgb(reference, x: x, y: y)) {
+                        XCTAssertEqual(actual, expected, accuracy: 0.02,
+                                       "Blur must preserve the existing reflection opacity and artwork colors.")
+                    }
+                }
+            }
+        }
+    }
+
     func testTopAndBottomSeamsDoNotBrightenDuringSwipeFadesOrPullScaling() throws {
         for scale in [CGFloat(1), 1.17] {
             let image = try render(
-                PlozziOSExtendedHeroArtwork(height: 340) { layout in
+                PlozziOSExtendedHeroArtwork(height: 340, surfaceRole: .home) { layout in
                     Color.white.frame(width: layout.width, height: layout.height)
                 }
                 .scaleEffect(scale, anchor: .topLeading)
@@ -75,6 +193,89 @@ final class HeroReflectionPresentationTests: XCTestCase {
         }
     }
 
+    func testMacHomeHeightAdaptsToTheWindowAndKeepsActionsAboveTheNextRow() {
+        var previous: CGFloat = 0
+        for windowHeight in [CGFloat(400), 600, 720, 900, 1_080, 1_440] {
+            let height = PlozziOSHeroMetrics.height(
+                style: .landscape, surfaceRole: .home, dynamicTypeSize: .large,
+                containerHeight: windowHeight, isRunningOnMac: true
+            )
+            XCTAssertGreaterThan(height, previous)
+            XCTAssertLessThanOrEqual(height, windowHeight - HeroStageMetrics.minimumPeek)
+            XCTAssertLessThanOrEqual(height, 1_020)
+            let accessibleHeight = PlozziOSHeroMetrics.height(
+                style: .landscape, surfaceRole: .home, dynamicTypeSize: .accessibility3,
+                containerHeight: windowHeight, isRunningOnMac: true
+            )
+            XCTAssertGreaterThanOrEqual(accessibleHeight, height)
+            XCTAssertLessThanOrEqual(accessibleHeight, windowHeight - HeroStageMetrics.minimumPeek)
+            previous = height
+        }
+        XCTAssertEqual(
+            PlozziOSHeroMetrics.height(
+                style: .landscape, surfaceRole: .home, dynamicTypeSize: .large,
+                containerHeight: 1_080, isRunningOnMac: true
+            ), 885.6, accuracy: 0.01
+        )
+    }
+
+    func testMacHomeSizingPreservesOtherLayoutsAndTheUnmeasuredFallback() {
+        let unmeasuredHeights: [CGFloat?] = [nil, 0, -.infinity, .infinity, .nan]
+        for height in unmeasuredHeights {
+            XCTAssertEqual(PlozziOSHeroMetrics.height(
+                style: .landscape, surfaceRole: .home, dynamicTypeSize: .large,
+                containerHeight: height, isRunningOnMac: true
+            ), 680)
+        }
+        for height in [CGFloat(600), 900, 1_440] {
+            XCTAssertEqual(PlozziOSHeroMetrics.height(
+                style: .landscape, surfaceRole: .home, dynamicTypeSize: .large,
+                containerHeight: height, isRunningOnMac: false
+            ), 680)
+            XCTAssertEqual(PlozziOSHeroMetrics.height(
+                style: .landscape, surfaceRole: .detail, dynamicTypeSize: .large,
+                containerHeight: height, isRunningOnMac: true
+            ), 784)
+            XCTAssertEqual(
+                PlozziOSHeroMetrics.height(
+                    style: .compactPortrait, surfaceRole: .home, dynamicTypeSize: .large,
+                    containerHeight: height, isRunningOnMac: true
+                ),
+                PlozziOSHeroMetrics.height(
+                    style: .compactPortrait, surfaceRole: .home, dynamicTypeSize: .large,
+                    containerHeight: height, isRunningOnMac: false
+                )
+            )
+        }
+    }
+
+    func testOnlyMacLandscapeHomeArtworkPreservesItsTopEdge() throws {
+        let artwork = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 225)).image { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 400, height: 225))
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 400, height: 24))
+        }
+        for isMac in [false, true] {
+            for role in [HeroTrailerSurfaceRole.home, .detail] {
+                for style in [HeroArtworkStyle.landscape, .compactPortrait] {
+                    let result = try render(
+                        PlozziOSHeroArtworkImage(
+                            image: Image(uiImage: artwork), style: style, surfaceRole: role
+                        )
+                        .frame(width: 200, height: 50)
+                        .environment(\.plozziOSIsRunningOnMac, isMac),
+                        height: 50
+                    )
+                    let preservesTop = isMac && role == .home && style == .landscape
+                    try assertColor(
+                        result, y: 4, red: preservesTop, green: false, blue: !preservesTop
+                    )
+                }
+            }
+        }
+    }
+
     private func render<Content: View>(_ content: Content, height: CGFloat) throws -> UIImage {
         let renderer = ImageRenderer(content: content
             .frame(width: 200, height: height, alignment: .topLeading)
@@ -96,7 +297,7 @@ final class HeroReflectionPresentationTests: XCTestCase {
         }
     }
 
-    private func rgb(_ image: UIImage, y: CGFloat) throws -> [CGFloat] {
+    private func rgb(_ image: UIImage, x: CGFloat = 100, y: CGFloat) throws -> [CGFloat] {
         let cgImage = try XCTUnwrap(image.cgImage)
         var pixels = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
         try pixels.withUnsafeMutableBytes { bytes in
@@ -109,7 +310,7 @@ final class HeroReflectionPresentationTests: XCTestCase {
             ))
             context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
         }
-        let offset = (Int(y * image.scale) * cgImage.width + cgImage.width / 2) * 4
+        let offset = (Int(y * image.scale) * cgImage.width + Int(x * image.scale)) * 4
         return pixels[offset..<(offset + 3)].map { CGFloat($0) / 255 }
     }
 }

@@ -2,6 +2,7 @@ import AppShelliOS
 import AppRuntime
 import CoreModels
 import PlozzCoreUI
+import FeatureSettings
 import SwiftUI
 import UIKit
 
@@ -36,24 +37,34 @@ private final class PlozziOSAppDelegate: NSObject, UIApplicationDelegate {
 
 @main
 struct PlozziOSApp: App {
+    @State private var launchPrepared: Bool
     @UIApplicationDelegateAdaptor(PlozziOSAppDelegate.self) private var appDelegate
 
     init() {
         _ = AppInstallation.current
+        _launchPrepared = State(initialValue: SyncSetupLaunchPreparation.prepare())
         ProcessSignalPolicy.ignoreBrokenPipe()
         URLCache.shared = URLCache(
             memoryCapacity: 64 * 1024 * 1024,
             diskCapacity: 512 * 1024 * 1024,
             directory: nil
         )
+        // Mirrors the tvOS entry point. `PLZSTALL=1` arms the opt-in main-actor
+        // wake-up probe, which is how a device run can attribute the post-back
+        // navigation lock to a real stall instead of a screenshot guess.
+        MainActor.assumeIsolated { MainThreadStallProbe.startIfRequested() }
     }
 
     var body: some Scene {
         WindowGroup {
-            // Same scope as tvOS so the two shells can't drift on how the
-            // language override is applied. See CoreUI.AppLanguageScope.
-            AppLanguageScope {
-                PlozziOSRootView()
+            Group {
+                if launchPrepared {
+                    PlozziOSRootView()
+                } else {
+                    ICloudSetupUnavailableView {
+                        launchPrepared = SyncSetupLaunchPreparation.prepare()
+                    }
+                }
             }
             .diagnosticRecordingStatus()
         }

@@ -15,6 +15,16 @@ session persistence.
   - `PasswordSignInService` + `PasswordSignInViewModel` +
     `PasswordSignInView` — username/password sign-in for Emby and the
     fallback for Jellyfin servers without Quick Connect.
+  - `SubsonicAuthViewModel` + `SubsonicSignInView` — direct
+    **Navidrome (Subsonic)** address/username/password-or-API-key sign-in.
+    Server address and credentials use separate shared form groups. A native
+    Password/API Key selector defaults to Password and clears the previous
+    secret when switched; only API Key shows a short compatibility note.
+    Offered separately below the primary mobile choices in development/TestFlight,
+    without a generic "music servers" submenu. Shared account reauthentication
+    retains profile, server/user identity and credential-revision checks.
+    Cancelled work cannot persist a late session; persistence failure remains
+    visible instead of dismissing the form.
 - **Session state machine** — `SessionStateMachine`. A pure `reduce`
   function over `(state, event) → state` (`launching → selectingServer →
   authenticating → authenticated → failed`). Unit-tested independently of
@@ -32,6 +42,9 @@ session persistence.
   per-flow views above. `BrandQRCodeView` renders the Quick Connect /
   Plex Link codes as scannable QR. `ConnectionCodeView` supplies the shared
   readable code panel for Quick Connect, Plex Link, Silo, and device setup.
+  Mobile sign-in forms use `settingsSignInFields()` for native placeholders,
+  persistent accessible names, and consistent input spacing. This does not
+  remove descriptive section context or change tvOS field presentation.
   `ServerAddressesView` uses the shared provider logo and Settings surfaces to
   separate server/sign-in identity, saved addresses, and address entry. Full
   addresses wrap without truncation, with the protocol labeled separately;
@@ -40,6 +53,57 @@ session persistence.
   removal still requires confirmation, and the original address cannot be removed.
   The add action uses a native title-and-icon label so the group's muted row-icon
   color cannot override the prominent button's contrasting foreground.
+- **Source entry points** — both platforms use **Sources** for the device's
+  connected accounts and **Add Source** for the general provider chooser, using
+  `SettingsCopy` for shared labels. Mobile Home and Settings do not have a
+  separate network-share shortcut: **Media Share** is one of the chooser's
+  provider choices. Profile Libraries retains its add action even with connected
+  sources, with device-wide scope made explicit. First-run provider choices,
+  provider-specific reconnects, additional-user sign-in, and device transfer
+  remain distinct flows. **TV Sources / Add TV Source** names the narrower
+  profile-scoped channel setup; its general connection action still opens
+  **Add Source**.
+- **Mobile server onboarding** — `AppShelliOS.AddServerView` starts with the
+  same provider choices as first-run setup, then uses native navigation to
+  discovery and sign-in. Seeded server/user, synced-server, and IPTV reconnect
+  routes skip the chooser. Saved and discovered servers open sign-in directly;
+  manual addresses still pass through `ServerPickerViewModel` validation.
+  `ServerOnboardingPage` keeps mobile discovery, Quick Connect, password, and
+  Plex screens scrollable and width-capped on iPhone and iPad. Plex keeps browser
+  linking and manual codes, preselects owned servers, and adds only the checked
+  servers after Continue. Empty selection cannot continue. Leaving the server
+  selection asks for confirmation, and leaving authentication cancels its work.
+  Mobile primary and secondary page actions use `plozzPageActionButton`, with matching
+  20-point page insets and a 640-point content cap across the server flows.
+  Welcome, Add Source, Silo, and IPTV page actions share `plozzPageActionLabel`
+  inside native large buttons, including alternative sign-in methods.
+  Navidrome's Sign In and Cancel actions also fill the form width on TV.
+  The mobile navigation owner supplies Cancel at the modal root and Back on
+  subsequent steps, using semantic cancellation placement and title-plus-symbol
+  labels so native bars can adapt their edge. Silo and IPTV suppress their standalone
+  in-content cancellation when hosted in that flow; leaving a step cancels its
+  authentication/import work. Plex preserves its selection-loss confirmation
+  for both root Cancel and pushed Back.
+  Silo uses a matching secondary button to reveal another-device instructions
+  and a short code-verification reminder below its browser action.
+  Mobile link codes use the shared mobile code size without an enclosing
+  settings card, and the code tile uses the shared theme-aware group surface
+  instead of a dark overlay. The shared `LinkCodeExpiryCountdown` sits beside the code when
+  it fits, stacking below at narrow widths or larger text sizes; its neutral
+  mobile tint turns orange near expiry. TV retains its existing layout and tint.
+  Shared Silo and IPTV retain their setup behavior and tvOS layout; media shares
+  retain their native form flow.
+
+Mobile interaction tests use deterministic transport fixtures for navigation,
+retry, cancellation, and selection coverage. `LiveMobileServerOnboardingTests`
+is opt-in through `PLOZZ_ONBOARDING_LIVE_HELPER`, a caller-owned loopback URL.
+The helper serves `GET connection/{jellyfin,emby}` with non-secret `baseURL` and
+`username` fields, and accepts `POST approve-jellyfin` with a `code` field to
+approve the displayed Quick Connect request. It must use dedicated authorized
+test identities and keep credentials in memory, outside launch arguments,
+XCTest logs, and attachments. These tests use real validation/authentication
+and an isolated in-memory account store; they never run against live servers
+in the default suite.
 
 ## Invariants
 
@@ -110,6 +174,21 @@ session persistence.
   than invalidating every provider and losing active Silo grants.
 - **Tokens NEVER leave the Keychain.** Never written to `UserDefaults`,
   never logged. `AccountStore` is split-storage by design.
+- **Offline entry retains normal profile and PIN authorization.** An online Plex
+  Home sign-in can establish a non-synchronizing, device-local Keychain proof for
+  that profile, account credential revision, device, and selected server user.
+  Protected users retain a salted `ProfileLock` verifier, not their PIN. Offline
+  entry restores only that user's server token; it does not install an owner or
+  cloud-discovery token, establish a new binding, or enable automatic sign-in.
+  A connection outage may use this proof in normal mode, so a saved, reachable
+  LAN server remains usable without plex.tv. Explicit credential rejection,
+  changed identity, cancellation, and TLS/protocol failures cannot authorize
+  cached entry. First-time sign-in still requires the provider to be reachable.
+  `RuntimeFeatureFlag.offlineMode` gates this fallback on both platforms.
+  Disabling it retains the proof but cannot use it to authorize entry or create
+  new offline proofs; ordinary online authentication is unchanged.
+  As with other offline authorization, remote PIN/account changes cannot be
+  learned until connectivity returns; an observed rejection revokes the proof.
 - **One Plex Home authorization across servers.** During one profile activation,
   a successful Home-user PIN authenticates that Plex login/user once. Other enabled
   servers with the same Plex account user ID and Home-user UUID reuse its in-memory
@@ -245,6 +324,11 @@ or in-flight Plex PIN entry. Synced profile changes and locks still pass the
 profile gates, and source membership/credential changes still reconcile or revoke
 Plex access. Deliberate selection, even of the current profile, remains a fresh
 authorization boundary.
+On mobile, a pending “Who are you on this server?” question still blocks the
+watchlist import, but waits for the Plozz profile picker and any unlock or setup
+flow to finish. A successful Plex Home sign-in answers the question for that
+profile and server; a failed or cancelled PIN leaves it pending. Other profiles
+and servers keep their own unanswered questions.
 Automatic sign-in applies to Plozz profiles regardless of their providers,
 including profiles without server accounts. Plex Home token restoration is the
 provider-specific part, not a restriction on who can use the setting.

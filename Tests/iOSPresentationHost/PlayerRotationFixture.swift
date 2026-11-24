@@ -18,6 +18,7 @@ final class RotationLoadProbe {
     var videoFit = ""
     var brightness: Double?
     var systemVolume: Double?
+    var selectedVersionID: String?
     private var server: IPTVTestHTTPServer?
     private var streamingURL: URL?
 
@@ -71,6 +72,11 @@ struct PlayerRotationFixture: View {
             model.settings.playback.settings.skipForwardInterval = .five
             model.settings.playback.settings.skipBackwardInterval = .thirty
         }
+        if arguments.contains("--skip-player-fixture") {
+            model.settings.playback.settings.skipIntros = .on
+            model.settings.playback.settings.showUpNextCard = false
+            model.settings.playback.settings.autoPlayNextEpisode = false
+        }
         if arguments.contains("--no-level-gestures") {
             model.settings.playback.settings.volumeBrightnessGestures = false
         }
@@ -81,6 +87,8 @@ struct PlayerRotationFixture: View {
         }
         if arguments.contains("--auto") { model.settings.playback.settings.orientation = .auto }
         if arguments.contains("--portrait") { model.settings.playback.settings.orientation = .portrait }
+        if arguments.contains("--landscape-left") { model.settings.playback.settings.orientation = .landscapeLeft }
+        if arguments.contains("--landscape-right") { model.settings.playback.settings.orientation = .landscapeRight }
         _model = State(initialValue: model)
     }
 
@@ -105,8 +113,9 @@ struct PlayerRotationFixture: View {
     }
 
     private var playerSurface: some View {
-        openButton.plozziOSPlayerCover(item: $request, orientation: model.settings.playback.settings.orientation) {
-            request, orientation in
+        openButton.plozziOSPlayerCover(
+            item: $request, orientation: model.settings.playback.settings.orientation
+        ) { request, orientation in
             player(request: request, orientation: orientation)
         }
     }
@@ -116,14 +125,21 @@ struct PlayerRotationFixture: View {
             Button("Open rotation player") {
                 request = .init(
                     item: RotationProvider.media,
-                    startPosition: ProcessInfo.processInfo.arguments.contains("--keyboard-up-next-fixture")
-                        ? 135 : (ProcessInfo.processInfo.arguments.contains("--gesture-player-fixture") ? 60 : 0),
+                    startPosition: startPosition,
                     versionPreferences: model.versionPreferences
                 )
             }
             Text(model.settings.playback.settings.orientation.rawValue)
                 .accessibilityIdentifier("saved-orientation")
         }
+    }
+
+    private var startPosition: TimeInterval {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--end-player") { return 165 }
+        if arguments.contains("--keyboard-up-next-fixture") { return 135 }
+        if arguments.contains("--skip-player-fixture") { return 60 }
+        return arguments.contains("--gesture-player-fixture") ? 60 : 0
     }
 
     private func player(
@@ -145,6 +161,9 @@ struct PlayerRotationFixture: View {
         .overlay(alignment: .topTrailing) {
             VStack {
                 Text("Loads \(probe.count)").accessibilityIdentifier("rotation-load-count")
+                if ProcessInfo.processInfo.arguments.contains("--version-choice-fixture") {
+                    Text(probe.selectedVersionID ?? "none").accessibilityIdentifier("rotation-selected-version")
+                }
                 Text("\(probe.interfaceOrientation)").accessibilityIdentifier("rotation-interface-orientation")
                 if ProcessInfo.processInfo.arguments.contains("--gesture-player-fixture") {
                     Text(verbatim: probe.playbackRate.map { String($0) } ?? "unavailable")
@@ -225,11 +244,19 @@ private struct RotationProvider: MediaProvider, StreamingQualityProviding {
     private static var keyboardUpNext: Bool {
         ProcessInfo.processInfo.arguments.contains("--keyboard-up-next-fixture")
     }
+    private static var versionChoice: Bool {
+        ProcessInfo.processInfo.arguments.contains("--version-choice-fixture")
+    }
     static var media: MediaItem {
         if keyboardUpNext { return episode(index: 1) }
         return MediaItem(
-            id: "rotation", title: "Rotation fixture", kind: embyStreaming || failsPlayback ? .movie : .video, runtime: 180,
-            allowsTitleBasedMetadataMatching: false
+            id: "rotation", title: "Rotation fixture",
+            kind: embyStreaming || failsPlayback || versionChoice ? .movie : .video, runtime: 180,
+            allowsTitleBasedMetadataMatching: false,
+            versions: versionChoice ? [
+                .init(id: "rotation-1080", width: 1920, height: 1080, videoCodec: "h264"),
+                .init(id: "rotation-4k", width: 3840, height: 2160, videoCodec: "h264")
+            ] : []
         )
     }
     private static func episode(index: Int) -> MediaItem {
@@ -270,6 +297,9 @@ private struct RotationProvider: MediaProvider, StreamingQualityProviding {
     func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest {
         await MainActor.run { probe.count += 1 }
+        if ProcessInfo.processInfo.arguments.contains("--slow-player-fixture") {
+            try await Task.sleep(for: .seconds(5))
+        }
         if ProcessInfo.processInfo.arguments.contains("--failed-conversion-fixture") {
             throw StreamingQualityError.unavailable
         }
@@ -287,11 +317,20 @@ private struct RotationProvider: MediaProvider, StreamingQualityProviding {
         for itemID: String, mediaSourceID: String?, forceTranscode: Bool,
         streaming: StreamingPlaybackOptions
     ) async throws -> PlaybackRequest {
-        try await playbackInfo(for: itemID)
+        await MainActor.run { probe.selectedVersionID = mediaSourceID }
+        return try await playbackInfo(for: itemID)
     }
     func releaseStreamingSession(_ request: PlaybackRequest) async {}
     func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
     func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
+
+    /// A real server-shaped intro window for `PlayerSkipInteractionTests`: the
+    /// production overlay shows "Skip Intro" and the press must seek past the
+    /// WHOLE window, not a ±skip interval.
+    func mediaSegments(for itemID: String) async throws -> [MediaSegment] {
+        guard ProcessInfo.processInfo.arguments.contains("--skip-player-fixture") else { return [] }
+        return [MediaSegment(id: "fixture-intro", kind: .intro, start: 60, end: 90)]
+    }
 
     private static func movie() async throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rotation-fixture.mov")

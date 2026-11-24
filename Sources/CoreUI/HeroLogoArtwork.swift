@@ -34,13 +34,16 @@ public enum HeroLogoPresentationPolicy: Sendable, Equatable {
     /// Keep the title area empty during resolution; show text only when no usable
     /// logo is available.
     case whenResolved
+    /// Paint a ready logo or confirmed text fallback immediately. Fade only a
+    /// logo that arrives after the slot is already on screen.
+    case detailEntrance
     /// Adopt the logo only if it is ready within the arrival window. A later result
     /// still warms the shared cache, but the current title remains visually stable.
     case onArrival(maximumWait: TimeInterval)
 
     func shouldAdopt(elapsed: TimeInterval) -> Bool {
         switch self {
-        case .whenReady, .whenResolved:
+        case .whenReady, .whenResolved, .detailEntrance:
             return true
         case .onArrival(let maximumWait):
             return elapsed <= max(0, maximumWait)
@@ -52,7 +55,7 @@ public enum HeroLogoPresentationPolicy: Sendable, Equatable {
     }
 
     var showsTextWhileLoading: Bool {
-        self != .whenResolved
+        self != .whenResolved && self != .detailEntrance
     }
 }
 
@@ -183,6 +186,7 @@ public struct HeroLogoFallback: Sendable {
 }
 
 public struct HeroLogoArtwork<TextFallback: View>: View {
+    @Environment(\.openingHeroLogo) private var openingLogo
     private let references: [ArtworkReference]
     private let asyncFallbackURL: HeroLogoFallback?
     private let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
@@ -262,30 +266,84 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
 
     public var body: some View {
         #if canImport(UIKit)
-        ArtworkPolicyReader(policy: nil) { policy in
-        let logoPolicy = policy.forPlacement(.logo)
-        LoadedLogo(
-            references: references,
-            asyncFallbackURL: asyncFallbackURL?.localized(to: logoPolicy.logoLanguage),
-            prefersOnlineArtwork: logoPolicy.prefersOnlineArtwork,
-            providerPolicyIdentity: logoPolicy.identity,
-            backgroundSample: backgroundSample,
-            displayedArtworkID: displayedArtworkID,
-            maxWidth: maxWidth,
-            maxHeight: maxHeight,
-            constrainsToBounds: constrainsToBounds,
-            presentationPolicy: presentationPolicy,
-            alignment: alignment,
-            haloStyle: haloStyle,
-            logoNeedsHelp: logoNeedsHelp,
-            onResolve: onResolve,
-            textFallback: textFallback
-        )
-        .id(logoPolicy.identity)
+        ArtworkPolicyReader(policy: nil) { policy, sourceReady in
+            let logoPolicy = policy.forPlacement(.logo)
+            let fallback = asyncFallbackURL?.localized(to: logoPolicy.logoLanguage)
+            let seed = openingLogo.flatMap {
+                $0.value(
+                    for: HeroLogoMemo.key(
+                        for: references, fallback: fallback,
+                        prefersOnlineArtwork: logoPolicy.prefersOnlineArtwork,
+                        providerPolicyIdentity: logoPolicy.identity
+                    ),
+                    itemID: displayedArtworkID
+                )
+            }
+            if sourceReady || seed != nil || presentationPolicy == .detailEntrance {
+                LoadedLogo(
+                    references: references,
+                    asyncFallbackURL: fallback,
+                    prefersOnlineArtwork: logoPolicy.prefersOnlineArtwork,
+                    providerPolicyIdentity: logoPolicy.identity,
+                    openingLogo: seed,
+                    sourceReady: sourceReady,
+                    backgroundSample: backgroundSample,
+                    displayedArtworkID: displayedArtworkID,
+                    maxWidth: maxWidth,
+                    maxHeight: maxHeight,
+                    constrainsToBounds: constrainsToBounds,
+                    presentationPolicy: presentationPolicy,
+                    alignment: alignment,
+                    haloStyle: haloStyle,
+                    logoNeedsHelp: logoNeedsHelp,
+                    onResolve: onResolve,
+                    textFallback: textFallback
+                )
+                .id(logoPolicy.identity)
+            } else {
+                textFallback().opacity(presentationPolicy.showsTextWhileLoading ? 1 : 0)
+            }
         }
         #else
         textFallback()
         #endif
+    }
+}
+
+/// A presentation's processed wordmark, reusable only for the same subject and
+/// compatible lookup. It is not permission to resolve new artwork before entry.
+public struct DisplayedHeroLogo {
+    public let itemID: String
+    let key: HeroLogoMemo.Key
+    let logo: ProcessedLogo
+
+    @MainActor
+    func value(for key: HeroLogoMemo.Key, itemID: String?) -> ProcessedLogo? {
+        guard self.itemID == itemID, key.canRetainImage(from: self.key) else { return nil }
+        return logo
+    }
+}
+
+struct DetailLogoVisit: Hashable {
+    let scope: String
+    let subject: String
+}
+
+extension EnvironmentValues {
+    @Entry var detailLogoVisit: DetailLogoVisit? = nil
+}
+
+public extension View {
+    func detailHeroLogoVisit(scope: String, subject: String) -> some View {
+        environment(\.detailLogoVisit, DetailLogoVisit(scope: scope, subject: subject))
+    }
+}
+
+/// Published by the detail title once a logo or its text fallback is fully visible.
+public struct SettledDetailTitleID: PreferenceKey {
+    public static let defaultValue: String? = nil
+    public static func reduce(value: inout String?, nextValue: () -> String?) {
+        value = nextValue() ?? value
     }
 }
 
@@ -306,9 +364,48 @@ enum HeroLogoMemo {
         let fallback: HeroLogoFallback.Identity?
         let prefersOnlineArtwork: Bool
         let providerPolicyIdentity: String
+        let displayIdentity: ArtworkDisplayIdentity
+
+        /// Compatible enrichment must not replace a painted logo.
+        func canRetainImage(from previous: Self) -> Bool {
+            if self == previous { return true }
+            guard prefersOnlineArtwork == previous.prefersOnlineArtwork,
+                  providerPolicyIdentity == previous.providerPolicyIdentity,
+                  displayIdentity == previous.displayIdentity,
+                  let next = fallback, let old = previous.fallback,
+                  next.itemID == old.itemID, next.sourceAccountID == old.sourceAccountID else {
+                return false
+            }
+            let query = next.query
+            let prior = old.query
+            // Genres can change metadata routing without changing the subject.
+            guard query.artworkLanguage == prior.artworkLanguage,
+                  query.kind == prior.kind,
+                  query.title == prior.title, query.alternateTitle == prior.alternateTitle,
+                  prior.year == nil || query.year == prior.year,
+                  query.seasonNumber == prior.seasonNumber,
+                  query.episodeNumber == prior.episodeNumber else { return false }
+            let ids = query.logoSubjectIDs
+            return prior.logoSubjectIDs.allSatisfy { ids[$0.key] == $0.value }
+        }
+
+        func canPreview(from richer: Self, awaitingSource: Bool) -> Bool {
+            guard let fallback, references.isEmpty || references == richer.references,
+                  richer.canRetainImage(from: self) else { return false }
+            if awaitingSource, fallback.sourceAccountID != nil { return true }
+            // Discovery records need not have a server account. Only bridge a
+            // thinner record when it still confirms a catalogue identity.
+            return [.tmdb, .imdb, .tvdb, .aniList, .myAnimeList].contains { (id: ProviderIDNamespace) in
+                fallback.query.providerIDs.providerID(id) != nil
+            }
+        }
     }
 
-    private static var entries: [Key: ProcessedLogo] = [:]
+    private struct Entry {
+        let logo: ProcessedLogo
+        let visit: DetailLogoVisit?
+    }
+    private static var entries: [Key: Entry] = [:]
     private static var order: [Key] = []
     /// Enough for a hero carousel plus the pages reached from it. Evicting
     /// oldest-first costs one await on the next look, not a re-decode.
@@ -324,13 +421,32 @@ enum HeroLogoMemo {
             references: references.map(\.privacySafeIdentity),
             fallback: fallback?.identity,
             prefersOnlineArtwork: fallback != nil && prefersOnlineArtwork,
-            providerPolicyIdentity: providerPolicyIdentity
+            providerPolicyIdentity: providerPolicyIdentity,
+            displayIdentity: ArtworkDisplayIdentity(
+                subject: "logo", policy: providerPolicyIdentity, references: references, variant: .original
+            )
         )
     }
 
-    static func value(for key: Key) -> ProcessedLogo? { entries[key] }
+    static func value(for key: Key) -> ProcessedLogo? { entries[key]?.logo }
 
-    static func store(_ value: ProcessedLogo, for key: Key) {
+    fileprivate static func replay(for key: Key, visit: DetailLogoVisit?) -> ProcessedLogo? {
+        guard let visit else { return nil }
+        if let entry = entries[key], entry.visit == visit { return entry.logo }
+        for previous in order.reversed() where entries[previous]?.visit == visit && key.canRetainImage(from: previous) {
+            return entries[previous]?.logo
+        }
+        return nil
+    }
+
+    fileprivate static func preview(for key: Key, visit: DetailLogoVisit?, awaitingSource: Bool) -> (key: Key, logo: ProcessedLogo)? {
+        guard let visit, let previous = order.last(where: { entries[$0]?.visit == visit }),
+              key.canPreview(from: previous, awaitingSource: awaitingSource),
+              let entry = entries[previous] else { return nil }
+        return (previous, entry.logo)
+    }
+
+    static func store(_ value: ProcessedLogo, for key: Key, visit: DetailLogoVisit? = nil) {
         if entries[key] == nil {
             order.append(key)
             if order.count > capacity, let oldest = order.first {
@@ -338,7 +454,9 @@ enum HeroLogoMemo {
                 entries[oldest] = nil
             }
         }
-        entries[key] = value
+        let previous = entries[key]
+        let sameBitmap = previous?.logo.image === value.image
+        entries[key] = Entry(logo: value, visit: visit ?? (sameBitmap ? previous?.visit : nil))
     }
 }
 
@@ -348,6 +466,8 @@ private struct LoadedLogo<TextFallback: View>: View {
     let asyncFallbackURL: HeroLogoFallback?
     let prefersOnlineArtwork: Bool
     let providerPolicyIdentity: String
+    let openingLogo: ProcessedLogo?
+    let sourceReady: Bool
     let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
     let displayedArtworkID: String?
     let maxWidth: CGFloat
@@ -363,6 +483,8 @@ private struct LoadedLogo<TextFallback: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.heroArtworkDisplayState) private var displayedArtwork
+    @Environment(\.heroArtworkDisplayReporter) private var artworkReporter
+    @Environment(\.detailLogoVisit) private var detailVisit
     #if os(tvOS)
     @Environment(\.themePalette) private var palette
     @Environment(\.gradientBackgroundsEnabled) private var gradientEnabled
@@ -374,18 +496,24 @@ private struct LoadedLogo<TextFallback: View>: View {
     /// The completed request, including a confirmed miss. A different subject
     /// must neither show its image nor inherit its text-fallback readiness.
     @State private var resolvedKey: HeroLogoMemo.Key?
+    @State private var pendingFade: UUID?
 
     var body: some View {
         // Falls back to the synchronous memo, so a logo this view has already
         // resolved once paints on the FIRST frame of a rebuild. Without it every
         // rebuild drew the styled title for at least one frame, because the
         // pipeline is an actor and even a cache hit costs a suspension.
-        let cached = (resolvedKey == taskKey ? image : nil) ?? HeroLogoMemo.value(for: taskKey)
+        let key = taskKey
+        let retained = resolvedKey.map { key.canRetainImage(from: $0) } == true ? image : nil
+        let verified = sourceReady ? (retained ?? openingLogo ?? HeroLogoMemo.value(for: key)) : openingLogo
+        let reusable = verified ?? HeroLogoMemo.replay(for: key, visit: detailVisit)
+        let preview = reusable == nil ? HeroLogoMemo.preview(for: key, visit: detailVisit, awaitingSource: !sourceReady) : nil
+        let cached = reusable ?? preview?.logo
         let shown = cached.map { processed in
             guard let displayedArtworkID else { return processed }
             return HeroLogoAnalysis.refine(processed, backgroundSample: displayedArtwork?.sample(for: displayedArtworkID))
         }
-        Group {
+        let content = Group {
             if let processed = shown {
                 logo(processed)
                     .transition(.opacity)
@@ -398,13 +526,43 @@ private struct LoadedLogo<TextFallback: View>: View {
                     .transition(.opacity)
             }
         }
-        .animation(
-            reduceMotion || resolvedKey != taskKey || !presentationPolicy.animatesResolvedLogo
-                ? nil
-                : .easeIn(duration: 0.25),
-            value: shown != nil
+        Group {
+            if presentationPolicy == .detailEntrance {
+                let noSources = references.isEmpty && asyncFallbackURL == nil
+                let ready = shown != nil || noSources || (sourceReady && resolvedKey == taskKey)
+                // Animate the opacity of a persistent slot, not the insertion
+                // of a newly decoded Image into the conditional Group.
+                ZStack(alignment: alignment) {
+                    content.transaction { $0.animation = nil }
+                }
+                .opacity(ready ? 1 : 0)
+                .preference(key: SettledDetailTitleID.self, value: ready && (pendingFade == nil || reduceMotion) ? displayedArtworkID : nil)
+            } else {
+                content.animation(
+                    reduceMotion || resolvedKey != taskKey || !presentationPolicy.animatesResolvedLogo
+                        ? nil : .easeIn(duration: 0.25),
+                    value: shown != nil
+                )
+            }
+        }
+        .onChange(of: shown?.image, initial: true) { _, _ in
+            report(shown, key: preview?.key ?? (retained != nil ? resolvedKey ?? key : key))
+        }
+        .onChange(of: artworkReporter?.identity) { _, _ in
+            report(shown, key: preview?.key ?? (retained != nil ? resolvedKey ?? key : key))
+        }
+        .task(id: sourceReady ? taskKey : nil) {
+            guard sourceReady else { return }
+            await resolve()
+        }
+    }
+
+    private func report(_ logo: ProcessedLogo?, key: HeroLogoMemo.Key) {
+        guard let displayedArtworkID else { return }
+        artworkReporter?.publishLogo(
+            logo.map { DisplayedHeroLogo(itemID: displayedArtworkID, key: key, logo: $0) },
+            itemID: displayedArtworkID
         )
-        .task(id: taskKey) { await resolve() }
     }
 
     /// The exact size a logo renders at inside the `maxWidth` × `maxHeight` box.
@@ -508,20 +666,14 @@ private struct LoadedLogo<TextFallback: View>: View {
 
     private func resolve() async {
         let startedAt = ProcessInfo.processInfo.systemUptime
-        // Deliberately NOT cleared here.
-        //
-        // Blanking first meant every re-resolve dropped a logo that was already on
-        // screen back to the styled title, and then restored it — the text
-        // reappearing *after* the logo had loaded. A re-resolve is common: the
-        // reference list changes as a title is enriched, and a hero carousel
-        // rebuilds its slides as it pages.
-        //
-        // A matching key may retain its current image. A different title,
-        // source, lookup query or artwork preference must resolve independently;
-        // `body` also rejects that old image before the new task starts.
-        if resolvedKey != taskKey { image = nil }
+        // Keep a visible logo during compatible enrichment, but never carry it
+        // into another subject or artwork policy while the new request resolves.
         let key = taskKey
-        if let cached = HeroLogoMemo.value(for: key) {
+        if image != nil, resolvedKey.map({ key.canRetainImage(from: $0) }) == true {
+            return
+        }
+        if resolvedKey.map({ key.canRetainImage(from: $0) }) != true { image = nil }
+        if let cached = openingLogo ?? HeroLogoMemo.value(for: key) ?? HeroLogoMemo.replay(for: key, visit: detailVisit) {
             resolvedKey = key
             adopt(cached, for: key)
             if displayedArtworkID == nil, let backgroundSample {
@@ -531,6 +683,9 @@ private struct LoadedLogo<TextFallback: View>: View {
             }
             return
         }
+        // Keep the original lookup identity. Caching this bitmap under the
+        // thinner record would let a later conflicting ID appear compatible.
+        if HeroLogoMemo.preview(for: key, visit: detailVisit, awaitingSource: false) != nil { return }
         // `HeroLogoPipeline` caches the processed result by URL and runs the heavy
         // pixel work off the main actor, so re-appears / scheme changes / fast
         // scrolling reuse the prepared logo instead of reprocessing it.
@@ -541,11 +696,12 @@ private struct LoadedLogo<TextFallback: View>: View {
             prefersOnlineArtwork: prefersOnlineArtwork
         )
         guard !Task.isCancelled else { return }
-        resolvedKey = key
-        guard let prepared else { return }
         let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
-        guard presentationPolicy.shouldAdopt(elapsed: elapsed) else { return }
-
+        guard let prepared, presentationPolicy.shouldAdopt(elapsed: elapsed) else {
+            image = nil
+            resolvedKey = key
+            return
+        }
         // Draw the logo the moment it is decoded, BEFORE the backdrop is sampled.
         //
         // The sample is a second image fetched and analysed, and waiting on it
@@ -560,11 +716,24 @@ private struct LoadedLogo<TextFallback: View>: View {
         // always-on halo, because for that caller "unmeasured" is permanent rather
         // than momentary.
         let awaitsSample = displayedArtworkID == nil && backgroundSample != nil
-        adopt(HeroLogoAnalysis.analyze(
+        let processed = HeroLogoAnalysis.analyze(
             prepared,
             backgroundSample: nil,
             halosWhenUnmeasured: !awaitsSample
-        ), for: key)
+        )
+        if presentationPolicy == .detailEntrance && !reduceMotion {
+            let ticket = UUID()
+            pendingFade = ticket
+            withAnimation(DetailEntranceMotion.reveal(duration: DetailEntranceTiming().reveal), completionCriteria: .removed) {
+                resolvedKey = key
+                adopt(processed, for: key)
+            } completion: {
+                if pendingFade == ticket { pendingFade = nil }
+            }
+        } else {
+            resolvedKey = key
+            adopt(processed, for: key)
+        }
         guard awaitsSample else { return }
 
         // Then refine in place. A halo appearing a beat late is a soft shadow
@@ -579,7 +748,7 @@ private struct LoadedLogo<TextFallback: View>: View {
 
     private func adopt(_ processed: ProcessedLogo, for key: HeroLogoMemo.Key) {
         image = processed
-        HeroLogoMemo.store(processed, for: key)
+        HeroLogoMemo.store(processed, for: key, visit: detailVisit)
         onResolve?(processed.tone)
     }
 }
@@ -789,6 +958,23 @@ public enum HeroLogoPreloader {
         references: [ArtworkReference], fallback: HeroLogoFallback?,
         policy: ArtworkPresentationPolicy
     ) async {
+        await prepare(references: references, fallback: fallback, policy: policy, visit: nil)
+    }
+
+    @MainActor
+    public static func prepare(
+        references: [ArtworkReference], fallback: HeroLogoFallback?,
+        policy: ArtworkPresentationPolicy, scope: String, subject: String
+    ) async {
+        await prepare(references: references, fallback: fallback, policy: policy,
+                      visit: DetailLogoVisit(scope: scope, subject: subject))
+    }
+
+    @MainActor
+    static func prepare(
+        references: [ArtworkReference], fallback: HeroLogoFallback?,
+        policy: ArtworkPresentationPolicy, visit: DetailLogoVisit?
+    ) async {
         let policy = policy.forPlacement(.logo)
         let fallback = fallback?.localized(to: policy.logoLanguage)
         let key = HeroLogoMemo.key(
@@ -796,13 +982,17 @@ public enum HeroLogoPreloader {
             prefersOnlineArtwork: policy.prefersOnlineArtwork,
             providerPolicyIdentity: policy.identity
         )
-        guard HeroLogoMemo.value(for: key) == nil, !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return }
+        if let existing = HeroLogoMemo.value(for: key) {
+            if let visit { HeroLogoMemo.store(existing, for: key, visit: visit) }
+            return
+        }
         guard let prepared = await loadPreparedHeroLogo(
             references: references, asyncFallbackURL: fallback?.resolve,
             priority: .background, prefersOnlineArtwork: policy.prefersOnlineArtwork,
             background: true
         ), !Task.isCancelled else { return }
-        HeroLogoMemo.store(HeroLogoAnalysis.analyze(prepared, backgroundSample: nil), for: key)
+        HeroLogoMemo.store(HeroLogoAnalysis.analyze(prepared, backgroundSample: nil), for: key, visit: visit)
     }
 }
 
@@ -1091,7 +1281,7 @@ actor HeroLogoPipeline {
     private static func fetchAndPrepare(_ reference: ArtworkReference, background: Bool) async -> PreparedLogo? {
         switch reference {
         case .remote(let url):
-            guard let (data, response) = try? await ArtworkSession.shared.data(from: url) else {
+            guard let (data, response) = try? await ArtworkSession.data(from: url) else {
                 return nil
             }
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
@@ -1470,6 +1660,7 @@ private extension UIImage {
         // Reject non-uniform borders (real artwork) by checking spread against the
         // mean: if any sampled border pixel is far from the average, bail out.
         var maxDev = 0.0
+        var outliers = 0
         func dev(_ x: Int, _ y: Int) {
             let i = y * bytesPerRow + x * bpp
             let a = Double(data[i + 3]) / 255.0
@@ -1478,6 +1669,7 @@ private extension UIImage {
             let g = Double(data[i + 1]) / 255.0 / a * 255.0
             let b = Double(data[i + 2]) / 255.0 / a * 255.0
             let d = max(abs(r - bgR), max(abs(g - bgG), abs(b - bgB)))
+            if d > 26 { outliers += 1 }
             if d > maxDev { maxDev = d }
         }
         for x in stride(from: minX, through: maxX, by: max(1, sampleWidth / 64)) {
@@ -1488,7 +1680,10 @@ private extension UIImage {
         }
         // Tolerance for "the border is one flat colour". Loose enough to absorb
         // JPEG noise, tight enough to spare gradient/photographic backgrounds.
-        guard maxDev <= 26 else { return nil }
+        // A few compression artifacts on an otherwise flat brand-colour edge
+        // should not leave a smaller coloured box inside the channel plate.
+        let chromatic = max(bgR, bgG, bgB) - min(bgR, bgG, bgB) > 48
+        guard maxDev <= 26 || (maxDev.isFinite && maxDev < 100 && chromatic && outliers * 50 <= count) else { return nil }
 
         return PlateColor(red: bgR, green: bgG, blue: bgB)
     }

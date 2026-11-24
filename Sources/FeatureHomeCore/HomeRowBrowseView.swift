@@ -12,6 +12,10 @@ public struct HomeRowBrowseView<Card: View>: View {
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzNavigationContentInset) private var navigationInset
     @State private var moreRequest = 0
+    #if os(tvOS)
+    @Namespace private var entryFocusScope
+    @State private var hasResolvedEntryFocus = false
+    #endif
     private struct LoadKey: Equatable {
         let query: HomeRowBrowseQuery
         let snapshot: [MediaItem]?
@@ -38,16 +42,22 @@ public struct HomeRowBrowseView<Card: View>: View {
                         filterControl
                         sortControl.fixedSize(horizontal: true, vertical: false)
                     }
+                    .disabled(awaitsGridEntry)
                 }
                 .lineLimit(1)
                 .focusSection()
-                #else
-                heading
                 #endif
                 if model.query == model.appliedQuery {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: metrics.gridSpacing) {
                         ForEach(model.items, id: \.stablePresentationID) { item in
                             card(item)
+                                #if os(tvOS)
+                                .disabled(!hasResolvedEntryFocus && item.stablePresentationID != model.items.first?.stablePresentationID)
+                                .prefersDefaultFocus(
+                                    !hasResolvedEntryFocus && item.stablePresentationID == model.items.first?.stablePresentationID,
+                                    in: entryFocusScope
+                                )
+                                #endif
                                 .onAppear {
                                     if item.stablePresentationID == model.items.last?.stablePresentationID,
                                        model.hasMore, !model.isLoading, model.error == nil {
@@ -56,6 +66,11 @@ public struct HomeRowBrowseView<Card: View>: View {
                                 }
                         }
                     }
+                    #if os(tvOS)
+                    .background {
+                        NativeFocusRegionObserver(isEnabled: !hasResolvedEntryFocus) { hasResolvedEntryFocus = true }
+                    }
+                    #endif
                 }
                 if let error = model.error {
                     VStack(alignment: .leading, spacing: 12) {
@@ -67,6 +82,9 @@ public struct HomeRowBrowseView<Card: View>: View {
                         .frame(maxWidth: .infinity)
                 } else if model.hasMore {
                     Button("Load more") { moreRequest += 1 }
+                        #if os(tvOS)
+                        .disabled(awaitsGridEntry)
+                        #endif
                         .onAppear { moreRequest += 1 }
                 } else if model.items.isEmpty {
                     Text("No titles to show")
@@ -84,11 +102,22 @@ public struct HomeRowBrowseView<Card: View>: View {
             guard moreRequest > 0, !model.isLoading else { return }
             await model.load()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .mediaItemDidMutate)) {
-            if let mutation = MediaItemMutation.from($0) { model.applyMutation(mutation) }
+        .task {
+            for await notification in NotificationCenter.default.notifications(named: .mediaItemDidMutate) {
+                if let mutation = MediaItemMutation.from(notification) { await model.applyMutation(mutation) }
+            }
         }
         .onChange(of: model.scopeIsCurrent) { _, current in if !current { model.invalidate() } }
+        #if os(tvOS)
+        .focusScope(entryFocusScope)
+        .background {
+            NativeFocusRegionObserver(isEnabled: !hasResolvedEntryFocus && !awaitsGridEntry) {
+                hasResolvedEntryFocus = true
+            }
+        }
+        #endif
         #if os(iOS)
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -98,6 +127,12 @@ public struct HomeRowBrowseView<Card: View>: View {
         }
         #endif
     }
+
+    #if os(tvOS)
+    private var awaitsGridEntry: Bool {
+        !hasResolvedEntryFocus && model.error == nil && (model.isLoading || model.hasMore || !model.items.isEmpty)
+    }
+    #endif
 
     private var horizontalPadding: CGFloat {
         #if os(tvOS)
@@ -121,40 +156,30 @@ public struct HomeRowBrowseView<Card: View>: View {
     }
 
     private var sortControl: some View {
-        BrowseSortMenu(
-            sort: model.query.sort ?? .default,
-            fields: [.name, .dateAdded, .releaseDate, .runtime],
-            isDefault: model.query.sort == nil,
-            onReset: { model.query.sort = nil },
-            onChange: { model.query.sort = $0 }
-        )
+        Menu {
+            HomeContentSortOptions(query: $model.query)
+        } label: {
+            Label {
+                Text(model.query.sortTitle)
+            } icon: {
+                Image(systemName: "arrow.up.arrow.down")
+            }
+            #if os(iOS)
+            .frame(minWidth: 44, minHeight: 44)
+            #endif
+        }
+        .accessibilityLabel(Text("Sort: \(model.query.sortTitle)"))
         .accessibilityIdentifier("home-row-sort-menu")
     }
 
     private var filterControl: some View {
         BrowseFilterMenu(
-            activeCount: model.query.filters.activeCount + (model.query.media == .all ? 0 : 1),
-            summary: filterSummary
+            activeCount: model.query.activeFilterCount,
+            summary: model.query.filterSummary(in: locale)
         ) {
-            Picker("Filter", selection: $model.query.media) {
-                ForEach(WatchlistMediaFilter.allCases, id: \.self) { Text($0.displayName).tag($0) }
-            }
-            Picker("Filter", selection: $model.query.filters.filter) {
-                Text("All").tag(LibraryFilter.all)
-                Text("Unwatched").tag(LibraryFilter.unwatched)
-                Text("In Progress").tag(LibraryFilter.inProgress)
-            }
+            HomeContentFilterOptions(query: $model.query)
         }
         .accessibilityIdentifier("home-row-filter-menu")
     }
 
-    private var filterSummary: String {
-        var labels = [model.query.filters.summary(in: locale)].filter { !$0.isEmpty }
-        if model.query.media != .all {
-            var title = model.query.media.displayName
-            title.locale = locale
-            labels.insert(String(localized: title), at: 0) // l10n:content — existing localized filter choice
-        }
-        return labels.joined(separator: " · ")
-    }
 }

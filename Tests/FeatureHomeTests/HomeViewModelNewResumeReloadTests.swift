@@ -9,6 +9,53 @@ import CoreModels
 /// the next episode; movies and in-place progress do not need that refresh.
 @MainActor
 final class HomeViewModelNewResumeReloadTests: XCTestCase {
+    func testBriefResumeAndTrailerCannotBypassCurationViaProviderOrOptimisticUpdates() async {
+        let movie = MediaItem(
+            id: "movie", title: "Movie", kind: .movie, runtime: 7_200,
+            resumePosition: 2, sourceAccountID: "a"
+        )
+        var trailer = movie.markingAsTrailer()
+        trailer.id = "trailer"
+        trailer.resumePosition = 100
+        let next = MediaItem(id: "next", title: "Next", kind: .episode)
+        let provider = FakeMediaProvider(allItems: [])
+        provider.continueWatchingItems = [movie, trailer, next]
+        let vm = makeViewModel(provider: provider)
+        await vm.load()
+        XCTAssertEqual(cw(vm).map(\.id), ["next"])
+        vm.applyWatchedState(.init(
+            itemIDs: ["movie"], scopedItemIDs: ["a:movie"], resumePosition: 59.999, item: movie
+        ))
+        vm.applyWatchedState(.init(
+            itemIDs: ["trailer"], scopedItemIDs: ["a:trailer"], resumePosition: 100, item: trailer
+        ))
+        XCTAssertEqual(cw(vm).map(\.id), ["next"])
+        vm.applyWatchedState(.init(
+            itemIDs: ["movie"], scopedItemIDs: ["a:movie"], resumePosition: 60, item: movie
+        ))
+        XCTAssertEqual(cw(vm).map(\.id), ["movie", "next"])
+    }
+
+    func testPendingAndCarriedProgressCannotBypassAdmission() {
+        let movie = MediaItem(
+            id: "movie", title: "Movie", kind: .movie, runtime: 7_200,
+            resumePosition: 60, sourceAccountID: "a"
+        )
+        let pending = WatchMutation(
+            capturedAt: Date(), canonicalMediaID: "movie", resumePosition: 5,
+            targets: [.init(accountID: "a", itemID: "movie")]
+        )
+        XCTAssertTrue(HomeViewModel.reconcileContinueWatching([movie], pending: [pending]).isEmpty)
+        var brief = movie
+        brief.resumePosition = 5
+        XCTAssertTrue(HomeViewModel.reconcileContinueWatching(
+            [], pending: [pending], carryForward: [brief]
+        ).isEmpty)
+        XCTAssertTrue(HomeViewModel.reconcileContinueWatching(
+            [movie.markingAsTrailer()], pending: []
+        ).isEmpty)
+    }
+
     private func makeViewModel(
         provider: FakeMediaProvider, visibility: HomeLibraryVisibility = .default
     ) -> HomeViewModel {
@@ -38,6 +85,36 @@ final class HomeViewModelNewResumeReloadTests: XCTestCase {
 
     private func cw(_ vm: HomeViewModel) -> [MediaItem] {
         vm.state.value?.continueWatching ?? []
+    }
+
+    func testUnwatchedResetRemovesOnlySelectedResumeAndClearsOtherCards() async throws {
+        for kind in [MediaItemKind.movie, .episode] {
+            let selected = MediaItem(
+                id: "selected", title: "Selected", kind: kind,
+                resumePosition: 600, playedPercentage: 0.5, sourceAccountID: "a"
+            )
+            let other = MediaItem(
+                id: "other", title: "Other", kind: kind,
+                resumePosition: 900, playedPercentage: 0.5, sourceAccountID: "a"
+            )
+            let provider = FakeMediaProvider(allItems: [selected, other])
+            provider.continueWatchingItems = [selected, other]
+            provider.latestItems = [selected, other]
+            let vm = makeViewModel(provider: provider)
+            await vm.load()
+            XCTAssertEqual(Set(cw(vm).map(\.id)), ["selected", "other"])
+            vm.applyWatchedState(.init(
+                itemIDs: ["selected"], scopedItemIDs: ["a:selected"],
+                played: false, resumePosition: 0, playedPercentage: 0, item: selected
+            ))
+            XCTAssertEqual(cw(vm).map(\.id), ["other"])
+            XCTAssertFalse(vm.continueWatchingForDetail.contains { $0.id == "selected" })
+            let updated = try XCTUnwrap(vm.state.value?.latest.first { $0.id == "selected" })
+            XCTAssertFalse(updated.isPlayed)
+            XCTAssertNil(updated.resumePosition)
+            XCTAssertEqual(updated.playedPercentage, 0)
+            XCTAssertEqual(cw(vm).first?.resumePosition, 900)
+        }
     }
 
     func testProviderStyleNextUpMovesIntoResumeAndRefreshesAfterCompletion() async throws {

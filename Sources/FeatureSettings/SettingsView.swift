@@ -369,56 +369,12 @@ public struct SettingsView: View {
 
     public var body: some View {
         SettingsWorkspace(navigation: navigation) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    // The active profile's own container comes FIRST. Almost
-                    // everything anyone opens Settings to change is in here —
-                    // playback, appearance, trackers — while the device-shared
-                    // section is servers and profile management, which is setup
-                    // you do once. Ordering by "what belongs to the whole Apple
-                    // TV" put the rarely-touched half at the top and pushed the
-                    // rest below it. Switching profiles swaps everything inside
-                    // this container at once.
-                    profileContainer
-
-                    // Then what every profile shares, regardless of who is using
-                    // it — unless a Kids Profile is active, in which case the
-                    // whole section is withheld. Every destructive control in the
-                    // app lives in there (remove server, delete profile, sign out
-                    // of everything), and a child's profile is deliberately left
-                    // unlocked, so without this the lock on the grown-ups'
-                    // profiles could simply be routed around.
-                    // The parent-controlled group sits between the child's own
-                    // settings and the withheld household section.
-                    if showsParentalControlsSection {
-                        parentalControlsSection
-                    }
-
-                    // No household section on a Kids Profile. There used to be a
-                    // card here explaining its absence, but it was a second
-                    // "Kids Profile" heading that did nothing — and once
-                    // Parental Controls exists, a missing shared section needs no
-                    // caption.
-                    if !activeProfile.isKids {
-                        everyoneSection
-                    }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("About").settingsSectionHeader()
-                            .padding(.horizontal, SettingsFormMetrics.headingInset)
-                        aboutAndSignOut
-                    }
-                }
-                .padding(.horizontal, SettingsFormMetrics.pageInset)
-                .padding(.top, SettingsFormMetrics.pageTopInset)
-                .padding(.bottom, SettingsFormMetrics.pageBottomInset)
-            }
-            .scrollClipDisabled()
-            .scrollsTopNavigation(onReturnToTop: { navigation.select(.playback) })
+            settingsRoot
         } detail: { route in
             destination(for: route)
         }
         .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
+        .environment(themeMusic)
         .task { await reloadLibraries() }
         .onAppear { MainThreadStallProbe.context = "settings" }
         .onChange(of: activeProfile.id) { _, _ in
@@ -438,6 +394,50 @@ public struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes every Plex and Jellyfin sign-in on this Apple TV. You'll need to sign in again.")
+        }
+    }
+
+    private var settingsRoot: some View {
+        SettingsSearchTelevisionView(isKids: activeProfile.isKids) {
+            VStack(alignment: .leading, spacing: 28) {
+                // The active profile's own container comes FIRST. Almost
+                // everything anyone opens Settings to change is in here —
+                // playback, appearance, trackers — while the device-shared
+                // section is servers and profile management, which is setup
+                // you do once. Ordering by "what belongs to the whole Apple
+                // TV" put the rarely-touched half at the top and pushed the
+                // rest below it. Switching profiles swaps everything inside
+                // this container at once.
+                profileContainer
+
+                // Then what every profile shares, regardless of who is using
+                // it — unless a Kids Profile is active, in which case the
+                // whole section is withheld. Every destructive control in the
+                // app lives in there (remove server, delete profile, sign out
+                // of everything), and a child's profile is deliberately left
+                // unlocked, so without this the lock on the grown-ups'
+                // profiles could simply be routed around.
+                // The parent-controlled group sits between the child's own
+                // settings and the withheld household section.
+                if showsParentalControlsSection {
+                    parentalControlsSection
+                }
+
+                // No household section on a Kids Profile. There used to be a
+                // card here explaining its absence, but it was a second
+                // "Kids Profile" heading that did nothing — and once
+                // Parental Controls exists, a missing shared section needs no
+                // caption.
+                if !activeProfile.isKids {
+                    everyoneSection
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("About").settingsSectionHeader()
+                        .padding(.horizontal, SettingsFormMetrics.headingInset)
+                    aboutAndSignOut
+                }
+            }
         }
     }
 
@@ -545,9 +545,16 @@ public struct SettingsView: View {
                     }
                 case .language:
                     AppLanguagePicker(model: appLanguage, isCategoryRow: true)
+                case .seerr:
+                    if !activeProfile.isKids {
+                        SettingsSectionButton(title: Text(verbatim: "Seerr"), icon: category.symbol, assetIcon: "SeerrIcon",
+                                              value: seerrRowValue, route: .seerr)
+                    }
                 default:
-                    sectionRow(category.title, icon: category.symbol,
-                               subtitle: category.summary.map { Text($0) }, route: category.settingsRoute)
+                    if let title = category.localizedTitle {
+                        sectionRow(title, icon: category.symbol,
+                                   subtitle: category.summary.map { Text($0) }, route: category.settingsRoute)
+                    }
                 }
             }
             // The profile's own PIN gate. Belongs to the profile (it travels with
@@ -557,7 +564,7 @@ public struct SettingsView: View {
         }
     }
 
-    /// The **Everyone** container: everything shared by every profile — server
+    /// The **Manage Plozz** container: everything shared by every profile — server
     /// sign-ins (shared Keychain via `AccountStore`) and profile management (the
     /// roster; the launch picker lives one level in, on the Profiles screen). It
     /// follows the profile card, because the profile holds what people actually
@@ -565,27 +572,19 @@ public struct SettingsView: View {
     /// belongs to a single profile; a profile only picks which of these servers
     /// it watches (see the profile's Libraries section).
     ///
-    /// Named for its audience, not the hardware. Most of what's in here syncs, so
-    /// "This Apple TV" was only ever true when iCloud Sync was off — see
-    /// `SettingsCopy.everyone`. The heading is fixed and the *subtitle* carries the
-    /// reach, so flipping Sync never appears to move a row into another scope.
+    /// Individual settings explain their device and sync scope.
     @ViewBuilder
     private var everyoneSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             // "Identity on top", mirroring the profile card's avatar header. The
-            // glyph tracks reach the same way the subtitle does: people when these
+            // glyph tracks reach: people when these
             // settings span the user's devices, a lone Apple TV when they don't.
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: SettingsWorkspaceHeaderMetrics.labelSpacing) {
-                    SettingsWorkspaceScopeBadge(syncEnabled: syncEnabled)
-                        .accessibilityIdentifier("settings-everyone-icon")
-                    Text(SettingsCopy.everyone)
-                        .font(SettingsWorkspaceHeaderMetrics.titleFont)
-                        .accessibilityIdentifier("settings-everyone-name")
-                }
-                Text(SettingsCopy.everyoneScope(syncEnabled: syncEnabled, deviceName: Self.deviceName))
-                    .font(.caption)
-                    .plozzForeground(.secondary)
+            HStack(spacing: SettingsWorkspaceHeaderMetrics.labelSpacing) {
+                SettingsWorkspaceScopeBadge(syncEnabled: syncEnabled)
+                    .accessibilityIdentifier("settings-everyone-icon")
+                Text(SettingsCopy.everyone)
+                    .font(SettingsWorkspaceHeaderMetrics.titleFont)
+                    .accessibilityIdentifier("settings-everyone-name")
             }
             .padding(SettingsWorkspaceHeaderMetrics.contentInset)
 
@@ -593,8 +592,8 @@ public struct SettingsView: View {
 
             SettingsControlRows(dividerLeadingInset: SettingsRowMetrics.iconTitleInset) {
                 // Shared server sign-ins (the household's full inventory). The
-                // list screen opens with a prominent Add Server button.
-                sectionRow("Servers", icon: "externaldrive.connected.to.line.below",
+                // list screen opens with a prominent Add Source button.
+                sectionRow(SettingsCopy.sources, icon: "externaldrive.connected.to.line.below",
                        value: householdServersSummary,
                        route: .servers)
 
@@ -615,14 +614,6 @@ public struct SettingsView: View {
                 sectionRow(KidsProfileCopy.parentalPIN, icon: "figure.and.child.holdinghands",
                        value: hasParentalPIN ? Text(ProfileLockCopy.on) : Text(ProfileLockCopy.off),
                        route: .parentalPIN)
-
-                // Seerr is one shared admin connection powering the Home hero's
-                // trending row + requests for everyone on this Apple TV, so it's
-                // a household concern — not a per-profile tracker. The per-profile
-                // "requests are made as" mapping is managed inside its page.
-                SettingsSectionButton(title: Text(verbatim: "Seerr"), icon: "sparkles.tv", assetIcon: "SeerrIcon",
-                       value: seerrRowValue,
-                       route: .seerr)
 
                 // Cross-device sync + device pairing, combined under one entry that
                 // drills into a detail page (matches the Settings hierarchy).
@@ -884,14 +875,107 @@ public struct SettingsView: View {
     }
 
     @ViewBuilder
+    private func searchDestination(_ entry: SettingsSearchEntry) -> some View {
+        let page = entry.destinationPage(on: .television)
+        switch page {
+        case .theme, .cards:
+            AppearanceDetailView(
+                librariesScope: context.librariesScope, settingsNavigation: navigation,
+                theme: theme, nightShift: nightShift, spoilers: spoilers,
+                searchPageID: page == .theme ? "theme" : "cards"
+            )
+        case .playback: authorizedDestination(for: .playback)
+        case .playbackAdvanced: PlaybackAdvancedSettingsView()
+        case .externalPlayer: ExternalPlayerSettingsView(custom: entry.id == "external-template")
+        case .skipMarkers:
+            SkipMarkerSettingsView(model: playback, initialKind: entry.skipKind, initialCategory: entry.contentCategory)
+        case .subtitles: authorizedDestination(for: .subtitles)
+        case .subtitleStyle: authorizedDestination(for: .subtitleStyle(liveTV: false))
+        case .liveSubtitleStyle:
+            authorizedDestination(for: subtitleStyle.usesSeparateLiveTVStyle ? .subtitleStyle(liveTV: true) : .subtitles)
+        case .cardLabels:
+            CardCaptionCustomizationView(
+                cards: cardStyle, visibility: homeVisibility, initialView: entry.cardCaptionView
+            )
+        case .musicPlayer:
+            AppearanceDetailView(
+                librariesScope: context.librariesScope, settingsNavigation: navigation,
+                theme: theme, nightShift: nightShift, spoilers: spoilers, searchPageID: "music-player"
+            )
+        case .artwork:
+            if entry.anchorID.hasPrefix("artwork-view-") {
+                ArtworkCustomizationView(
+                    cards: cardStyle,
+                    continueWatchingShowsSeriesArtwork: homeVisibility.continueWatchingShowsSeriesArtwork,
+                    continueWatchingLayout: homeVisibility.continueWatchingLayout
+                )
+            } else {
+                authorizedDestination(for: .artwork)
+            }
+        case .circadian: authorizedDestination(for: .nightShift)
+        case .allScreens: authorizedDestination(for: .allScreens)
+        case .navigation: authorizedDestination(for: .navigationLayout)
+        case .heroTrailers:
+            TrailersAndMusicSettingsView(background: heroBackground, themeMusic: themeMusic)
+        case .home, .hero, .heroContent, .heroRatings, .heroDiscovery,
+             .heroLibraries, .heroCollections, .homeRows, .homeRowStyle, .homeFiltering, .homeLabels, .continueWatching:
+            HomeRowsSettingsView(
+                libraries: librariesStore.state.value ?? [], accounts: homeRowAccounts, visibility: homeVisibility,
+                spoilerSettings: spoilers.settings, searchPage: page
+            )
+            .id(ObjectIdentifier(homeVisibility))
+        case .detail: authorizedDestination(for: .detailPage)
+        case .libraries: authorizedDestination(for: .customizeLibraries)
+        case .liveTV, .liveTVSources: authorizedDestination(for: .liveTV)
+        case .liveTVGuide, .liveTVVisibility:
+            LiveTVSettingsView(
+                store: LiveTVViewSettingsStore(namespace: liveTVPreferencesNamespace),
+                preferencesStore: LiveTVPreferencesStore(namespace: liveTVPreferencesNamespace),
+                searchPage: page
+            )
+        case .language: authorizedDestination(for: .language)
+        case .trackers: authorizedDestination(for: .integrations)
+        case .topShelf: authorizedDestination(for: .topShelf)
+        case .profiles: authorizedDestination(for: .profile)
+        case .profileAppearance: authorizedDestination(for: .profileAppearance(profileID: activeProfile.id))
+        case .profileSettings: authorizedDestination(for: .profileSettings(profileID: activeProfile.id))
+        case .accountLibraries: authorizedDestination(for: .myLibraries)
+        case .seerr: authorizedDestination(for: .seerr)
+        case .sync: authorizedDestination(for: .syncSetup)
+        case .metadata: authorizedDestination(for: .metadata)
+        case .metadataDiagnostics: authorizedDestination(for: .metadataDiagnostics)
+        case .diagnostics: authorizedDestination(for: .help)
+        case .releaseNotes: authorizedDestination(for: .releaseNotes)
+        case .downloads, .streamingAdvanced, .detailRatingSources:
+            ContentUnavailableView("Setting unavailable", systemImage: "magnifyingglass")
+        }
+    }
+
+    @ViewBuilder
     private func authorizedDestination(for route: SettingsRoute) -> some View {
         switch route {
+        case .search:
+            settingsRoot
+        case .searchResult(let id):
+            if let entry = SettingsSearchCatalog.entry(id: id),
+               entry.isAvailable(on: .television, isKids: activeProfile.isKids) {
+                let targetID = entry.page == .liveSubtitleStyle && !subtitleStyle.usesSeparateLiveTVStyle
+                    ? "live-subtitle-style" : entry.anchorID
+                SettingsSearchLanding(targetID: targetID) {
+                    AnyView(searchDestination(entry))
+                }
+                .id("\(id)-\(targetID)")
+            } else {
+                ContentUnavailableView("Setting unavailable", systemImage: "magnifyingglass")
+            }
         case .language:
             ScrollView {
                 VStack(alignment: .leading, spacing: SettingsFormMetrics.controlSpacing) {
                     SettingsPageHeader("Language")
                     SettingsControlGroup { AppLanguagePicker(model: appLanguage) }
+                        .settingsSearchAnchor("language")
                 }
+
                 .padding(.horizontal, SettingsFormMetrics.pageInset)
                 .padding(.bottom, SettingsFormMetrics.pageBottomInset)
             }
@@ -1047,8 +1131,12 @@ public struct SettingsView: View {
                 )
             }
         case let .seerUserPicker(profileID):
-            if let profile = profiles.first(where: { $0.id == profileID }) {
-                SeerUserPickerView(seer: seer, profile: profile, onSelect: { onSetSeerrUser(profileID, $0) })
+            if profileID == seer.activeProfileID {
+                SeerConnectionsView(seer: seer)
+            } else {
+                SeerSettingsPage {
+                    Text("Switch to this profile to sign in to Seerr.")
+                }
             }
         case .releaseNotes:
             ReleaseNotesSettingsView(model: .shared)
@@ -1104,14 +1192,14 @@ public struct SettingsView: View {
                 if let onSetSyncEnabled {
                     SettingsPanel(
                         title: "iCloud Sync",
-                        footer: "Syncs profiles, settings, and servers. Logins stay on each device."
+                        footer: "Keep profiles, settings, watchlist, and supported sign-ins in sync across your devices."
                     ) {
                         Toggle("Sync With iCloud", isOn: Binding(
                             get: { syncEnabled }, set: { onSetSyncEnabled($0) }
                         ))
                         .toggleStyle(SettingsSwitchToggleStyle())
                         .settingsWorkspaceEntry()
-                        .modifier(SyncRecoveryDisabled(provider: syncStatusSummary))
+                        .modifier(SyncRecoveryDisabled(provider: syncStatusSummary)).settingsSearchAnchor("icloud-sync")
 
                         if syncEnabled, let syncStatusSummary {
                             HStack(spacing: 24) {
@@ -1222,11 +1310,11 @@ public struct SettingsView: View {
 
     // MARK: - Helpers
 
-    /// Global summary for the This Apple TV › Servers row: how many distinct
+    /// Global summary for the Sources row: how many distinct
     /// servers the household is signed in to (device scope, not profile).
     private var householdServersSummary: Text {
-        if accounts.isEmpty { return Text("Add a server") }
-        // Row already says "Servers", so show a bare count (no repeated noun).
+        if accounts.isEmpty { return Text(SettingsCopy.addSource) }
+        // Row already says "Sources", so show a bare count (no repeated noun).
         // `.formatted()` so the digits follow the user's locale.
         return Text(verbatim: Set(accounts.map { $0.server.id }).count.formatted())
     }
@@ -1253,7 +1341,7 @@ public struct SettingsView: View {
         return hosts
     }
 
-    /// Right-hand summary for the This Apple TV › Seerr row. `savedBaseURLString`
+    /// Right-hand summary for the active profile's Seerr row. `savedBaseURLString`
     /// is loaded synchronously from the stored config at launch and cleared on
     /// disconnect, so it's a reliable "is a server configured?" signal without
     /// waiting on an async status refresh.
@@ -1354,6 +1442,7 @@ private extension ProfileSettingsCategory {
         case .appearance: .appearance
         case .screensNavigation: .screensNavigation
         case .trackers: .integrations
+        case .seerr: .seerr
         case .language: .language
         }
     }

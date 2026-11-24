@@ -34,6 +34,8 @@ import TopShelfKit
 enum HomeTabRoot {
     case home
     case watchlist
+    case upcoming
+    case discover
     /// One library's grid.
     case library(MediaLibrary)
     /// The combined grid over every browsable library the profile can see.
@@ -48,22 +50,30 @@ private struct PlaylistDetailRoute: Hashable {
 /// full-screen player presentation. Every destination resolves its provider from
 /// the tapped item/library's `sourceAccountID`.
 struct HomeTab: View {
+    private var navigationTitles = NavigationTitles()
     @State private var trailerOpening = YouTubeTrailerOpening()
+    @State private var externalOpening = ExternalMediaOpening()
+    @Environment(ProfilesModel.self) private var profilesModel: ProfilesModel?
     /// The app's effective language, injected by `AppLanguageScope`. Read here
     /// only to hand to the Top Shelf publisher: that snapshot crosses into
     /// another process, so its titles have to be resolved on this side.
     @Environment(\.locale) private var locale
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.detailPlaybackPreparationAllowed) private var playbackPreparationAllowed
     @Environment(LibraryPresentationSettingsModel.self) private var libraryPresentation
     @Environment(\.plozzArtworkPolicy) private var artworkPolicy
     @Environment(\.plozzShowsContentRatings) private var showsContentRatings
     @Environment(\.mediaItemActionHandler) private var mediaItemActionHandler
-    /// The rail's chrome model, present only under ``NavigationStyle/rail``. This
-    /// stack reports its depth so the rail steps aside on a detail page.
+    /// Custom navigation observes this stack's depth to step aside on pushed pages.
     @Environment(NavigationChromeModel.self) private var navigationChrome: NavigationChromeModel?
     /// What this stack is rooted at: `.home` for the Home destination, a library
     /// for one of the rail's library slots.
     var root: HomeTabRoot = .home
     let accounts: [ResolvedAccount]
+    var upcomingAccounts: @MainActor () -> [ResolvedAccount] = { [] }
+    var upcomingWatchlist: @MainActor () -> [MediaItem] = { [] }
+    var isProfileAuthorized: @MainActor () -> Bool = { false }
     /// Every server added to the device, regardless of what this profile has
     /// switched on. Home needs it to tell "no servers yet" from "all off".
     let configuredServerCount: Int
@@ -169,6 +179,7 @@ struct HomeTab: View {
 
     @State private var path = NavigationPath()
     @State private var heroRequestFailure: SeerRequestFailure?
+    @State private var heroRequestConfirmation: LocalizedStringResource?
     /// Handles owned above the tab so tab re-hosting cannot destroy them.
     let runtime: HomeTabRuntime
     /// Detail view models, kept across `navigationDestination` re-evaluations.
@@ -203,8 +214,13 @@ struct HomeTab: View {
     private func preservesHeroTrailerOnReturn(itemID: String) -> Bool {
         guard case .home = root else { return false }
         return isActiveTab && path.isEmpty && playRequest == nil && resumePrompt == nil
-            && heroBackground.settings.homeTrailerEnabled
-            && heroRuntime.trailerReturnItemID == itemID
+            && heroBackground.settings.homeTrailerPlaybackEnabled
+            && heroRuntime.trailerReturnItemID.map {
+                $0 == itemID || (
+                    heroTrailerController.isShowing($0)
+                        && heroTrailerController.isShowing(itemID)
+                )
+            } == true
     }
 
     /// The stack's root screen, chosen by ``root``. Home, Watchlist, one library's
@@ -217,6 +233,10 @@ struct HomeTab: View {
             homeRoot
         case .watchlist:
             watchlistRoot
+        case .upcoming:
+            UpcomingView(model: sharedHomeViewModel.upcoming, interval: UpcomingFeedLoader.window())
+        case .discover:
+            discoverRoot
         case let .library(library):
             libraryBrowse(for: library, isNavigationRoot: true)
         case let .allLibraries(libraries):
@@ -224,8 +244,83 @@ struct HomeTab: View {
         }
     }
 
+    @ViewBuilder
+    private var discoverRoot: some View {
+        if heroSettings.allowsDiscovery, isProfileAuthorized() {
+            let profileID = profilesModel?.activeProfileID
+            let visibility = homeVisibility.visibility
+            DiscoverBrowseView(model: DiscoverRuntime.makeModel(
+                namespace: libraryPreferencesNamespace,
+                accounts: accounts,
+                identitySources: identitySources,
+                visibility: visibility,
+                seer: seer,
+                language: locale.identifier,
+                pendingWatchMutations: pendingWatchMutations,
+                isCurrent: {
+                    heroSettings.allowsDiscovery && isProfileAuthorized()
+                        && profilesModel?.activeProfileID == profileID
+                        && homeVisibility.visibility == visibility
+                }
+            ), isActive: isActiveTab && path.isEmpty) { feed, items, loading, loadMore in
+                MediaRowView(
+                    title: Text(feed.title), items: items,
+                    spoilerSettings: spoilerSettings,
+                    isCovered: !path.isEmpty,
+                    loadingPlaceholderCount: loading ? 6 : 0,
+                    onSelect: { navigate($0) }
+                )
+                .loadingMore(loadMore)
+            }
+            .id("\(seer.connectionRevision)|\(locale.identifier)|\(visibility.disabledKeys.sorted())")
+        }
+    }
+
+    private var upcomingScopeKey: String {
+        UpcomingFeedLoader.scopeKey(
+            profileID: profilesModel?.activeProfileID ?? runtime.scopeKey,
+            accounts: upcomingAccounts(), requestIdentity: activeSeerrIdentity,
+            connectionRevision: seer.connectionRevision, language: locale.identifier,
+            regionCode: Locale.current.region?.identifier
+        )
+    }
+
+    private func refreshUpcoming() async {
+        let scope = upcomingScopeKey
+        let profileID = profilesModel?.activeProfileID
+        let accounts = upcomingAccounts()
+        let saved = upcomingWatchlist()
+        let region = Locale.current.region?.identifier
+        let language = locale.identifier
+        let identity = activeSeerrIdentity
+        let cacheScope = UpcomingFeedLoader.scopeKey(
+            profileID: profileID ?? runtime.scopeKey, accounts: accounts,
+            requestIdentity: identity, connectionRevision: nil, language: language,
+            regionCode: region, requestServerURL: seer.savedBaseURLString
+        )
+        let isCurrent: @MainActor @Sendable () -> Bool = {
+            isProfileAuthorized() && profilesModel?.activeProfileID == profileID
+                && upcomingScopeKey == scope
+                && seer.requestIdentity == identity
+        }
+        await sharedHomeViewModel.upcoming.refresh(
+            scope: scope, namespace: libraryPreferencesNamespace, cacheScope: cacheScope,
+            rehydrate: { mediaItemActionHandler?.rehydratePersistedArtwork($0) ?? $0 },
+            isCurrent: isCurrent
+        ) { progress in
+            try await UpcomingFeedLoader.load(
+                accounts: accounts, watchlist: saved, regionCode: region,
+                interval: UpcomingFeedLoader.window(),
+                requestedTitles: {
+                    try await seer.personallyRequestedTitles(identity: identity, language: language)
+                },
+                isCurrent: isCurrent, onProgress: progress
+            )
+        }
+    }
+
     private var sharedHomeViewModel: HomeViewModel {
-        runtime.homeViewModel.value(forKey: runtime.scopeKey) {
+        runtime.homeViewModel.value(forKey: runtime.scopeKey, onDiscard: { $0.invalidate() }) {
             HomeViewModel(
                 accounts: accounts,
                 profileNamespace: libraryPreferencesNamespace,
@@ -261,15 +356,17 @@ struct HomeTab: View {
                                 item: item, placement: item.kind == .episode ? .seriesPoster : .poster,
                                 policy: policy
                             )
-                            return await source.resolve(variant: .posterCard, maxAspectRatio: 1)?
-                                .image.pngData()
+                            guard let artwork = await source.resolve(variant: .posterCard, maxAspectRatio: 1)
+                            else { return nil }
+                            return await TopShelfArtworkEncoder.shared.data(for: artwork.image, format: .png)
                         },
                         resolveBackdrop: { item in
                             let subject = item.kind == .episode ? ArtworkRouter.seriesArtworkItem(for: item) : item
                             let source = MediaArtworkSource(
                                 item: subject, placements: [.detailBackdrop, .poster], policy: policy
                             )
-                            return await source.resolve(variant: .heroBackdrop)?.image.jpegData(compressionQuality: 0.9)
+                            guard let artwork = await source.resolve(variant: .heroBackdrop) else { return nil }
+                            return await TopShelfArtworkEncoder.shared.data(for: artwork.image, format: .jpeg)
                         }
                     )
                 }
@@ -281,6 +378,7 @@ struct HomeTab: View {
             HomeView(
                 viewModel: sharedHomeViewModel,
                 visibility: homeVisibility,
+                metadataLanguage: locale.identifier,
                 spoilerSettings: spoilerSettings,
                 heroSettings: heroSettings,
                 heroBackground: heroBackground,
@@ -296,6 +394,7 @@ struct HomeTab: View {
                     heroSettings: heroSettings,
                     identitySources: identitySources
                 ),
+                heroIdentityRevision: identityRevision,
                 heroRequestIdentity: { seer.hasRequestIdentity(for: $0) },
                 heroFeaturedStatusProvider: makeHeroFeaturedStatusProvider(
                     seer: seer
@@ -314,7 +413,11 @@ struct HomeTab: View {
                     accounts: accounts,
                     identitySources: identitySources,
                     ratingsProvider: ratingsProvider,
-                    seer: seer
+                    seer: seer,
+                    hideWatched: !heroSettings.effectiveSettings.followsFocus
+                        && heroSettings.effectiveSettings.hideWatched,
+                    visibility: { [homeVisibility] in await homeVisibility.visibility },
+                    allowsDiscovery: { [heroSettings] in await heroSettings.allowsDiscovery }
                 ),
                 heroTrailerResolver: makeHeroTrailerResolver(),
                 homePerfOverlayEnabled: homePerfOverlayEnabled,
@@ -337,12 +440,24 @@ struct HomeTab: View {
                     // server picker), so best-source selection still happens there and
                     // at play time (requestPlay).
                     let item = $0
-                    let handsOffTrailer = heroTrailerController.isShowing(item.id)
+                    if heroBackground.settings.detailTrailerEnabled,
+                       heroTrailerController.isShowing(item.id) {
+                        do {
+                            let destination = try titleDetailViewModel(for: item, libraryOrigin: nil)
+                            heroTrailerController.handoffToDetail(
+                                itemID: item.id,
+                                destinationItemID: destination.state.value?.item.id
+                            )
+                        } catch {
+                            PlozzLog.app.error("Could not prepare hero trailer detail handoff: \(String(describing: error))")
+                        }
+                    }
+                    let handsOffTrailer = heroTrailerController.isClaimed(by: .detail, itemID: item.id)
                         && heroTrailerController.isPlaying
                     #if os(tvOS)
                     DetailTransitionNavigation.prepare(
                         for: item,
-                        artworkSnapshot: handsOffTrailer ? heroTrailerController.handoffImage : nil
+                        preservingVideo: handsOffTrailer
                     )
                     #endif
                     if handsOffTrailer {
@@ -358,20 +473,21 @@ struct HomeTab: View {
                 onSelectLibrary: { library in
                     path.append(library)
                 },
+                onBrowse: { $0.push(onto: $path, chrome: navigationChrome) },
                 configuredServerCount: configuredServerCount,
                 enabledServerCount: accounts.count
             )
             .alert(
-                "Request Failed",
+                heroRequestConfirmation == nil ? Text("Request Failed") : Text(verbatim: "Seerr"),
                 isPresented: Binding(
-                    get: { heroRequestFailure != nil },
-                    set: { if !$0 { heroRequestFailure = nil } }
-                ),
-                presenting: heroRequestFailure
-            ) { _ in
+                    get: { heroRequestFailure != nil || heroRequestConfirmation != nil },
+                    set: { if !$0 { heroRequestFailure = nil; heroRequestConfirmation = nil } }
+                )
+            ) {
                 Button("OK", role: .cancel) {}
-            } message: { failure in
-                Text(failure.userMessage)
+            } message: {
+                if let confirmation = heroRequestConfirmation { Text(confirmation) }
+                else if let failure = heroRequestFailure { Text(failure.userMessage) }
             }
     }
 
@@ -381,6 +497,11 @@ struct HomeTab: View {
     ) async -> MediaAvailabilityStatus? {
         let outcome = await seer.request(item, seasons: seasons, identity: activeSeerrIdentity)
         switch outcome {
+        case let .successElsewhere(message):
+            heroRequestConfirmation = message
+            return nil
+        case .failure(.cancelled):
+            return nil
         case let .success(status):
             return status
         case let .failure(reason):
@@ -418,7 +539,10 @@ struct HomeTab: View {
                     settingsNamespace: libraryPreferencesNamespace,
                     presentation: libraryPresentation
                 ),
-                title: library.displayName,
+                title: navigationTitles(
+                    "\(browse.sourceAccountID ?? library.sourceAccountID ?? ""):\(library.id)",
+                    default: library.displayName
+                ),
                 isNavigationRoot: isNavigationRoot,
                 spoilerSettings: spoilerSettings,
                 continueWatchingShowsSeriesArtwork: homeVisibility.continueWatchingUsesSeriesArtwork,
@@ -459,7 +583,7 @@ struct HomeTab: View {
                     settingsNamespace: libraryPreferencesNamespace,
                     presentation: libraryPresentation
                 ),
-                title: Text(AllLibrariesBrowse.title),
+                title: navigationTitles(NavigationLibraryLayout.allLibrariesKey, default: Text(AllLibrariesBrowse.title)),
                 isNavigationRoot: true,
                 spoilerSettings: spoilerSettings,
                 onSelect: { navigate($0) }
@@ -483,6 +607,33 @@ struct HomeTab: View {
         NavigationStack(path: $path) {
             rootContent
             .modifier(NavigationRailRootContentInset())
+            .navigationDestination(for: HomeBrowseDestination.self) { destination in
+                Group {
+                    switch destination {
+                    case let .row(browser):
+                        HomeRowBrowseView(
+                            model: browser,
+                            columns: browser.style == .landscape
+                                ? Array(metrics.posterColumns.prefix(max(1, metrics.posterColumns.count / 2)))
+                                : metrics.posterColumns
+                        ) { item in
+                            PosterCardView(
+                                item: item, style: browser.style == .landscape ? .landscape : .poster,
+                                spoilerSettings: spoilerSettings
+                            ) {
+                                navigate(item)
+                            }
+                            .navigationEntryFocus(.content)
+                        }
+                    case .watchlist:
+                        watchlistRoot
+                    case .upcoming:
+                        UpcomingView(model: sharedHomeViewModel.upcoming, interval: UpcomingFeedLoader.window())
+                    }
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .environment(\.plozzTopNavigationScroll, nil)
+            }
             .navigationDestination(for: MediaLibrary.self) { library in
                 libraryBrowse(for: library)
             }
@@ -492,7 +643,16 @@ struct HomeTab: View {
                 itemDetail(for: item, libraryOrigin: nil)
             }
             .onChange(of: pendingTitleRoute) { _, _ in consumePendingTitleRoute() }
+            .task(id: "\(upcomingScopeKey)|\(sharedHomeViewModel.upcoming.refreshRevision)|\(isActiveTab)") {
+                guard isActiveTab else { return }
+                await refreshUpcoming()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active, isActiveTab { sharedHomeViewModel.upcoming.refreshIfStale() }
+            }
             .youTubeTrailerOpeningFailures(trailerOpening)
+            .externalMediaOpeningFailures(externalOpening)
+            .onChange(of: accounts.map(\.account.id)) { _, _ in externalOpening.cancel() }
             .onChange(of: artworkPolicy.forArea(.topShelf).identity) { _, _ in
                 if case .home = root { sharedHomeViewModel.publishCurrentContent() }
             }
@@ -601,7 +761,6 @@ struct HomeTab: View {
                         stackDepth: detailStackDepth,
                         heroTrailerResolver: makeHeroTrailerResolver(),
                         preservesHeroTrailerOnDisappear: preservesHeroTrailerOnReturn,
-                        initialEpisode: route.episode,
                         seerConnected: seer.isConfigured,
                         requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                         onRequestSeasons: { item, seasons in
@@ -666,11 +825,11 @@ struct HomeTab: View {
             // reaches the root content — "Episode Info" worked on Continue
             // Watching and was silently dropped in every pushed detail page.
             .mediaItemNavigator { navigate($0, asOwnSubject: $0.kind == .episode) }
+            .environment(\.detailPlaybackPreparationAllowed, playbackPreparationAllowed && isActiveTab)
         }
         .cinematicDetailNavigation(path: $path)
-        // Under the rail, a pushed page is a detail page — report the depth so the
-        // chrome steps aside and the title page is full-bleed. No-op under the two
-        // native tab styles, which install no chrome model.
+        // All pushed pages, including Home row browsers, share this path so
+        // custom chrome and Back agree about whether Home is still the root.
         .reportsNavigationDepth(path.count, to: navigationChrome)
         // The deep-link watcher lives in its own leaf view. Reading the pending
         // id in *this* body subscribed the whole tab to it, and every publish
@@ -736,11 +895,13 @@ struct HomeTab: View {
                         item, accounts: accounts, identitySources: identitySources
                     )
                     guard target.kind.needsPlaybackTargetResolution else {
+                        resumePrompt = nil
                         playRequest = PlayRequest(item: target, startPosition: seconds)
                         return
                     }
                     Task { @MainActor in
                         guard let episode = await resolveSeriesNextUpEpisode(target) else { return }
+                        resumePrompt = nil
                         playRequest = PlayRequest(
                             item: bestSourcePlayItem(
                                 episode, accounts: accounts, identitySources: identitySources
@@ -790,8 +951,11 @@ struct HomeTab: View {
         private func perform() async {
             guard isActive else { return }
             guard let request = director.request else { return }
+            // Clearing the task's identity before awaiting cancels network-backed lookups.
+            let outcome = await reach(request)
+            guard !Task.isCancelled, director.request == request else { return }
+            director.finish(outcome)
             director.request = nil
-            director.finish(await reach(request))
         }
 
         /// Reaches the requested screen and answers with what the capture script
@@ -991,7 +1155,7 @@ struct HomeTab: View {
     ///
     /// Lives on ``DeepLinkPlayRouter`` rather than on the tab so that watching
     /// the pending id cannot invalidate the tab's body.
-    private struct DeepLinkPlayRouter: View {
+    struct DeepLinkPlayRouter: View {
         let pendingPlay: PendingPlayRequest
         let accounts: [ResolvedAccount]
         let scopeKey: String
@@ -1061,8 +1225,9 @@ struct HomeTab: View {
     /// Pushes a detail page for any item — movies get a Movie Details page (with a
     /// Play button); series/seasons get their children list. A tapped episode is
     /// redirected to its *series* page (fronting that episode) so the user never
-    /// lands on a dead-end single-episode page. Immediate playback is reserved for
-    /// Continue Watching and the detail page's own Play action.
+    /// lands on a single-episode page unless that is the requested destination.
+    /// Playback remains available through the detail page and the optional
+    /// Continue Watching Play action.
     ///
     /// `libraryOrigin` carries the owning `Account.id` when the navigation springs
     /// from a single-server library tile, so the pushed detail (and any movie/
@@ -1073,10 +1238,8 @@ struct HomeTab: View {
     /// Routes a navigation to `item`.
     ///
     /// `asOwnSubject` distinguishes the two ways an episode can be navigated to.
-    /// A menu's "Episode Info" wants the episode's *own* page — its synopsis, air
-    /// date, and the file that would play. Everything else that hands over an
-    /// episode (a deep link, a tapped card) means "show me this episode in
-    /// context", which is the series page with it fronted.
+    /// A menu's "Go to Episode" opens the episode's own page. Ordinary browsing,
+    /// including Continue Watching, shows the series page with that episode fronted.
     private func navigate(
         _ item: MediaItem,
         libraryOrigin: String? = nil,
@@ -1123,6 +1286,7 @@ struct HomeTab: View {
         let identitySources = self.identitySources
         let seer = self.seer
         let runtime = self.runtime
+        let metadataLanguage = locale.identifier
         return DetailOpenEnvironment(
             resolveProvider: { try resolveProvider($0, in: accounts) },
             resolveOptionalProvider: { resolveOptionalProvider($0, in: accounts) },
@@ -1130,8 +1294,12 @@ struct HomeTab: View {
             crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
             continueWatchingSnapshot: { runtime.continueWatchingForDetail },
             ratingsProvider: ratingsProvider,
-            detailMetadataResolver: { await DetailMetadataResolver.household.resolve($0) },
+            metadataLanguage: metadataLanguage,
+            localizedDetailMetadataResolver: {
+                await DetailMetadataResolver.household.resolve($0, language: $1)
+            },
             onlineTrailerResolver: { await DetailMetadataResolver.household.trailers(for: $0) },
+            trailerSettings: heroBackground,
             discoveryStatusRefresh: { await seer.requestAvailability(for: $0) },
             loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
@@ -1188,6 +1356,14 @@ struct HomeTab: View {
         }
     }
 
+    private func titleDetailViewModel(
+        for item: MediaItem, libraryOrigin: String?
+    ) throws -> ItemDetailViewModel {
+        try detailViewModels.value(forKey: .title(for: item, libraryOrigin: libraryOrigin)) {
+            try detailEnvironment.makeViewModel(for: item, libraryOrigin: libraryOrigin)
+        }
+    }
+
     @ViewBuilder
     private func titleDetail(
         for item: MediaItem, libraryOrigin: String?,
@@ -1199,12 +1375,7 @@ struct HomeTab: View {
         // titles (available/partiallyAvailable) are NOT discovery: they resolve to
         // a real library copy via the identity index, so they keep the normal
         // playable detail page.
-        if let model = try? detailViewModels.value(
-            forKey: .title(for: item, libraryOrigin: libraryOrigin),
-            {
-                try detailEnvironment.makeViewModel(for: item, libraryOrigin: libraryOrigin)
-            })
-        {
+        if let model = try? titleDetailViewModel(for: item, libraryOrigin: libraryOrigin) {
             ItemDetailView(
                 viewModel: model,
                 spoilerSettings: spoilerSettings,
@@ -1244,6 +1415,10 @@ struct HomeTab: View {
     private func requestPlay(
         _ item: MediaItem, playlistOrigin: VideoPlaylistPlaybackOrigin? = nil
     ) {
+        guard !item.isTrailer || heroBackground.settings.trailerSources.allows(item) else {
+            PlozzLog.app.info("Trailer action suppressed by profile settings")
+            return
+        }
         if item.isYouTubeTrailer {
             Task { await trailerOpening.open(item) }
             return
@@ -1281,11 +1456,27 @@ struct HomeTab: View {
     private func presentPlay(
         _ target: MediaItem, playlistOrigin: VideoPlaylistPlaybackOrigin? = nil
     ) {
+        if target.opensExternalSource {
+            do {
+                let provider = try resolveProvider(target.sourceAccountID, in: accounts)
+                let profileID = profilesModel?.activeProfileID
+                Task {
+                    await externalOpening.open(target, provider: provider) {
+                        profilesModel?.activeProfileID == profileID && isProfileAuthorized()
+                    }
+                }
+            } catch {
+                externalOpening.failed = true
+            }
+            return
+        }
         pendingPlaylistOrigin = playlistOrigin
-        if playbackSettings.shouldAskBeforeResuming(at: target.resumePosition) {
+        if target.effectiveDiscPlayback(default: playbackSettings.discPlayback) != .openMenu,
+           playbackSettings.shouldAskBeforeResuming(at: target.resumePosition) {
             HandoffDiagnostics.emit(
                 "tap RESUME_PROMPT item=\(target.id) provider=\(target.sourceAccountID ?? "nil")"
             )
+            playRequest = nil
             resumePrompt = target
         } else {
             let playlist: VideoPlaylistPlaybackContext? = playlistOrigin.flatMap { origin in
@@ -1298,6 +1489,7 @@ struct HomeTab: View {
                 "tap PLAY trace=\(request.traceID.uuidString.prefix(8)) item=\(target.id) "
                     + "provider=\(target.sourceAccountID ?? "nil")"
             )
+            resumePrompt = nil
             playRequest = request
         }
     }

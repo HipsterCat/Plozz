@@ -5,6 +5,27 @@ import os
 
 final class IPTVHTTP: Sendable {
     @TaskLocal static var performanceMetrics: IPTVPerformanceMetrics?
+
+    /// One guide operation's latest response policy, without changing thrown error kinds.
+    final class ResponseMetadata: Sendable {
+        private let state = OSAllocatedUnfairLock<(status: Int, retryAfter: TimeInterval?)?>(initialState: nil)
+
+        func received(_ response: HTTPURLResponse) {
+            let retryAfter = HTTPDate.retryAfter(response.value(forHTTPHeaderField: "Retry-After"))
+            state.withLock { $0 = (response.statusCode, retryAfter) }
+        }
+
+        func retryAfter(for error: any Error) -> TimeInterval? {
+            let status: Int
+            switch error {
+            case AppError.rateLimited: status = 429
+            case IPTVError.httpStatus(let code): status = code
+            default: return nil
+            }
+            return state.withLock { $0?.status == status ? $0?.retryAfter : nil }
+        }
+    }
+
     private let session: URLSession
     private let redirects: IPTVRedirects
     private typealias RequestTask = Task<(URLSession.AsyncBytes, URLResponse), Error>
@@ -27,7 +48,7 @@ final class IPTVHTTP: Sendable {
         configuration.timeoutIntervalForRequest = 45
         configuration.timeoutIntervalForResource = resourceTimeout
         redirects = IPTVRedirects(sensitiveValues: sensitiveValues, scope: redirectScope)
-        session = URLSession(configuration: configuration, delegate: redirects, delegateQueue: nil)
+        session = OfflineNetworkSession.make(configuration: configuration, delegate: redirects, delegateQueue: nil)
     }
 
     deinit { session.invalidateAndCancel() }
@@ -51,6 +72,8 @@ final class IPTVHTTP: Sendable {
 
     func bytes(
         url: URL, headers: [String: String], method: String = "GET",
+        guideRequest: Bool = false,
+        guideCache: XMLTVGuideCacheMetadata? = nil,
         receivedResponse: (@Sendable (HTTPURLResponse) -> Void)? = nil
     ) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
         try Task.checkCancellation()
@@ -60,19 +83,24 @@ final class IPTVHTTP: Sendable {
         request.httpMethod = method
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        if let guideCache { request = guideCache.applying(to: request) }
         let diagnostic = IPTVSetupDiagnostics.current
         diagnostic?.willRequest()
         let guideDiagnostic = IPTVGuideDiagnostics.request
         guideDiagnostic?.requesting()
+        let guideDelegate = guideRequest ? IPTVRedirects(
+            sensitiveValues: redirects.sensitiveValues, scope: .guide, diagnostic: guideDiagnostic,
+            guideCache: guideCache
+        ) : nil
         let id = UUID()
         // URLSession.bytes creates its native task asynchronously. Fence that
         // entire startup, not just a cancellation check before calling it.
         let task = try lifecycle.withLock { state in
             guard !state.closed else { throw CancellationError() }
-            let task = RequestTask { [session, request] in
+            let task = RequestTask { [session, request, guideDelegate] in
                 try Task.checkCancellation()
                 Self.performanceMetrics?.requested()
-                let result = try await session.bytes(for: request)
+                let result = try await session.bytes(for: request, delegate: guideDelegate)
                 if Task.isCancelled {
                     result.0.task.cancel()
                     throw CancellationError()
@@ -99,6 +127,10 @@ final class IPTVHTTP: Sendable {
         diagnostic?.received(status: response.statusCode, response: .init(mimeType: response.mimeType))
         guideDiagnostic?.received(response)
         receivedResponse?(response)
+        if response.statusCode == 304, guideRequest, let guideCache,
+           guideCache.permitsPersistence, guideCache.hasValidator, guideCache.responseURL == response.url {
+            return (bytes, response)
+        }
         guard (200...299).contains(response.statusCode) else {
             defer { bytes.task.cancel() }
             if redirects.scope == .playback, method == "GET", response.statusCode == 503,
@@ -190,10 +222,17 @@ final class IPTVPerformanceMetrics: @unchecked Sendable {
 private final class IPTVRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     let sensitiveValues: [String]
     let scope: IPTVRedirectPolicy.Scope
+    let diagnostic: IPTVGuideDiagnostics.Request?
+    let guideCache: XMLTVGuideCacheMetadata?
 
-    init(sensitiveValues: [String], scope: IPTVRedirectPolicy.Scope) {
+    init(
+        sensitiveValues: [String], scope: IPTVRedirectPolicy.Scope,
+        diagnostic: IPTVGuideDiagnostics.Request? = nil, guideCache: XMLTVGuideCacheMetadata? = nil
+    ) {
         self.sensitiveValues = sensitiveValues
         self.scope = scope
+        self.diagnostic = diagnostic
+        self.guideCache = guideCache
     }
 
     func urlSession(
@@ -202,26 +241,30 @@ private final class IPTVRedirects: NSObject, URLSessionTaskDelegate, Sendable {
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void
     ) {
-        completionHandler(IPTVRedirectPolicy.request(
+        let redirected = IPTVRedirectPolicy.request(
             request, previous: response.url, original: task.originalRequest, sensitiveValues: sensitiveValues,
-            scope: scope
-        ))
+            scope: scope, diagnostic: diagnostic
+        )
+        completionHandler(redirected.map { guideCache?.applying(to: $0) ?? $0 })
     }
 }
 
 enum IPTVRedirectPolicy {
-    enum Scope: Sendable { case account, playback }
+    enum Scope: Sendable { case account, playback, guide }
 
     static func request(
         _ request: URLRequest, previous: URL?, original: URLRequest?, sensitiveValues: [String] = [],
-        scope: Scope = .account
+        scope: Scope = .account, diagnostic: IPTVGuideDiagnostics.Request? = nil
     ) -> URLRequest? {
+        diagnostic?.redirected()
         guard let next = request.url, let previous,
               LiveTVPlaylistSource.isSupportedURL(next) else {
+            diagnostic?.blockedRedirect(.invalidDestination)
             return nil
         }
         guard scope == .playback
             || !(previous.scheme?.lowercased() == "https" && next.scheme?.lowercased() != "https") else {
+            diagnostic?.blockedRedirect(.downgrade)
             return nil
         }
         if IPTVCredential.sameOrigin(previous, next),
@@ -235,7 +278,17 @@ enum IPTVRedirectPolicy {
             url: original?.url ?? previous, headers: original?.allHTTPHeaderFields ?? [:]
         )
         let destination = next.absoluteString.removingPercentEncoding ?? next.absoluteString
-        guard scope == .playback || !secrets.contains(where: { !$0.isEmpty && destination.contains($0) }) else {
+        let source = original?.url ?? previous
+        let secureGuideUpgrade = scope == .guide
+            && source.scheme?.lowercased() == "http" && (source.port ?? 80) == 80
+            && next.scheme?.lowercased() == "https" && (next.port ?? 443) == 443
+            && source.host?.lowercased() == next.host?.lowercased()
+            && (IPTVCredential.sameOrigin(source, previous) || IPTVCredential.sameOrigin(previous, next))
+        // A standard-port HTTPS upgrade on the same host can retain URL credentials.
+        // It still strips headers, and never authorizes another host or a downgrade.
+        guard scope == .playback || secureGuideUpgrade
+            || !secrets.contains(where: { !$0.isEmpty && destination.contains($0) }) else {
+            diagnostic?.blockedRedirect(.credentials)
             return nil
         }
         var clean = URLRequest(url: next)

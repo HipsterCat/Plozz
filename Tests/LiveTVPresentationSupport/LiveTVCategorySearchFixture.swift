@@ -4,24 +4,27 @@ import FeatureLiveTV
 import FeatureLiveTVCore
 import FeatureProfiles
 import SwiftUI
-#if os(iOS)
 import AVFoundation
+#if os(iOS)
 @testable import AppShelliOS
+#endif
 import FeaturePlayback
 import Observation
 import UIKit
-#endif
 
 struct LiveTVCategorySearchFixture: View {
+    let isActive: Bool
     @State private var profiles: ProfilesModel
     @State private var showsProfile = false
     @State private var isExpanded = false
+    @State private var sourceSetup = ManagedProviderSetupRouter()
     private let namespace = "CategorySearch.\(UUID().uuidString)"
     private var palette: ThemePalette {
         ProcessInfo.processInfo.arguments.contains("--category-preview-light") ? .light : .dark
     }
 
-    init() {
+    init(isActive: Bool = true) {
+        self.isActive = isActive
         let defaults = UserDefaults(suiteName: "CategorySearchProfiles.\(UUID().uuidString)")!
         _profiles = State(initialValue: ProfilesModel(store: ProfileStore(defaults: defaults)))
     }
@@ -29,27 +32,41 @@ struct LiveTVCategorySearchFixture: View {
     var body: some View {
         NavigationStack {
             LiveTVPrototypeView(
+                isActive: isActive,
                 preferencesStore: CategorySearchPreferences(),
                 viewSettingsStore: CategorySearchSettings(),
                 sourceStore: CategorySearchSources(),
                 onExpandedChange: { isExpanded = $0 },
+                allowsPlayback: !ProcessInfo.processInfo.arguments.contains("--category-playback-unavailable"),
                 sourceLoader: CategorySearchLoader(),
                 preferencesNamespace: namespace,
                 sourceApprovalContext: { [profiles] in LiveTVSourceApprovalContext(profiles: profiles) },
-                topBarAccessory: profileAction
+                onShowSettings: { showsProfile = true }
             ) { playback in
                 #if os(iOS)
                 CategoryPreviewPlayer(playback: playback)
                 #else
-                Color.black
-                    .accessibilityIdentifier("category-search-playback")
-                    .accessibilityLabel(Text(playback.channel.name))
-                    .accessibilityValue(Text(verbatim: playback.isExpanded ? "Fullscreen" : "Preview"))
+                if ProcessInfo.processInfo.arguments.contains("--category-live-preview") {
+                    CategoryPreviewPlayer(playback: playback)
+                } else {
+                    Color.black
+                        .accessibilityIdentifier("category-search-playback")
+                        .accessibilityLabel(Text(playback.channel.name))
+                        .accessibilityValue(Text(verbatim: playback.isExpanded ? "Fullscreen" : "Preview"))
+                }
                 #endif
             }
-
         }
         .environment(profiles)
+        .environment(\.managedProviderSetupRouter,
+                     ProcessInfo.processInfo.arguments.contains("--category-managed-source-setup") ? sourceSetup : nil)
+        .overlay(alignment: .bottomLeading) {
+            if let request = sourceSetup.request {
+                Text(verbatim: request.mode.rawValue)
+                    .accessibilityIdentifier("category-source-setup-request")
+                    .allowsHitTesting(false)
+            }
+        }
         .environment(\.locale, Locale(identifier: "en_US"))
         .environment(\.themePalette, palette)
         .environment(\.colorScheme, palette.isLight ? .light : .dark)
@@ -68,24 +85,8 @@ struct LiveTVCategorySearchFixture: View {
         }
         #endif
     }
-
-    private var profileAction: AnyView? {
-        #if os(iOS)
-        AnyView(
-            Button { showsProfile = true } label: {
-                ProfileAvatarView(profile: profiles.activeProfile, size: 36, rendersAsImage: true)
-            }
-            .buttonBorderShape(.circle)
-            .accessibilityLabel("Profile settings")
-            .accessibilityIdentifier("live-tv-profile")
-        )
-        #else
-        nil
-        #endif
-    }
 }
 
-#if os(iOS)
 private struct CategoryPreviewPlayer: View {
     let playback: LiveTVPrototypePlayback
     @State private var engine: CategoryPreviewEngine
@@ -117,6 +118,12 @@ private struct CategoryPreviewPlayer: View {
             onPlaybackStarted: playback.playbackStarted, reportingID: playback.reportingID,
             countsAsWatching: playback.countsAsWatching, program: playback.program
         )
+        .background {
+            Color.clear
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Video bounds")
+                .accessibilityIdentifier("category-preview-video-bounds")
+        }
         .overlay(alignment: .topLeading) {
             VStack {
                 Text("Loads: \(engine.loads)")
@@ -216,7 +223,6 @@ private final class CategoryPreviewEngine: LiveChannelEngine {
         native.makeVideoOutputView()
     }
 }
-#endif
 
 private final class CategorySearchPreferences: LiveTVPreferencesStoring, @unchecked Sendable {
     private let lock = NSLock()
@@ -228,7 +234,8 @@ private final class CategorySearchPreferences: LiveTVPreferencesStoring, @unchec
 
 private struct CategorySearchSettings: LiveTVViewSettingsStoring {
     func load() -> LiveTVViewSettings {
-        .init(autoPreview: false, hasChosenAutoPreview: true,
+        .init(autoPreview: ProcessInfo.processInfo.arguments.contains("--category-live-preview"),
+              hasChosenAutoPreview: true,
               startsWithCategories: !ProcessInfo.processInfo.arguments.contains("--category-search-guide-first"))
     }
     func save(_ settings: LiveTVViewSettings) {}
@@ -236,11 +243,29 @@ private struct CategorySearchSettings: LiveTVViewSettingsStoring {
 
 private struct CategorySearchSources: LiveTVSourcesStoring {
     func load() throws -> LiveTVSourcesConfiguration {
-        .init(playlists: [
-            .init(id: "category-search", name: "Sample TV",
+        var sources = LiveTVSourcesConfiguration(playlists: [
+            .init(id: "category-search",
+                  name: ProcessInfo.processInfo.arguments.contains("--category-long-source-name")
+                    ? "Sample Television International Network" : "Sample TV",
                   playlistURL: URL(string: "https://fixture.invalid/channels.m3u")!,
-                  guideURLs: [URL(string: "https://fixture.invalid/guide.xml")!])
+                  guideURLs: ProcessInfo.processInfo.arguments.contains("--category-no-guide")
+                    ? [] : [URL(string: "https://fixture.invalid/guide.xml")!])
         ])
+        if ProcessInfo.processInfo.arguments.contains("--category-multiple-sources") {
+            sources.playlists += [
+                .init(id: "local", name: "Local TV",
+                      playlistURL: URL(string: "https://fixture.invalid/local.m3u")!),
+                .init(id: "paused", name: "Paused TV",
+                      playlistURL: URL(string: "https://fixture.invalid/paused.m3u")!, isEnabled: false)
+            ]
+        }
+        if ProcessInfo.processInfo.arguments.contains("--category-disabled-source") {
+            sources.playlists.append(
+                .init(id: "paused", name: "Paused TV",
+                      playlistURL: URL(string: "https://fixture.invalid/paused.m3u")!, isEnabled: false)
+            )
+        }
+        return sources
     }
 
     func save(_ configuration: LiveTVSourcesConfiguration) throws {}
@@ -250,6 +275,33 @@ private struct CategorySearchLoader: LiveTVSourceLoading {
     func loadPlaylist(from url: URL) async throws -> LiveTVPlaylistImport {
         if ProcessInfo.processInfo.arguments.contains("--category-search-failure") {
             throw URLError(.cannotConnectToHost)
+        }
+        if url.lastPathComponent == "local.m3u" {
+            return try LiveTVPlaylistParser(baseURL: url).parse("""
+            #EXTM3U
+            #EXTINF:-1 tvg-id="local-sport" group-title="Sports",Local Sport
+            https://fixture.invalid/local-sport.m3u8
+            #EXTINF:-1 tvg-id="local-music" group-title="Music",Local Music
+            https://fixture.invalid/local-music.m3u8
+            """)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--guide-travel") {
+            let entries = (1...240).map { index in
+                """
+                #EXTINF:-1 tvg-id="travel-\(index)" group-title="Channels",Channel \(String(format: "%03d", index))
+                https://fixture.invalid/travel-\(index).m3u8
+                """
+            }
+            return try LiveTVPlaylistParser(baseURL: url).parse("#EXTM3U\n" + entries.joined(separator: "\n"))
+        }
+        if ProcessInfo.processInfo.arguments.contains("--category-scroll-content") {
+            let entries = (1...80).map { index in
+                """
+                #EXTINF:-1 tvg-id="scroll-\(index)" group-title="Category \(String(format: "%02d", index))",Channel \(String(format: "%02d", index))
+                https://fixture.invalid/scroll-\(index).m3u8
+                """
+            }
+            return try LiveTVPlaylistParser(baseURL: url).parse("#EXTM3U\n" + entries.joined(separator: "\n"))
         }
         return try LiveTVPlaylistParser(baseURL: url).parse("""
         #EXTM3U
@@ -271,8 +323,13 @@ private struct CategorySearchLoader: LiveTVSourceLoading {
     ) async throws -> LiveTVGuideImport {
         let start = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 / 1_800) * 1_800)
         let titles = ["Matchday Live", "Championship Highlights", "World Sports", "The Sports Review", "News Today"]
-        let programs = channels.enumerated().flatMap { index, channel in
-            (0..<4).map { slot in
+        let slots = ProcessInfo.processInfo.arguments.contains("--guide-travel") ? 48 : 4
+        let scheduled = channels.enumerated().filter {
+            !ProcessInfo.processInfo.arguments.contains("--guide-remote-arrival") || $0.offset.isMultiple(of: 2)
+        }
+        let probesProgress = ProcessInfo.processInfo.arguments.contains("--guide-progress-edges")
+        let programs = scheduled.flatMap { index, channel in
+            var listings = (0..<slots).map { slot in
                 LiveTVPrototypeProgram(
                     id: "\(channel.id)-\(slot)", channelID: channel.id,
                     title: slot.isMultiple(of: 2) ? titles[index % titles.count] : "Weekend Highlights",
@@ -280,11 +337,29 @@ private struct CategorySearchLoader: LiveTVSourceLoading {
                     end: start.addingTimeInterval(Double(slot + 1) * 1_800)
                 )
             }
+            if probesProgress, index == 2 || index == 4 {
+                // Give the active programme on row 3 and the gap on row 5 different
+                // origins from the ruler. Keep a previous listing in both cases.
+                let split = start.addingTimeInterval(now.timeIntervalSince(start) / 2)
+                listings.removeFirst()
+                let previous = LiveTVPrototypeProgram(
+                    id: "\(channel.id)-previous", channelID: channel.id, title: "Previous", subtitle: "",
+                    start: start, end: split
+                )
+                listings.insert(previous, at: 0)
+                if index == 2 {
+                    listings.insert(LiveTVPrototypeProgram(
+                        id: "\(channel.id)-current", channelID: channel.id, title: "Current", subtitle: "",
+                        start: split, end: start.addingTimeInterval(1_800)
+                    ), at: 1)
+                }
+            }
+            return listings
         }
         return .init(
-            programs: programs, matchedChannelCount: channels.count,
-            guideChannelCount: channels.count, programCount: programs.count,
-            coverageStart: start, coverageEnd: start.addingTimeInterval(7_200)
+            programs: programs, matchedChannelCount: scheduled.count,
+            guideChannelCount: scheduled.count, programCount: programs.count,
+            coverageStart: start, coverageEnd: start.addingTimeInterval(Double(slots) * 1_800)
         )
     }
 }

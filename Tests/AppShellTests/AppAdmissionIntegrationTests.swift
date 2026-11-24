@@ -6,6 +6,7 @@ import XCTest
 import TopShelfKit
 @testable import AppRuntime
 @testable import AppShell
+@testable import FeatureLiveTVCore
 
 private struct OnboardingLibraryProvider: MediaProvider {
     let session: UserSession
@@ -96,6 +97,10 @@ final class AppAdmissionIntegrationTests: XCTestCase {
             homeLibraryVisibilityModel: HomeLibraryVisibilityModel(
                 store: HomeLibraryVisibilityStore(defaults: defaults)
             ),
+            navigationStyleModel: NavigationStyleSettingsModel(
+                store: NavigationStyleSettingsStore(defaults: defaults),
+                layoutStore: NavigationLibraryLayoutStore(defaults: defaults)
+            ),
             appAdmissionStore: admission
         )
         return Harness(state: state, accounts: accounts, profiles: profiles, defaults: defaults)
@@ -141,7 +146,6 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         harness.state.completeFirstRunSeerrSetup()
         harness.state.finishThemeSelection()
         harness.state.finishNavigationSelection()
-        harness.state.finishHomeLayoutSelection()
         XCTAssertFalse(harness.state.profileFlow.hasResumableSetup)
         harness.state.profileFlow.switchProfile(to: selected)
         XCTAssertFalse(harness.state.profileFlow.isPickingAppearanceForNewProfile)
@@ -435,7 +439,6 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         harness.state.completeFirstRunSeerrSetup()
         harness.state.finishThemeSelection()
         harness.state.finishNavigationSelection()
-        harness.state.finishHomeLayoutSelection()
 
         XCTAssertEqual(harness.state.state, .ready)
         XCTAssertTrue(harness.profiles.firstRunProfileSetupComplete)
@@ -500,10 +503,12 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         try harness.accounts.add(Account(id: Account.stableID(for: session), from: session), token: "fixture")
         harness.profiles.setActiveAccountIDs(["media-account"], for: harness.profiles.activeProfileID)
         harness.state.bootstrap()
+        harness.state.profileSettings.navigationStyleModel.showsLiveTV = false
 
         XCTAssertTrue(harness.state.didAuthenticate(session))
 
         XCTAssertEqual(harness.state.accountsProviders.activeAccountIDs, ["media-account"])
+        XCTAssertFalse(harness.state.profileSettings.navigationStyleModel.showsLiveTV)
     }
 
     func testAddingIPTVCannotOverwriteAnUnreadableProfileSelection() throws {
@@ -511,6 +516,7 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         let harness = try makeHarness(profileSetupComplete: true, withAccount: true, profileSecrets: secrets)
         harness.profiles.setActiveAccountIDs(["media-account"], for: harness.profiles.activeProfileID)
         harness.state.bootstrap()
+        harness.state.profileSettings.navigationStyleModel.showsLiveTV = false
         secrets.failMembershipReads = true
         harness.profiles.setActiveAccountIDs(["media-account"], for: harness.profiles.activeProfileID)
         let session = UserSession(
@@ -520,6 +526,7 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         )
 
         XCTAssertFalse(harness.state.didAuthenticate(session))
+        XCTAssertFalse(harness.state.profileSettings.navigationStyleModel.showsLiveTV)
         XCTAssertTrue(harness.state.accountsProviders.navigationAccounts.isEmpty)
 
         secrets.failMembershipReads = false
@@ -527,6 +534,7 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         XCTAssertEqual(harness.profiles.storedActiveAccountIDs(for: harness.profiles.activeProfileID), ["media-account"])
         harness.state.accountsProviders.reloadAccounts()
         XCTAssertTrue(harness.state.didAuthenticate(session, activateIPTVAccount: true))
+        XCTAssertTrue(harness.state.profileSettings.navigationStyleModel.showsLiveTV)
         XCTAssertTrue(harness.state.accountsProviders.activeAccountIDs.contains(Account.stableID(for: session)))
     }
 
@@ -542,12 +550,16 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         harness.profiles.setActiveAccountIDs(["media-account"], for: harness.profiles.activeProfileID)
         let other = harness.profiles.add(name: "Other", activeAccountIDs: ["media-account"])
         harness.state.bootstrap()
+        harness.state.profileSettings.navigationStyleModel.showsLiveTV = false
 
         XCTAssertTrue(harness.state.didAuthenticate(session, activateIPTVAccount: true))
 
         XCTAssertEqual(harness.accounts.loadAccounts().filter { $0.id == id }.count, 1)
         XCTAssertTrue(harness.state.accountsProviders.liveTVServerChoices.contains { $0.id == id })
         XCTAssertEqual(harness.profiles.storedActiveAccountIDs(for: other.id), ["media-account"])
+        XCTAssertTrue(harness.state.profileSettings.navigationStyleModel.showsLiveTV)
+        XCTAssertTrue(NavigationLibraryLayoutStore(defaults: harness.defaults).load()
+            .shownKeys.contains(NavigationLibraryLayout.liveTVKey))
     }
 
     func testNormalLastAccountSignOutStillOnboards() throws {
@@ -564,7 +576,9 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         harness.state.bootstrap()
         let profile = harness.profiles.activeProfile
         let rememberedSelection = harness.profiles.hasRememberedSelection
+        harness.state.profileSettings.navigationStyleModel.showsLiveTV = false
         XCTAssertTrue(harness.state.recordSuccessfulIPTVSetup())
+        XCTAssertTrue(harness.state.profileSettings.navigationStyleModel.showsLiveTV)
         XCTAssertEqual(harness.state.state, .ready)
         XCTAssertEqual(harness.profiles.activeProfile, profile)
         XCTAssertEqual(harness.profiles.hasRememberedSelection, rememberedSelection)
@@ -644,8 +658,6 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         harness.state.finishThemeSelection()
         XCTAssertEqual(harness.state.state, .onboarding(.selectNavigation, canReturnToApp: true))
         harness.state.finishNavigationSelection()
-        XCTAssertEqual(harness.state.state, .onboarding(.selectHomeLayout, canReturnToApp: true))
-        harness.state.finishHomeLayoutSelection()
         XCTAssertEqual(harness.state.state, .ready)
         XCTAssertTrue(harness.state.pendingStandaloneLiveTVEntry)
         XCTAssertTrue(harness.state.consumeStandaloneLiveTVEntryIntent())
@@ -748,13 +760,142 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         XCTAssertFalse(harness.state.profileFlow.isProfileSelectionCancelable)
     }
 
-    func testDiagnosticFirstRunResetClearsStandaloneChoice() throws {
-        let harness = try makeHarness(standalone: true, profileSetupComplete: true)
+    func testDiagnosticFirstRunResetClearsStandaloneChoice() async throws {
+        let harness = try makeHarness(
+            standalone: true, profileSetupComplete: true, profileSecrets: InMemorySecureStore()
+        )
+        let fixture = try await makeLastSeenResetFixture(harness: harness)
+        let preResetProfileIDs = harness.profiles.profiles.map(\.id)
+        var erasedProfileIDs: [[String]] = []
+        harness.state.eraseLiveTVLastSeen = { profileIDs in
+            erasedProfileIDs.append(profileIDs)
+            try LiveTVLastSeenStore.erase(
+                profileIDs: profileIDs, directory: fixture.directory, secureStore: fixture.secrets
+            )
+        }
         harness.state.bootstrap()
-        harness.state.resetToFirstRunForDebugging()
+
+        XCTAssertTrue(harness.state.resetToFirstRunForDebugging())
+
+        XCTAssertEqual(erasedProfileIDs, [preResetProfileIDs])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.path))
+        for key in fixture.keys { XCTAssertNil(try fixture.secrets.readString(for: key)) }
+        XCTAssertEqual(try fixture.secrets.readString(for: "unrelated.catalog.key"), "keep")
+        XCTAssertEqual(harness.profiles.profiles.count, 1)
+        XCTAssertEqual(harness.profiles.activeProfileID, ProfileStore.defaultProfileID)
+        XCTAssertFalse(harness.profiles.firstRunProfileSetupComplete)
+        XCTAssertFalse(AppAdmissionStore(defaults: harness.defaults).loadStandaloneChoice())
         XCTAssertFalse(harness.state.canEnterApp)
         XCTAssertFalse(harness.state.allowsStandalonePlayback)
         XCTAssertFalse(harness.state.pendingStandaloneLiveTVEntry)
         XCTAssertEqual(harness.state.state, .onboarding(.selectingServer, canReturnToApp: false))
+    }
+
+    func testDiagnosticFirstRunResetPreservesAdmissionWhenLastSeenErasureThrows() async throws {
+        let harness = try makeHarness(
+            standalone: true, profileSetupComplete: true, withAccount: true, profileSecrets: InMemorySecureStore()
+        )
+        let fixture = try await makeLastSeenResetFixture(harness: harness)
+        let preResetProfileIDs = harness.profiles.profiles.map(\.id)
+        let activeProfileID = harness.profiles.activeProfileID
+        var erasedProfileIDs: [[String]] = []
+        harness.state.eraseLiveTVLastSeen = { profileIDs in
+            erasedProfileIDs.append(profileIDs)
+            try LiveTVLastSeenStore.erase(
+                profileIDs: profileIDs, directory: fixture.directory, secureStore: fixture.secrets
+            )
+        }
+        fixture.secrets.rejectRemovals = true
+        harness.state.bootstrap()
+
+        XCTAssertFalse(harness.state.resetToFirstRunForDebugging())
+
+        XCTAssertEqual(erasedProfileIDs, [preResetProfileIDs])
+        XCTAssertEqual(fixture.secrets.rejectedRemovalCount, 1)
+        // File deletion precedes key deletion. A partial erasure is NOT a successful reset.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.path))
+        for key in fixture.keys { XCTAssertNotNil(try fixture.secrets.readString(for: key)) }
+        XCTAssertEqual(try fixture.secrets.readString(for: "unrelated.catalog.key"), "keep")
+        XCTAssertTrue(harness.state.accountsProviders.accounts.isEmpty)
+        XCTAssertEqual(harness.profiles.profiles.map(\.id), preResetProfileIDs)
+        XCTAssertEqual(harness.profiles.activeProfileID, activeProfileID)
+        XCTAssertTrue(harness.profiles.firstRunProfileSetupComplete)
+        XCTAssertTrue(AppAdmissionStore(defaults: harness.defaults).loadStandaloneChoice())
+        XCTAssertTrue(harness.state.canEnterApp)
+        XCTAssertTrue(harness.state.allowsStandalonePlayback)
+        XCTAssertEqual(harness.state.state, .ready)
+    }
+
+    private func makeLastSeenResetFixture(harness: Harness) async throws -> (
+        directory: URL, secrets: AdmissionCatalogSecrets, keys: [String]
+    ) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppAdmissionLastSeen.\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock {
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+        }
+        let secrets = AdmissionCatalogSecrets()
+        try secrets.setString("keep", for: "unrelated.catalog.key")
+        let retained = harness.profiles.add(name: "Retained snapshot")
+        let evicted = harness.profiles.add(name: "Evicted snapshot")
+        harness.profiles.select(retained.id)
+        let channel = LiveTVPrototypeChannel(
+            id: "fixture-channel", number: 1, name: "Fixture channel", category: "News",
+            symbol: "tv", accent: 0, source: .iptv, tagline: ""
+        )
+        let snapshot = LiveTVLastSeenSnapshot(
+            sources: [.init(
+                sourceID: "fixture-source", accountID: "fixture-account", kind: .iptv,
+                entries: [.init(nativeID: "native-channel", channel: channel)], viewerScopeID: "fixture-viewer"
+            )],
+            browse: .init(categories: ["News"], categoryCounts: ["News": 1], totalCount: 1)
+        )
+        var files: [URL] = []
+        var keys: [String] = []
+        for profileID in [retained.id, evicted.id] {
+            let store = LiveTVLastSeenStore(profileID: profileID, directory: directory, secureStore: secrets)
+            await store.save(snapshot)
+            let loaded = await store.load()
+            XCTAssertEqual(loaded, snapshot, "A failed save must not make erasure pass vacuously")
+            let contents = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            let file = try XCTUnwrap(contents.first { !files.contains($0) })
+            let key = "liveTV.lastSeen." + file.deletingPathExtension().lastPathComponent + ".key"
+            XCTAssertNotNil(try secrets.readString(for: key))
+            files.append(file)
+            keys.append(key)
+        }
+        // Only the pre-reset roster can find this nondefault profile's remaining key.
+        try FileManager.default.removeItem(at: files[1])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: files[0].path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files[1].path))
+        return (directory, secrets, keys)
+    }
+}
+
+private final class AdmissionCatalogSecrets: SecureStoring, @unchecked Sendable {
+    private let storage = InMemorySecureStore()
+    private let lock = NSLock()
+    private var rejectsRemoval = false
+    private var rejectedRemovals = 0
+
+    var rejectRemovals: Bool {
+        get { lock.withLock { rejectsRemoval } }
+        set { lock.withLock { rejectsRemoval = newValue } }
+    }
+    var rejectedRemovalCount: Int { lock.withLock { rejectedRemovals } }
+
+    func setString(_ value: String, for key: String) throws { try storage.setString(value, for: key) }
+    func string(for key: String) -> String? { storage.string(for: key) }
+    func readString(for key: String) throws -> String? { try storage.readString(for: key) }
+    func removeValue(for key: String) throws {
+        try lock.withLock {
+            if rejectsRemoval {
+                rejectedRemovals += 1
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            try storage.removeValue(for: key)
+        }
     }
 }

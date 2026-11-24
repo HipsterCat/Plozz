@@ -1,10 +1,291 @@
 # FeatureSettings
 
-Mobile customization lists apply the shared native switch style to both standard
-sections and grouped cards. Enabled switches keep the system green appearance
-instead of inheriting the page's monochrome navigation tint.
+The household Sources page places Add Source before saved sources on TV and
+mobile. On TV, Add Source is also the workspace entry focus target and occupies
+its own connected card above saved sources, using the same grouped surfaces as Audio. IPTV source
+rows share the origin-only website-logo lookup and generic fallback across platforms.
+
+Mobile customization choice groups use the same Settings cards and content
+insets, including contained groups such as Hero content sources. TV row sizing
+does not select a different mobile section style. Enabled switches keep the
+system green appearance instead of inheriting the page's monochrome navigation tint.
 
 The Settings screen and its detail pages. Profile-aware and integration-aware.
+
+Settings search opens **Auto-hide controls** in Playback on TV, iPhone, and iPad.
+It defaults to **While playing**. **While playing
+or paused** also clears the paused picture after four idle seconds without
+resuming playback. **Never** leaves dismissal to the viewer. VoiceOver and
+Switch Control suspend automatic dismissal regardless of the profile setting.
+
+Playback's **Default zoom** uses the shared native menu on TV and mobile.
+Each profile stores separate iPhone, iPad and Apple TV choices; the current platform's
+control edits only its own choice. Custom exposes the existing 50-200% range.
+Saved movie/series mode overrides take priority. Auto-crop's pinch-selected
+screen-edge/cutout-safe framing instead carries across all videos for that device
+type and profile. Changing Custom's percentage preserves that shared framing.
+The playback settings payload carries all three defaults through profile switching,
+transfer and sync.
+
+Live TV's **Clean channel names** switch is profile-scoped and off by default.
+The shared TV/mobile section previews up to three distinct original names from
+the authorized loaded IPTV catalog, preferring names affected by cleanup.
+It updates immediately without fetching a source or changing stream/guide identities.
+Hidden and manually renamed channels are excluded. With no eligible loaded names,
+the fallback is explicitly labeled Example. Custom names win;
+the formatting rules and retained metadata are documented in
+[Live TV](../../docs/live-tv-prototype.md#channel-name-presentation).
+
+On mobile, Appearance starts with the shared visual theme cards, Gradient
+Backgrounds and Liquid Glass. Cards, Artwork and Circadian Mode form a separate
+group below. Theme search results open Appearance directly.
+Theme previews on mobile and TV update immediately with Gradient Backgrounds,
+using the app's shared ambient mesh or the theme's flat background. System
+continues to preview both light and dark.
+
+On mobile beta builds, Appearance → Music player sits beneath the theme controls
+in the same group and exposes the per-profile choices Match App Theme (default),
+Artwork, Black, Dark, and Light. Its visual cards reuse the app-theme picker
+layout and shared preview-card styling, with each platform's actual player
+background. Match App Theme previews the current app theme and Gradient Backgrounds;
+explicit choices stay independent. The picker updates the active player's
+settings model directly, without changing the app theme or music browsing pages.
+Preview-card title heights match only within each visible row; wrapped labels
+do not add empty space to other rows or single-column accessibility layouts.
+Both mobile grids own even 8-point outer insets and gaps through
+`settingsPreviewRow()`, without a second row inset from the group. Their 18-point
+card corners nest inside the 26-point settings group; the 8-point preview inset
+leaves 10-point swatch corners. Ordinary rows keep their 16-point insets.
+Onboarding and TV retain their standalone card geometry.
+Settings search reaches the same
+control; production mobile builds hide the page and its search entry. The TV-only track
+details toggle is not offered on mobile.
+
+Ordinary Settings text inputs use CoreUI's `SettingsInputRow` for a persistent
+label above the native field. Existing settings groups/panels own backgrounds and
+insets; the row does not add another surface or replace native editing, secure
+entry, keyboard traits, focus, validation, or save behavior. Home row names, Seerr
+connection fields, TMDB tokens, custom player URLs, and mobile subtitle-language
+codes share this treatment. Search, authorization-code entry, diagnostic-message
+composition, sign-in, server setup, and profile forms keep their intentional
+task-specific presentation.
+
+Version selection offers Ask every time, Choose automatically, and Use first from server
+on both platforms and at first use. Use first from server uses the selected server's first
+version and ignores remembered choices; a manual file selection still wins.
+
+Version selection is one native menu row showing its label and current value,
+not an expanded list. Unconfigured profiles show Choose on first play without
+changing the saved preference; the three choices are inside the menu.
+Automatic version selection has a shared information button beside the TV
+description below the menu, beside the selected mobile value, and beside the
+first-use description.
+The native help dialog explains remembered series choices and metadata-based
+ranking with examples; opening or dismissing it never selects a playback mode.
+
+Disc playback lives in a dedicated Discs section near the bottom of Playback,
+just before Advanced, on TV and mobile. It uses the shared labeled menu row on TV, showing the setting name
+and current choice rather than an unlabeled segmented picker.
+Its helper note explains HDMV-only menus, automatic video playback for BD-J,
+and the watch-progress limitation once on both platforms; disc action menus
+and video pickers do not repeat it.
+
+Controls with supporting text use CoreUI's `SettingsDescribedControl` on both
+platforms. It owns helper typography and spacing, keeps the native control's
+normal clearance, and places group separators after the complete row. Settings
+summaries use `SettingsRowMetrics.descriptionFont`, not per-page caption sizes.
+Seerr appears in the active profile's category list, not Manage Plozz. It edits only
+that profile's connections; the existing Kids-profile restrictions still apply.
+Downloads follows Libraries in the mobile profile card and uses that profile's
+existing download model. It remains hidden for Kids profiles and unavailable on tvOS.
+On mobile, the active profile's avatar and name form the first row of this same
+settings card, matching the tvOS grouping. The household Profiles entry remains
+under Manage Plozz. The shared section has no scope footer; device and sync
+details belong inside the relevant settings. The profile card has no repeated
+scope footer.
+
+Playback groups its five optional **Player tabs** in one shared control surface
+on TV and mobile. Labels match the player tabs, Info stays always available, and
+visibility preferences are independent of autoplay and Up Next behavior.
+
+Playback's **Video upscaling** control is shared by TV and mobile and is
+profile-scoped. Automatic is the default, including profiles saved before the
+setting existed; Off, Standard and Animation are explicit alternatives.
+Automatic chooses Animation from anime identities or animation genres/tags,
+otherwise Standard. Standard enhances supported 8-bit SDR below 1920x1080 in
+both dimensions; Animation accepts drawn 8/10-bit SDR up to 1920x1080 inclusive.
+Both require a larger display and exclude HDR/Dolby Vision and 4K.
+The description distinguishes these limits and metadata-based selection.
+The setting applies to new playback through AetherEngine, including Live TV;
+native and external players
+are unchanged. Engine eligibility and performance fallbacks still apply.
+
+Movie & show details → Trailers & music is the shared destination for trailer
+availability, independent Home autoplay and detail background playback. Home →
+Hero links to the same controls. Off suppresses trailer lookups, manual actions,
+and autoplay without erasing surface preferences or disabling theme music.
+Server only permits local/server trailers, excluding YouTube links even when
+supplied by a server or already cached. Server + YouTube preserves background
+preparation of manual links; YouTube never autoplays. Each surface retains its
+own mute default, and detail theme music retains its profile-scoped volume.
+
+On iPad, selecting a different sidebar category discards the previous category's
+entire pushed detail stack. The reset targets the native detail navigation
+controller, not the split view, preserving sidebar scroll position and search.
+Profile changes and parental relocking also invalidate the detail identity.
+Mobile disclosure and action rows share `settingsActionRow()` from CoreUI;
+composite controls retain separate minimum touch targets with
+`settingsControlTarget()`. Per-view customization menus respond across their
+whole title/value row, not only the value. Native toggles remain independent.
+Do not put `SettingsFormButtonStyle` inside `settingsActionRow()`: it overrides
+the mobile padding while the group omits its own insets. Grouped Live TV links
+inherit the TV form style from `SettingsSectionGroup` instead.
+
+TV label customization uses `ViewCustomizationRow` for Only show descriptions on focus,
+matching the neighboring controls' sizing and focus treatment. Its live episode
+preview shows descriptions under every card by default, or only the focused
+example when enabled, without changing the preview's layout.
+
+## Settings search
+
+Settings search is local: queries are neither saved nor sent to a service or log.
+The shared `SettingsSearchCatalog` indexes profile and device preferences,
+including Home/Hero, artwork and labels, playback and subtitles, libraries,
+Live TV, downloads, profile appearance, sync, metadata, diagnostics and startup.
+Results use the current platform's destination and retain their query on Back.
+Protected destinations retain their normal profile/PIN checks; search never
+selects a server, library or user, enables a prerequisite, or submits an editor.
+Unavailable controls lead to their existing prerequisite or availability message.
+On mobile, custom quality keeps its normal modal editor: Cancel discards the draft, Apply
+updates only the selected network, and either action returns to the search.
+
+Matching prioritizes exact titles, then prefixes, related terms, and bounded
+spelling corrections. This is a curated synonym index, not a general-purpose
+language model. Do not promise arbitrary semantic understanding or add aliases
+for capabilities a control does not provide.
+
+The initial cross-player terminology comes from the
+[Infuse settings reference](https://support.firecore.com/hc/en-us/articles/360015608854-Settings-Overview)
+and Kodi's [video](https://kodi.wiki/view/Settings/Player/Videos) and
+[subtitle](https://kodi.wiki/view/Settings/Player/Subtitles) references:
+continuous playback, streaming cache, forward/backward skip, skip steps,
+background playback, landscape lock, gesture control, poster titles, external
+ratings, and subtitle position. These are discoverability terms, not claims of
+feature parity. In particular, audio passthrough is not an alias for lossless
+conversion; display refresh-rate matching is not an alias for transition fades;
+subtitle placement is distinct from audio/subtitle timing.
+
+iPhone on iOS 26 and later uses the system search toolbar item in the bottom
+bar; iPad keeps the native search field visible in the Settings sidebar without a
+redundant Settings heading. Detail pages retain their titles. Earlier iPhone
+systems use SwiftUI's native search placement. Mobile results use plain native List rows,
+with shared title/breadcrumb keylines and no additional result-container inset.
+On iPhone, returning from a result restores the query and keyboard. Dismissing
+the keyboard leaves the query visible and clearable; it does not end search.
+The compact Settings root places its large heading inside the scrolling content,
+below the toolbar. Scrolling past the heading shows the inline navigation title.
+TV has a native search field in its own card at the top of Settings. Selecting
+it opens remote text entry immediately, without pushing a search page. The
+settings cards fade into suggestions/results in the same scrolling column;
+Reduce Motion skips the fade. Dismissing the keyboard leaves search available,
+and Back from the results clears the query and restores the settings cards and
+search-field focus. Result destinations use the existing retained Settings page
+stack, preserving the query and selected result on return. Native sidebar
+full-screen dismissal retains the source row and restores its focus only after
+the cover finishes dismissing, rather than resetting focus to the search field. Profile or
+authorization changes clear search along with the page stack.
+TV result buttons use `SettingsFormButtonStyle` for the standard row height and
+content insets inside the focus highlight, with `SettingsIconLabelStyle` keeping
+titles aligned across different symbols. Result labels add no extra padding.
+`SettingsSearchLanding` and
+`settingsSearchAnchor` reveal the existing control without changing its value.
+On mobile, the brief landing highlight covers the complete padded row, not just
+its label or picker. Grouped rows own the highlight and their corner clipping;
+standalone native List/Form rows use the native row background. The searched
+row installs a stable, binding-driven background before reveal: native List can
+retain an initially absent background during navigation even when the row's
+highlight state changes. Non-target rows retain their native background. The highlight
+does not intercept touches or change the setting.
+The landing cue stays invisible for 0.35 seconds after reveal, then plays its
+full 3.9-second animation. It opens with a quick, soft brightness lift that blends
+into two broad neutral reflections over the first 1.8 seconds. Dark appearances
+use a stronger arrival, surface reflection and fine edge so the cue is visibly
+brighter even without HDR display headroom; light appearances retain their
+existing contrast. The brightness
+lift decays throughout their movement rather than ending as a separate flash. Each reflection
+drifts and changes strength independently, lighting the surface
+and fine portions of its edge rather than drawing a continuously illuminated rim.
+The light fields scale with the row, including wide tablet rows, and start at a
+varied phase on each landing; nothing picks new random values between frames.
+A shared envelope preserves the initial 2.1 seconds, then fades the entire cue out
+over 1.8 seconds with a smooth, flat-ended curve. The full lifetime, including
+the invisible pause, is 4.25 seconds. Its inset drawing stays within
+the row's corner shape, and its 30-fps timeline stops when the cue ends.
+Reduce Motion, reduced transparency/effects, and inactive scenes use a steady
+outline after the same delay instead; TV continues to use native focus without this mobile effect.
+On iOS/iPadOS 26 and later, animated dark-theme reflections use HDR emission at 2.25 times
+SDR white in linear light. The existing alpha field masks that emission without
+clipping it through the SDR Canvas. SwiftUI manages available display headroom
+and tone mapping; this does not change the screen-brightness setting or guarantee a measured
+125% display-output increase. Light themes, reduced effects and earlier OS versions
+retain their standard-range appearance.
+Grouped ownership is set before resolving SwiftUI subviews, so ScrollView rows
+do not also paint a smaller control highlight. Nested anchors preserve a child's
+active highlight, and nested row owners consume it without lighting up their parents.
+Native lazy List cells and sections register their contained targets with
+`settingsSearchGroup`; the selected control is then revealed within that container.
+Ungrouped native Form rows bootstrap directly through their target ID, so a
+subtitle control below the viewport can mount before its native reveal runs.
+TV search anchors belong to visible menu triggers, not their unopened options.
+Hero source groups register both their toggle and dependent targets, so offscreen
+Collections and other sources can be created before their landing cue starts.
+Every indexed entry needs an available route and a matching control anchor.
+On TV, Hero and Row style have separate search destinations. Showcase sizing
+and inline ratings open Row style; when Classic hides those controls, search
+focuses the Showcase choice without changing it. Hidden Hero controls similarly
+lead to its On preview. The standalone Discovery row leads to Hero Off when
+the featured Hero is active, then to the row's enable switch when necessary.
+Search labels distinguish localized app copy from verbatim provider names;
+indexing resolves resources for the current locale without translating brands.
+Disabled prerequisite controls can register dependent targets with `fallbackFor`;
+do not register the same target on a still-mounted disabled child.
+TV controls with their own focus binding pass `focusAction` to use that owner.
+Search waits for native layout before requesting focus, including native menus
+whose focusable view is not ready when the initial SwiftUI task begins.
+
+Run `tools/check-settings-search.sh` when changing Settings. Its SwiftSyntax
+inventory independently discovers controls in Settings/Preferences files and
+reachable components, including custom input call sites and nested menus.
+The checked-in `tools/settings-search-coverage.json` records individually reviewed
+navigation, credential, contextual-content and preview exclusions. Exclusions
+have exact control keys/counts; reusable renderer and presentation boundaries
+also retain their control structure. A new control, arbitrary uncatalogued
+anchor, missing destination anchor, stale exclusion or changed boundary fails.
+Review a failure rather than accepting the current inventory as a new baseline.
+When extracting connection-setup subviews, keep their files traversable and
+update only the reviewed control keys and counts, not broad component exemptions.
+When a containing input row or stack owns the search anchor, record the exact
+inner control with `covered_by` pointing to that indexed destination; do not
+give every child of an anchored container implicit coverage. Repository-backed
+regressions keep refactored editors discoverable and reject removed row anchors.
+Runtime navigation, provider access, lazy reveal and native focus still require
+behavioral tests; static coverage is not proof that a screen works.
+
+Searching for Hero, a Home banner, carousel, or spotlight opens the full Home
+Hero page at **Show hero**, ahead of the incidental movie/show Background match.
+This remains available when Hero is off and does not enable it automatically.
+On TV with Showcase selected, search instead focuses the Hero layout choice;
+changing layout still requires an explicit selection.
+
+Mobile customization menus reuse `SettingsMenuValue`, the value/chevron rendering
+used by `SettingsMenuLabel`. Playback details, per-view labels, and item-tap actions
+retain their native menus and adaptive labels without separate value pills.
+Artwork by view, label customization, and Hero subpages also use the shared
+mobile `SettingsPageList` surface and `SettingsSectionGroup` rows. They inherit
+the same page margins, headers, separators, corner radius, theme/gradient
+background, and toolbar treatment as other Settings destinations, rather than
+adding native inset-grouped styling or an opaque background. Lazy grouped
+artwork and label rows register their contained search targets.
 
 Playback > **Ask to resume or start over** is per-profile and off by default, including
 for existing profiles. TV and mobile resume partially watched movies and episodes
@@ -74,10 +355,24 @@ asked once after this migration; reporting stays off until they choose to share.
 Either choice continues setup and survives relaunch and profile switching.
 Help & Diagnostics can change it later. Consent is not synced or transferred.
 The prompt and its primary Share Diagnostics and secondary Don't Share actions
-use the shared Settings card above a separate bottom privacy footer, with
+use the shared Settings card, with
 48-point content insets on tvOS and the standard card insets on mobile.
-Its GitHub-marked link opens the repository
-on mobile or a scannable QR sheet on Apple TV; opening it does not grant consent.
+Like other first-use prompts, it supplies the palette's neutral accent to native
+controls rather than inheriting the system-blue tint.
+Its circular info button uses the same native secondary action style as Don't
+Share (Liquid Glass where available). On mobile, the glass circle is 44 points
+across and the GitHub action is 44 points tall at the default text size, scaling
+with Dynamic Type. Flexible native button sizing sets the glass height rather
+than enlarging the label vertically. The mobile GitHub label adds 6 points of
+trailing padding while retaining the icon's native leading inset.
+Older mobile systems retain 44-point minimum
+targets, and tvOS keeps its native control sizing.
+It sits 12 points inside the card's top-trailing corner, independently of its
+content insets. It opens the shared sheet with detailed disclosures, the
+optional-sharing explanation and the Privacy Policy link; opening or dismissing
+it does not choose consent. The footer contains only the GitHub repo link, which
+opens the repository on mobile or a scannable QR sheet on Apple TV; opening it
+does not grant consent.
 
 Settings and the consent screen also expose **Privacy Policy**, opening the
 public policy on mobile or its URL and QR code on Apple TV. `SettingsCopy` keeps
@@ -111,7 +406,7 @@ Playback's **Prefer lossless audio** toggle uses one short helper:
 **Turn off for surround sound over regular HDMI ARC, which requires compressed audio.**
 It defaults on for new and upgrading devices and is shared by Plozz
 profiles on that device, not synced to other audio setups. Off selects the
-ordinary compatibility-surround bridge; the spatial-height setting is separate.
+ordinary compatibility-surround bridge. Height-channel conversion is disabled.
 
 Title navigation uses native page opening and closing. The former
 **Zoom when opening titles** setting is removed, and saved values are ignored.
@@ -192,24 +487,16 @@ with schematic Home Screen previews. A slightly larger solid-white tile marks
 the focused app, without an icon. Posters stays the default; full-screen explains
 tvOS's swipe-up expansion and retains the same two item limits.
 
-Playback > Advanced also contains **Dolby Vision FEL (experimental)** on TV,
-iPhone and iPad. This is a profile-scoped, default-off preference, unlike the
-device-wide external-player choice. It applies to new built-in on-demand sessions
-and travels through profile settings transfer. Its short helper warns that it
-may impact performance. On iOS/iPadOS and tvOS before 26 it also warns that
-FEL disables spatial audio; ordinary channel audio still plays. On OS 26+,
-eligible FEL tracks can retain spatial audio when the Spatial audio setting is on.
-Live playback, shared players and muted previews do not opt in.
+Playback > Advanced retains the device-wide external-player choice on TV,
+iPhone and iPad. The experimental Dolby Vision FEL control is removed, and the
+engine's dual-layer reconstruction component is disabled. Old saved or transferred
+FEL preferences are ignored; normal Dolby Vision playback remains unchanged.
 See [playback engines](../../docs/playback-engines.md#dolby-vision-fel) for eligibility
 and output limits.
 
-On tvOS and iOS/iPadOS 26+, Playback > Advanced also offers **Rendering layout** in a native
-menu: 5.1.2, 5.1.4, 7.1.2, 7.1.4 and the default 9.1.6. This device-local choice
-is shared by profiles, excluded from profile transfer and read on each new load.
-It does not enable Spatial audio or alter saved On/Off choices. The helper
-discloses that DTS:X heights require 7.1.4 or 9.1.6; smaller layouts retain
-ordinary channel playback for those tracks. This is a rendering bed, not a
-speaker-detection setting.
+The former height-channel switch and **Rendering layout** picker are also removed,
+including their Settings search results. Legacy profile flags and device layout
+values cannot enable conversion.
 
 **Remember audio language per series** stores only the selected language, not a
 specific audio track or format. Its label needs no explanatory footer.
@@ -217,8 +504,8 @@ specific audio track or format. Its label needs no explanatory footer.
 On TV, related control groups can share one section heading through
 `SettingsConnectedControlGroups`: an 8pt gap and tighter 8pt facing corners keep
 them connected, while the section's outer corners retain the standard radius.
-Audio language controls share the first group; Prefer lossless audio and Spatial
-audio share the second, retaining their independent preferences and helpers.
+Audio language controls share the first group; Prefer lossless audio occupies
+the second, retaining its device-local preference and helper.
 Autoplay switches share a group, separate from the Up Next card and its
 conditional timing control. These use the existing surfaces and native controls,
 without an enclosing card or changing the independent settings.
@@ -255,49 +542,131 @@ profile-scoped and travel through settings transfer. Community-marker attributio
 and identifier sharing appear as a short caption attached to its switch, without
 a separate section footer.
 
-The **Spatial audio (height channel support)** switch is available on tvOS and iOS/iPadOS 26 and later. Its
-profile-scoped `trueHDAtmosEnabled` preference defaults on, preserves saved Off
-choices and travels through profile transfer. It applies to new supported
-on-demand sessions, not live streams, shared players or muted previews. The
-helper identifies TrueHD Atmos and DTS:X as inputs, PCM rendering and lossy
-AirPlay output. Format names describe compatibility, not certification,
-lossless passthrough, or patent clearance.
-FEL can use the same spatial conversion on these platforms; source eligibility and
-fallback remain engine-owned. Unsupported platforms
-keep ordinary channel playback; directly compatible spatial audio is unaffected.
-Compatible AirPods use the system's spatial rendering automatically when enabled
-in the OS; Plozz does not override Spatial Audio or head-tracking preferences.
-Feature descriptions use neutral spatial-audio wording; track
-metadata, diagnostics and legal notices retain accurate format and dependency names.
+Height-channel conversion is disabled in both the adapter and the engine's
+package traits. Older `trueHDAtmosEnabled` values are ignored when decoding
+profile preferences and omitted on the next save; other preferences and profile
+transfers remain intact. Ordinary surround audio and directly compatible native
+spatial audio remain available. Plozz does not override the OS's Spatial Audio
+or head-tracking preferences. Track metadata, diagnostics and legal notices
+retain accurate format and dependency names.
 See [spatial audio](../../docs/playback-engines.md#spatial-audio) for limitations.
 
 Playback > Advanced > External player is a device-only, default-off preference
 shared by all profiles on that device. It stays inside Playback rather than
-adding an Everyone category. The picker has one short scope label; About external
-playback and custom configuration are separate drill-ins.
-Choosing an installed player redirects compatible movies and episodes:
+adding an Everyone category. A separate "[player] limitations" section lists only
+sources that stay in Plozz and missing watch-progress return, not general playback
+capabilities. It is not a footer inside the picker and is hidden for built-in playback.
+On tvOS, focusing a player previews its support without changing the saved
+default; only activating the row changes the selection. With focus outside the
+picker, the section returns to the selected player. Mobile shows the selected
+player's limitations in a separate section beneath its menu.
+On tvOS, VLC lists the share protocols that stay in Plozz;
+Native Player and Infuse also explain WebDAV
+password-character, extra-header and certificate-pin limitations and the built-in
+fallback. About external playback retains credential-sharing and progress details;
+custom configuration is a separate drill-in.
+Choosing an installed player redirects compatible movies, episodes, server videos,
+trailers and extras:
 Native Player on tvOS, Infuse 8.4.7+ on both platforms, and VLC on both platforms.
 The further-nested custom player editor accepts one encoded `{url}` placeholder.
 Unavailable apps, failed handoff preparation, and unsupported sources use Plozz
 automatically without a confirmation prompt or changing the preference.
 Cancellation and profile/authorization changes abort playback, not fall back.
-All IPTV content (including movies/episodes), NAS shares, and Silo bypass external
-negotiation altogether. Silo's session-bound grants need its built-in lifecycle;
-no speculative external session is opened. Live TV, trailers, and music keep
-their existing runtimes.
+IPTV movies and episodes can use a provider-owned independent handoff: the
+origin HTTP(S) URL is sent directly, without starting Plozz's local proxy.
+Sources requiring custom HTTP headers stay in Plozz; the app-link APIs cannot
+carry those headers. Explicit unknown versions are not replaced with a default.
+WebDAV files can use anonymous or password-authenticated HTTP(S) delivery with
+system TLS trust. Native Player, Infuse and VLC receive the configured share
+username and password in an ephemeral playback URL, including matching SRT
+sidecars. Passwords containing a colon or requiring URL escapes cannot use
+direct links in the tested Infuse and Native Player versions; VLC handles
+escaped passwords. Custom player templates never
+receive share passwords. The transport
+revalidates the selected file's identity and size and proves bounded range access
+before handing off. Server redirects to independently readable HTTPS delivery
+URLs still use isolated anonymous requests and never receive the share's
+password, bearer or cookies. A delivery URL can remain on the same HTTPS server:
+Plozz checks it in a separate anonymous session against the selected file's
+validator and size before sending it without share credentials. A pinned DAV
+connection can also resolve a separate, system-trusted HTTPS delivery server;
+the pin is still enforced on the DAV connection and is never dropped on a
+direct handoff to that origin.
+VLC can also receive plain FTP files and matching SRTs directly, preserving the
+exact absolute server path, port and selected representation. Only anonymous or
+URL-unreserved ASCII password credentials are enabled; FTPS/TLS and pinned-trust
+configurations never become plaintext links. See the
+[FTP transport](../MediaTransportFTP/README.md#external-playback) for the verified
+receiver contract. Other direct share protocols are not enabled: an installed
+player's saved-share browser does not establish support for its app-link API.
+When direct network-share handoff is unsupported, iOS/iPadOS 26 can instead serve the
+exact selected file and matching SRTs through an app-owned loopback endpoint.
+This covers WebDAV, SMB, NFS, SFTP and FTP/FTPS through their existing transport
+resolvers, retaining password/key authentication, signing, host-key and certificate
+policies rather than handing those policies to an external app.
+It requires actual admission of a
+`BGContinuedProcessingTask` before opening the player; a denied or delayed grant
+keeps playback in Plozz. The system activity reports unique file bytes served,
+not watched progress. Cancellation/expiration stops the endpoint, and the next
+return to Plozz presents any execution-expiration error. No server setup,
+duplicate library configuration, downloaded-video export or background-audio
+keepalive is involved. This fallback is unavailable on tvOS and older iOS;
+those platforms retain direct handoff or built-in playback. Disc folders
+remain internal. Network shares cannot satisfy
+conversion requests or reduced streaming-quality limits. Matching SRT sidecars
+use the same player-specific authentication policy, without copying local
+subtitle files to another app. Plozz keeps playback URLs in memory, not callback
+receipts or logs. Temporary server-issued delivery URLs may expire; the
+external player cannot renew them through Plozz.
+Silo negotiates its native
+original-file or HLS plan, retaining the exact version and mobile quality limits.
+Native Silo URLs require account authentication on every media request. Handoff
+requires the current account token and any advertised grant expiry to cover the
+full video plus five minutes for startup; otherwise playback stays internal.
+Unknown-duration native streams also stay internal. External sessions use
+client-owned progress: only a valid player callback updates resume/watch state.
+Media requests sustain the server session, with cleanup on callback or the next
+play intent, including after an app restart. Live TV always stays in Plozz,
+including explicit Watch actions and preview expansion. YouTube trailers keep
+their existing source-opening behavior, and background trailers/music never
+launch another app.
 
 On iPhone/iPad, downloaded movies and episodes play inside Plozz. Downloads
 menus do not export files to other apps, regardless of the external-player
 preference. External playback remains available for supported online sources.
 
-External playback requires directly accessible HTTP(S) media: no app-local
-proxy, downloaded file, private share credentials, separate audio stream, or
-server conversion. Mobile quality limits are not bypassed. Links can contain
+Apart from VLC's plain FTP route, direct external playback requires independently accessible HTTP(S) media: original
+files, remote HLS, and server remux/transcode streams are eligible. Except for
+the explicitly admitted network-share file endpoint above, app-local proxies,
+downloaded files, share connections requiring app-owned authentication
+or trust, and separate audio streams
+remain internal. DASH can open in VLC; other players retain the built-in fallback.
+Mobile quality limits and forced conversion are negotiated through the same
+provider streaming API, not bypassed by handing
+off the original. The external player applies resume to the complete rendition
+timeline; the server is not also asked to trim it to that position. Links can contain
 server tokens, so the settings explain that the chosen app receives them.
 Jellyfin, Emby, and Plex direct-play sources remain eligible. Native Player and
 Infuse receive resume positions and up to eight SRT sidecars;
 VLC receives at most one sidecar and no resume/progress promise. Track selection,
 skip markers, Plozz controls, and Plozz autoplay are not available after handoff.
+
+Server conversion sessions are retained after a successful handoff and released
+on a supported return or the next playback intent. A credential-free session ID
+can restore cleanup after Plozz restarts, only under the original authorized
+profile, account, server user and credential revision. Failed or canceled
+handoffs release their prepared session. VLC/custom players do not report
+completion, so cleanup waits for another playback intent or server expiry.
+Returning to Plozz without a callback is not treated as completion: the other
+app may still be playing in PiP.
+
+For independently delivered server streams, Plozz does not run a background
+keepalive or local relay after handoff. The
+external app's media requests must sustain the server stream; servers may expire
+long-paused conversions. Silo's native session can expire after 45 seconds without
+media activity (subject to its startup/proxy grace); external players cannot send
+its pause reports or recreate an expired session. These paths need
+external-app/device verification and do not establish universal playback compatibility.
 
 `AppRuntime.ExternalPlaybackRuntime` correlates returns with a random session,
 bundle-specific callback scheme, and media-URL digest. Its device-local receipt
@@ -344,7 +713,7 @@ watch history and planning-list behavior are documented in
   the native action inline with the scrolling page title and Back control.
   Editing remains available for one row so it can be removed; movement does not.
   Presets and reordering never change page appearance. Showcase's fixed Discovery
-  row links back to Home layout rather than pretending to be reorderable.
+  row links back to Row style rather than pretending to be reorderable.
   Shared Continue Watching settings remain accessible when its Home row is hidden.
   Home → Filtering groups two independent switches under **Hide watched content**:
   **Recently Added** (off by default) and **Hero & discovery** (on by default).
@@ -405,6 +774,11 @@ watch history and planning-list behavior are documented in
   its Hidden divider, native focus/drag behavior, and scoped reset actions.
   Navigation library rows use the shared content-kind glyph, with the provider
   mark and server name below the library name rather than beside the drag handle.
+  Hold any navigation item and choose Rename to change its profile-specific
+  navigation label and destination heading. Empty names restore localized defaults;
+  names survive arrangement resets and offline libraries without changing route,
+  provider, or library identity. Watchlist shares its name with the Home row,
+  so either editor updates the row, navigation label, and page together.
   `LibraryPresentationLoading` connects the settings UI to the existing browse
   and discovery pipeline through AppRuntime, without a feature-to-feature
   dependency. Identity changes cancel pending discovery and replace row editors.
@@ -414,7 +788,43 @@ watch history and planning-list behavior are documented in
   and Hero source selection uses the enabled library inventory. Discovering
   libraries for those controls must not restore a separate management list.
 - **Home rows** is one shared arrangement editor on TV, iPhone and iPad.
-  Normal rows open their own settings. Source-specific rows and their settings
+  Normal rows open their own settings with a **Row name** field.
+  Saving applies a profile-specific heading,
+  and clearing it restores the original heading. Names survive hiding, reordering,
+  preset changes, and temporary source unavailability without renaming server content.
+  Home and its row-browse pages use these headings. Watchlist also uses its shared
+  name on its navigation item and dedicated page; other row names remain separate
+  from navigation naming.
+  Collection rows retain their existing name editor.
+  On iPhone and iPad, long-press a Home row's combined title/chevron target and
+  choose **Edit** to open that same row editor directly. Ordinary taps still browse;
+  rows without a browse action also expose Edit. The shortcut is scoped to the
+  active profile and is available through VoiceOver actions.
+  On iPhone and iPad, ordinary row names, collection-row drafts, and navigation
+  names share a native confirmation-toolbar checkmark instead of an in-content
+  Save changes button. It enables for valid changes (or a new collection row),
+  shows progress while saving, and returns to the previous page after success.
+  Keyboard Done uses the same save path. Failures retain the draft and show an
+  alert; leaving cancels pending work. Immediate appearance/behavior preferences
+  remain immediate.
+  On TV, ordinary row names, existing collection names, and navigation names save
+  when native text editing ends, whether through Done or keyboard Back. Back
+  closes the keyboard without also leaving the editor. There is no second Save
+  action. A secondary checkmark and **Saved** appear beside the field label only
+  after a changed name saves; the status remains until editing starts again.
+  It adds no remote focus stop and announces success to VoiceOver.
+  A failed name save retains the draft and shows **Couldn't save** with Retry.
+  The shared name input observes its own native text-field editing lifecycle:
+  remote focus can stay on the input after the keyboard closes, and Back does
+  not submit the field. The observer never reacts to another input's editing.
+  Existing collection layout, logo, and content choices apply on selection and
+  preserve the saved name independently; failures expose Retry. New collection
+  rows remain drafts until the explicit **Add to Home** action on both platforms.
+  Remove from Home is a separate, full-width destructive action group below the
+  row's editing controls, shared by ordinary and collection rows.
+  Onboarding keeps the shared large native page actions; editor toolbar actions
+  and destructive form rows retain their native sizing.
+  Source-specific rows and their settings
   use the shared provider brand mark, including the transport badge for shares.
   In the editor, Add row, and reorder rows, the mark sits beside the
   library/server name on the second line rather than before the section title;
@@ -426,15 +836,80 @@ watch history and planning-list behavior are documented in
   One full-width Add row action appears below Preset and above the editable rows.
   A centered plus-and-label, native capsule style, and vertical spacing distinguish
   the action from the editable rows. Edit/Done switches to native movement controls
-  with no Hidden drop zone. Hero and Showcase remain on their separate layout page.
+  with no Hidden drop zone. Hero and Row style remain separate Home settings.
   Mobile uses the shared page inset without extra gutters.
-  Add row separates **From a collection** from **Available rows** not already
+  Add row separates **Custom row** from **Available rows** not already
   shown. Empty results omit the empty heading; discovery failures show source
-  errors and Retry instead of claiming no rows are available. Creation starts with
-  a library collection; the editor identifies that source as Content and its
-  presentation as Layout (see [Home terminology](../../CONTEXT.md)). Choose a source collection first,
-  then edit its name and Posters, Landscape or Featured presentation with the layout control immediately above a real-title
-  preview. The preview uses the existing artwork preferences and spoiler protection.
+  errors and Retry instead of claiming no rows are available. A custom row's
+  **Content** picker can combine collections, video playlists, video libraries,
+  recommendation feeds, Watchlist, Continue Watching, and Recently Added.
+  Selection order determines the interleave; duplicate titles retain their
+  existing cross-source identity and playback references. Unavailable saved
+  sources remain visible and removable. An existing row cannot lose its last
+  source; a new empty draft cannot be saved.
+  The picker uses standard grouped Settings choice rows. A separate compact
+  Selected summary includes nested sources and their library/server context,
+  with explicit remove buttons instead of duplicate checkmarks. Collection and
+  playlist drill-ins do not repeat that summary. Done returns one level without
+  saving a new row: mobile retains the editor's toolbar save, TV existing rows
+  autosave, and TV new rows still require Add to Home.
+  Leaving a changed new row on TV, using either the header Back button or the
+  remote, asks whether to Add to Home, Discard, or Keep Editing. Add to Home
+  remains unavailable without valid content, and a failed save keeps the editor
+  open with its error. Untouched or fully reverted drafts leave without prompting;
+  navigating into Content does not count as leaving the editor.
+  Container selections project the original sources binding through a writable
+  key path, so checkmarks update immediately in retained TV destinations without
+  a separate selection cache.
+  The editor separates Content from Layout (see [Home terminology](../../CONTEXT.md)).
+  Content, a single-line **Name** input, **Sort**, **Filter**, and **Layout** share one Settings group;
+  the name label stacks above its input at accessibility text sizes.
+  Mobile Sort, Filter, Layout and Logo menus match the other editor rows' 44-point minimum
+  content height before group insets, without changing unrelated Settings menus.
+  Choose Posters, Landscape or Featured presentation, with **Logo** below Layout
+  for landscape rows. Once content is selected, a live real-title preview appears
+  below the controls without another enclosing card, with eight additional points
+  separating it from the controls. Empty drafts omit the preview.
+  The preview uses Home's actual heading, rail spacing, viewport-fitted card
+  widths, captions, artwork preferences and spoiler protection through
+  CoreUI's `HomeRowPreviewView`. Featured sizing and focus also share Home's
+  presentation owner. On TV, the preview aligns with the settings group and
+  sizes cards against the containing page stack's full content viewport, not
+  the narrower editor column. The horizontal scroll viewport extends to both
+  screen edges; its initial content margin keeps the first card aligned with
+  the settings group while scrolled cards remain visible outside that column.
+  Sizing preserves Home's navigation gutter and poster trailing-safe-area
+  behavior without carrying the navigation gutter or fade into the preview.
+  Mobile removes the surrounding gutter only for the rail, avoiding a second inset.
+  Preview cards cannot navigate,
+  play, or mutate titles; TV focus and scrolling remain usable.
+  Sort defaults to Source order, preserving playlist sequence. The saved sort,
+  direction and media/watch-status filters also apply to Home and the initial
+  opened grid. Query changes cancel stale preview work and reuse complete
+  membership within the same scoped editor session. Large sources take longer
+  with an explicit query because ordering/filtering must cover the whole source,
+  not just the first preview page. Errors remain visible with Retry.
+  Settings presentation must forward the active Home snapshot provider for
+  Continue Watching and Watchlist previews, including the mobile Settings sheet.
+  Pausing Home refresh behind mobile Settings does not revoke read access to
+  the authorized, current-profile snapshot; profile/account changes, revoked
+  authorization and mismatched visibility still reject reads.
+  Small recommendation pages reuse the traversal's pinned items. Prefix-based
+  continuation requests include enough items to validate every pinned anchor,
+  even when an individual source's share of a combined page is smaller.
+  A failing source retains the other sources' preview titles and an explicit
+  retry. Diagnostic submissions record failed preview feed kinds, provider,
+  paging bounds, snapshot availability and safe HTTP route/status evidence in
+  the bounded library journal, never source titles, identifiers or URLs.
+  Landscape exposes **Logo: On / Off** for movie/show cards on all platforms,
+  defaulting to Off. Older Automatic values migrate to Off; saved On/Off choices
+  remain intact. On uses the shared background/logo treatment and is never
+  suppressed by an artwork-type guess. It prefers clean backgrounds when allowed
+  by the artwork settings, but still overlays the available artwork when none is
+  found. Off adds no overlay; it cannot remove a logo embedded in the image.
+  The preference persists
+  with each row, survives layout changes and profile transfer, and previews
+  without saving until the user applies the edit. Episode stills are unchanged.
   Each navigation destination explicitly forwards the active profile's card settings,
   including Add row's nested creation destination; iOS navigation does not
   inherit dependencies injected only into the preceding page.
@@ -451,23 +926,33 @@ watch history and planning-list behavior are documented in
   provider mark beside each library's second-line server label, including personal
   collection sources. Featured previews share the live card's artwork, logo and
   metadata layout without starting playback in Settings. Reorder menus include Move to top
-  and Move to bottom within the movable sections, never above Home layout.
+  and Move to bottom within the movable sections.
   On TV, picked-up rows retain native focus during rapid directional presses
   and held Up/Down; reaching an edge does not move focus out of the list.
   Home's latest section warnings also appear here with Details and Retry.
   These are transient results fenced by profile, account, effective viewer,
   credentials, and the loaded Home settings; catalog discovery is not treated
   as evidence that the actual Home content request succeeded.
-  Continue Watching owns its merge and artwork controls. Hero owns its sources
-  and presentation, including the existing TV Home Layout/Showcase options.
+  Continue Watching owns its merge and artwork controls. TV Hero owns its
+  enabled state, sources, sizing, rotation, ratings, and trailers. Its On/Off
+  preview cards use the shared settings selection style; Off previews the current
+  Classic or Showcase rows without changing that preference. Row style has
+  Showcase followed by Classic preview cards independent of Hero, with Showcase
+  sizing and inline rating controls below, rather than a Ratings subpage.
+  Standalone Showcase also exposes Discovery and its
+  providers, respecting Kids policy. These controls map to existing persisted
+  hero style/enabled fields without resetting content preferences. Mobile keeps
+  its Hero controls and carousel presentation. Fresh TV profiles default to
+  Hero + Showcase; existing saved choices remain unchanged.
   Continue Watching groups artwork, playback details and labels before their shared
   Recommended-page scope note; Include Next Up and selection behavior follow.
   Showcase groups Ratings and Discovery with their dependent controls.
-  **Center button action** on TV and **When tapping an item** on iPhone/iPad
+  **Center button action** on TV and **Tap action** on iPhone/iPad
   select **Play** or **Open detail page** for Home's movie/episode cards.
-  Play remains the default for fresh and existing profiles. The choice uses the
-  existing profile-scoped Home settings store and profile transfer; it does not
-  change artwork or Live TV shortcuts.
+  Open detail page is the default when no action has been saved. Existing saved
+  choices remain unchanged. Episodes open their own detail page, not the parent
+  show's page. The choice uses the existing profile-scoped Home settings store
+  and profile transfer; it does not change artwork or Live TV shortcuts.
   On Apple TV this setting controls the center button only; the remote's
   Play/Pause button always starts the focused Continue Watching movie or episode.
   Helper text below the control describes Play/Pause, with its filled circular
@@ -554,12 +1039,12 @@ watch history and planning-list behavior are documented in
   Appearance, Screens & Navigation, Trackers, Language. Compact mobile windows
   use native push navigation; regular-width windows use a sidebar and detail stack.
   Both mobile layouts share their category section and destinations. Appearance
-  groups Theme, Cards, Artwork, and Circadian Mode; Display
+  starts with inline theme previews and controls, followed by Music player on beta
+  builds. Cards, Artwork, and Circadian Mode form the next group; Display
   Size is last inside Cards. Screens & Navigation groups App navigation,
-  All screens, Home, Libraries, and Movie & show details; Music player remains TV-only because mobile does
-  not implement those presentation choices. Mobile navigation editing includes
-  every enabled video library from the shared discovery inventory; Music remains
-  TV-only. Refreshing Libraries updates the available shortcuts
+  All screens, Home, Libraries, and Movie & show details. Mobile navigation editing includes
+  every enabled video library from the shared discovery inventory and Music on beta
+  builds when a music library is available. Refreshing Libraries updates the available shortcuts
   without resetting saved hide/order choices.
   Home, Downloads, and Search are the iPhone/iPad defaults, even before content
   discovery. Watchlist, Live TV, Settings, All Libraries, and individual libraries
@@ -587,23 +1072,19 @@ watch history and planning-list behavior are documented in
   exclude that library's content from the combined grid; disabling its content does.
   Settings opens as a sheet from direct tabs or native More without replacing
   the selected page or its navigation history.
-  Everyone uses the TV order, with mobile-only Downloads last. Version/build,
+  Manage Plozz uses the TV order; mobile-only Downloads belongs to the profile card. Version/build,
   release notes, and community links are inline on both mobile root layouts.
   Mobile Community uses standard-height, single-line Discord and GitHub links
   with small brand icons, without subtitles or QR codes. TV keeps its scannable
   community cards.
-  Mobile Settings also includes a **More apps** section linking Mozz to its
-  public TestFlight beta. Both compact and regular layouts share the same native
-  link and preserve the official full-color light/dark app icon. Its three-line
-  label identifies Mozz as a free, open-source music player and names the
-  TestFlight public beta without adding another line. Mozz is not
-  advertised on tvOS. The iOS-only `MozzAppIcon` imageset is copied unchanged from
-  `brandomoore/Mozz` at `b262a5a1257ac20369287599e6fea888462f8284`,
-  `App/Mozz/Assets.xcassets/AppIcon.appiconset`; `AppLinks.mozzTestFlight`
-  owns the invite URL.
+  Mobile Version and Build rows use native labeled icons. Sign Out of All
+  Accounts is a separate final section, with a red sign-out label and icon,
+  retaining the existing confirmation and Kids-profile restrictions.
+  The shared mobile action-row style propagates destructive roles to primary
+  text and icons, instead of overriding them with the neutral settings foreground.
   The compact and regular root menus eagerly lay out their small, fixed set of
   sections. This keeps variable-height groups stable while scrolling rather
-  than repeatedly revising lazy height estimates as the promotion enters view.
+  than repeatedly revising lazy height estimates as sections enter view.
   Kids-profile gates and profile/household storage ownership are unchanged.
   `SettingsLibrarySourcesSummary` shares configured source grouping and profile
   inclusion with TV. Mobile keeps the source icons/names on one horizontal line,
@@ -697,6 +1178,9 @@ watch history and planning-list behavior are documented in
   directional movement, without resizing or sliding across the screen.
   Back from a category restores its selected row and retained scroll position;
   Back from a child returns one page. Playback initially owns focus, not a second pane.
+  Home's Edit shortcut opens Home directly but remembers Screens & Navigation
+  as its root category, so returning leaves a real enabled row to focus rather
+  than gating every category behind a subpage-only route.
   The remembered category only restores navigation: native focus owns the row's
   highlight and selected accessibility trait. Moving to profile actions, credits,
   or any other root control must not leave an inactive category highlighted.
@@ -773,6 +1257,9 @@ watch history and planning-list behavior are documented in
   available height instead of scrolling the whole page. There is no redundant
   Appearance heading.
   Standalone page links use matching 28pt idle/focus corners and compact 8pt gaps.
+  Their shared `.navigation` style owns the idle surface beneath the focus fill;
+  `SettingsFormLinkLabel` and tvOS `HomeEditorLink` labels must not paint their own
+  surface. This preserves contrast with gradients or Liquid Glass disabled.
   Controls within sections use inset rounded focus geometry instead. The shared
   `SettingsControlGroup` supplies section surfaces, row separators and insets;
   `SettingsDetailGroup` uses it for Cards and other multi-group pages. A row marked
@@ -822,6 +1309,40 @@ watch history and planning-list behavior are documented in
 - `ServerDetailView` + `ServersAndLibrariesDetailView` — manage stored
   household servers / accounts (`AccountStore`) and remove accounts.
   `MyLibrariesDetailView` owns the active profile's server-user and library choices.
+  Membership-only edits retain unrelated providers and retire disabled sources;
+  credential/account reloads still invalidate their existing provider scope.
+  Mobile switches commit each choice immediately rather than queuing delayed
+  writes. Both presentations avoid regrouping servers for each row, and mobile
+  library rows observe visibility separately from the server list. During new
+  profile setup, library-name discovery remains available, but full cross-server
+  identity indexing waits until setup finishes and uses the final membership.
+  Mobile also leaves the hidden tab catalogue unmounted beneath the opaque setup
+  cover, without removing its presentation owner. Home content loading pauses
+  during setup and ordinary Settings visits, then resumes with the final choices.
+  Account/profile replacement explicitly retires the previous Home model rather
+  than leaving its asynchronous fan-out running behind the selection controls.
+  On mobile, enabling Plex verifies its user (and requests a PIN when required)
+  inside the existing Settings presentation rather than replacing it with the
+  launch profile picker. This presentation ownership applies only to the same
+  active profile; source authorization remains withheld until verification.
+  Settings and new-profile setup immediately reuse `LibraryInventoryStore`
+  names from currently authorized accounts, while bounded live discovery refreshes
+  them. Normal Home library discovery warms the same cache. Its scope includes
+  the account, server connection, credential revision, and verified Plex Home
+  viewer, never the Plozz profile's selection. Reissued Plex activation tokens
+  can share names only for the same verified viewer and persisted login revision.
+  Pending PINs and unresolved providers cannot read inventories. Offline refreshes
+  retain names with an explicit failure/Retry; authentication or access refusals
+  remove them, and successful empty inventories replace old names. Canceled or
+  superseded answers cannot overwrite a newer completed inventory.
+  This local cache is a disposable paint hint, not authorization or content:
+  no artwork URLs, tokens, merged-account routes, or profile preferences are saved.
+  It keeps at most 128 identities, 512 libraries per identity and 2 MiB on disk;
+  larger inventories still arrive from live discovery. Unchanged inventories do
+  not rewrite the disk cache on every refresh. Loading indicators belong
+  only to cache misses; a successfully cached empty inventory is not a miss.
+  Both Libraries presentations show one scrolling "Saved for" profile chip,
+  shared with Seerr setup, rather than a fixed introduction or per-server footers.
   On TV, each enabled media-share section shows its own compact update phase,
   progress bar and known percentage. Only accounts included in the current
   profile contribute; idle, excluded and removed shares show no status. Progress
@@ -850,7 +1371,12 @@ watch history and planning-list behavior are documented in
   submitting any diagnostics; automatic crash reports are unchanged.
   Each submission appears in Sentry's User Feedback inbox with the required message,
   linked to the diagnostic event in Issues and its `plozz-diagnostics.json`
-  attachment. No name or email is collected. The privacy filter retains only the
+  attachment. The playback section includes the last three independently
+  preserved failed attempts, including late native evidence and numeric engine
+  telemetry, in both Debug and Release. Successful retries and routine journal
+  churn do not erase them; they expire after 48 hours. This is allowlisted
+  structured evidence, not an upload of local free-form log files.
+  No name or email is collected. The privacy filter retains only the
   feedback message, custom source,
   and valid associated event ID, not identity or arbitrary feedback fields.
   Success means SDK handoff, not server acknowledgment; inactive reporting or a
@@ -1062,6 +1588,10 @@ watch history and planning-list behavior are documented in
   the column and stack at accessibility text sizes; long profile/user names
   wrap without widening the scroll content. TV retains its bounded settings
   layout with contained row focus.
+  The shared connections page offers account sign-in or an explicit API key.
+  It lists only this profile's saved connections, never the whole Seerr user
+  directory. Defaults, request choice, and migration rules are documented in
+  [SeerService](../SeerService/README.md).
 - **Mobile Settings is a presentation action.** The profile button is the default
   entry point. Its navigation shortcut starts hidden on iPhone and iPad, keeping
   the default navigation at Home, Downloads, and Search.
@@ -1085,6 +1615,24 @@ watch history and planning-list behavior are documented in
   use the shared transient-status presenter for progress and the actual result,
   and disable both actions while either is running. Reset still requires
   confirmation. Pending Live TV source repair rows remain in Troubleshooting.
+  Both platforms describe supported sign-in syncing consistently with onboarding.
+  Only confirmed iCloud account absence prompts sign-in; account lookup and
+  identity-verification failures retain an error diagnostic. Cancelled or
+  superseded account checks must not overwrite the current sync status.
+  Temporary account unavailability (CloudKit error 36) retries account and identity
+  verification after 2, 5 and 15 seconds, including before the engine first starts.
+  Retries stop on cancellation, revoked consent, deactivation or a newer check;
+  other failures are not retried by this account-check policy. Persistent
+  unavailability uses a readable status while retaining the original diagnostic.
+  Recovery still requires verified account ownership, and later foreground or
+  manual sync can try again after the bounded retries finish.
+  Local snapshot cancellations caused by concurrent changes are recaptured up to
+  four times; cancellation of the caller or a superseded lifecycle never publishes
+  stale data or errors. A genuine preparation failure remains tied to its channel
+  until that channel captures and persists successfully. Unrelated network
+  completions cannot clear it or advance the successful-sync time. Retryable
+  CloudKit conflicts stay in Syncing during a bounded 30-second recovery window;
+  repeated failures cannot extend that window indefinitely.
 - **Profile-namespaced settings.** Per-user prefs (theme, captions,
   diagnostics, spoiler) are namespaced by the active profile id; the
   default profile uses no suffix so an upgrading install keeps existing

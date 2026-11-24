@@ -16,10 +16,22 @@ import Foundation
 public protocol WatchStateProviding: Sendable {
     /// Marks `itemID` played (`true`) or unplayed (`false`) on the server.
     ///
-    /// For a container item (a season or series id) the backend cascades the
-    /// change to its children, so a whole season can be marked watched with one
-    /// call where the provider supports it.
+    /// Call the kind-aware overload for a known season or series so providers
+    /// can verify and repair servers whose container cascade is incomplete.
     func setPlayed(_ played: Bool, itemID: String) async throws
+    /// Carries known container scope without requiring metadata reads for normal
+    /// episode/movie writes. Capture time still orders local-store writes.
+    func setPlayed(_ played: Bool, itemID: String, kind: MediaItemKind?, capturedAt: Date) async throws
+}
+
+public extension WatchStateProviding {
+    func setPlayed(_ played: Bool, itemID: String, kind: MediaItemKind?, capturedAt: Date) async throws {
+        if let timestamped = self as? any PlayedStateWriting {
+            try await timestamped.setPlayed(played, itemID: itemID, capturedAt: capturedAt)
+        } else {
+            try await setPlayed(played, itemID: itemID)
+        }
+    }
 }
 
 /// Refinement of ``WatchStateProviding`` for a provider whose played state is
@@ -28,19 +40,28 @@ public protocol WatchStateProviding: Sendable {
 ///
 /// The cross-server watch outbox can queue a played write and drain it much later
 /// (server asleep, app offline, or the account still resolving at launch). A
-/// server-backed provider (Plex, Jellyfin) doesn't care — its server owns
-/// recency — so it conforms to ``WatchStateProviding`` alone. A local store (the
-/// SMB share) must stamp the write with `capturedAt` so a late-draining *stale*
+/// fully server-backed provider does not need this timestamp for its writes.
+/// A local store (including Plex's profile-local extra fallback) must stamp
+/// the write with `capturedAt` so a late-draining *stale*
 /// played write can't clobber genuinely newer resume / in-progress state.
 ///
 /// Detected at runtime via `provider as? PlayedStateWriting` (preferred over the
 /// timestamp-less ``WatchStateProviding/setPlayed(_:itemID:)`` when present).
 public protocol PlayedStateWriting: WatchStateProviding {
+    /// Only fully local providers can skip server freshness reads before a queued
+    /// reset. Timestamped writes alone do not imply this: a mixed provider can
+    /// use local ordering for extras while ordinary titles remain server-backed.
+    var usesLocalWatchStateOnly: Bool { get }
+
     /// Marks `itemID` played/unplayed, stamped with the play's real time
     /// (`capturedAt`) for local last-writer-wins ordering — see
     /// ``ResumeStateWriting/setResumePosition(_:itemID:capturedAt:)`` for the
     /// same rationale applied to resume writes.
     func setPlayed(_ played: Bool, itemID: String, capturedAt: Date) async throws
+}
+
+public extension PlayedStateWriting {
+    var usesLocalWatchStateOnly: Bool { false }
 }
 
 /// Optional capability a `MediaProvider` adopts to write a **resume position**

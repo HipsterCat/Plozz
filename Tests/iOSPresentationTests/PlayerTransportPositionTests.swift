@@ -11,6 +11,89 @@ import XCTest
 
 @MainActor
 final class PlayerTransportPositionTests: XCTestCase {
+    func testPausedPlayerRecoversThroughNativeSceneEventsWithFrozenSwiftUIEnvironment() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let engine = BackgroundRecoveryEngine()
+        let request = PlaybackRequest(
+            item: .init(id: "fixture", title: "Fixture", kind: .movie, runtime: 1200),
+            streamURL: try XCTUnwrap(URL(string: "https://fixture.invalid/video.mp4"))
+        )
+        let model = PlayerViewModel(
+            provider: LayoutProvider(), itemID: "fixture",
+            engineFactory: .init(makeNative: { _ in engine }),
+            adoptedResolved: .init(itemID: "fixture", request: request, engineKind: .native)
+        )
+        let host = UIHostingController(rootView: PlayerView(
+            viewModel: model, showsSharedControls: false, onDismiss: {}
+        ).environment(\.scenePhase, .active))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let readyDeadline = ContinuousClock.now + .seconds(5)
+        while model.phase != .ready, ContinuousClock.now < readyDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(model.phase, .ready)
+        engine.currentTime = 234.572
+        engine.onProgress?()
+        model.setPaused(true)
+        engine.seekTargets = []
+
+        NotificationCenter.default.post(name: UIScene.willDeactivateNotification, object: scene)
+        NotificationCenter.default.post(name: UIScene.didEnterBackgroundNotification, object: scene)
+        engine.needsBackgroundReload = true
+        NotificationCenter.default.post(name: UIScene.didActivateNotification, object: scene)
+        let recoveredDeadline = ContinuousClock.now + .seconds(5)
+        while (engine.seekTargets.isEmpty || model.showBringUpSpinner), ContinuousClock.now < recoveredDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(engine.reloadCount, 1)
+        XCTAssertEqual(engine.seekTargets, [234.572])
+        XCTAssertEqual(engine.currentTime, 234.572, accuracy: 0.001)
+        XCTAssertTrue(engine.isPaused)
+        XCTAssertTrue(model.controls.intendsPause)
+
+        NotificationCenter.default.post(name: UIScene.didActivateNotification, object: scene)
+        await Task.yield()
+        XCTAssertEqual(engine.reloadCount, 1, "A duplicate activation must not reopen playback.")
+        model.setPaused(false)
+        XCTAssertFalse(engine.isPaused, "Play should operate on the rebuilt engine.")
+        NotificationCenter.default.post(name: UIScene.willDeactivateNotification, object: nil)
+        XCTAssertFalse(model.controls.intendsPause, "Unscoped notifications must not pause this scene.")
+        await model.stop()
+    }
+
+    func testPlayerSceneReaderDetachesAndDoesNotDeliverUnscopedNotifications() throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let window = UIWindow(windowScene: scene)
+        var phases: [ScenePhase] = []
+        let reader = PlayerSceneLifecycleReader.SceneView { phases.append($0) }
+        window.addSubview(reader)
+        defer { reader.removeFromSuperview() }
+        XCTAssertTrue(reader.window?.windowScene === scene)
+        phases = []
+        NotificationCenter.default.post(name: UIScene.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.post(name: UIScene.didActivateNotification, object: nil)
+        XCTAssertTrue(phases.isEmpty)
+        NotificationCenter.default.post(name: UIScene.willDeactivateNotification, object: scene)
+        NotificationCenter.default.post(name: UIScene.didEnterBackgroundNotification, object: scene)
+        NotificationCenter.default.post(name: UIScene.didActivateNotification, object: scene)
+        XCTAssertEqual(phases, [.inactive, .background, .active])
+        reader.removeFromSuperview()
+        phases = []
+        NotificationCenter.default.post(name: UIScene.didEnterBackgroundNotification, object: scene)
+        NotificationCenter.default.post(name: UIScene.didActivateNotification, object: scene)
+        XCTAssertTrue(phases.isEmpty)
+    }
+
     func testScrubbingDisablesLevelGesturesWithoutRestoringPlaybackBrightness() async throws {
         let model = PlayerViewModel(provider: LayoutProvider(), itemID: "fixture")
         model.controls.duration = 1200
@@ -169,7 +252,7 @@ final class PlayerTransportPositionTests: XCTestCase {
         }
     }
 
-    func testVODCaptionsClearTheActualCenterControlsOrRetainTheirOriginalPosition() async throws {
+    func testVODCaptionsUseAvailableSpaceAndHonorControlAvoidancePreference() async throws {
         let model = PlayerViewModel(provider: LayoutProvider(), itemID: "fixture")
         model.controls.duration = 1200
         model.controls.intendsPause = true
@@ -184,7 +267,7 @@ final class PlayerTransportPositionTests: XCTestCase {
         )
     }
 
-    func testLiveCaptionsClearTheActualCenterControlsOrRetainTheirOriginalPosition() async throws {
+    func testLiveCaptionsUseAvailableSpaceAndHonorControlAvoidancePreference() async throws {
         let input = LiveChannelInput.stream(
             url: try XCTUnwrap(URL(string: "https://fixture.invalid/live.m3u8")), httpHeaders: [:]
         )
@@ -232,7 +315,8 @@ final class PlayerTransportPositionTests: XCTestCase {
         let sizes = [
             CGSize(width: 956, height: 440), CGSize(width: 440, height: 956),
             CGSize(width: 568, height: 320), CGSize(width: 320, height: 568),
-            CGSize(width: 1024, height: 768), CGSize(width: 768, height: 1024)
+            CGSize(width: 1024, height: 768), CGSize(width: 768, height: 1024),
+            CGSize(width: 1600, height: 1000), CGSize(width: 1920, height: 1080)
         ]
         for mode in supportsDual ? ["single", "dual", "no-room"] : ["single", "no-room"] {
             model.style.followsSystemStyle = false
@@ -249,6 +333,7 @@ final class PlayerTransportPositionTests: XCTestCase {
             let originalStyle = model.style
             for size in mode == "no-room" ? [sizes[0]] : sizes {
                 visibility.visible = false
+                visibility.isRunningOnMac = size.width >= 1600
                 window.frame = CGRect(origin: .zero, size: size)
                 host.view.frame = window.bounds
                 window.layoutIfNeeded()
@@ -272,7 +357,20 @@ final class PlayerTransportPositionTests: XCTestCase {
                     XCTAssertGreaterThan(original.height, center.minY)
                     XCTAssertEqual(moved, original, "Insufficient room must retain the original position, not a partial lift.")
                 } else {
-                    XCTAssertLessThanOrEqual(moved.maxY, center.minY - SubtitleOverlayGeometry.controlsClearance + 1)
+                    let overlapsControls = layout.frames.contains { $0.intersects(original) }
+                    if overlapsControls {
+                        let clearPositions = layout.frames.map {
+                            original.offsetBy(dx: 0, dy: $0.minY - SubtitleOverlayGeometry.controlsClearance - original.maxY)
+                        }.filter { candidate in
+                            candidate.minY <= original.minY && window.bounds.contains(candidate)
+                                && !layout.frames.contains { $0.intersects(candidate) }
+                        }
+                        let closest = try XCTUnwrap(clearPositions.max { $0.minY < $1.minY })
+                        XCTAssertEqual(moved.minY, closest.minY, accuracy: 1,
+                            "Use the nearest clear gap, including below the timeline or center buttons.")
+                    } else {
+                        XCTAssertEqual(moved, original, "Already-clear captions should not move, even below the timeline.")
+                    }
                     XCTAssertTrue(window.bounds.contains(moved))
                     XCTAssertFalse(layout.frames.contains(where: { $0.intersects(moved) }))
                     let pixel = 1 / window.screen.scale + 0.001
@@ -286,6 +384,12 @@ final class PlayerTransportPositionTests: XCTestCase {
                 attachment.name = "\(label) \(mode) subtitles \(Int(size.width))x\(Int(size.height))"
                 attachment.lifetime = .keepAlways
                 add(attachment)
+                model.style.avoidsPlayerControls = false
+                try await Task.sleep(for: .milliseconds(200))
+                window.layoutIfNeeded()
+                XCTAssertEqual(try captionBounds(), original, "Disabling avoidance keeps captions at their saved position.")
+                XCTAssertFalse(layout.frames.isEmpty, "Controls remain visible and measured when avoidance is disabled.")
+                model.style.avoidsPlayerControls = true
                 visibility.visible = false
                 try await Task.sleep(for: .milliseconds(300))
                 XCTAssertTrue(layout.frames.isEmpty)
@@ -296,6 +400,7 @@ final class PlayerTransportPositionTests: XCTestCase {
 
     @Observable final class CaptionChromeVisibility {
         var visible = false
+        var isRunningOnMac = false
     }
 
     private struct CaptionAvoidanceFixture<Captions: View, Chrome: View>: View {
@@ -311,6 +416,7 @@ final class PlayerTransportPositionTests: XCTestCase {
             }
             .environment(\.themePalette, .light)
             .environment(\.colorScheme, .light)
+            .environment(\.plozziOSIsRunningOnMac, visibility.isRunningOnMac)
             .ignoresSafeArea()
         }
     }
@@ -674,6 +780,54 @@ final class PlayerTransportPositionTests: XCTestCase {
         }
         return bytes
     }
+}
+
+@MainActor
+private final class BackgroundRecoveryEngine: VideoEngine {
+    let displayName = "background-recovery-fixture"
+    var status: VideoEngineStatus = .idle
+    var isPaused = false
+    var preventsDisplaySleep = false
+    var currentTime: TimeInterval = 0
+    var duration: TimeInterval = 1200
+    var furthestObservedPosition: TimeInterval = 0
+    var hasPresentedVideoFrame: Bool { status == .ready }
+    var needsBackgroundReload = false
+    var audioTracks: [MediaTrack] = []
+    var subtitleTracks: [MediaTrack] = []
+    var onProgress: (@MainActor () -> Void)?
+    var onFailure: (@MainActor (AppError) -> Void)?
+    var onEnded: (@MainActor () -> Void)?
+    var onTracksChanged: (@MainActor () -> Void)?
+    var onSubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
+    var onSecondarySubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
+    var onProbedSourceFactsChanged: (@MainActor (EngineProbedSourceFacts) -> Void)?
+    var reloadCount = 0
+    var seekTargets: [TimeInterval] = []
+
+    func load(request: PlaybackRequest, startPosition: TimeInterval) async {
+        currentTime = startPosition
+        status = .ready
+    }
+
+    func reloadAfterForeground() async throws {
+        reloadCount += 1
+        needsBackgroundReload = false
+        currentTime = 0
+    }
+
+    func play() { isPaused = false }
+    func pause() { isPaused = true }
+    func seek(to seconds: TimeInterval) async {
+        seekTargets.append(seconds)
+        currentTime = seconds
+        onProgress?()
+    }
+    func stop() { status = .idle }
+    func selectAudioTrack(_ track: MediaTrack?) {}
+    func selectSubtitleTrack(_ track: MediaTrack?) {}
+    func setPlaybackSpeed(_ rate: Double) {}
+    func makeVideoOutputView() -> UIView { UIView() }
 }
 
 private struct LayoutProvider: MediaProvider {

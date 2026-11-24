@@ -20,6 +20,8 @@ public protocol MediaProvider: Sendable {
     /// Catalog/search cards may expose one external ID but omit the other
     /// namespaces needed to match a title across providers. Fetch full details
     /// before publishing those cards as complete identity-index/search evidence.
+    /// Fresh cards with a complete provider-supplied identity can opt out via
+    /// `MediaItem.catalogIdentityIsComplete`; inferred IDs alone cannot.
     var catalogIdentityRequiresEnrichment: Bool { get }
 
     /// Browsing metadata may omit lazily resolved files. Offer explicit source
@@ -27,6 +29,10 @@ public protocol MediaProvider: Sendable {
     var playbackInventoryRequiresEnrichment: Bool { get }
 
     // MARK: Library browsing
+
+    /// False for profile-local projections such as downloaded media, whose
+    /// libraries must not read or replace the shared server-viewer inventory.
+    var sharesLibraryInventoryAcrossProfiles: Bool { get }
 
     /// Top-level libraries/views available to the user.
     func libraries() async throws -> [MediaLibrary]
@@ -36,11 +42,17 @@ public protocol MediaProvider: Sendable {
     /// bounded request sizes rather than send that value as a server limit.
     func continueWatching(limit: Int) async throws -> [MediaItem]
 
+    /// The same Resume/Next Up feeds, optionally omitting extra parent-series
+    /// recency reads. Use `Int.max` when membership, rather than ordering, is needed.
+    func continueWatching(limit: Int, includeSeriesRecency: Bool) async throws -> [MediaItem]
+
     /// Recently added items across the user's libraries.
     func latest(limit: Int) async throws -> [MediaItem]
 
     /// Continues the exact Home feed in provider order, not an unrestricted library.
     func homeRowPage(_ feed: HomeRowFeed, startIndex: Int, limit: Int) async throws -> HomeRowPage
+
+    func libraryRecentlyAddedPage(in libraryID: String, kind: MediaItemKind, startIndex: Int, limit: Int) async throws -> HomeRowPage
 
     /// "Continue Watching" restricted to the given libraries, used by the Home
     /// aggregator to honour the user's per-library Home-visibility *at fetch
@@ -74,6 +86,9 @@ public protocol MediaProvider: Sendable {
     /// Unlike browsing detail, unresolved source discovery must throw rather than
     /// return a placeholder that could bypass the version picker.
     func playbackItem(id: String) async throws -> MediaItem
+
+    /// Resolve a user-imported external title without opening a playback engine.
+    func externalMediaLink(for itemID: String, mediaSourceID: String?) async throws -> ExternalMediaLink
 
     /// Trailers / preview clips for an item (movie or series).
     ///
@@ -194,6 +209,10 @@ public protocol MediaProvider: Sendable {
         sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>
     ) async -> [String: Result<[MediaItem], AppError>]
 
+    func serverHomeContent(
+        sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>
+    ) async -> [String: Result<ServerHomeRowContent, AppError>]
+
     // MARK: Search
 
     /// Search the user's libraries for items matching a free-text query.
@@ -239,6 +258,13 @@ public protocol MediaProvider: Sendable {
     /// default that ignores the id, so this is fully additive — existing
     /// conformers and test doubles need no changes.
     func playbackInfo(for itemID: String, mediaSourceID: String?, forceTranscode: Bool) async throws -> PlaybackRequest
+
+    /// Resolve only an already selected file for bounded detail preparation.
+    /// Never discovers versions, downloads sidecars or starts a playback session.
+    /// Unsupported providers return nil; ordinary Play still uses playbackInfo.
+    func playbackPreparationLocator(
+        for itemID: String, mediaSourceID: String
+    ) async throws -> NetworkFileLocator?
 
     /// Report progress so the server keeps resume points in sync.
     func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws
@@ -486,8 +512,12 @@ public enum MediaProviderURLIdentity {
 // doubles) inherit safe no-ops, so adding the capability never forces every
 // conformer to implement it.
 public extension MediaProvider {
+    func externalMediaLink(for itemID: String, mediaSourceID: String?) async throws -> ExternalMediaLink {
+        throw AppError.unknown("This source does not support external title links.")
+    }
     var catalogIdentityRequiresEnrichment: Bool { false }
     var playbackInventoryRequiresEnrichment: Bool { false }
+    var sharesLibraryInventoryAcrossProfiles: Bool { true }
 
     func playbackItem(id: String) async throws -> MediaItem {
         try await item(id: id)
@@ -565,6 +595,10 @@ public extension MediaProvider {
         try await continueWatching(limit: limit, inLibraries: libraryIDs)
     }
 
+    func continueWatching(limit: Int, includeSeriesRecency: Bool) async throws -> [MediaItem] {
+        try await continueWatching(limit: limit)
+    }
+
     func homeNextUp(libraryID: String, limit: Int) async throws -> [MediaItem] { [] }
 
     func serverHomeLayout() async throws -> ServerHomeLayout? { nil }
@@ -592,6 +626,13 @@ public extension MediaProvider {
             }
         }
         return results
+    }
+
+    func serverHomeContent(
+        sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>
+    ) async -> [String: Result<ServerHomeRowContent, AppError>] {
+        await serverHomeItems(sections: sections, limit: limit, excludingLibraryIDs: excludingLibraryIDs)
+            .mapValues { $0.map { ServerHomeRowContent(items: $0) } }
     }
 
     /// Default: cannot query by person, so a person page shows no library credits
@@ -697,12 +738,21 @@ public extension MediaProvider {
         try await playbackInfo(for: itemID, forceTranscode: forceTranscode)
     }
 
+    func playbackPreparationLocator(
+        for itemID: String, mediaSourceID: String
+    ) async throws -> NetworkFileLocator? { nil }
+
     /// Default: classify locality from the session's persisted `baseURL` host.
     /// Correct for single-URL backends (Jellyfin, manually-entered hosts); Plex
     /// overrides this to classify the connection its resolver actually selected.
     var connectionLocality: SourceLocality {
         SourceLocalityClassifier.classify(url: session.server.baseURL)
     }
+}
+
+public enum LibraryCollectionPresentation: Equatable, Sendable {
+    case individualItems
+    case serverDefault
 }
 
 /// A request for one page of a container's children.
@@ -715,17 +765,28 @@ public struct PageRequest: Equatable, Sendable {
     /// session share one descriptor; changing it restarts paging from index 0.
     public var sort: SortDescriptor
     public var filters: LibraryFilters
+    public var collectionPresentation: LibraryCollectionPresentation
+
+    public var allowsServerCollections: Bool {
+        collectionPresentation == .serverDefault && sort.field == .name && filters.isEmpty
+    }
+
+    public func usesServerCollections(for kind: MediaItemKind) -> Bool {
+        kind == .movie && allowsServerCollections
+    }
 
     public init(
         startIndex: Int = 0,
         limit: Int = PageRequest.defaultLimit,
         sort: SortDescriptor = .default,
-        filters: LibraryFilters = .all
+        filters: LibraryFilters = .all,
+        collectionPresentation: LibraryCollectionPresentation = .individualItems
     ) {
         self.startIndex = startIndex
         self.limit = limit
         self.sort = sort
         self.filters = filters
+        self.collectionPresentation = collectionPresentation
     }
 
     /// Default page size tuned for a tvOS 10-foot grid: large enough to fill the
@@ -734,7 +795,10 @@ public struct PageRequest: Equatable, Sendable {
 
     /// The request for the page that follows this one, preserving the sort order.
     public func next() -> PageRequest {
-        PageRequest(startIndex: startIndex + limit, limit: limit, sort: sort, filters: filters)
+        PageRequest(
+            startIndex: startIndex + limit, limit: limit, sort: sort, filters: filters,
+            collectionPresentation: collectionPresentation
+        )
     }
 }
 

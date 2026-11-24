@@ -115,6 +115,7 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
     struct RowEnvironment: Equatable {
         let palette: ThemePalette
         let reduceTransparency: Bool
+        let cardFocusStyle: CardFocusStyle
         let colorScheme: ColorScheme
         let contrast: ColorSchemeContrast
         let direction: LayoutDirection
@@ -127,6 +128,7 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
         init(_ environment: EnvironmentValues) {
             palette = environment.themePalette
             reduceTransparency = environment.plozzReduceTransparency
+            cardFocusStyle = environment.plozzCardFocusStyle
             colorScheme = environment.colorScheme
             contrast = environment.colorSchemeContrast
             direction = environment.layoutDirection
@@ -165,6 +167,7 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .environment(\.themePalette, state.environment.palette)
                 .environment(\.plozzReduceTransparency, state.environment.reduceTransparency)
+                .environment(\.plozzCardFocusStyle, state.environment.cardFocusStyle)
                 .environment(\.colorScheme, state.environment.colorScheme)
                 .environment(\.layoutDirection, state.environment.direction)
                 .environment(\.dynamicTypeSize, state.environment.dynamicType)
@@ -199,9 +202,11 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
         }
     }
 
-    final class Controller: UICollectionViewController {
+    final class Controller: UICollectionViewController, HorizontalNavigationInputOwning {
         var parentView: PrototypeNativeGuideList?
         var swiftUIEnvironment: EnvironmentValues?
+        // The category handoff completes on release, after the rail's passive edge check.
+        var ownsHorizontalNavigationInput: Bool { parentView?.leadingExit != nil }
         private var rowIDs: [LiveTVGuideRowID] = []
         private var sectionStarts: [Int] = []
         private var scrollReportScheduled = false
@@ -240,14 +245,12 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
         }
 
         private var isLeadingColumnFocused: Bool {
-            guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
-                  focused.isDescendant(of: collectionView) else { return false }
+            guard let frame = NativeFocusRegion.frame(
+                of: UIFocusSystem.focusSystem(for: collectionView)?.focusedItem, in: collectionView)
+            else { return false }
             // Rapid remote presses can arrive before SwiftUI's FocusState catches up.
-            let center = focused.convert(
-                CGPoint(x: focused.bounds.midX, y: focused.bounds.midY), to: collectionView
-            )
             let distance = swiftUIEnvironment?.layoutDirection == .rightToLeft
-                ? collectionView.bounds.maxX - center.x : center.x - collectionView.bounds.minX
+                ? collectionView.bounds.maxX - frame.midX : frame.midX - collectionView.bounds.minX
             return distance >= 0 && distance < PrototypeLayout.stationWidth(for: collectionView.bounds.width)
         }
 
@@ -307,8 +310,8 @@ struct PrototypeNativeGuideList<Revision: Equatable, Content: View>: UIViewContr
         override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
             let leading: UIFocusHeading = swiftUIEnvironment?.layoutDirection == .rightToLeft ? .right : .left
             if context.focusHeading == leading,
-               context.previouslyFocusedView?.isDescendant(of: collectionView) == true,
-               context.nextFocusedView?.isDescendant(of: collectionView) != true,
+               NativeFocusRegion.contains(context.previouslyFocusedItem, in: collectionView),
+               !NativeFocusRegion.contains(context.nextFocusedItem, in: collectionView),
                parentView?.leadingExit != nil {
                 if !isRequestingLeadingExit {
                     isRequestingLeadingExit = true

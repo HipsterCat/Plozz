@@ -185,6 +185,7 @@ private struct ThemeMusicScope: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .environment(model)
             .environment(\.themeMusicController, controller)
             .environment(\.themeMusicPreviewController, controller)
             .environment(\.themeMusicSettings, model.settings)
@@ -230,7 +231,7 @@ func resolveThemeMusicURL(
             throw ThemeMusicSourceResolutionError.missingAuthenticatedResolver
         }
         return try await authenticatedHTTPResolver.resolve(locator)
-    case .networkFile, .dlnaResource:
+    case .networkFile, .networkDisc, .dlnaResource:
         throw ThemeMusicSourceResolutionError.unsupportedSource
     }
 }

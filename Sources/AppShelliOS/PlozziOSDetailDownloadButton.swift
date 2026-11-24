@@ -1,5 +1,6 @@
 #if os(iOS)
 import CoreModels
+import PlozzCoreUI
 import MediaDownloads
 import SwiftUI
 
@@ -9,18 +10,35 @@ struct PlozziOSDetailDownloadButton: View {
     @State private var downloadRecord: DownloadedMediaRecord?
     @State private var downloadError: String?
     @State private var showsDownloadConfirmation = false
+    @State private var showsVersionSelection = false
 
     let downloadItem: MediaItem
     let selectedSource: MediaSourceRef?
     let selectedVersion: MediaVersion?
 
     var body: some View {
-        Button {
-            Task { await performDownloadAction() }
-        } label: {
-            Image(systemName: downloadActionSymbol)
+        Group {
+            if downloadItem.kind == .episode, let record = currentDownloadRecord, record.status == .completed {
+                let profileID = appModel.profiles.activeProfileID
+                PlozziOSRemoveDownloadButton {
+                    Task { await appModel.removeConfirmedDownload(record, profileID: profileID) }
+                } label: {
+                    Image(systemName: downloadActionSymbol)
+                }
+                .id("\(profileID):\(record.identityKey)")
+                .contextMenu {
+                    Button("Choose Versions") { showsVersionSelection = true }
+                }
+            } else {
+                Button {
+                    guard !showsVersionSelection else { return }
+                    Task { await performDownloadAction() }
+                } label: {
+                    Image(systemName: downloadActionSymbol)
+                }
+                .accessibilityLabel(downloadActionTitle)
+            }
         }
-        .accessibilityLabel(downloadActionTitle)
         .task {
             downloadRecord = await appModel.downloads.record(forSelectedVersionOf: downloadItem)
             if let provider = appModel.provider(for: downloadItem) {
@@ -83,6 +101,17 @@ struct PlozziOSDetailDownloadButton: View {
         } message: {
             downloadConfirmationMessage
         }
+        .background {
+            if showsVersionSelection {
+                PlozziOSSingleItemDownloadSheet(item: downloadItem) {
+                    showsVersionSelection = false
+                    Task {
+                        downloadRecord = await appModel.downloads.record(forSelectedVersionOf: downloadItem)
+                    }
+                }
+                .id(downloadItem.stablePresentationID)
+            }
+        }
     }
 
     private var downloadActionTitle: LocalizedStringResource {
@@ -112,19 +141,18 @@ struct PlozziOSDetailDownloadButton: View {
         case .completed:
             showsDownloadConfirmation = true
         case nil:
-            if appModel.downloads.asksBeforeDownloading {
-                showsDownloadConfirmation = true
-            } else {
-                await startDownload()
-            }
+            showsVersionSelection = true
         }
     }
 
     private var currentDownloadRecord: DownloadedMediaRecord? {
+        if let record = appModel.downloads.cachedRecord(forSelectedVersionOf: downloadItem) {
+            return record
+        }
         guard let downloadRecord else { return nil }
         return appModel.downloads.records.first {
             $0.identityKey == downloadRecord.identityKey
-        } ?? downloadRecord
+        }
     }
 
     private func startDownload(quality: DownloadQuality? = nil) async {
@@ -150,11 +178,15 @@ struct PlozziOSDetailDownloadButton: View {
         let size = selectedVersion?.sizeBytes.map {
             Text(verbatim: $0.formatted(.byteCount(style: .file)))
         } ?? Text("Size unavailable")
-        return source
-            + Text(verbatim: " • ")
-            + size
-            + Text(verbatim: ". ")
-            + Text("Reduced qualities are transcoded by your media server.")
+        let quality: Text
+        if appModel.downloads.supportsReducedQuality(for: downloadItem) {
+            quality = Text("Smaller copies require server conversion and may include fewer tracks.")
+        } else {
+            quality = Text("Only Original is available for this source.")
+        }
+        let subtitles = Text("Available external text subtitles are saved too.")
+        return source + Text(verbatim: " • ") + size + Text(verbatim: "\n")
+            + quality + Text(verbatim: "\n") + subtitles
     }
 
     private func pauseDownload() async {
@@ -173,6 +205,25 @@ struct PlozziOSDetailDownloadButton: View {
         guard let record = currentDownloadRecord else { return }
         await appModel.downloads.remove(record)
         downloadRecord = nil
+    }
+}
+
+struct PlozziOSRemoveDownloadButton<Label: View>: View {
+    let onRemove: () -> Void
+    @ViewBuilder let label: () -> Label
+    @State private var showsConfirmation = false
+
+    var body: some View {
+        Button { showsConfirmation = true } label: { label() }
+            .accessibilityLabel("Remove Download")
+            .confirmationDialog(
+                "Remove this download from this device?",
+                isPresented: $showsConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Remove Download", role: .destructive, action: onRemove)
+                Button("Cancel", role: .cancel) {}
+            }
     }
 }
 #endif

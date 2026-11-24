@@ -20,7 +20,10 @@ struct PlayerActions {
     /// Pick the second (dual) subtitle track by option id, or `offID` for off.
     var selectSecondarySubtitle: (Int) -> Void = { _ in }
     var setPlaybackSpeed: (Double) -> Void = { _ in }
+    var setDolbyVisionFELConversion: (Bool) -> Void = { _ in }
+    var setVideoUpscaling: (VideoUpscaling) -> Void = { _ in }
     var setAudioDelay: (TimeInterval) -> Void = { _ in }
+    var setAudioDelayLive: (TimeInterval) -> Bool = { _ in false }
     var setSubtitleDelay: (TimeInterval) -> Void = { _ in }
     var setDialogEnhance: (Bool) -> Void = { _ in }
     /// Apply an edited subtitle appearance (in-player Style screen), for live
@@ -60,6 +63,12 @@ struct PlayerActions {
 /// `PlayerActions` closures, so any engine (AVPlayer or Plozzigen)
 /// reuses it without change.
 struct CustomPlayerContainer: UIViewControllerRepresentable {
+    @Environment(PlaybackSettingsModel.self) private var playbackSettings: PlaybackSettingsModel?
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
+    private var autoHideMode: PlaybackControlsAutoHide {
+        voiceOver || switchControl ? .never : playbackSettings?.settings.controlsAutoHide ?? PlaybackSettings.default.controlsAutoHide
+    }
     let engine: any VideoEngine
     let model: PlayerControlsModel
     let subtitleModel: LiveSubtitleModel
@@ -101,6 +110,7 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
             engine: engine, model: model, actions: actions, fitsInsideSafeArea: fitsInsideSafeArea
         )
         if showsSharedControls {
+            controller.autoHideMode = autoHideMode
             controller.configureScrubPreview(
                 scrubPreview,
                 authenticatedHTTPResolver: authenticatedHTTPResolver,
@@ -117,6 +127,7 @@ struct CustomPlayerContainer: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: PlayerInputViewController, context: Context) {
         controller.actions = actions
+        if showsSharedControls { controller.autoHideMode = autoHideMode }
         controller.fitsInsideSafeArea = fitsInsideSafeArea
     }
 }
@@ -132,6 +143,7 @@ struct VideoSurfaceContainer: UIViewRepresentable {
     var aspectRatio: Double? = nil
     var fitsInsideSafeArea = false
     var subtitleViewport: VideoSubtitleViewport?
+    var needsPictureSubtitles = false
     var reflectionHeight: CGFloat = 0
     var topReflectionHeight: CGFloat = 0
     var leadingReflectionWidth: CGFloat = 0
@@ -153,17 +165,19 @@ struct VideoSurfaceContainer: UIViewRepresentable {
     func makeUIView(context: Context) -> VideoPresentationView {
         let root = VideoPresentationView(frame: .zero)
         root.subtitleViewport = subtitleViewport
-        root.attach(engine)
+        root.attach(engine, deferringOffscreenAttachment: true)
         updateReflection(root)
-        root.update(zoom: zoom, aspectRatio: aspectRatio, fitsInsideSafeArea: fitsInsideSafeArea)
+        root.update(zoom: zoom, aspectRatio: aspectRatio, fitsInsideSafeArea: fitsInsideSafeArea,
+                    needsPictureSubtitles: needsPictureSubtitles)
         return root
     }
 
     func updateUIView(_ uiView: VideoPresentationView, context: Context) {
         uiView.subtitleViewport = subtitleViewport
-        uiView.attach(engine)
+        uiView.attach(engine, deferringOffscreenAttachment: true)
         updateReflection(uiView)
-        uiView.update(zoom: zoom, aspectRatio: aspectRatio, fitsInsideSafeArea: fitsInsideSafeArea)
+        uiView.update(zoom: zoom, aspectRatio: aspectRatio, fitsInsideSafeArea: fitsInsideSafeArea,
+                      needsPictureSubtitles: needsPictureSubtitles)
     }
 }
 
@@ -253,8 +267,19 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     private var scrubPreviewCoordinator: ScrubPreviewCoordinator?
 
     private var autoHideTask: Task<Void, Never>?
+    var autoHideMode = PlaybackSettings.default.controlsAutoHide {
+        didSet {
+            if oldValue != autoHideMode, model.controlsVisible { scheduleAutoHide() }
+        }
+    }
     private var refreshTask: Task<Void, Never>?
     private var skipHintTask: Task<Void, Never>?
+    private var scanTask: Task<Void, Never>?
+    private var remoteScanActive = false
+    private var swipePreviewCadence = ScrubPreviewCadence()
+    private var swipePreviewTask: Task<Void, Never>?
+    private var swipePreviewDeadline: TimeInterval?
+    private var selectHoldRecognizer: UILongPressGestureRecognizer?
     /// Interprets Siri-Remote pan samples into scrub decisions (axis lock,
     /// pause-to-seek gate, velocity smoothing, flick-vs-land commit). Owns the
     /// per-gesture state that used to live inline in `handlePan`; the point→
@@ -381,6 +406,10 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         super.viewDidLoad()
 #if os(tvOS)
         installGestures()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(interruptRemoteScan),
+            name: UIApplication.willResignActiveNotification, object: nil
+        )
 #endif
     }
 
@@ -401,6 +430,9 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         startSubtitleClock()
 #if os(tvOS)
         remoteTouchInput.start()
+        if controlBarHost != nil, model.controlsVisible {
+            scheduleAutoHide()
+        }
 #endif
     }
 
@@ -408,7 +440,10 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         super.viewDidDisappear(animated)
         refreshTask?.cancel()
         refreshTask = nil
+        cancelAutoHide()
+        stopRemoteScan()
         cancelScrubCommit()
+        resetSwipePreviewCadence()
         if ScrubDiagnostics.forceScrubRefresh { engine.setScrubRefreshBoost(false) }
         subtitleClock?.invalidate()
         subtitleClock = nil
@@ -435,6 +470,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             (any AuthenticatedHTTPResourceResolving)?,
         generatedStills: (any ScrubStillExtracting)? = nil
     ) {
+        resetSwipePreviewCadence()
         scrubPreviewCoordinator?.clear()
         scrubPreviewCoordinator = nil
         model.previewImage = nil
@@ -483,6 +519,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// Hosts the engine's bare video surface as the backmost, non-interactive
     /// layer. The engine keeps it fed across reloads, so we add it once.
     func attachVideoSurface() {
+        model.videoZoom.supportsActivePicture = engine.supportsActivePictureAnalysis
         videoPresentation.frame = view.bounds
         videoPresentation.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         videoPresentation.attach(engine)
@@ -510,12 +547,18 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     private func updateSubtitleVideoRect() {
-        videoPresentation.update(zoom: model.videoZoom.settings, fitsInsideSafeArea: fitsInsideSafeArea)
+        videoPresentation.update(
+            zoom: model.videoZoom.settings, fitsInsideSafeArea: fitsInsideSafeArea,
+            needsPictureSubtitles: subtitleModel.map { $0.hasContent && $0.style.positionReference == .picture } ?? false
+        )
         videoPresentation.layoutIfNeeded()
         guard let subtitleModel else { return }
         let rect = videoPresentation.videoRect
         if subtitleModel.videoRect != rect {
             subtitleModel.videoRect = rect
+        }
+        if subtitleModel.activePictureRect != videoPresentation.activePictureRect {
+            subtitleModel.activePictureRect = videoPresentation.activePictureRect
         }
         let sourceAspect = model.videoZoom.settings.mode == .stretch ? videoPresentation.sourceAspectRatio : nil
         if subtitleModel.sourceVideoAspectRatio != sourceAspect {
@@ -547,9 +590,25 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// interaction is off so indirect-touch scrub pans flow to the surface and it
     /// can't steal focus.
     func attachControls(themePalette: ThemePaletteBox) {
+        // A disc menu can replace this host while retaining the controls model.
+        // Focus and panel state belong to this new host, not the retired one.
+        model.controlBarVisible = false
+        model.isPanelOpen = false
+        model.controlBar.focusArmed = false
+        model.controlBar.settled = false
+        model.controlBar.infoCardOpen = false
+        model.controlBar.episodeBrowserOpen = false
         // The remote's Play/Pause reaches the view model as a Now Playing command
         // while video plays; this is where it becomes the same input as a press.
-        model.remotePlayPause.onSystemCommand = { [weak self] in self?.revealAfterPlayPause() }
+        model.remotePlayPause.onSystemCommand = { [weak self] in
+            guard let self else { return }
+            if self.remoteScanActive {
+                // Now Playing has already applied this command's playback intent.
+                self.resumeAfterScrub = false
+                self.commitScrub()
+            }
+            self.revealAfterPlayPause()
+        }
         let exitToSurface: () -> Void = { [weak self] in self?.exitToSurface() }
         let actions = PlayerOptionsActions(
             togglePlayPause: { [weak self] in self?.togglePlayPauseFromControlBar() },
@@ -557,7 +616,10 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             selectSubtitle: { [weak self] in self?.actions.selectSubtitle($0) },
             selectSecondarySubtitle: { [weak self] in self?.actions.selectSecondarySubtitle($0) },
             setPlaybackSpeed: { [weak self] in self?.actions.setPlaybackSpeed($0) },
+            setDolbyVisionFELConversion: { [weak self] in self?.actions.setDolbyVisionFELConversion($0) },
+            setVideoUpscaling: { [weak self] in self?.actions.setVideoUpscaling($0) },
             setAudioDelay: { [weak self] in self?.actions.setAudioDelay($0) },
+            setAudioDelayLive: { [weak self] in self?.actions.setAudioDelayLive($0) ?? false },
             setSubtitleDelay: { [weak self] in self?.actions.setSubtitleDelay($0) },
             setDialogEnhance: { [weak self] in self?.actions.setDialogEnhance($0) },
             setSubtitleStyle: { [weak self] in self?.actions.setSubtitleStyle($0) },
@@ -566,7 +628,13 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             downloadRemoteSubtitle: { [weak self] in self?.actions.downloadRemoteSubtitle($0) },
             playNextEpisode: { [weak self] in self?.actions.playNextEpisode() },
             playPreviousEpisode: { [weak self] in self?.actions.playPreviousEpisode() },
-            restart: { [weak self] in self?.actions.restart() }
+            restart: { [weak self] in self?.actions.restart() },
+            restoreInfoFocus: { [weak self] in
+                guard let self, self.focusContext == .controlBar else { return }
+                self.model.controlBar.entry = .info
+                self.model.controlBar.settled = false
+                self.requestControlBarFocusUpdate()
+            }
         )
         let host = UIHostingController(rootView: themePalette.makeControls(model, actions, exitToSurface))
         host.view.backgroundColor = .clear
@@ -651,10 +719,8 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     private func refreshFromEngine() {
         #if !os(iOS)
-        // Keep the display awake only while frames are actually advancing.
-        // Evaluated every tick, before any early-return, so a pause, end-of-
-        // stream, or stall promptly releases the wake lock for every engine.
-        idleSleepGuard.keepAwake(engine.preventsDisplaySleep)
+        // An advancing preview is active transport even though its video is paused.
+        idleSleepGuard.keepAwake(engine.preventsDisplaySleep || model.skipGesture.scanLevel != 0)
         #endif
         let resolution = PlaybackClockReconciler.reconcile(
             snapshot: .init(
@@ -974,11 +1040,15 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
         let select = addPress(.select, #selector(handleSelect))
         selectRecognizer = select
+        selectHoldRecognizer = addHold(.select, tap: select)
         surfaceRecognizers.append(select)
         surfaceRecognizers.append(addPress(.playPause, #selector(handlePlayPause)))
         surfaceRecognizers.append(addPress(.menu, #selector(handleMenu)))
-        surfaceRecognizers.append(addPress(.leftArrow, #selector(handleLeft)))
-        surfaceRecognizers.append(addPress(.rightArrow, #selector(handleRight)))
+        let left = addPress(.leftArrow, #selector(handleLeft))
+        let right = addPress(.rightArrow, #selector(handleRight))
+        addHold(.leftArrow, tap: left)
+        addHold(.rightArrow, tap: right)
+        surfaceRecognizers.append(contentsOf: [left, right])
         surfaceRecognizers.append(addPress(.upArrow, #selector(handleUp)))
         surfaceRecognizers.append(addPress(.downArrow, #selector(handleDown)))
     }
@@ -995,9 +1065,23 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         return recognizer
     }
 
+    @discardableResult
+    private func addHold(_ type: UIPress.PressType, tap: UIGestureRecognizer) -> UILongPressGestureRecognizer {
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleSeekHold(_:)))
+        hold.minimumPressDuration = RemoteSeekScan.holdDuration
+        hold.allowedPressTypes = [NSNumber(value: type.rawValue)]
+        hold.allowedTouchTypes = []
+        hold.delegate = self
+        tap.require(toFail: hold)
+        view.addGestureRecognizer(hold)
+        surfaceRecognizers.append(hold)
+        return hold
+    }
+
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive press: UIPress) -> Bool {
         surfacePan?.cancelTap()
-        if gestureRecognizer === selectRecognizer, press.type == .select, focusContext == .surface {
+        if (gestureRecognizer === selectRecognizer || gestureRecognizer === selectHoldRecognizer),
+           press.type == .select, focusContext == .surface {
             var position: RemoteClickInterpreter.Position?
 #if os(tvOS)
             if press.key == nil {
@@ -1005,6 +1089,10 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             }
 #endif
             surfacePan?.click.selectBegan(position: position)
+            if model.isScrubbing { cancelScrubCommit() }
+        }
+        if press.type == .leftArrow || press.type == .rightArrow {
+            surfacePan?.click.selectBegan(position: nil)
             if model.isScrubbing { cancelScrubCommit() }
         }
         if ScrubDiagnostics.enabled,
@@ -1017,6 +1105,12 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer is UILongPressGestureRecognizer {
+            guard focusContext == .surface, canSeekFromPosition else { return false }
+            if gestureRecognizer === selectHoldRecognizer {
+                return (surfacePan?.click.pendingAction ?? .select) != .select
+            }
+        }
         if gestureRecognizer === surfacePan {
             return surfacePan?.click.suppressesPan != true
         }
@@ -1028,8 +1122,10 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         // A click must still complete if its contact had already started a pan.
-        (gestureRecognizer === surfacePan && otherGestureRecognizer === selectRecognizer)
-            || (gestureRecognizer === selectRecognizer && otherGestureRecognizer === surfacePan)
+        (gestureRecognizer === surfacePan
+            && (otherGestureRecognizer === selectRecognizer || otherGestureRecognizer is UILongPressGestureRecognizer))
+            || (otherGestureRecognizer === surfacePan
+                && (gestureRecognizer === selectRecognizer || gestureRecognizer is UILongPressGestureRecognizer))
     }
 
     // MARK: Scrubbing
@@ -1058,7 +1154,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// model's kept duration must not let new input seek it mid-rebuild (issue
     /// #61). A scrub already under way may still move, commit or cancel.
     private var canSeekFromPosition: Bool {
-        model.duration > 0 && (model.isScrubbing || engine.status != .loading)
+        model.duration.isFinite && model.duration > 0 && (model.isScrubbing || engine.status != .loading)
     }
 
     @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -1087,7 +1183,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
                 velocityX: Double(gesture.velocity(in: view).x),
                 isScrubbing: model.isScrubbing) {
             case .none:
-                if model.isScrubbing, scrubCommitTask == nil { scheduleScrubCommit() }
+                if model.isScrubbing, !remoteScanActive, scrubCommitTask == nil { scheduleScrubCommit() }
             case .commit:
                 commitScrub()
             case .bridgeCommit:
@@ -1135,15 +1231,16 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             break
         case .enterControlBar:
             traceVerticalSwipe("down", phase: gesture.state, translation: translation)
-            if model.isScrubbing { scheduleScrubCommit() }
+            if model.isScrubbing, !remoteScanActive { scheduleScrubCommit() }
             handleDown()
         case .moveUp:
             traceVerticalSwipe("up", phase: gesture.state, translation: translation)
-            if model.isScrubbing { scheduleScrubCommit() }
+            if model.isScrubbing, !remoteScanActive { scheduleScrubCommit() }
             handleUp()
         case .flashAndSuppress:
             flashControls()
         case let .advance(deltaPoints, smoothedSpeed, beginScrub, continueTraversal):
+            stopRemoteScan()
             if continueTraversal { cancelScrubCommit() }
             if beginScrub { self.beginScrub() }
             model.scrubSeconds = ScrubGeometry.advance(
@@ -1152,7 +1249,8 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
                 speedPointsPerSecond: smoothedSpeed,
                 tuning: scrubTuning,
                 duration: model.duration)
-            let cacheHit = updatePreviewThumbnail()
+            swipePreviewCadence.update(speed: smoothedSpeed, delta: deltaPoints)
+            let cacheHit = updateSwipePreviewThumbnail()
             if ScrubDiagnostics.enabled {
                 scrubDiag.recordSample(
                     handlerMs: (CACurrentMediaTime() - sampleStart) * 1000,
@@ -1163,9 +1261,10 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     private func beginScrub() {
         cancelAutoHide()
+        resetSwipePreviewCadence()
         resumeAfterScrub = !model.isPaused
         model.isScrubbing = true
-        model.scrubSeconds = model.currentSeconds
+        model.scrubSeconds = model.pendingSeekTarget ?? model.currentSeconds
         model.controlsVisible = true
         // Pause the underlying stream while previewing; we resume on commit.
         if !model.isPaused { actions.togglePlayPause() }
@@ -1177,6 +1276,8 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     private func commitScrub() {
         guard model.isScrubbing else { return }
+        stopRemoteScan()
+        resetSwipePreviewCadence()
         // Any pending flick bridge is now resolved by this commit.
         cancelScrubCommit()
         let target = model.scrubSeconds
@@ -1195,7 +1296,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         // vanish as the resume + seek spinner took over (the flicker). Resuming
         // first means the pause branch never mounts: a seek-without-pausing shows
         // only the loading spinner.
-        if resumeAfterScrub { actions.togglePlayPause() }
+        if resumeAfterScrub, model.isPaused { actions.togglePlayPause() }
         model.isScrubbing = false
         scrubPreviewCoordinator?.clear()
         model.skipGesture.indicatorOnLeft = false
@@ -1226,9 +1327,12 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     private func cancelScrub() {
         guard model.isScrubbing else { return }
+        stopRemoteScan()
+        resetSwipePreviewCadence()
+        cancelScrubCommit()
         // Resolve playback intent before un-hiding the overlay (same ordering
         // rationale as commitScrub) so the pause glyph never flickers in.
-        if resumeAfterScrub { actions.togglePlayPause() }
+        if resumeAfterScrub, model.isPaused { actions.togglePlayPause() }
         model.isScrubbing = false
         scrubPreviewCoordinator?.clear()
         if ScrubDiagnostics.forceScrubRefresh { engine.setScrubRefreshBoost(false) }
@@ -1245,7 +1349,120 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         return scrubPreviewCoordinator.update(for: model.scrubSeconds)
     }
 
+    private func resetSwipePreviewCadence() {
+        swipePreviewTask?.cancel()
+        swipePreviewTask = nil
+        swipePreviewDeadline = nil
+        swipePreviewCadence = ScrubPreviewCadence()
+    }
+
+    @discardableResult
+    private func updateSwipePreviewThumbnail() -> Bool? {
+        guard scrubPreviewCoordinator != nil else { return updatePreviewThumbnail() }
+        let now = CACurrentMediaTime()
+        let delay = swipePreviewCadence.remainingDelay(at: now)
+        if delay == 0 {
+            swipePreviewTask?.cancel()
+            swipePreviewTask = nil
+            swipePreviewDeadline = nil
+            swipePreviewCadence.didRequest(at: now)
+            return updatePreviewThumbnail()
+        }
+
+        let deadline = now + delay
+        // Keep a trailing update anchored to the last request, not the latest
+        // input. Slowing down can bring that deadline forward immediately.
+        if deadline < (swipePreviewDeadline ?? .infinity) - 0.001 {
+            swipePreviewTask?.cancel()
+            swipePreviewDeadline = deadline
+            swipePreviewTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, let self else { return }
+                swipePreviewTask = nil
+                swipePreviewDeadline = nil
+                guard model.isScrubbing, !remoteScanActive else { return }
+                updateSwipePreviewThumbnail()
+            }
+        }
+        return nil
+    }
+
     // MARK: Button handlers
+
+    @objc func handleSeekHold(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            if gesture.allowedPressTypes.contains(NSNumber(value: UIPress.PressType.leftArrow.rawValue)) {
+                advanceRemoteScan(forward: false)
+            } else if gesture.allowedPressTypes.contains(NSNumber(value: UIPress.PressType.rightArrow.rawValue)) {
+                advanceRemoteScan(forward: true)
+            } else {
+                switch surfacePan?.click.takeAction() ?? .select {
+                case .skipBackward: advanceRemoteScan(forward: false)
+                case .skipForward: advanceRemoteScan(forward: true)
+                case .select: break
+                }
+            }
+        case .cancelled, .failed:
+            interruptRemoteScan()
+        default:
+            break
+        }
+    }
+
+    func advanceRemoteScan(forward: Bool) {
+        guard focusContext == .surface, canSeekFromPosition else { return }
+        resetSwipePreviewCadence()
+        cancelScrubCommit()
+        if !model.isScrubbing { beginScrub() }
+        remoteScanActive = true
+        skipHintTask?.cancel()
+        model.skipGesture.hintVisible = false
+        model.skipGesture.scanLevel = RemoteSeekScan.nextLevel(model.skipGesture.scanLevel, forward: forward)
+        guard scanTask == nil else { return }
+        scanTask = Task { [weak self] in
+            var previous = CACurrentMediaTime()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(33))
+                guard !Task.isCancelled else { return }
+                let now = CACurrentMediaTime()
+                // Do not turn a suspended main thread into a huge timeline jump.
+                let elapsed = min(0.25, max(0, now - previous))
+                previous = now
+                guard let self, self.remoteScanActive else { return }
+                guard self.model.isScrubbing else {
+                    self.stopRemoteScan()
+                    return
+                }
+                self.advanceRemoteScan(elapsed: elapsed)
+            }
+        }
+    }
+
+    func advanceRemoteScan(elapsed: TimeInterval) {
+        guard remoteScanActive, model.isScrubbing, elapsed.isFinite, elapsed >= 0 else { return }
+        model.scrubSeconds = RemoteSeekScan.position(
+            from: model.scrubSeconds, level: model.skipGesture.scanLevel,
+            elapsed: elapsed, duration: model.duration
+        )
+        updatePreviewThumbnail()
+        if model.scrubSeconds <= 0 || model.scrubSeconds >= model.duration {
+            scanTask?.cancel()
+            scanTask = nil
+            model.skipGesture.scanLevel = 0
+        }
+    }
+
+    private func stopRemoteScan() {
+        scanTask?.cancel()
+        scanTask = nil
+        model.skipGesture.scanLevel = 0
+        remoteScanActive = false
+    }
+
+    @objc func interruptRemoteScan() {
+        if remoteScanActive { cancelScrub() }
+    }
 
     func handleSurfaceTap() {
         guard focusContext == .surface, !model.isScrubbing else { return }
@@ -1260,7 +1477,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         }
     }
 
-    @objc private func handleSelect() {
+    @objc func handleSelect() {
         guard focusContext == .surface else { return }
         let action = surfacePan?.click.takeAction() ?? .select
         ScrubDiagnostics.note("remote-select action=\(action) scrubbing=\(model.isScrubbing) paused=\(model.isPaused)")
@@ -1283,6 +1500,13 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     @objc func handlePlayPause() {
+        if remoteScanActive {
+            guard model.remotePlayPause.admit(.press) else { return }
+            resumeAfterScrub = true
+            commitScrub()
+            flashControls()
+            return
+        }
         if model.isScrubbing { commitScrub() }
         togglePlayPauseFromPress()
         flashControls()
@@ -1309,7 +1533,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         flashControls()
     }
 
-    @objc private func handleMenu() {
+    @objc func handleMenu() {
         if model.isScrubbing {
             cancelScrub()
         } else if model.controlsVisible {
@@ -1319,12 +1543,20 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         }
     }
 
-    @objc private func handleLeft() {
+    @objc func handleLeft() {
         guard focusContext == .surface else { return }
+        if remoteScanActive {
+            advanceRemoteScan(forward: false)
+            return
+        }
         skip(by: -model.skipGesture.backwardInterval.seconds)
     }
-    @objc private func handleRight() {
+    @objc func handleRight() {
         guard focusContext == .surface else { return }
+        if remoteScanActive {
+            advanceRemoteScan(forward: true)
+            return
+        }
         skip(by: model.skipGesture.forwardInterval.seconds)
     }
 
@@ -1360,6 +1592,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     private func skip(by seconds: TimeInterval) {
         guard canSeekFromPosition else { return }
         if model.isScrubbing {
+            resetSwipePreviewCadence()
             model.scrubSeconds = min(max(0, model.scrubSeconds + seconds), model.duration)
             updatePreviewThumbnail()
         } else {
@@ -1409,6 +1642,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     private func scheduleAutoHide() {
         cancelAutoHide()
+        guard autoHideMode.allowsHiding(paused: model.intendsPause) else { return }
         autoHideTask = Task { [weak self] in
             // Anchor the idle countdown to the playhead ACTUALLY ADVANCING, not to
             // the reveal request, the engine's .ready status, or a single
@@ -1431,6 +1665,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
                 var lastTime: TimeInterval = -1
                 var advancingTicks = 0
                 while !Task.isCancelled {
+                    if self?.model.intendsPause == true { return true }
                     guard let sample = self.map({ ($0.engine.preventsDisplaySleep, $0.engine.currentTime) })
                     else { return false } // container torn down
                     let (playing, now) = sample
@@ -1470,16 +1705,18 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
                 // A re-resolve / transcode reload dropped frames mid-window:
                 // re-anchor to the re-presented playback rather than hiding over
                 // a spinner. Checked weakly so a torn-down container isn't held.
-                if self?.engine.preventsDisplaySleep == false, self?.engine.status == .loading {
+                if self?.model.intendsPause == false, self?.engine.preventsDisplaySleep == false, self?.engine.status == .loading {
                     guard await awaitPlaybackPresenting() else { return }
                     continue
                 }
                 guard let self, !Task.isCancelled else { return }
+                guard !UIAccessibility.isVoiceOverRunning, !UIAccessibility.isSwitchControlRunning else { return }
                 switch ControlsAutoHidePolicy.outcome(
                     focus: self.focusContext.policyFocus,
                     isScrubbing: self.model.isScrubbing,
-                    isPaused: self.model.isPaused,
-                    isPanelOpen: self.model.isPanelOpen
+                    isPaused: self.model.isPaused || self.model.intendsPause,
+                    isPanelOpen: self.model.isPanelOpen,
+                    mode: self.autoHideMode
                 ) {
                 case .stayVisible:
                     // Mid-interaction (scrub in flight, paused, or a menu open);
@@ -1603,6 +1840,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     private func setSurfaceRecognizers(enabled: Bool) {
+        if !enabled { interruptRemoteScan() }
         for recognizer in surfaceRecognizers { recognizer.isEnabled = enabled }
     }
 
@@ -1619,6 +1857,8 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         autoHideTask?.cancel()
         refreshTask?.cancel()
         skipHintTask?.cancel()
+        scanTask?.cancel()
+        swipePreviewTask?.cancel()
     }
 }
 #endif

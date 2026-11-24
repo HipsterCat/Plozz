@@ -270,6 +270,11 @@ public struct MetadataSettingsDetailView: View {
                     title: orderModeTitle
                 )
                 .settingsWorkspaceEntry()
+                .settingsSearchAnchor(
+                    "metadata-order-mode",
+                    fallbackFor: providers.settings.orderMode == .custom
+                        ? [] : ["metadata-provider-priority-enabled"]
+                )
 
                 Text("Shared by all profiles.")
                     .font(.caption)
@@ -284,6 +289,7 @@ public struct MetadataSettingsDetailView: View {
                         row: { LiftableReorderList.Row(title: Text(displayName($0))) },
                         onChange: { persist($0) }
                     )
+                    .settingsSearchAnchor("metadata-provider-priority-enabled")
 
                     #if os(tvOS)
                     Button(role: .destructive) {
@@ -349,9 +355,11 @@ public struct MetadataSettingsDetailView: View {
                         .plozzForeground(.secondary)
                 }
 
-                SecureField("TMDB v4 API Read Access Token", text: draftKeyBinding)
-                    .textContentType(.password)
-                    .disableAutocorrection(true)
+                SettingsInputRow("TMDB v4 API Read Access Token") {
+                    SecureField("TMDB v4 API Read Access Token", text: draftKeyBinding, prompt: Text(verbatim: ""))
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                }
 
                 verifyStatusView
 
@@ -707,9 +715,11 @@ private struct MetadataDiagnosticsCachePanel: View {
         budgetControl(
             title: "Artwork", options: Self.artworkBudgetOptions, selection: artworkBudgetBinding
         )
+        .settingsSearchAnchor("artwork-cache-budget")
         budgetControl(
             title: "Lookups", options: Self.metadataBudgetOptions, selection: metadataBudgetBinding
         )
+        .settingsSearchAnchor("lookup-cache-budget")
     }
 
     private func budgetControl(

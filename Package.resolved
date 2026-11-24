@@ -1,12 +1,12 @@
 {
-  "originHash" : "5c0774e0d0cb66a2afda4200b1c336d9394b29a5c1839aeed0d5a6680f7cfa61",
+  "originHash" : "db1cb98099d503b2ac68585b8903db7c5cf93ea4407d7bab6c86ceaf705e092c",
   "pins" : [
     {
       "identity" : "aetherengine",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/brandomoore/AetherEngine",
       "state" : {
-        "revision" : "c1ce4cf48bad416e6be5230032a2b7f332e833d8"
+        "revision" : "d98f93de1bc05635279ab5ce7831910327452e3f"
       }
     },
     {
@@ -14,8 +14,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/superuser404notfound/FFmpegBuild",
       "state" : {
-        "revision" : "2c7977df9c3e337e4d6a46cc506d7914d7d2b61e",
-        "version" : "3.10.1"
+        "revision" : "d445e6daa180db73f12d47606a00c914f682e278",
+        "version" : "3.15.0"
       }
     },
     {
@@ -23,17 +23,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/superuser404notfound/LibDovi",
       "state" : {
-        "revision" : "0d7cce1d6836a30d13a3a2326e50a153af53f014",
-        "version" : "2.1.0"
-      }
-    },
-    {
-      "identity" : "libtruehd",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/superuser404notfound/LibTrueHD",
-      "state" : {
-        "revision" : "73bee84d7ac7b8619db570e36490b92761fe91a6",
-        "version" : "3.1.0"
+        "revision" : "caff700968700467c089a3f38c8b4180620518b5",
+        "version" : "2.2.0"
       }
     },
     {
@@ -50,7 +41,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/thatcube/SMBClient.git",
       "state" : {
-        "revision" : "5d5bceb6fa0833c98b0eecc676609c9476bd9423"
+        "revision" : "c778237de5e2525a46005241dc5e7926703bddcf"
       }
     },
     {

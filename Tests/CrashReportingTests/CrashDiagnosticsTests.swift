@@ -73,8 +73,16 @@ final class CrashDiagnosticsTests: XCTestCase {
         journal.record(
             .failed, session: UUID(), attempt: UUID(),
             facts: .init(provider: .plex, engine: .plozzigen),
-            failure: .init(.serverHTTP(503))
+            failure: .init(.serverHTTP(503)),
+            pipeline: .init(.init(bufferedSecondsAhead: 0.25, audioPipelineDescription: "PRIVATE-PIPELINE"))
         )
+        await journal.flush()
+        for _ in 0..<3 {
+            for _ in 0..<200 {
+                journal.record(.firstFrame, session: UUID(), attempt: UUID(), facts: .init(provider: .plex))
+            }
+            await journal.flush()
+        }
         let playback = await journal.export(scope: scope)
         for enabled in [false, true] {
             var captures = 0
@@ -86,8 +94,14 @@ final class CrashDiagnosticsTests: XCTestCase {
                     captures += 1
                     let playback = self.payload(attachment)["playback"] as? [String: Any]
                     let entries = playback?["entries"] as? [[String: Any]]
-                    XCTAssertEqual(entries?.first?["event"] as? String, "failed")
-                    XCTAssertEqual((entries?.first?["failure"] as? [String: Any])?["httpStatus"] as? Int, 503)
+                    XCTAssertFalse(entries?.contains { $0["event"] as? String == "failed" } == true)
+                    let snapshots = playback?["failureSnapshots"] as? [[String: Any]]
+                    let failures = snapshots?.first?["entries"] as? [[String: Any]]
+                    XCTAssertEqual(failures?.first?["event"] as? String, "failed")
+                    XCTAssertEqual((failures?.first?["failure"] as? [String: Any])?["httpStatus"] as? Int, 503)
+                    XCTAssertEqual((failures?.first?["pipeline"] as? [String: Any])?["bufferedSeconds"] as? Double, 0.25)
+                    XCTAssertFalse(String(decoding: attachment.data ?? Data(), as: UTF8.self).contains("PRIVATE-PIPELINE"))
+                    XCTAssertLessThanOrEqual(attachment.data?.count ?? Int.max, 4 * 1_024 * 1_024)
                     return SentryId()
                 },
                 captureFeedback: { _ in SentryId() }
@@ -407,6 +421,13 @@ final class CrashDiagnosticsTests: XCTestCase {
         operations.start()
         operations.begin(.serverRequest, provider: .jellyfin)?
             .finish(.failed, metrics: .init(bytes: 128, requests: 1), httpStatus: 401)
+        operations.begin(.homePublish, metrics: .init(items: 800, rows: 40))?.finish(.succeeded)
+        let homeObservation = try XCTUnwrap(operations.beginHomeObservation())
+        var homeMetrics = PerformanceDiagnostics.HomeUIMetrics()
+        homeMetrics.samples = 1
+        homeMetrics.loadingSamples = 1
+        XCTAssertTrue(homeObservation.record(homeMetrics))
+        homeObservation.stop()
         let searches = SearchDiagnosticJournal()
         searches.start()
         let search = try XCTUnwrap(searches.beginSearch())
@@ -438,6 +459,9 @@ final class CrashDiagnosticsTests: XCTestCase {
                 XCTAssertEqual(records?.first?["attempt"] as? String, records?.last?["attempt"] as? String)
                 XCTAssertEqual((records?.first?["facts"] as? [String: Any])?["sourceVideo"] as? String, "hevc")
                 XCTAssertNotNil(body["operations"])
+                let operationBody = body["operations"] as? [String: Any]
+                XCTAssertEqual((operationBody?["homeRecent"] as? [[String: Any]])?.first?["operation"] as? String, "homePublish")
+                XCTAssertEqual((operationBody?["homeUI"] as? [[String: Any]])?.count, 1)
                 let searchEntries = (body["search"] as? [String: Any])?["entries"] as? [[String: Any]]
                 let searchFacts = searchEntries?.first?["facts"] as? [String: Any]
                 XCTAssertEqual(searchFacts?["provider"] as? String, "silo")

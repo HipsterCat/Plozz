@@ -8,6 +8,51 @@ import zlib
 final class LiveTVXMLTVParserTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_767_225_600)
 
+    func testExternalCancellationInterruptsPlainAndCompressedInputWithoutCancellingTask() throws {
+        final class CancellationBudget: @unchecked Sendable {
+            private let lock = NSLock()
+            private var remaining = 20
+            func check() -> Bool { lock.withLock { remaining -= 1; return remaining <= 0 } }
+        }
+        let inputs = [
+            "<!--" + String(repeating: " ", count: 1_000_000) + "--><tv/>",
+            "<tv>" + String(repeating: "<programme channel=\"unmatched\"/>", count: 1_000) + "</tv>"
+        ]
+        for xml in inputs {
+            for compressed in [false, true] {
+                let budget = CancellationBudget()
+                let parser = LiveTVXMLTVParser(isCancelled: { budget.check() })
+                let data = Data(xml.utf8)
+                XCTAssertThrowsError(try parser.parseIndexed(
+                    data: compressed ? gzip(data) : data, channels: [], now: now, sink: { _ in
+                        XCTFail("No programmes in this input should be retained.")
+                    }
+                ), "compressed=\(compressed)") {
+                    XCTAssertEqual($0 as? LiveTVSourceImportError, .cancelled)
+                }
+                XCTAssertFalse(Task.isCancelled)
+            }
+        }
+    }
+
+    func testLargeChannelDirectoryRetainsOnlyTheRequestedSchedule() throws {
+        let declarations = (0..<20_001).map { "<channel id=\"g\($0)\"/>" }.joined()
+        let xml = Data("""
+        <tv>\(declarations)
+        <programme channel="g20000" start="20260101000000 +0000" stop="20260101010000 +0000"><title>Selected</title></programme>
+        <programme channel="g0" start="20260101000000 +0000" stop="20260101010000 +0000"><title>Unrequested</title></programme>
+        </tv>
+        """.utf8)
+        let channels = [makeChannel(id: "app", name: "Selected", guideID: "g20000")]
+        for result in [
+            try LiveTVXMLTVParser().parseXML(data: xml, channels: channels, now: now),
+            try LiveTVXMLTVParser().parse(gzipData: gzip(xml), channels: channels, now: now)
+        ] {
+            XCTAssertEqual(result.guideChannelCount, 20_001)
+            XCTAssertEqual(result.programs.map(\.title), ["Selected"])
+        }
+    }
+
     func testProgrammeOnlyFeedMatchesExactIDsWithoutGuessingNamesOrCase() throws {
         let xml = Data("""
         <tv>
@@ -607,26 +652,36 @@ final class LiveTVXMLTVParserTests: XCTestCase {
         )
     }
 
+    func testConcatenatedGzipMembersValidateEveryTrailerAndRejectTrailingGarbage() throws {
+        let first = try gzip(Data("<tv>".utf8))
+        let last = try gzip(Data("</tv>".utf8))
+        let parsed = try LiveTVXMLTVParser().parse(gzipData: first + last, channels: [], now: now)
+        XCTAssertEqual(parsed.programCount, 0)
+        let complete = try gzip(Data("<tv/>".utf8))
+        var damaged = complete
+        damaged[damaged.count - 8] ^= 0xff
+        for data in [damaged, Data(complete.dropLast()), complete + Data("garbage".utf8),
+                     complete + damaged, complete + Data(last.dropLast())] {
+            XCTAssertThrowsError(try LiveTVXMLTVParser().parse(gzipData: data, channels: [], now: now)) {
+                XCTAssertEqual($0 as? LiveTVSourceImportError, .invalidGuide)
+            }
+        }
+        XCTAssertThrowsError(
+            try LiveTVXMLTVParser(maximumExpandedBytes: 6).parse(
+                gzipData: first + last, channels: [], now: now
+            )
+        ) { XCTAssertEqual($0 as? LiveTVSourceImportError, .guideTooLarge) }
+    }
+
     func testGzipCorruptionAndExpansionLimitAreRejected() throws {
         XCTAssertThrowsError(
             try LiveTVXMLTVParser().parse(
-                gzipData: Data(count: LiveTVXMLTVParser.maximumCompressedBytes + 1),
-                channels: [],
-                now: now
+                gzipData: Data(count: LiveTVXMLTVParser.maximumCompressedBytes + 1), channels: [], now: now
             )
-        ) {
-            XCTAssertEqual($0 as? LiveTVSourceImportError, .guideTooLarge)
-        }
+        ) { XCTAssertEqual($0 as? LiveTVSourceImportError, .guideTooLarge) }
         XCTAssertThrowsError(
-            try LiveTVXMLTVParser().parse(
-                gzipData: Data([0x1f, 0x8b, 0x00, 0x01]),
-                channels: [],
-                now: now
-            )
-        ) {
-            XCTAssertEqual($0 as? LiveTVSourceImportError, .invalidGuide)
-        }
-
+            try LiveTVXMLTVParser().parse(gzipData: Data([0x1f, 0x8b, 0x00, 0x01]), channels: [], now: now)
+        ) { XCTAssertEqual($0 as? LiveTVSourceImportError, .invalidGuide) }
         let oversizedXML = "<tv><!--" + String(repeating: "x", count: 1_024) + "--></tv>"
         let compressed = try gzip(Data(oversizedXML.utf8))
         XCTAssertThrowsError(
@@ -637,6 +692,29 @@ final class LiveTVXMLTVParserTests: XCTestCase {
             )
         ) {
             XCTAssertEqual($0 as? LiveTVSourceImportError, .guideTooLarge)
+        }
+    }
+
+    func testOversizedOptionalDescriptionsStayBoundedWithoutDiscardingTheSchedule() throws {
+        let description = String(repeating: "é", count: LiveTVXMLTVParser.maximumTextLength)
+        let data = Data("""
+        <tv>
+        <programme channel="guide" start="20260101000000 +0000" stop="20260101010000 +0000">
+        <title>Listing</title><desc>\(description)</desc></programme>
+        <programme channel="other" start="20260101000000 +0000" stop="20260101010000 +0000">
+        <title>Other</title><desc><![CDATA[\(description)]]></desc></programme>
+        </tv>
+        """.utf8)
+        let channels = [makeChannel(id: "app", name: "Guide", guideID: "guide")]
+        for result in [
+            try LiveTVXMLTVParser().parseXML(data: data, channels: channels, now: now),
+            try LiveTVXMLTVParser().parse(gzipData: gzip(data), channels: channels, now: now)
+        ] {
+            let program = try XCTUnwrap(result.programs.first)
+            XCTAssertEqual(result.programs.count, 1)
+            XCTAssertEqual(program.title, "Listing")
+            XCTAssertEqual(program.details?.description?.utf8.count, LiveTVXMLTVParser.maximumTextLength)
+            XCTAssertEqual(program.details?.description, String(description.prefix(LiveTVXMLTVParser.maximumTextLength / 2)))
         }
     }
 
@@ -708,7 +786,7 @@ final class LiveTVXMLTVParserTests: XCTestCase {
         }
         XCTAssertEqual(XMLTVDateParser.date(from: "202601010130 -05:30"), date("20260101070000 +0000"))
         XCTAssertEqual(XMLTVDateParser.date(from: "202601010130+0130"), now)
-        for invalid in ["202601", "20260101", "2026010101", "2026010101300", "202601010130000",
+        for invalid in ["2026010101300", "202601010130000",
                         "202602300130", "202601012430", "202601010160", "202601010130 CST",
                         "202601010130 GMT+01", "202601010130 UTC trailing", "202601010130 +2460",
                         "202601010130 +010", "202601010130 +0x00", "20260101013٠"] {
@@ -726,6 +804,71 @@ final class LiveTVXMLTVParserTests: XCTestCase {
             XCTAssertEqual(result.programs.first?.start, now)
             XCTAssertEqual(result.programs.first?.end, now.addingTimeInterval(3_600))
         }
+    }
+
+    func testReducedPrecisionDatesUsePeriodStartWithoutRelaxingValidation() throws {
+        for prefix in ["2026", "202601", "20260101", "2026010100"] {
+            XCTAssertEqual(XMLTVDateParser.date(from: prefix), now, prefix)
+            XCTAssertEqual(XMLTVDateParser.date(from: prefix + " +01:30"), now.addingTimeInterval(-5_400), prefix)
+            XCTAssertEqual(XMLTVDateParser.date(from: prefix + " -0230"), now.addingTimeInterval(9_000), prefix)
+            let xml = """
+            <tv><programme channel="g" start="\(prefix)" stop="2026010101"><title>Short timestamp</title></programme></tv>
+            """
+            for programs in try programsAcrossParserPaths(xml, preferredLanguage: nil) {
+                XCTAssertEqual(programs.count, 1, prefix)
+                XCTAssertEqual(programs.first?.start, now, prefix)
+                XCTAssertEqual(programs.first?.end, now.addingTimeInterval(3_600), prefix)
+            }
+        }
+        XCTAssertEqual(XMLTVDateParser.date(from: "202602"), date("20260201000000 +0000"))
+        XCTAssertEqual(XMLTVDateParser.date(from: "20240229"), date("20240229000000 +0000"))
+        for invalid in ["202", "20260", "2026010", "202601010", "20260101000", "0000",
+                        "202600", "202613", "20260100", "20260229", "2026010124",
+                        "2026 CST", "2026 +010", "2026 +2460", "2026 trailing", "202٦"] {
+            XCTAssertNil(XMLTVDateParser.date(from: invalid), invalid)
+        }
+    }
+
+    func testProgrammeSummaryExplainsUnusableRowsWithoutExposingFeedContent() throws {
+        let xml = Data("""
+        <tv>
+          <programme channel="g" start="2026010100" stop="2026010101"><title>private-title</title></programme>
+          <programme start="2026010100" stop="2026010101"><title>private-missing-channel</title></programme>
+          <programme channel="g" start="private-date" stop="2026010101"><title>Invalid start</title></programme>
+          <programme channel="g" start="2026010100" stop="private-date"><title>Invalid stop</title></programme>
+          <programme channel="g" start="2026010100" stop="2026010101"><title> </title></programme>
+          <programme channel="g" start="2027010100" stop="2027010101"><title>Outside window</title></programme>
+          <programme channel="private-unmatched" start="2026010100" stop="2026010101"><title>Unmatched</title></programme>
+          <programme channel="g" start="2026010102"><title>No end</title></programme>
+        </tv>
+        """.utf8)
+        let channels = [
+            makeChannel(id: "app", name: "private-channel", guideID: "g"),
+            makeChannel(id: "unmatched", name: "Unknown", guideID: "different")
+        ]
+        let since = Date()
+        let result = try LiveTVXMLTVParser().parseXML(data: xml, channels: channels, now: now)
+        XCTAssertEqual(result.programs.map(\.title), ["private-title"])
+        let messages = PlozzLog.recentEntries(limit: 50).filter {
+            $0.date >= since && $0.message.hasPrefix("XMLTV_PARSE pass=programmes outcome=succeeded mode=")
+        }.map(\.message)
+        XCTAssertEqual(messages.count, 1)
+        let message = try XCTUnwrap(messages.first)
+        for field in ["mode=channelMatch", "requestedChannels=2", "matchedStations=1", "guideChannels=2",
+                      "programmes=8", "retainedPrograms=1", "skipped_channelID=1", "skipped_start=1",
+                      "skipped_stop=1", "skipped_title=1", "skipped_outsideWindow=1",
+                      "skipped_unmatchedChannel=1", "skipped_missingStop=1"] {
+            XCTAssertTrue(message.contains(field), field)
+        }
+        XCTAssertFalse(message.contains("private"))
+        _ = try LiveTVXMLTVParser().parseIndexed(
+            data: xml, channels: channels, now: now, indexGuideStations: true, sink: { _ in }
+        )
+        let indexedMessage = try XCTUnwrap(PlozzLog.recentEntries(limit: 50).last {
+            $0.date >= since && $0.message.contains("mode=stationIndex")
+        }?.message)
+        XCTAssertTrue(indexedMessage.contains("candidateStations=1"))
+        XCTAssertFalse(indexedMessage.contains("matchedStations="))
     }
 
     func testEntityLikeTextInCommentsInstructionsAndCDATAIsNotADeclaration() throws {

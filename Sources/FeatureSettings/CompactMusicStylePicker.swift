@@ -3,6 +3,41 @@ import SwiftUI
 import CoreModels
 import PlozzCoreUI
 
+#if os(iOS)
+public struct CompactMusicStylePicker<Preview: View>: View {
+    @Binding private var selection: MusicPlayerAppearance
+    private let preview: (MusicPlayerAppearance) -> Preview
+    @Environment(\.themePalette) private var palette
+
+    public init(
+        selection: Binding<MusicPlayerAppearance>,
+        @ViewBuilder preview: @escaping (MusicPlayerAppearance) -> Preview
+    ) {
+        _selection = selection
+        self.preview = preview
+    }
+
+    public var body: some View {
+        AppearancePreviewLayout(options: MusicPlayerAppearance.pickerOrder) { appearance, row in
+            PreviewCard(
+                title: appearance.displayName, isSelected: selection == appearance,
+                accent: palette.accent, compact: true, swatchAspectRatio: 1.6,
+                titleLineLimit: nil,
+                titleSizeGroup: row.map(\.displayName),
+                cornerRadius: MobileSettingsMetrics.previewCardCornerRadius,
+                contentInset: MobileSettingsMetrics.previewCardInset,
+                action: { selection = appearance }
+            ) {
+                preview(appearance)
+            }
+            .accessibilityLabel(Text(appearance.displayName))
+            .accessibilityAddTraits(selection == appearance ? .isSelected : [])
+            .accessibilityIdentifier("music-appearance-\(appearance.rawValue)")
+        }
+    }
+}
+#endif
+
 /// The detail-pane content for the "Music Player" settings row: the style
 /// preview cards with the "Show track details" toggle beneath.
 ///
@@ -22,6 +57,7 @@ struct MusicPlayerStyleDetail: View {
     @Binding var appearance: MusicPlayerAppearance
     @Binding var showTrackDetails: Bool
     @Environment(\.themePalette) private var palette
+    @Environment(SettingsSearchRequest.self) private var searchRequest: SettingsSearchRequest?
     @FocusState private var focused: FocusTarget?
     /// Whether a style card has been focused this entry — gates the toggle into
     /// the focus order so it can't steal the initial right-press.
@@ -41,17 +77,27 @@ struct MusicPlayerStyleDetail: View {
                         isSelected: appearance == style,
                         accent: palette.accent,
                         compact: true,
+                        titleLineLimit: nil,
+                        titleSizeGroup: MusicPlayerAppearance.pickerOrder.map(\.displayName),
                         action: { appearance = style }
                     ) {
                         MusicStyleSwatch(appearance: style, cornerRadius: PlozzTheme.Metrics.Radius.content)
                     }
                     .focused($focused, equals: .style(style))
+                    .settingsSearchAnchor(
+                        appearance == style ? "music-style" : "music-style-option-\(style.rawValue)",
+                        focusAction: { focused = .style(style) }
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            FocusGatedSwitch("Show album, quality & lyrics source", isOn: $showTrackDetails, canFocus: cardFocused)
-                .focused($focused, equals: .toggle)
+            FocusGatedSwitch(
+                "Show album, quality & lyrics source", isOn: $showTrackDetails,
+                canFocus: cardFocused || searchRequest?.targetID == "music-track-details"
+            )
+            .focused($focused, equals: .toggle)
+            .settingsSearchAnchor("music-track-details", focusAction: { focused = .toggle })
         }
         .tvOSFocusSection()
         .onChange(of: focused) { _, new in

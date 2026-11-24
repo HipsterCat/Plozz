@@ -6,21 +6,12 @@ import PlozzCoreUI
 import FeatureHomeCore
 import MetadataKit
 
-/// A single, self-contained page for an entire series. The hero at the top
-/// describes whatever the Play button would play — the episode to resume, or the
-/// show itself when there is no resume point. It follows watch state, never
-/// focus, so browsing the episode rail leaves it alone and both platforms behave
-/// identically (iPadOS has no focus concept at all).
-///
-/// Layout, top to bottom:
-///   1. Hero — series by default; becomes the focused season, then the focused
-///      episode, as focus moves down the page.
-///   2. Season tabs ("Book One: Water", …). Focusing a tab previews that season
-///      in the hero and swaps the episode rail to it; no click required.
-///   3. Episode rail for the selected season. Focusing an episode previews it in
-///      the hero; clicking it plays it (the parent applies resume-vs-start-over).
+/// Series metadata stays in the header; the selected season's episode rail
+/// carries episode previews. Playback selection is independent of the header.
 struct SeriesDetailView: View {
     let series: MediaItem
+    let preparationIsActive: Bool
+    @State private var playbackPreparation = DetailPlaybackPreparationCoordinator()
     let seasons: [MediaItem]
     /// Episodes attached directly to the series (used when a backend returns a
     /// flat episode list with no season containers).
@@ -61,9 +52,11 @@ struct SeriesDetailView: View {
     /// Which season's episodes the rail is currently showing. Driven by season
     /// tab focus; seeded to the "next up" season on first appearance.
     @State private var selectedSeasonID: String?
-    /// The item the hero is currently presenting. Updated as focus moves; it is
-    /// never cleared, so moving focus onto a non-previewing control (e.g. the
-    /// hero's own Play button) keeps the last meaningful context.
+    /// Set only when the viewer (or the opening route) deliberately chose a
+    /// season. Focus entering the browser is not a season choice, so a return
+    /// refresh may still re-resolve the server's current resume season.
+    @State private var hasExplicitSeasonSelection: Bool
+    /// The browser's resting selection resolves Play, not the header's subject.
     @State private var heroItem: MediaItem
     @State private var hasEditedSeasonWatchState = false
     @FocusState private var focusedSeasonID: String?
@@ -173,6 +166,7 @@ struct SeriesDetailView: View {
     init(
         series: MediaItem,
         hasChildOnTop: Bool = false,
+        preparationIsActive: Bool = true,
         seasons: [MediaItem],
         looseEpisodes: [MediaItem],
         viewModel: ItemDetailViewModel,
@@ -191,6 +185,7 @@ struct SeriesDetailView: View {
         versionPreferences: VersionPreferenceStoring = VersionPreferenceStore()
     ) {
         self.series = series
+        self.preparationIsActive = preparationIsActive
         self.hasChildOnTop = hasChildOnTop
         self.seasons = seasons
         self.looseEpisodes = looseEpisodes
@@ -216,6 +211,9 @@ struct SeriesDetailView: View {
         let seasonID = initialEpisode?.seasonID ?? initialSeasonID
         let initialSeason = seasonID.flatMap { id in seasons.first { $0.id == id } }
         _selectedSeasonID = State(initialValue: initialSeason?.id)
+        _hasExplicitSeasonSelection = State(
+            initialValue: initialSeasonID != nil || initialEpisode != nil
+        )
         _heroItem = State(initialValue:
             SeriesEpisodeEntry.openingSeed(
                 for: series, initialEpisode: initialEpisode,
@@ -250,6 +248,11 @@ struct SeriesDetailView: View {
         let _ = plozzPrintChanges { Self._printChanges() }
         let _ = PlozzBodyRate.tick("SeriesDetail")
         scrollContent
+            .detailPlaybackPreparation(
+                for: preparationItem,
+                isActive: preparationIsActive && !hasChildOnTop,
+                coordinator: playbackPreparation
+            )
             // Never clip a focused card's lift, shadow or border.
             .scrollClipDisabled()
             // Let the hero bleed into the top overscan inset instead of the
@@ -386,7 +389,7 @@ struct SeriesDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     DetailHeroView(
-                        item: displayHeroItem,
+                        item: HeroContentPolicy.detailSubject(focused: heroItem, root: series),
                         backdropItem: series,
                         titleFallbackOverride: series.title,
                         // Watched-state actions follow what Play would run. When
@@ -398,12 +401,39 @@ struct SeriesDetailView: View {
                         spoilerSettings: spoilerSettings,
                         playTitle: playTarget.map { viewModel.playButtonTitle(for: $0) },
                         onPlay: playTarget.map { target in {
-                            onPlay(DetailPlaybackSelection.playItem(
+                            let item = DetailPlaybackSelection.playItem(
                                 for: target, sources: target.sources, activeAccountID: target.sourceAccountID,
                                 versionID: effectivePlayVersionID,
-                                explicit: versionOverride != nil || target.explicitSourceSelection
-                            ))
+                                explicit: versionOverride != nil || target.explicitSourceSelection,
+                                explicitVersion: versionOverride != nil || target.explicitVersionSelection
+                            )
+                            playbackPreparation.handoff(item)
+                            onPlay(item)
                         } },
+                        onPlayDisc: playTarget == nil ? nil : { behavior in
+                            guard let target = playTarget else {
+                                PlozzLog.playback.error("The disc playback target is no longer available.")
+                                return
+                            }
+                            let selected = DetailPlaybackSelection.playItem(
+                                for: target, sources: target.sources, activeAccountID: target.sourceAccountID,
+                                versionID: effectivePlayVersionID, explicit: true,
+                                explicitVersion: versionOverride != nil || target.explicitVersionSelection
+                            )
+                            onPlay(selected.requestingDiscPlayback(behavior))
+                        },
+                        onPlayExternal: playTarget == nil ? nil : { player in
+                            guard let target = playTarget else {
+                                PlozzLog.playback.error("The playback target is no longer available.")
+                                return
+                            }
+                            let selected = DetailPlaybackSelection.playItem(
+                                for: target, sources: target.sources, activeAccountID: target.sourceAccountID,
+                                versionID: effectivePlayVersionID, explicit: true,
+                                explicitVersion: versionOverride != nil || target.explicitVersionSelection
+                            )
+                            onPlay(selected.requestingExternalPlayer(player))
+                        },
                         showsPlayPlaceholder: DetailPlaybackSelection.showsPlayPlaceholder(
                             for: series,
                             hasPlayTarget: playTarget != nil,
@@ -425,7 +455,7 @@ struct SeriesDetailView: View {
                         playRemainingText: playTarget?.resumeRemainingText,
                         playSeasonEpisodeText: playTarget.flatMap { HeroForegroundModelBuilder.seasonEpisodeButtonText(for: $0) },
                         onPlayTrailer: trailerButtonAction,
-                        trailerItem: heroItem.id == series.id ? viewModel.trailers.first : nil,
+                        trailerItem: viewModel.trailers.first,
                         versions: playVersions,
                         selectedVersionID: effectivePlayVersionID,
                         onSelectVersion: { selectVersion($0) },
@@ -472,6 +502,7 @@ struct SeriesDetailView: View {
                     // closures otherwise made it compare unequal every time — so
                     // it rebuilt while masked out behind the episode browser.
                     .equatable()
+                    .environment(\.plozzArtworkSourceReady, viewModel.artworkSourceIsReady)
                     .id(Self.topAnchorID)
                     .task(id: viewModel.episodeBadgeEnrichmentKey(for: playTarget)) {
                         guard let target = playTarget else { return }
@@ -764,7 +795,7 @@ struct SeriesDetailView: View {
             seasons: seasons,
             episodes: stampedLooseEpisodes,
             selectedSeasonID: selectedSeasonID,
-            preserveSelection: hasUserDirectedFocus,
+            preserveSelection: hasExplicitSeasonSelection,
             initialSeasonID: initialSeasonID,
             initialEpisode: initialEpisode,
             resumeEpisode: viewModel.serverResumeEpisode
@@ -905,7 +936,7 @@ struct SeriesDetailView: View {
                 guard let id = newValue,
                       let season = seasons.first(where: { $0.id == id }) else { return }
                 enterSeasonBrowser(onFocusEntered: onFocusEntered)
-                select(season)
+                select(season, explicit: id != activeSeasonID)
                 // Deliberately *don't* move the hero to the season: focusing the tab bar
                 // keeps the page on the episode you were last viewing, so going up and
                 // back down stays anchored to that episode rather than the season.
@@ -1061,7 +1092,8 @@ struct SeriesDetailView: View {
 
     /// Selects `season`: marks it active and kicks off (cached) episode loading
     /// so the rail and Play target are ready as focus settles on the tab.
-    private func select(_ season: MediaItem) {
+    private func select(_ season: MediaItem, explicit: Bool = true) {
+        if explicit { hasExplicitSeasonSelection = true }
         selectedSeasonID = season.id
         Task {
             await viewModel.loadEpisodes(for: season.id)
@@ -1149,6 +1181,7 @@ struct SeriesDetailView: View {
                 // so selecting it is deliberately inert — it stays focusable purely
                 // so the rest of the run can be browsed and read.
                 guard !item.isUpcomingUnaired else { return }
+                playbackPreparation.handoff(item)
                 onPlay(item)
             }
         )
@@ -1403,9 +1436,15 @@ struct SeriesDetailView: View {
             guard accountID != series.sourceAccountID,
                   let source = viewModel.sources.first(where: { $0.accountID == accountID })
             else { return }
-            // Capture the fronted episode by NUMBER (the displayed hero, whose S/E
-            // is guaranteed) so the new server fronts the same one after reload.
-            let fronted = displayHeroItem
+            playbackPreparation.invalidate()
+            // Preserve the selected episode by number across provider-specific IDs.
+            let fronted = SeriesHeroNumbering.numberedHero(
+                heroItem,
+                seasons: seasons,
+                loadedEpisodesBySeason: viewModel.seasonEpisodes,
+                selectedSeasonID: selectedSeasonID,
+                selectedSeasonPool: currentEpisodes
+            )
             if fronted.kind == .episode,
                let season = fronted.seasonNumber, let episode = fronted.episodeNumber {
                 pendingSwitchTargetSE = SeasonEpisodeRef(season: season, episode: episode)
@@ -1433,6 +1472,7 @@ struct SeriesDetailView: View {
     /// series' key: picking the 4K cut on episode 3 is how a viewer says "play
     /// this show in 4K", and every later episode matches the same shape.
     private func selectVersion(_ id: String) {
+        playbackPreparation.invalidate()
         versionOverride = id
         guard versionPreferences.remembersSeriesVersions else { return }
         guard let target = playTarget,
@@ -1497,7 +1537,7 @@ struct SeriesDetailView: View {
 
     private var playTarget: MediaItem? {
         if heroItem.kind == .episode { return viewModel.episodeWithEnrichedBadges(heroItem) }
-        // The hero is the show — either nothing is watched or all of it is. Both
+        // The selection is the show — either nothing is watched or all of it is. Both
         // mean "start from the beginning", so offer the first episode rather than
         // `nextUp`, which returns the *finale* once everything is played.
         let target = SeriesResume.isFinished(seasons: seasons, episodes: currentEpisodes)
@@ -1506,26 +1546,21 @@ struct SeriesDetailView: View {
         return target.map { viewModel.episodeWithEnrichedBadges($0) }
     }
 
-    /// The hero item with its season/episode numbers guaranteed when an episode is
-    /// fronted, so the hero ALWAYS shows "S{n} · E{m}" for a TV show. Some list/
-    /// search/seed episodes arrive without numbers (they know only their own id);
-    /// `SeriesHeroNumbering` backfills them from the loaded episode the rail shows,
-    /// the owning season, or the episode's position — never inventing a wrong value.
-    private var displayHeroItem: MediaItem {
-        SeriesHeroNumbering.numberedHero(
-            heroItem,
-            seasons: seasons,
-            loadedEpisodesBySeason: viewModel.seasonEpisodes,
-            selectedSeasonID: selectedSeasonID,
-            selectedSeasonPool: currentEpisodes
+    private var preparationItem: MediaItem? {
+        guard let target = playTarget, !target.isUpcomingUnaired,
+              target.sourceAccountID == series.sourceAccountID,
+              target.seriesID == series.id,
+              !viewModel.hasNoPlaybackStreams(for: target) else { return nil }
+        return DetailPlaybackSelection.playItem(
+            for: target, sources: target.sources, activeAccountID: target.sourceAccountID,
+            versionID: effectivePlayVersionID,
+            explicit: versionOverride != nil || target.explicitSourceSelection,
+            explicitVersion: versionOverride != nil || target.explicitVersionSelection
         )
     }
 
-    /// The series' trailer action, shown only while the hero is presenting the
-    /// series itself (not a focused season/episode), so the Trailer button reads
-    /// as belonging to the show. `nil` hides the button.
     private var trailerButtonAction: (() -> Void)? {
-        guard heroItem.id == series.id, let trailer = viewModel.trailers.first else { return nil }
+        guard let trailer = viewModel.trailers.first else { return nil }
         return { onPlay(trailer) }
     }
 
@@ -1545,7 +1580,7 @@ struct SeriesDetailView: View {
             await frontSwitchTarget(target)
             return
         }
-        if !hasUserDirectedFocus, initialEpisode == nil,
+        if !hasExplicitSeasonSelection, initialEpisode == nil,
            let seed = SeriesEpisodeEntry.openingSeed(
                for: series, initialEpisode: initialEpisode,
                initialSeasonID: initialSeasonID, resumeEpisode: viewModel.serverResumeEpisode

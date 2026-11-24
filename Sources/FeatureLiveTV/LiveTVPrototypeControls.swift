@@ -132,27 +132,116 @@ struct PrototypeBrowseToolbar: View {
     }
 }
 
+struct PrototypeBrowseSourceMenu: View {
+    let configuration: LiveTVSourcesConfiguration
+    let selectedSourceID: String?
+    let includesLibraryChannels: Bool
+    let selectSource: (String?) -> Void
+    let addSource: () -> Void
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    var singleSourceID: String? {
+        guard !includesLibraryChannels else { return nil }
+        let ids = configuration.playlists.filter(\.isEnabled).map(\.id)
+            + configuration.servers.filter(\.isEnabled).map(\.id)
+        return ids.count == 1 ? ids.first : nil
+    }
+
+    private var displayedSourceID: String? { singleSourceID ?? selectedSourceID }
+
+    var body: some View {
+        Menu {
+            Picker("Source", selection: Binding(get: { displayedSourceID }, set: selectSource)) {
+                if singleSourceID == nil {
+                    Text("All").tag(String?.none)
+                }
+                ForEach(configuration.playlists.filter(\.isEnabled)) { source in
+                    Text(verbatim: source.name).tag(Optional(source.id))
+                }
+                ForEach(configuration.servers.filter(\.isEnabled)) { source in
+                    Text(verbatim: source.name).tag(Optional(source.id))
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Button(action: addSource) {
+                Label {
+                    Text(SettingsCopy.addSource)
+                } icon: {
+                    Image(systemName: "plus")
+                }
+            }
+            .accessibilityIdentifier("live-tv-add-source")
+        } label: {
+            HStack(spacing: 6) {
+                #if os(tvOS)
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                #endif
+                sourceLabel
+                    #if os(iOS)
+                    .font(.headline)
+                    #endif
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                #if os(tvOS)
+                Spacer(minLength: 0)
+                #endif
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold))
+            }
+            #if os(tvOS)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #else
+            .frame(maxWidth: sizeClass == .compact ? 160 : 220)
+            .fixedSize(horizontal: false, vertical: true)
+            #endif
+        }
+        #if os(tvOS)
+        .menuStyle(.button)
+        #endif
+        .menuOrder(.fixed)
+        .accessibilityLabel("Source")
+        .accessibilityValue(sourceLabel)
+        .accessibilityIdentifier("live-tv-source")
+    }
+
+    private var sourceLabel: Text {
+        if let source = configuration.playlists.first(where: { $0.id == displayedSourceID }) {
+            Text(verbatim: source.name)
+        } else if let source = configuration.servers.first(where: { $0.id == displayedSourceID }) {
+            Text(verbatim: source.name)
+        } else {
+            Text("All")
+        }
+    }
+}
+
 #if os(iOS)
 import UIKit
 
 struct PrototypeTouchBrowseToolbar: ToolbarContent {
     @Bindable var model: LiveTVPrototypeModel
+    let configuration: LiveTVSourcesConfiguration
     let isSearching: Bool
     let showsDirectory: Bool
     let hasSidebar: Bool
     let isDisabled: Bool
     let showGuide: () -> Void
     let showCategories: () -> Void
-    let search: () -> Void
+    let selectSource: (String?) -> Void
+    let addSource: () -> Void
+    let selectCategory: (String?) -> Void
     let filters: () -> Void
+    let search: () -> Void
+    let sources: () -> Void
     var multiviews: (() -> Void)?
     let cancelSelection: (() -> Void)?
-    let accessory: AnyView?
+    let settings: (() -> Void)?
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        ToolbarItem(placement: cancelSelection == nil ? .topBarLeading : .cancellationAction) {
             if let cancelSelection {
-                Button("Cancel", action: cancelSelection)
+                Button("Cancel", systemImage: "xmark", action: cancelSelection)
             } else if !hasSidebar && !showsDirectory && !isSearching {
                 Button("Categories", systemImage: "chevron.backward", action: showCategories)
                     .labelStyle(.iconOnly)
@@ -160,34 +249,82 @@ struct PrototypeTouchBrowseToolbar: ToolbarContent {
                     .disabled(isDisabled)
             }
         }
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            Group {
-                if showsDirectory && !isSearching {
-                    Button("Guide", systemImage: "list.bullet.rectangle", action: showGuide)
-                        .accessibilityIdentifier("live-tv-open-guide")
-                } else if !hasSidebar {
-                    Button(
-                        isSearching ? "Back to guide" : "Search",
-                        systemImage: isSearching ? "chevron.backward" : "magnifyingglass",
-                        action: search
-                    )
-                    .accessibilityValue(model.query)
-                    .accessibilityIdentifier("live-tv-search")
-                }
-                Button("Filters", systemImage: "line.3.horizontal.decrease", action: filters)
-                    .accessibilityValue(Text(verbatim: model.category ?? ""))
-                    .accessibilityIdentifier("live-tv-category")
-                if !hasSidebar && !showsDirectory, let multiviews {
-                    Button("Multiviews", systemImage: "rectangle.split.2x2", action: multiviews)
-                        .accessibilityIdentifier("live-tv-multiview-favorites")
-                }
-            }
-            .labelStyle(.iconOnly)
-            .disabled(isDisabled)
-            if showsDirectory || hasSidebar || UIDevice.current.userInterfaceIdiom != .phone {
-                accessory
+        ToolbarItemGroup(placement: .topBarLeading) {
+            if (showsDirectory || hasSidebar) && !isSearching {
+                PrototypeBrowseSourceMenu(
+                    configuration: configuration, selectedSourceID: model.configuredSourceID,
+                    includesLibraryChannels: model.channels.contains { $0.source == .plozz },
+                    selectSource: selectSource, addSource: addSource
+                )
+                .disabled(isDisabled)
             }
         }
+        if #available(iOS 26.0, *), !hasSidebar && !showsDirectory && !isSearching {
+            ToolbarSpacer(.fixed, placement: .topBarLeading)
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            if !hasSidebar && !showsDirectory && !isSearching {
+                Menu {
+                    Picker("Category", selection: Binding(get: { model.category }, set: selectCategory)) {
+                        Text("All channels").tag(String?.none)
+                        ForEach(model.browsingCategories) { category in
+                            Text(verbatim: category.name).tag(Optional(category.name))
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    HStack(spacing: 6) {
+                        categoryLabel.lineLimit(1).truncationMode(.tail)
+                        Image(systemName: "chevron.down").font(.caption)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: sizeClass == .compact ? 160 : 320)
+                }
+                .menuOrder(.fixed)
+                .accessibilityLabel("Category")
+                .accessibilityValue(categoryLabel)
+                .accessibilityIdentifier("live-tv-category")
+                .disabled(isDisabled)
+            }
+        }
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if !isSearching {
+                Button("Search", systemImage: "magnifyingglass", action: search)
+                    .labelStyle(.iconOnly)
+                    .disabled(isDisabled)
+                Menu {
+                    if showsDirectory {
+                        Button("Guide", systemImage: "list.bullet.rectangle", action: showGuide)
+                            .accessibilityIdentifier("live-tv-open-guide")
+                    }
+                    Button("Filters", systemImage: "line.3.horizontal.decrease", action: filters)
+                        .accessibilityIdentifier("live-tv-filters")
+                    if !hasSidebar && !showsDirectory, let multiviews {
+                        Button("Multiviews", systemImage: "rectangle.split.2x2", action: multiviews)
+                            .accessibilityIdentifier("live-tv-multiview-favorites")
+                    }
+                    Divider()
+                    Button("TV Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
+                        .accessibilityIdentifier("live-tv-sources")
+                    if let settings {
+                        Divider()
+                        Button("Settings", systemImage: "gearshape", action: settings)
+                            .accessibilityIdentifier("live-tv-settings")
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis")
+                }
+                .labelStyle(.iconOnly)
+                .menuOrder(.fixed)
+                .accessibilityIdentifier("live-tv-more")
+                .disabled(isDisabled)
+            }
+        }
+    }
+
+    private var categoryLabel: Text {
+        if let category = model.category { Text(verbatim: category) }
+        else { Text("All channels") }
     }
 }
 
@@ -296,7 +433,7 @@ struct PrototypeSheetPresentation<SheetContent: View>: ViewModifier {
 extension PrototypeSheet {
     var usesManagementPage: Bool {
         switch self {
-        case .sources, .addPlaylist, .serverSetup, .organization: true
+        case .sources, .addSource, .addPlaylist, .serverSetup, .organization: true
         default: false
         }
     }
@@ -313,6 +450,7 @@ struct PrototypeSheetContent: View {
     let guideStart: Date
     let tune: (String) -> Void
     let openMultiview: (LiveTVMultiviewFavorite) -> Void
+    var isPortrait = false
     var channelActionTitle: LocalizedStringResource?
     var sourceManagement: ((PrototypeSheet) -> AnyView)? = nil
     var openLibraryItem: ((LibraryChannelItem) -> Void)?
@@ -323,7 +461,7 @@ struct PrototypeSheetContent: View {
     var body: some View {
         #if os(tvOS)
         if case .multiviewFavorites = destination {
-            LiveTVMultiviewFavoritesView(model: model, open: openMultiview)
+            LiveTVMultiviewFavoritesView(model: model, open: openMultiview, isPortrait: isPortrait)
         } else {
             navigationContent
         }
@@ -345,14 +483,18 @@ struct PrototypeSheetContent: View {
                 case .diagnostics(let report):
                     PlaybackDiagnosticDetailsView(report: report)
                 case .multiviewFavorites:
-                    LiveTVMultiviewFavoritesView(model: model, open: openMultiview)
+                    LiveTVMultiviewFavoritesView(model: model, open: openMultiview, isPortrait: isPortrait)
                 case .filters:
                     PrototypeFilterForm(model: model, imports: imports, canMutate: canMutate)
+                        #if os(iOS)
+                        .navigationTitle("Filters")
+                        #else
                         .navigationTitle("Categories")
+                        #endif
                 case .guideTime:
                     PrototypeGuideTimeForm(guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart)
                         .navigationTitle("Guide time")
-                case .sources, .addPlaylist, .serverSetup:
+                case .sources, .addSource, .addPlaylist, .serverSetup:
                     if let sourceManagement {
                         sourceManagement(destination)
                     } else {
@@ -392,7 +534,7 @@ struct PrototypeSheetContent: View {
             #endif
             .toolbar {
                 #if os(iOS)
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: "xmark") { dismiss() }
                         .labelStyle(.iconOnly)
                         .accessibilityIdentifier("live-tv-close-sheet")

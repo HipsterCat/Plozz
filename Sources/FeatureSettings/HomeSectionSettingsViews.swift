@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
+import CoreNetworking
 import PlozzCoreUI
 
 struct HomeEditorPage<HeaderActions: View, Content: View>: View {
@@ -50,6 +51,64 @@ extension HomeEditorPage where HeaderActions == EmptyView {
     }
 }
 
+#if os(iOS)
+struct HomeEditorSaveAction: ViewModifier {
+    var title: Text = Text("Save changes")
+    let isEnabled: Bool
+    let identifier: String
+    let action: @MainActor () async throws -> Void
+    @State private var isSaving = false
+    @State private var saveFailed = false
+    @SettingsPageDismiss private var dismiss
+
+    func body(content: Content) -> some View {
+        content
+            .disabled(isSaving)
+            .onSubmit(submit)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(action: submit) {
+                        if isSaving {
+                            ProgressView()
+                        } else {
+                            Label { title } icon: { Image(systemName: "checkmark") }
+                                .labelStyle(.iconOnly)
+                        }
+                    }
+                    .accessibilityLabel(isSaving ? Text("Saving…") : title)
+                    .accessibilityIdentifier(identifier)
+                    .disabled(!isEnabled || isSaving)
+                }
+            }
+            .task(id: isSaving) {
+                guard isSaving else { return }
+                defer { isSaving = false }
+                do {
+                    try Task.checkCancellation()
+                    try await action()
+                    try Task.checkCancellation()
+                    dismiss()
+                } catch is CancellationError {
+                    // Leaving an editor cancels its pending save, not the next page.
+                } catch {
+                    saveFailed = true
+                    PlozzLog.app.error("Could not save settings editor")
+                }
+            }
+            .alert("Couldn't save changes", isPresented: $saveFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Try again.")
+            }
+    }
+
+    private func submit() {
+        guard isEnabled, !isSaving else { return }
+        isSaving = true
+    }
+}
+#endif
+
 struct HomeEditorLink<Destination: View, Label: View>: View {
     @ViewBuilder let destination: () -> Destination
     @ViewBuilder let label: () -> Label
@@ -60,7 +119,7 @@ struct HomeEditorLink<Destination: View, Label: View>: View {
     var body: some View {
         #if os(tvOS)
         SettingsPageLink(destination: destination) {
-            label().padding(16).settingsGroupSurface(cornerRadius: SettingsRowMetrics.navigationCornerRadius)
+            label().padding(16)
         }
             .buttonStyle(SettingsFocusButtonStyle(size: .navigation))
         #else
@@ -106,7 +165,7 @@ struct HomeEditorRowLabel: View {
                             )
                             .accessibilityHidden(true)
                         }
-                        subtitle.font(.footnote).settingsRowSecondary()
+                        subtitle.font(SettingsRowMetrics.descriptionFont).settingsRowSecondary()
                     }
                 }
             }
@@ -124,17 +183,23 @@ struct HomeEditorRowLabel: View {
 
 extension HomeRowChoice {
     var homeEditorTitle: Text { localizedTitle.map(Text.init) ?? Text(verbatim: title) }
+    func homeEditorTitle(in visibility: HomeLibraryVisibility) -> Text {
+        visibility.homeRowName(for: id).map { Text(verbatim: $0) } ?? homeEditorTitle
+    }
     func homeEditorProvider(in accounts: [ResolvedAccount]) -> ProviderKind? {
         library?.providerKind ?? serverRow?.providerKind
             ?? collectionSection.flatMap { section in
-                accounts.first(where: section.source.matches)?.account.server.provider
+                section.sources.count == 1
+                    ? section.sources.first.flatMap { source in accounts.first(where: source.matches)?.account.server.provider }
+                    : nil
             }
     }
 
     func homeEditorSource(in accounts: [ResolvedAccount]) -> Text {
-        if library == nil, let collectionSection,
-           let account = accounts.first(where: collectionSection.source.matches) {
-            return Text(verbatim: "\(collectionSection.source.title) · \(account.account.server.name)")
+        if library == nil, let collectionSection, collectionSection.sources.count == 1,
+           let source = collectionSection.sources.first, let account = accounts.first(where: source.matches) {
+            return (source.localizedTitle.map(Text.init) ?? Text(verbatim: source.title))
+                + Text(verbatim: " · \(account.account.server.name)")
         }
         return homeEditorSource
     }
@@ -155,7 +220,9 @@ extension HomeRowChoice {
             return library.library.displayName + Text(verbatim: " · \(library.serverName)")
         }
         if let serverRow { return Text(verbatim: serverRow.serverName) }
-        if let collectionSection { return Text(verbatim: collectionSection.source.title) }
+        if let collectionSection {
+            return collectionSection.localizedContentTitle.map(Text.init) ?? Text(verbatim: collectionSection.contentTitle)
+        }
         return id == .liveTV ? Text("All live sources") : Text("All libraries")
     }
 }
@@ -164,14 +231,98 @@ struct HomeSectionChoiceLabel: View {
     let choice: HomeRowChoice
     var accessory = "chevron.forward"
     var accounts: [ResolvedAccount] = []
+    var visibility: HomeLibraryVisibility = .default
 
     var body: some View {
         HomeEditorRowLabel(
-            title: choice.homeEditorTitle, subtitle: choice.homeEditorSource(in: accounts),
+            title: choice.homeEditorTitle(in: visibility), subtitle: choice.homeEditorSource(in: accounts),
             accessory: accessory,
             subtitleProvider: choice.homeEditorProvider(in: accounts),
             mediaShareTransport: choice.library?.transportKind
         )
+    }
+}
+
+struct HomeRowNameEditor: View {
+    let choice: HomeRowChoice
+    let visibility: HomeLibraryVisibilityModel
+    @State private var name: String
+    @FocusState private var isNameFocused: Bool
+
+    init(choice: HomeRowChoice, visibility: HomeLibraryVisibilityModel) {
+        self.choice = choice
+        self.visibility = visibility
+        _name = State(initialValue: visibility.visibility.homeRowName(for: choice.id) ?? "")
+    }
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        #if os(iOS)
+        SettingsSectionGroup {
+            SettingsInputRow("Row name") { nameField }
+        }
+        .modifier(HomeEditorSaveAction(
+            isEnabled: trimmedName != (visibility.visibility.homeRowName(for: choice.id) ?? ""),
+            identifier: "home-section-name-save", action: save
+        ))
+        #elseif os(tvOS)
+        SettingsSectionGroup {
+            HomeEditorAutosavingNameInput(
+                "Row name", name: name, prompt: choice.homeEditorTitle,
+                identifier: "home-section-name"
+            ) { value in
+                visibility.setHomeRowName(value, for: choice.id)
+            }
+        }
+        #else
+        SettingsSectionGroup {
+            SettingsInputRow("Row name") { nameField }
+            Button("Save changes", action: save)
+                .buttonStyle(SettingsFormButtonStyle())
+                .disabled(trimmedName == (visibility.visibility.homeRowName(for: choice.id) ?? ""))
+                .accessibilityIdentifier("home-section-name-save")
+        }
+        #endif
+    }
+
+    private var nameField: some View {
+        TextField("Row name", text: $name, prompt: choice.homeEditorTitle)
+            .focused($isNameFocused)
+            .submitLabel(.done)
+            .accessibilityIdentifier("home-section-name")
+            #if os(iOS)
+            .onSubmit { isNameFocused = false }
+            #else
+            .onSubmit(save)
+            #endif
+    }
+
+    private func save() {
+        visibility.setHomeRowName(name, for: choice.id)
+        name = visibility.visibility.homeRowName(for: choice.id) ?? ""
+        isNameFocused = false
+    }
+}
+
+struct HomeRowRemoveAction: View {
+    let action: () -> Void
+
+    var body: some View {
+        SettingsSectionGroup {
+            Button(role: .destructive, action: action) {
+                Text("Remove from Home")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #if os(iOS)
+            .settingsActionRow()
+            .foregroundStyle(.red)
+            #else
+            .plozzActionButton(role: .secondary)
+            #endif
+            .accessibilityIdentifier("home-section-remove")
+        }
+        .padding(.top, 16)
     }
 }
 
@@ -181,7 +332,9 @@ struct HomeSectionSettingsView: View {
     let visibility: HomeLibraryVisibilityModel
     let libraries: [AggregatedLibrary]
     let accounts: [ResolvedAccount]
+    @Environment(\.homeContentSnapshot) private var homeSnapshot
     var showsRemoveAction = true
+    @Environment(\.themePalette) private var palette
     @Environment(CardStyleSettingsModel.self) private var cards
     @Environment(LibraryPresentationSettingsModel.self) private var libraryPresentation: LibraryPresentationSettingsModel?
     #if os(tvOS)
@@ -191,11 +344,13 @@ struct HomeSectionSettingsView: View {
     @State private var failed = false
 
     var body: some View {
-        HomeEditorPage(title: choice.homeEditorTitle, showsHeader: true) {
+        HomeEditorPage(title: choice.homeEditorTitle(in: visibility.visibility), showsHeader: true) {
             HStack(spacing: 12) {
                 choice.homeEditorProviderMark
                 choice.homeEditorSource.font(.subheadline).plozzForeground(.secondary)
             }
+            HomeRowNameEditor(choice: choice, visibility: visibility)
+                .id(ObjectIdentifier(visibility))
             if hasCollectionCovers, let libraryPresentation {
                 SettingsSectionGroup {
                     CollectionCoverLayoutPicker(selection: Binding(
@@ -218,6 +373,7 @@ struct HomeSectionSettingsView: View {
                     }
                 ), playbackDetails: visibility.continueWatchingPlaybackDetails,
                    captions: cards.captions, isShowcase: previewsShowcase)
+                .settingsSearchAnchor("continue-artwork-layout")
                 #if os(tvOS)
                 SettingsControlGroup { presentationControls }
                 #else
@@ -231,8 +387,16 @@ struct HomeSectionSettingsView: View {
                 SettingsSectionGroup { behaviorControls }
                 #endif
             }
+            if !previewsShowcase, visibility.visibility.dismissedEmptyHomeRows.contains(choice.id) {
+                Button("Show empty message") {
+                    visibility.setEmptyHomeRowDismissed(false, id: choice.id)
+                }
+                .plozzActionButton(role: .secondary)
+                .tint(palette.primaryText)
+                .accessibilityIdentifier("home-section-restore-empty")
+            }
             if showsRemoveAction {
-                Button("Remove from Home", role: .destructive) {
+                HomeRowRemoveAction {
                     do {
                         try visibility.setHomeSectionVisible(false, id: choice.id, catalog: inventory.currentCatalog(
                             libraries: libraries, accounts: accounts, visibility: visibility
@@ -240,8 +404,6 @@ struct HomeSectionSettingsView: View {
                         dismiss()
                     } catch { failed = true }
                 }
-                .plozzActionButton(role: .secondary)
-                .accessibilityIdentifier("home-section-remove")
             }
             if failed { InlineErrorMessage(Text("Couldn't update this row. Try again.")) }
             if inventory.isLoading { ProgressView("Loading available rows…") }
@@ -249,18 +411,23 @@ struct HomeSectionSettingsView: View {
         .task(id: HomeSectionCatalogModel.loadID(
             libraries: libraries, accounts: accounts, visibility: visibility
         )) {
-            await inventory.load(libraries: libraries, accounts: accounts, visibility: visibility)
+            await inventory.load(
+                libraries: libraries, accounts: accounts, visibility: visibility,
+                recommendationScope: homeSnapshot?.recommendationScope
+            )
         }
     }
 
     @ViewBuilder
     private var presentationControls: some View {
         ContinueWatchingPlaybackDetailsControl(visibility: visibility)
+            .settingsSearchAnchor("continue-playback-details")
         CardCaptionViewChoices(
             view: .continueWatching,
             settings: Binding(get: { cards.captions }, set: { cards.captions = $0 }),
             title: "Labels"
         )
+        .settingsSearchAnchor("continue-labels")
     }
 
     private var coverAddress: String {
@@ -278,12 +445,14 @@ struct HomeSectionSettingsView: View {
     @ViewBuilder
     private var behaviorControls: some View {
         ContinueWatchingNextUpControl(visibility: visibility)
+            .settingsSearchAnchor("continue-next-up")
         ContinueWatchingActionControl(visibility: visibility)
+            .settingsSearchAnchor("continue-action")
     }
 
     private var previewsShowcase: Bool {
         #if os(tvOS)
-        hero.settings.style == .followsFocus
+        hero.settings.followsFocus
         #else
         false
         #endif
@@ -298,7 +467,11 @@ struct ContinueWatchingActionControl: View {
         Group {
             #if os(iOS)
             ViewCustomizationMenu(
-                id: "continue-watching-action", title: "When tapping an item",
+                id: "continue-watching-action",
+                title: LocalizedStringResource(
+                    "Tap action",
+                    comment: "Short label for the Continue Watching setting on iPhone and iPad that chooses whether tapping a movie or episode plays it or opens its detail page."
+                ),
                 value: selection.displayName, detail: selection.detail,
                 selection: Binding(
                     get: { visibility.continueWatchingAction },
@@ -365,6 +538,7 @@ struct HomeAddSectionView: View {
     let visibility: HomeLibraryVisibilityModel
     let libraries: [AggregatedLibrary]
     let accounts: [ResolvedAccount]
+    @Environment(\.homeContentSnapshot) private var homeSnapshot
     var spoilerSettings: SpoilerSettings = .default
     @Environment(CardStyleSettingsModel.self) private var cards
     @SettingsPageDismiss private var dismiss
@@ -380,7 +554,7 @@ struct HomeAddSectionView: View {
                 )
                 .environment(cards)
             } label: {
-                HomeEditorRowLabel(title: Text("From a collection"))
+                HomeEditorRowLabel(title: Text("Custom row"))
             }
             .accessibilityIdentifier("home-add-collection")
             let catalog = inventory.currentCatalog(libraries: libraries, accounts: accounts, visibility: visibility)
@@ -403,7 +577,9 @@ struct HomeAddSectionView: View {
                         dismiss()
                     } catch { failed = true }
                 } label: {
-                    HomeSectionChoiceLabel(choice: choice, accessory: "plus", accounts: accounts)
+                    HomeSectionChoiceLabel(
+                        choice: choice, accessory: "plus", accounts: accounts, visibility: visibility.visibility
+                    )
                 }
                 .buttonStyle(SettingsFormButtonStyle())
                 .accessibilityIdentifier("home-add-\(choice.id.presentationID)")
@@ -419,19 +595,48 @@ struct HomeAddSectionView: View {
         .task(id: HomeSectionCatalogModel.loadID(
             libraries: libraries, accounts: accounts, visibility: visibility, revision: reloadRevision
         )) {
-            await inventory.load(libraries: libraries, accounts: accounts, visibility: visibility)
+            await inventory.load(
+                libraries: libraries, accounts: accounts, visibility: visibility,
+                recommendationScope: homeSnapshot?.recommendationScope, refreshRecommendations: reloadRevision > 0
+            )
         }
     }
 }
 
-struct HomeHeroSettingsView: View {
+public struct HomeHeroSettingsView: View {
     let libraries: [AggregatedLibrary]
     let accounts: [ResolvedAccount]
     let visibility: HomeLibraryVisibilityModel
+    let initialPage: HeroSettingsPage?
     @Environment(HeroSettingsModel.self) private var hero
     #if os(tvOS)
     @State private var navigation = SettingsDetailNavigation()
     #endif
+
+    public init(
+        libraries: [AggregatedLibrary], accounts: [ResolvedAccount], visibility: HomeLibraryVisibilityModel,
+        initialPage: HeroSettingsPage? = nil
+    ) {
+        self.libraries = libraries
+        self.accounts = accounts
+        self.visibility = visibility
+        self.initialPage = initialPage
+    }
+
+    private var resolvedPage: HeroSettingsPage? {
+        guard let initialPage else { return nil }
+        #if os(tvOS)
+        guard hero.settings.spotlightEnabled else { return nil }
+        #else
+        guard hero.settings.isEnabled else { return nil }
+        #endif
+        switch initialPage {
+        case .libraries where !hero.effectiveSettings.isEnabled(.randomFromLibrary): return .titles
+        case .collections where !hero.effectiveSettings.isEnabled(.collection): return .titles
+        case .discovery where !hero.effectiveSettings.isEnabled(.featured): return .titles
+        default: return initialPage
+        }
+    }
 
     private var availableLibraries: [AggregatedLibrary] {
         let accountIDs = Set(accounts.map(\.account.id))
@@ -440,7 +645,10 @@ struct HomeHeroSettingsView: View {
         }
     }
 
-    var body: some View {
+    public var body: some View {
+        if let resolvedPage {
+            HeroSettingsScreen(page: resolvedPage, libraries: availableLibraries, accounts: accounts)
+        } else {
         #if os(tvOS)
         SettingsDetailPages(navigation: navigation) {
             page
@@ -450,58 +658,68 @@ struct HomeHeroSettingsView: View {
         #else
         page
         #endif
+        }
     }
 
     @ViewBuilder private var page: some View {
-        @Bindable var hero = hero
         HomeEditorPage(title: pageTitle, showsHeader: true) {
-            #if os(tvOS)
-            HomeLayoutPicker(
-                layout: $hero.settings.style,
-                homeLogoSize: hero.settings.logoSize, showcaseLogoSize: hero.settings.showcaseLogoSize,
-                homeTextSize: hero.settings.textSize, showcaseTextSize: hero.settings.showcaseTextSize
-            )
-            if hero.settings.style == .followsFocus {
-                SettingsControlGroup {
-                    HeroLogoSizeControl(
-                        size: $hero.settings.showcaseLogoSize, textSize: $hero.settings.showcaseTextSize, surface: .showcase
-                    )
-                }
-                SettingsControlGroup {
-                    Toggle("Ratings", isOn: $hero.settings.showsRatings)
-                    if hero.settings.showsRatings {
-                        Toggle("Show Common Sense age", isOn: $hero.settings.ratingPreferences.showsHeaderFamilyGuidance)
-                        HeaderReviewScoreCountPicker(settings: $hero.settings.ratingPreferences)
-                    }
-                }
-                if hero.allowsDiscovery {
-                    SettingsControlGroup {
-                        Toggle("Discovery row", isOn: $hero.settings.showsDiscoverRow)
-                        if hero.settings.showsDiscoverRow {
-                            HeroSettingsLink(page: .discovery, libraries: availableLibraries, accounts: accounts)
-                        }
-                    }
-                } else {
-                    Text("Discovery is unavailable in Kids profiles.")
-                        .settingsHelperText()
-                }
-            } else {
-                HeroSettingsControls(libraries: availableLibraries, accounts: accounts)
-            }
-            #else
             HeroSettingsControls(libraries: availableLibraries, accounts: accounts)
-            #endif
         }
     }
 
     private var pageTitle: Text {
-        #if os(tvOS)
-        Text("Home layout")
-        #else
         Text("Hero")
-        #endif
     }
 }
+
+#if os(tvOS)
+struct HomeRowStyleSettingsView: View {
+    let libraries: [AggregatedLibrary]
+    let accounts: [ResolvedAccount]
+    @Environment(HeroSettingsModel.self) private var hero
+    @State private var navigation = SettingsDetailNavigation()
+
+    var body: some View {
+        @Bindable var hero = hero
+        SettingsDetailPages(navigation: navigation) {
+            HomeEditorPage(title: Text("Row style"), showsHeader: true) {
+                HomeRowStylePicker(
+                    immersive: $hero.settings.immersiveRows,
+                    logoSize: hero.settings.showcaseLogoSize,
+                    textSize: hero.settings.showcaseTextSize
+                )
+                if hero.settings.immersiveRows {
+                    SettingsControlGroup {
+                        HeroLogoSizeControl(
+                            size: $hero.settings.showcaseLogoSize,
+                            textSize: $hero.settings.showcaseTextSize, surface: .showcase
+                        )
+                    }
+                    HeroRatingControls(isShowcase: true)
+                    if hero.settings.style == .followsFocus {
+                        if hero.allowsDiscovery {
+                            SettingsControlGroup {
+                                Toggle("Discovery row", isOn: $hero.settings.showsDiscoverRow)
+                                    .settingsSearchAnchor(
+                                        "showcase-discovery-row",
+                                        fallbackFor: hero.settings.showsDiscoverRow ? [] : SettingsSearchCatalog.targets(on: .heroDiscovery)
+                                    )
+                                if hero.settings.showsDiscoverRow {
+                                    HeroSettingsLink(page: .discovery, libraries: libraries, accounts: accounts)
+                                }
+                            }
+                        } else {
+                            Text("Discovery is unavailable in Kids profiles.").settingsHelperText()
+                        }
+                    }
+                }
+            }
+        } detail: {
+            HeroSettingsDestination(libraries: libraries, accounts: accounts)
+        }
+    }
+}
+#endif
 
 struct HomeCatalogStatus: View {
     let inventory: HomeSectionCatalogModel
@@ -632,6 +850,7 @@ struct HomeRowPresetPicker: View {
         .accessibilityLabel(Text("Preset"))
         .accessibilityValue(currentTitle)
         .accessibilityIdentifier("home-row-preset")
+        .settingsSearchAnchor("home-row-preset")
     }
 
     private var currentTitle: Text {

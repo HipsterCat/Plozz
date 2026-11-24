@@ -27,8 +27,17 @@ struct PlozziOSProfileSelectionView: View {
             || appModel.plexHomeUsers.pendingPlexPINRequest != nil
     }
 
+    // A live Plex check blocks Home, but isn't a reason to move the avatar
+    // onto a PIN page. Keep an already-presented local PIN in place when chained.
+    private var isCheckingOnPicker: Bool {
+        selectedProfileID != nil && !hasPresentedAuthorization
+            && appModel.parentalSwitch == nil && appModel.lockedSwitch == nil
+            && appModel.plexHomeUsers.pendingPlexPINRequest != nil
+            && appModel.plexHomeUsers.plexPINEntryAvailability == .checking
+    }
+
     private var presentsAuthorization: Bool {
-        selectedProfileID != nil && (hasPresentedAuthorization || hasPendingAuthorization)
+        selectedProfileID != nil && !isCheckingOnPicker && (hasPresentedAuthorization || hasPendingAuthorization)
     }
 
     private var selectedProfile: Profile? {
@@ -77,12 +86,22 @@ struct PlozziOSProfileSelectionView: View {
                 },
                 manager: pickerManager,
                 onCancel: onCancel,
+                onCancelVerification: isCheckingOnPicker ? {
+                    guard isCheckingOnPicker else { return }
+                    selectedProfileID = nil
+                    appModel.plexHomeUsers.cancelPlexPIN()
+                } : nil,
                 identityNamespace: profileIdentity,
                 selectedProfileID: selectedProfileID,
                 isCovered: presentsAuthorization,
-                showsPINLock: appModel.accountsProviders.profileShowsPINLock
+                showsPINLock: appModel.accountsProviders.profileShowsPINLock,
+                offlineMode: appModel.isOfflineModeAvailable ? Binding(
+                    get: { appModel.isOfflineMode },
+                    set: { enabled in Task { await appModel.setOfflineMode(enabled) } }
+                ) : nil,
+                isChangingOfflineMode: appModel.isChangingOfflineMode
             )
-            .allowsHitTesting(!presentsAuthorization && selectedProfileID == nil)
+            .allowsHitTesting(selectedProfileID == nil || isCheckingOnPicker)
             .accessibilityHidden(presentsAuthorization)
 
             if presentsAuthorization {
@@ -97,6 +116,7 @@ struct PlozziOSProfileSelectionView: View {
                 .zIndex(1)
             }
         }
+        .offlineStatusOverlay(appModel: appModel, palette: palette, isEnabled: !presentsAuthorization)
         .background { AppBackground(palette: palette).ignoresSafeArea() }
         .animation(reduceMotion ? nil : .smooth(duration: 0.48), value: presentsAuthorization)
         .onChange(of: presentsAuthorization) { _, presented in
@@ -134,13 +154,20 @@ struct PlozziOSProfilePickerView: View {
     var manager: PlozziOSAppModel?
     /// Closes the picker. `nil` at launch, where there's nothing to go back to.
     var onCancel: (() -> Void)?
+    /// Cancels only the in-flight selection, never the picker itself.
+    var onCancelVerification: (() -> Void)?
     var identityNamespace: Namespace.ID?
     var selectedProfileID: String?
     var isCovered = false
     var showsPINLock: (Profile) -> Bool = { $0.showsPINLock }
+    var offlineMode: Binding<Bool>?
+    var isChangingOfflineMode = false
 
     @State private var isEditing = false
     @State private var route: Route?
+    @State private var hasAppeared = false
+    @State private var hasRevealedProfiles = false
+    @State private var showsVerificationProgress = false
     @Namespace private var localIdentityNamespace
     @Environment(\.themePalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -170,6 +197,10 @@ struct PlozziOSProfilePickerView: View {
                             .foregroundStyle(palette.primaryText)
                             .multilineTextAlignment(.center)
                             .accessibilityAddTraits(.isHeader)
+                            .modifier(PlozziOSProfilePickerHeadingEntrance(
+                                isPresented: hasAppeared, isLaunch: onCancel == nil,
+                                reduceMotion: reduceMotion
+                            ))
                             .animation(reduceMotion ? nil : .easeOut(duration: 0.18)) { content in
                                 content.opacity(isCovered ? 0 : 1)
                             }
@@ -178,6 +209,7 @@ struct PlozziOSProfilePickerView: View {
                             profiles: profiles, layout: layout,
                             showsPINLock: showsPINLock,
                             canManage: manager != nil, isEditing: isEditing,
+                            isPresented: onCancel != nil || hasRevealedProfiles,
                             startsDuringPresentation: onCancel != nil,
                             identityNamespace: identityNamespace ?? localIdentityNamespace,
                             selectedProfileID: selectedProfileID,
@@ -186,47 +218,99 @@ struct PlozziOSProfilePickerView: View {
                             onEdit: { route = .edit(profileID: $0.id) },
                             onAdd: { route = .add(isKids: $0) }
                         )
+                        .disabled(onCancelVerification != nil)
                     }
                     .frame(maxWidth: layout.contentWidth)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 32)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: geometry.size.height, alignment: .center)
+                    .background {
+                        ProfilePickerPresentationObserver(startsDuringPresentation: onCancel != nil) {
+                            startEntrance()
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
                 }
                 .scrollBounceBehavior(.basedOnSize)
             }
             .background { AppBackground(palette: palette) }
-            .toolbar(manager != nil || onCancel != nil ? .visible : .automatic, for: .navigationBar)
+            .toolbar(manager != nil || offlineMode != nil || onCancel != nil ? .visible : .automatic, for: .navigationBar)
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                if let onCancel, !isEditing, !isCovered {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Cancel", systemImage: "xmark", action: onCancel)
+                if let cancel = onCancelVerification ?? onCancel, !isEditing, !isCovered {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel", systemImage: "xmark", action: cancel)
                             .labelStyle(.iconOnly)
-                            .accessibilityIdentifier("profile-picker-close")
+                            .accessibilityIdentifier(onCancelVerification == nil
+                                ? "profile-picker-close" : "profile-picker-cancel-verification")
                     }
                 }
-                if manager != nil, !isCovered {
+                if onCancelVerification != nil, showsVerificationProgress {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                                isEditing.toggle()
+                        ProgressView().accessibilityLabel("Loading")
+                            .accessibilityIdentifier("profile-picker-verifying")
+                    }
+                } else if (manager != nil || offlineMode != nil), !isCovered {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if isEditing {
+                            Button("Done") {
+                                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                                    isEditing = false
+                                }
                             }
-                        } label: {
-                            if isEditing {
-                                Text("Done")
-                            } else {
-                                Label("Edit Profiles", systemImage: "pencil")
-                                    .labelStyle(.iconOnly)
+                            .accessibilityIdentifier("profile-picker-edit")
+                        } else {
+                            Menu {
+                                if manager != nil {
+                                    Button("Edit Profiles", systemImage: "pencil") {
+                                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                                            isEditing = true
+                                        }
+                                    }
+                                    .accessibilityIdentifier("profile-picker-edit")
+                                }
+                                if let offlineMode {
+                                    Toggle("Offline Mode", systemImage: "wifi.slash", isOn: offlineMode)
+                                        .disabled(isChangingOfflineMode)
+                                        .accessibilityIdentifier("profile-picker-offline-mode")
+                                }
+                            } label: {
+                                Label("More", systemImage: "ellipsis").labelStyle(.iconOnly)
                             }
+                            .accessibilityIdentifier("profile-picker-options")
+                            .disabled(onCancelVerification != nil)
                         }
-                        .accessibilityIdentifier("profile-picker-edit")
                     }
                 }
             }
             .navigationDestination(item: $route) { route in
                 destination(for: route)
             }
+        }
+        .task(id: onCancelVerification != nil) {
+            showsVerificationProgress = false
+            guard onCancelVerification != nil else { return }
+            do { try await Task.sleep(for: .milliseconds(800)) } catch { return }
+            showsVerificationProgress = true
+        }
+    }
+
+    private func startEntrance() {
+        guard !hasAppeared else { return }
+        guard onCancel == nil, !reduceMotion else {
+            hasAppeared = true
+            hasRevealedProfiles = true
+            return
+        }
+        withAnimation(
+            .smooth(duration: PlozziOSProfilePickerEntrance.headingDuration),
+            completionCriteria: .logicallyComplete
+        ) {
+            hasAppeared = true
+        } completion: {
+            hasRevealedProfiles = true
         }
     }
 
@@ -275,6 +359,7 @@ private struct PlozziOSProfilePickerGrid: View {
     let showsPINLock: (Profile) -> Bool
     let canManage: Bool
     let isEditing: Bool
+    let isPresented: Bool
     let startsDuringPresentation: Bool
     let identityNamespace: Namespace.ID
     let selectedProfileID: String?
@@ -361,34 +446,51 @@ private struct PlozziOSProfilePickerGrid: View {
         }
         .disabled(isCovered)
         .background {
-            ProfilePickerPresentationObserver(startsDuringPresentation: startsDuringPresentation) {
+            ProfilePickerPresentationObserver(
+                startsDuringPresentation: startsDuringPresentation, isReady: isPresented
+            ) {
                 hasAppeared = true
             }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 }
 
-private struct ProfilePickerPresentationObserver: UIViewControllerRepresentable {
+struct ProfilePickerPresentationObserver: UIViewControllerRepresentable {
     let startsDuringPresentation: Bool
+    var isReady = true
     let onAppear: () -> Void
 
     func makeUIViewController(context: Context) -> Observer {
-        Observer(startsDuringPresentation: startsDuringPresentation, onAppear: onAppear)
+        Observer(startsDuringPresentation: startsDuringPresentation, isReady: isReady, onAppear: onAppear)
     }
 
     func updateUIViewController(_ controller: Observer, context: Context) {
         controller.startsDuringPresentation = startsDuringPresentation
         controller.onAppear = onAppear
+        controller.isReady = isReady
+    }
+
+    static func dismantleUIViewController(_ controller: Observer, coordinator: ()) {
+        controller.cancelPendingEntrance()
     }
 
     final class Observer: UIViewController {
         var startsDuringPresentation: Bool
         var onAppear: () -> Void
+        var isReady: Bool {
+            didSet { resumeIfReady() }
+        }
+        private var hasStarted = false
+        private var isAppearing = false
+        private var isPresented = false
+        private var displayLink: CADisplayLink?
+        private var displayedFrames = 0
 
-        init(startsDuringPresentation: Bool, onAppear: @escaping () -> Void) {
+        init(startsDuringPresentation: Bool, isReady: Bool = true, onAppear: @escaping () -> Void) {
             self.startsDuringPresentation = startsDuringPresentation
+            self.isReady = isReady
             self.onAppear = onAppear
             super.init(nibName: nil, bundle: nil)
         }
@@ -402,12 +504,78 @@ private struct ProfilePickerPresentationObserver: UIViewControllerRepresentable 
 
         override func viewIsAppearing(_ animated: Bool) {
             super.viewIsAppearing(animated)
-            if startsDuringPresentation { onAppear() }
+            isAppearing = true
+            resumeIfReady()
         }
 
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            if !startsDuringPresentation { onAppear() }
+            isAppearing = true
+            isPresented = true
+            guard !hasStarted else { return }
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(sceneDidActivate),
+                name: UIScene.didActivateNotification, object: nil
+            )
+            resumeIfReady()
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            cancelPendingEntrance()
+        }
+
+        func cancelPendingEntrance() {
+            isAppearing = false
+            isPresented = false
+            displayLink?.invalidate()
+            displayLink = nil
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        @objc private func sceneDidActivate(_ notification: Notification) {
+            guard let scene = notification.object as? UIWindowScene,
+                  scene === view.window?.windowScene else { return }
+            resumeIfReady()
+        }
+
+        private func resumeIfReady() {
+            guard isReady, !hasStarted else { return }
+            if startsDuringPresentation {
+                if isAppearing { startEntrance() }
+            } else {
+                scheduleAfterFirstFrame()
+            }
+        }
+
+        private func scheduleAfterFirstFrame() {
+            guard isReady, isPresented, !hasStarted, displayLink == nil,
+                  let window = view.window, !window.isHidden,
+                  window.windowScene?.activationState == .foregroundActive else { return }
+            displayedFrames = 0
+            let link = CADisplayLink(target: self, selector: #selector(frameWillDisplay))
+            displayLink = link
+            link.add(to: .main, forMode: .common)
+        }
+
+        @objc private func frameWillDisplay() {
+            guard isReady, isPresented, let window = view.window, !window.isHidden,
+                  window.windowScene?.activationState == .foregroundActive else {
+                displayLink?.invalidate()
+                displayLink = nil
+                return
+            }
+            // A display-link callback precedes drawing. Let one frame commit
+            // the hidden starting state before starting the entrance clock.
+            displayedFrames += 1
+            if displayedFrames == 2 { startEntrance() }
+        }
+
+        private func startEntrance() {
+            guard !hasStarted else { return }
+            hasStarted = true
+            cancelPendingEntrance()
+            onAppear()
         }
     }
 }
@@ -459,6 +627,26 @@ private struct PlozziOSProfilePickerAddTile: View {
     }
 }
 
+struct PlozziOSProfilePickerHeadingEntrance: ViewModifier {
+    let isPresented: Bool
+    let isLaunch: Bool
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        let isVisible = isPresented || !isLaunch || reduceMotion
+        content
+            .opacity(isVisible ? 1 : 0)
+            .scaleEffect(isVisible ? 1 : 0.97)
+            .offset(y: isVisible ? 0 : 14)
+            .animation(
+                !isLaunch || reduceMotion ? nil
+                    : .smooth(duration: PlozziOSProfilePickerEntrance.headingDuration),
+                value: isPresented
+            )
+            .accessibilityHidden(!isVisible)
+    }
+}
+
 struct PlozziOSProfilePickerEntrance: ViewModifier {
     let isPresented: Bool
     let position: Int
@@ -466,9 +654,10 @@ struct PlozziOSProfilePickerEntrance: ViewModifier {
     let reduceMotion: Bool
     @State private var isInteractive = false
 
-    static let initialScale: CGFloat = 0.96
+    static let initialScale: CGFloat = 0.3
     static let initialOffset: CGFloat = 8
     static let duration: TimeInterval = 0.45
+    static let headingDuration: TimeInterval = 0.45
     static func delay(at position: Int, profileCount: Int) -> TimeInterval {
         let interval = min(0.09, 0.45 / Double(max(1, profileCount - 1)))
         return Double(max(0, position)) * interval
@@ -500,8 +689,8 @@ struct PlozziOSProfilePickerEntrance: ViewModifier {
             .task(id: isPresented) {
                 guard isPresented else { isInteractive = false; return }
                 guard !isInteractive else { return }
-                // Only input admission waits on a task. Every visual animation
-                // is scheduled together from the presentation transaction.
+                // Only input admission waits on a task. Avatar animations are
+                // scheduled together from the grid-reveal transaction.
                 if !reduceMotion {
                     do {
                         try await Task.sleep(for: .seconds(delay))

@@ -62,8 +62,10 @@ final class LiveTVSettingsInteractionTests: XCTestCase {
         XCTAssertTrue(add.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["live-tv-source-details-fixture"].exists)
         XCTAssertTrue(app.navigationBars["Live TV"].exists)
+        captureSourceEntry("TV-sources-overview", in: app)
         add.tap()
-        XCTAssertTrue(app.navigationBars["Add TV source"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Add TV Source"].waitForExistence(timeout: 5))
+        captureSourceEntry("Add-TV-source", in: app)
         for (identifier, title) in [
             ("live-tv-add-playlist", "IPTV source"),
             ("live-tv-add-server", "Media server"),
@@ -71,8 +73,11 @@ final class LiveTVSettingsInteractionTests: XCTestCase {
         ] {
             tapVisible(app.buttons[identifier], in: app)
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), app.debugDescription)
+            if identifier == "live-tv-add-server" {
+                captureSourceEntry("TV-media-server-setup", in: app)
+            }
             app.navigationBars.buttons.firstMatch.tap()
-            XCTAssertTrue(app.navigationBars["Add TV source"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars["Add TV Source"].waitForExistence(timeout: 5))
         }
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Live TV"].waitForExistence(timeout: 5))
@@ -94,6 +99,36 @@ final class LiveTVSettingsInteractionTests: XCTestCase {
         app.switches["Favorites only"].tap()
         waitForSavedPreferences("Recent false favorites true", in: app)
         XCTAssertEqual(app.staticTexts["fixture-source-metrics"].label, "Sources 1 writes 0 requests 0")
+    }
+
+    private func captureSourceEntry(_ name: String, in app: XCUIApplication) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testBrowsingDrillInRowsUseStandardPaddedTouchTargets() {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.PresentationHost")
+        app.launchArguments = ["--source-settings", "--configured-sources"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["live-tv-add-source"].waitForExistence(timeout: 10))
+        for (identifier, title) in [
+            ("live-tv-guide-preferences", "Guide preferences"),
+            ("live-tv-channel-visibility", "Channel visibility")
+        ] {
+            let row = app.buttons[identifier]
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            XCTAssertGreaterThanOrEqual(row.frame.height, 44)
+            XCTAssertLessThanOrEqual(row.frame.height, 60, "Use standard settings row sizing.")
+            XCTAssertTrue(row.isHittable)
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1))
+                .withOffset(CGVector(dx: 0, dy: -2)).tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), app.debugDescription)
+            app.navigationBars.buttons.firstMatch.tap()
+            XCTAssertTrue(app.navigationBars["Live TV"].waitForExistence(timeout: 5))
+        }
     }
 
     func testBrowsingChoicesChangeInlineAndSaveImmediately() {
@@ -119,6 +154,31 @@ final class LiveTVSettingsInteractionTests: XCTestCase {
             XCTAssertTrue(app.navigationBars["Live TV"].exists)
             XCTAssertFalse(app.navigationBars["Channel order"].exists)
         }
+    }
+
+    func testChannelNameCleanupUpdatesPreviewAndPersistsWithoutSourceRequests() {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.PresentationHost")
+        app.launchArguments = ["--source-settings", "--configured-sources", "--channel-name-samples"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["live-tv-add-source"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["live-tv-channel-name-preview-2"].waitForExistence(timeout: 5))
+        let toggle = app.switches["live-tv-clean-channel-names"]
+        tapVisible(toggle, in: app)
+        let preview = app.staticTexts["live-tv-channel-name-preview"]
+        XCTAssertEqual(preview.label, "UK | NOW TV SPORT UHD 3840P")
+        XCTAssertEqual(app.staticTexts["live-tv-channel-name-preview-1"].label, "BBC One HD")
+        XCTAssertEqual(app.staticTexts["live-tv-channel-name-preview-2"].label, "FR | Canal+ FHD")
+        XCTAssertEqual(toggle.value as? String, "1")
+        tapVisible(app.buttons["live-tv-guide-preferences"], in: app)
+        XCTAssertTrue(app.navigationBars["Guide preferences"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        tapVisible(toggle, in: app)
+        XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertEqual(preview.label, "## UK|NOW TV SPORT U H D 3840P ##")
+        XCTAssertEqual(app.staticTexts["live-tv-channel-name-preview-1"].label, "** BBC One H D **")
+        XCTAssertEqual(app.staticTexts["live-tv-channel-name-preview-2"].label, "|FR| Canal+ F H D")
+        XCTAssertEqual(app.staticTexts["fixture-source-metrics"].label, "Sources 1 writes 0 requests 0")
     }
 
     func testRootAutomaticToggleAndFifthSourceStayIndependent() {
@@ -178,22 +238,23 @@ final class LiveTVSettingsInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 5), .completed,
                        "A child-page change must persist before navigating back.")
     }
+}
 
-    private func assertNeutralInk(_ element: XCUIElement) throws {
-        let image = try XCTUnwrap(element.screenshot().image.cgImage)
-        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
-        try bytes.withUnsafeMutableBytes { buffer in
-            let context = try XCTUnwrap(CGContext(
-                data: buffer.baseAddress, width: image.width, height: image.height,
-                bitsPerComponent: 8, bytesPerRow: image.width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-            ))
-            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        }
-        let bluePixels = stride(from: 0, to: bytes.count, by: 4).filter {
-            Int(bytes[$0 + 2]) - Int(bytes[$0]) > 40
-        }.count
-        XCTAssertLessThan(bluePixels, 10, "\(element.identifier) must not use system-blue control ink.")
+@MainActor
+func assertNeutralInk(_ element: XCUIElement) throws {
+    let image = try XCTUnwrap(element.screenshot().image.cgImage)
+    var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    try bytes.withUnsafeMutableBytes { buffer in
+        let context = try XCTUnwrap(CGContext(
+            data: buffer.baseAddress, width: image.width, height: image.height,
+            bitsPerComponent: 8, bytesPerRow: image.width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        ))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
     }
+    let bluePixels = stride(from: 0, to: bytes.count, by: 4).filter {
+        Int(bytes[$0 + 2]) - Int(bytes[$0]) > 40
+    }.count
+    XCTAssertLessThan(bluePixels, 10, "\(element.identifier) must not use system-blue control ink.")
 }

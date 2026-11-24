@@ -78,9 +78,15 @@ public struct PlayerTouchCardStrip: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: PlayerTouchLayout.cardSpacing) {
             tabRow
+                #if os(iOS)
+                .playerCameraSafeRow()
+                #endif
             if let openPanel {
                 card(for: openPanel)
                     .reportSubtitleControlsFrame(in: model.subtitleLayout, region: .card)
+                    #if os(iOS)
+                    .playerCameraSafeRow()
+                    #endif
                     // Grows upward out of the tabs, matching tvOS. The card is
                     // laid out ABOVE its strip in the enclosing bottom-anchored
                     // stack, so a bottom anchor is what makes it read as opening
@@ -110,6 +116,12 @@ public struct PlayerTouchCardStrip: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.playerCardMetrics, metrics)
         .environment(\.mediaBadgeScale, metrics.badgeScale)
+        .task {
+            if PlayerScreenshotHook.pendingPanel == .info {
+                PlayerScreenshotHook.pendingPanel = nil
+                openPanel = .info
+            }
+        }
         // Kept in step both ways: this view decides WHICH tab is open, the host
         // only ever needs to know THAT one is, and to be able to close it.
         .onChange(of: openPanel) { _, panel in
@@ -138,31 +150,24 @@ public struct PlayerTouchCardStrip: View {
                 withAnimation(Self.cardCurve) { openPanel = nil }
             }
         }
-        .onChange(of: model.infoCard.chapters.isEmpty) { _, empty in
-            if empty, openPanel == .chapters {
+        .onChange(of: visibleTabs) { _, tabs in
+            if let panel = openPanel, !tabs.contains(panel) {
                 withAnimation(Self.cardCurve) { openPanel = nil }
             }
         }
+    }
+
+    private var visibleTabs: [PlayerControls.Category] {
+        PlayerControls.Category.visibleCardTabs(model: model, player: player)
     }
 
     private var tabRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 tab(.info, title: Text("Info"))
-                if player != nil, !model.infoCard.chapters.isEmpty {
-                    tab(.chapters, title: Text(PlayerControls.Category.chapters.title))
-                        .accessibilityIdentifier("player-tab-chapters")
-                }
-                // Hidden entirely when there is no cast: a tab that opens an empty
-                // card is worse than an absent one.
-                if !model.infoCard.cast.isEmpty {
-                    tab(.cast, title: Text(PlayerControls.Category.cast.title))
-                }
-                if player?.episodeBrowser != nil {
-                    tab(.episodes, title: Text(PlayerControls.Category.episodes.title))
-                }
-                if player?.playlistContext != nil {
-                    tab(.playlist, title: Text(PlayerControls.Category.playlist.title))
+                ForEach(visibleTabs.filter { $0 != .info }, id: \.self) { category in
+                    tab(category, title: Text(category.title))
+                        .accessibilityIdentifier(category.tabAccessibilityID)
                 }
                 Spacer(minLength: 20)
             }
@@ -220,6 +225,10 @@ public struct PlayerTouchCardStrip: View {
                         source: category == .playlist ? .playlist : .episodes,
                         focus: $focus
                     )
+                }
+            case .continueWatching:
+                if let player {
+                    PlayerSequencePanel(player: player, source: .continueWatching, focus: $focus)
                 }
             default:
                 InfoPanelView(

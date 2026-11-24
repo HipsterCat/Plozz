@@ -5,6 +5,81 @@ import CoreNetworking
 
 // MARK: - Pure logic
 
+final class PlexScalarDecodingTests: XCTestCase {
+    private struct Scalars: Decodable {
+        let bool: Bool?
+        let int: Int?
+        let double: Double?
+        let string: String?
+
+        private enum CodingKeys: String, CodingKey { case value }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            bool = container.flexibleBool(.value)
+            int = container.flexibleInt(.value)
+            double = container.flexibleDouble(.value)
+            string = container.flexibleString(.value)
+        }
+    }
+
+    func testMissingNullAndUnsupportedValuesRemainAbsent() throws {
+        for json in ["{}", #"{"value":null}"#, #"{"value":[]}"#, #"{"value":{}}"#] {
+            let value = try JSONDecoder.plozz.decode(Scalars.self, from: Data(json.utf8))
+            XCTAssertNil(value.bool, json)
+            XCTAssertNil(value.int, json)
+            XCTAssertNil(value.double, json)
+            XCTAssertNil(value.string, json)
+        }
+    }
+
+    func testNativeAndStringRepresentationsKeepExistingConversions() throws {
+        let cases: [(String, Bool?, Int?, Double?, String?)] = [
+            ("true", true, nil, nil, nil),
+            ("false", false, nil, nil, nil),
+            ("0", false, 0, 0, "0"),
+            ("8", true, 8, 8, "8"),
+            ("8.75", nil, 8, 8.75, "8.75"),
+            (#""8""#, nil, 8, 8, "8"),
+            (#""8.75""#, nil, nil, 8.75, "8.75"),
+            (#""1""#, true, 1, 1, "1"),
+            (#""0""#, false, 0, 0, "0"),
+            (#""TRUE""#, true, nil, nil, "TRUE"),
+            (#""false""#, false, nil, nil, "false"),
+            (#""yes""#, true, nil, nil, "yes"),
+            (#""NO""#, false, nil, nil, "NO"),
+            (#""unknown""#, nil, nil, nil, "unknown"),
+            (#""""#, nil, nil, nil, "")
+        ]
+        for (json, bool, int, double, string) in cases {
+            let value = try JSONDecoder.plozz.decode(
+                Scalars.self, from: Data("{\"value\":\(json)}".utf8)
+            )
+            XCTAssertEqual(value.bool, bool, json)
+            XCTAssertEqual(value.int, int, json)
+            XCTAssertEqual(value.double, double, json)
+            XCTAssertEqual(value.string, string, json)
+        }
+    }
+
+    func testSparseSubtitleDoesNotLoseAvailableFacts() throws {
+        let stream = try JSONDecoder.plozz.decode(PlexStream.self, from: Data(
+            #"{"id":"42","streamType":3,"codec":"srt","languageCode":"eng","forced":0,"hearingImpaired":"1","key":"/library/streams/42"}"#.utf8
+        ))
+        XCTAssertEqual(stream.id, 42)
+        XCTAssertEqual(stream.streamType, 3)
+        XCTAssertEqual(stream.codec, "srt")
+        XCTAssertEqual(stream.languageCode, "eng")
+        XCTAssertEqual(stream.forced, false)
+        XCTAssertEqual(stream.hearingImpaired, true)
+        XCTAssertEqual(stream.key, "/library/streams/42")
+        XCTAssertNil(stream.width)
+        XCTAssertNil(stream.frameRate)
+        XCTAssertNil(stream.channels)
+        XCTAssertNil(stream.DOVIPresent)
+    }
+}
+
 final class PlexPinFlowTests: XCTestCase {
     func testPendingWhenAuthTokenNil() {
         let pin = decodePin(#"{"id":1,"code":"abcd","authToken":null}"#)
@@ -487,6 +562,116 @@ final class PlexProviderMappingTests: XCTestCase {
         XCTAssertFalse(try provider.map(stream: plain, itemID: "movie", mediaSourceID: "file").isHearingImpaired)
     }
 
+    func testAudioTrackMappingRetainsItsOwnProfileAndSpatialEvidence() throws {
+        let provider = PlexProvider(session: makeSession(), http: StubHTTPClient())
+        for (fields, expected) in [
+            (#""codec":"dca","profile":"MA + DTS:X IMAX""#, "MA + DTS:X IMAX"),
+            (#""codec":"truehd","extendedDisplayTitle":"English TrueHD Atmos""#, "Atmos"),
+            (#""codec":"eac3","profile":"JOC""#, "JOC")
+        ] {
+            let dto = try JSONDecoder.plozz.decode(PlexStream.self, from: Data(
+                (#"{"index":3,"streamType":2,"channels":8,"# + fields + "}").utf8
+            ))
+            let track = try provider.map(stream: dto, itemID: "movie", mediaSourceID: "file")
+            XCTAssertEqual(track.id, 3)
+            XCTAssertEqual(track.profile, expected)
+        }
+    }
+
+    func testExplicitPlexAudioDescriptionFlagSurvivesMappingAndEnrichment() throws {
+        let provider = PlexProvider(session: makeSession(), http: StubHTTPClient())
+        for value in ["true", "1", #""1""#] {
+            let dto = try JSONDecoder.plozz.decode(PlexStream.self, from: Data(
+                (#"{"index":3,"streamType":2,"codec":"aac","languageTag":"en","visualImpaired":"# + value + "}").utf8
+            ))
+            let mapped = try provider.map(stream: dto, itemID: "movie", mediaSourceID: "file")
+            XCTAssertTrue(mapped.isVisualImpaired)
+            XCTAssertTrue(MediaTrack(id: 3, kind: .audio, displayTitle: "English", language: "en")
+                .enriched(withProvider: mapped).isVisualImpaired)
+            XCTAssertFalse(mapped.isCommentary)
+        }
+        for fields in [#""title":"Audio Description""#, #""visualImpaired":false"#] {
+            let dto = try JSONDecoder.plozz.decode(PlexStream.self, from: Data(
+                (#"{"index":3,"streamType":2,"# + fields + "}").utf8
+            ))
+            XCTAssertFalse(try provider.map(stream: dto, itemID: "movie", mediaSourceID: "file").isVisualImpaired)
+        }
+    }
+
+    func testAudioMappingPreservesRawVersionTitle() throws {
+        let provider = PlexProvider(session: makeSession(), http: StubHTTPClient())
+        let dto = try JSONDecoder.plozz.decode(PlexStream.self, from: Data(
+            #"{"index":3,"streamType":2,"codec":"dca","channels":6,"languageTag":"fr","language":"French","extendedDisplayTitle":"French DTS 5.1","title":"VFQ"}"#.utf8
+        ))
+        let track = try provider.map(stream: dto, itemID: "movie", mediaSourceID: "file")
+        XCTAssertEqual(track.id, 3)
+        XCTAssertEqual(track.language, "fr")
+        XCTAssertEqual(track.displayTitle, "French DTS 5.1 VFQ")
+        XCTAssertEqual(
+            TrackLabeling.audioLabel(displayTitle: track.displayTitle, sourceTitle: track.sourceTitle, language: track.language,
+                                    codec: track.codec, channels: track.channels, trackID: track.id,
+                                    locale: Locale(identifier: "fr")),
+            TrackLabel(base: .content("Français"), qualifiers: [.version("VFQ"), .format("DTS 5.1")])
+        )
+    }
+
+    func testContainerNamesSurvivePlexGeneratedTitlesAndEngineEnrichment() throws {
+        let provider = PlexProvider(session: makeSession(), http: StubHTTPClient())
+        for (streamType, title, expected) in [
+            (2, "Director Commentary", TrackLabel(base: .content("English"),
+                qualifiers: [.title("Director Commentary"), .format("AAC Stereo")])),
+            (3, "Signs & Songs", TrackLabel(base: .content("English"), qualifiers: [.title("Signs & Songs")])),
+            (3, "Full subs", TrackLabel(base: .content("English"), qualifiers: [.title("Full subs")]))
+        ] {
+            let json = """
+            {"index":3,"streamType":\(streamType),"codec":"\(streamType == 2 ? "aac" : "srt")",
+             "channels":2,"languageTag":"en","displayTitle":"English",
+             "extendedDisplayTitle":"English","title":"\(title)"}
+            """
+            let dto = try JSONDecoder.plozz.decode(PlexStream.self, from: Data(json.utf8))
+            let track = try provider.map(stream: dto, itemID: "movie", mediaSourceID: "file")
+            let engine = MediaTrack(id: track.id, kind: track.kind, displayTitle: "English", language: "en")
+            let enriched = engine.enriched(withProvider: track)
+            XCTAssertEqual(enriched.sourceTitle, title)
+            let label = streamType == 2
+                ? TrackLabeling.audioLabel(
+                    displayTitle: enriched.displayTitle, sourceTitle: enriched.sourceTitle, language: enriched.language,
+                    codec: enriched.codec, channels: enriched.channels, trackID: enriched.id, locale: Locale(identifier: "en"))
+                : TrackLabeling.subtitleLabel(
+                    displayTitle: enriched.displayTitle, sourceTitle: enriched.sourceTitle, language: enriched.language,
+                    codec: enriched.codec, isForced: false, isImageBased: false, trackID: enriched.id,
+                    locale: Locale(identifier: "en"))
+            XCTAssertEqual(label, expected)
+        }
+    }
+
+    func testSubtitleMappingPreservesRawVersionsAlongsideForcedAndRegionalMetadata() throws {
+        let provider = PlexProvider(session: makeSession(), http: StubHTTPClient())
+        for (metadata, qualifiers) in [
+            (#""extendedDisplayTitle":"French (Forced)","title":"French (VFF)""#, [.version("VFF"), .forced]),
+            (#""extendedDisplayTitle":"French (Forced)","title":"French (VFQ)""#, [.version("VFQ"), .forced]),
+            (#""extendedDisplayTitle":"French (Forced)","displayTitle":"French (VFQ)""#, [.version("VFQ"), .forced]),
+            (#""extendedDisplayTitle":"French (VFF)","title":"French (VFQ)""#,
+             [.title("French (VFQ)"), .version("VFF"), .forced])
+        ] as [(String, [TrackLabel.Qualifier])] {
+            let json = #"{"index":3,"streamType":3,"codec":"srt","languageTag":"fr-CA","forced":true,"# + metadata + "}"
+            let dto = try JSONDecoder.plozz.decode(PlexStream.self, from: Data(json.utf8))
+            let track = try provider.map(stream: dto, itemID: "movie", mediaSourceID: "file")
+            XCTAssertEqual(track.id, 3)
+            XCTAssertEqual(track.language, "fr-CA")
+            XCTAssertTrue(track.isForced)
+            XCTAssertNil(track.channels)
+            XCTAssertEqual(
+                TrackLabeling.subtitleLabel(
+                    displayTitle: track.displayTitle, sourceTitle: track.sourceTitle, language: track.language, codec: track.codec,
+                    isForced: track.isForced, isImageBased: track.isImageBasedSubtitle,
+                    trackID: track.id, locale: Locale(identifier: "en")
+                ),
+                TrackLabel(base: .content("French (Canada)"), qualifiers: qualifiers)
+            )
+        }
+    }
+
     private func makeSession() -> UserSession {
         UserSession(
             server: MediaServer(id: "srv", name: "Home", baseURL: URL(string: "https://plex.host:32400")!, provider: .plex),
@@ -539,6 +724,7 @@ final class PlexProviderMappingTests: XCTestCase {
 
         XCTAssertEqual(trailers.map(\.id), ["e1"])
         XCTAssertEqual(trailers.first?.title, "Trailer")
+        XCTAssertEqual(trailers.first?.isTrailer, true)
         XCTAssertEqual(trailers.first?.kind, .video)
     }
 
@@ -1984,6 +2170,32 @@ final class PlexProviderMappingTests: XCTestCase {
         )
     }
 
+    func testOfflineTranscodeAllAudioRemovesInheritedSelectionWithoutChangingSourceOrQuality() throws {
+        let hls = try XCTUnwrap(URL(string:
+            "https://example.test/plex/video/:/transcode/universal/start.m3u8?path=%2Flibrary%2Fmetadata%2F7&mediaIndex=2&partIndex=1&AudioStreamID=99&X-Plex-Token=secret"))
+        let url = try XCTUnwrap(PlexOfflineTranscodeURLBuilder.makeURL(
+            from: hls, maximumVideoBitrateBps: 1_000_000, maximumHeight: 360,
+            audioStreamID: 11, textSubtitleStreamID: nil, includesTextSubtitle: false,
+            includesAllAudioTracks: true))
+        let query = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        func value(_ name: String) -> String? { query.first { $0.name == name }?.value }
+        XCTAssertFalse(query.contains { $0.name.lowercased() == "audiostreamid" })
+        XCTAssertEqual(value("path"), "/library/metadata/7")
+        XCTAssertEqual(value("mediaIndex"), "2")
+        XCTAssertEqual(value("partIndex"), "1")
+        XCTAssertEqual(value("X-Plex-Token"), "secret")
+        XCTAssertEqual(value("maxVideoBitrate"), "1000")
+        XCTAssertEqual(value("videoResolution"), "640x360")
+        XCTAssertTrue(try XCTUnwrap(value("X-Plex-Client-Profile-Extra"))
+            .hasSuffix("+add-settings(DirectPlayStreamSelection=true)"))
+        XCTAssertEqual(
+            PlexOfflineTranscodeURLBuilder.downloadQueueProfile(includesAllAudioTracks: true),
+            "add-transcode-target(type=videoProfile&context=all&protocol=http&container=mp4&videoCodec=h264&audioCodec=aac&subtitleCodec=mov_text&replace=true)+add-settings(DirectPlayStreamSelection=true)"
+        )
+        XCTAssertFalse(PlexOfflineTranscodeURLBuilder.downloadQueueProfile(includesAllAudioTracks: false)
+            .contains("DirectPlayStreamSelection"))
+    }
+
     func testOfflineTranscodeDownloadQueueURLPreservesProxyAndAuth() throws {
         let progressiveURL = try XCTUnwrap(
             URL(
@@ -2228,6 +2440,39 @@ final class PlexProviderMappingTests: XCTestCase {
         XCTAssertNil(request.streamURL)
     }
 
+    func testFLACMusicUsesOriginalAuthenticatedFileAtItsNativeSampleRate() async throws {
+        for sampleRate in [44_100, 96_000] {
+            let stub = StubHTTPClient()
+            stub.stub(pathSuffix: "/library/metadata/flac", json: """
+            {"MediaContainer":{"Metadata":[
+              {"ratingKey":"flac","type":"track","title":"FLAC fixture",
+               "Media":[{"id":7,"container":"flac","audioCodec":"flac",
+                 "Part":[{"id":8,"key":"/library/parts/8/music.flac","container":"flac",
+                   "Stream":[{"id":9,"streamType":2,"codec":"flac",
+                     "samplingRate":\(sampleRate),"channels":2,"bitrate":1200}]}]}]}
+            ]}}
+            """)
+            let provider = PlexProvider(session: makeSession(), accountID: "account", http: stub)
+            let request = try await provider.audioPlaybackInfo(for: "flac", queueContext: nil)
+            guard case .authenticatedHTTP(let locator) = request.playbackSource else {
+                return XCTFail("Expected an authenticated FLAC source")
+            }
+            XCTAssertEqual(locator.accountID, "account")
+            XCTAssertEqual(locator.resource.path, "library/parts/8/music.flac")
+            XCTAssertEqual(locator.formatHint.container, "flac")
+            XCTAssertEqual(locator.deliveryMode, .directFile)
+            XCTAssertEqual(locator.purpose, .audioStream)
+            XCTAssertFalse(request.isTranscoding)
+            XCTAssertEqual(request.quality?.isDirectPlay, true)
+            XCTAssertEqual(request.quality?.codec, "flac")
+            XCTAssertEqual(request.quality?.sampleRate, sampleRate)
+            XCTAssertEqual(request.quality?.channels, 2)
+            XCTAssertFalse(locator.resource.queryItems.contains {
+                $0.name.localizedCaseInsensitiveContains("token")
+            })
+        }
+    }
+
     func testPlaybackInfoPrefersHDBIFWhenAvailable() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/library/metadata/101", json: """
@@ -2391,9 +2636,71 @@ final class PlexAuthClientTests: XCTestCase {
         PlexAuthClient(deviceProfile: PlexDeviceProfile(clientIdentifier: "dev1"), http: stub, probeHTTP: UnreachableProbe())
     }
 
-    func testDefaultDeviceProfileReportsMinimumSupportedTVOS() {
+    func testDefaultDeviceProfileReportsRuntimeIdentity() {
         let profile = PlexDeviceProfile(clientIdentifier: "device")
-        XCTAssertEqual(profile.headers()["X-Plex-Platform-Version"], "18.0")
+        let headers = profile.headers()
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let expectedVersion = version.patchVersion == 0
+            ? "\(version.majorVersion).\(version.minorVersion)"
+            : "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+        XCTAssertEqual(headers["X-Plex-Platform-Version"], expectedVersion)
+        XCTAssertEqual(headers["X-Plex-Version"], AppVersionIdentity.current.marketingVersion)
+        XCTAssertEqual(headers["X-Plex-Client-Identifier"], "device")
+        XCTAssertEqual(headers["X-Plex-Device-Name"], DeviceDisplayName.current(fallback: profile.device))
+        #if os(tvOS)
+        XCTAssertEqual(headers["X-Plex-Platform"], "tvOS")
+        XCTAssertEqual(headers["X-Plex-Device"], "Apple TV")
+        #elseif os(iOS)
+        XCTAssertEqual(headers["X-Plex-Platform"], "iOS")
+        XCTAssertTrue(["iPhone", "iPad"].contains(profile.device))
+        #endif
+    }
+
+    func testDeviceFamiliesDistinguishPhoneTabletAndTV() {
+        XCTAssertEqual(PlexDeviceProfile.deviceFamily(modelIdentifier: "iPhone18,4"), "iPhone")
+        XCTAssertEqual(PlexDeviceProfile.deviceFamily(modelIdentifier: "iPad16,6"), "iPad")
+        XCTAssertEqual(PlexDeviceProfile.deviceFamily(modelIdentifier: "AppleTV14,1"), "Apple TV")
+        XCTAssertEqual(PlexDeviceProfile.deviceFamily(modelIdentifier: "FutureDevice1,1"), "FutureDevice1,1")
+        XCTAssertEqual(PlexDeviceProfile.deviceFamily(modelIdentifier: ""), "Apple device")
+    }
+
+    func testExplicitDeviceIdentityReachesAuthAndTimelineRequests() async throws {
+        let profile = PlexDeviceProfile(
+            product: "Plozz",
+            version: "2026.11.2",
+            device: "iPad",
+            platform: "iOS",
+            platformVersion: "27.1",
+            deviceName: "Living Room iPad",
+            clientIdentifier: "existing-install"
+        )
+        let expected = [
+            "Accept": "application/json",
+            "X-Plex-Product": "Plozz",
+            "X-Plex-Version": "2026.11.2",
+            "X-Plex-Device": "iPad",
+            "X-Plex-Platform": "iOS",
+            "X-Plex-Platform-Version": "27.1",
+            "X-Plex-Device-Name": "Living Room iPad",
+            "X-Plex-Client-Identifier": "existing-install"
+        ]
+        XCTAssertEqual(profile.headers(), expected)
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/api/v2/pins", json: #"{"id":42,"code":"CODE","authToken":null}"#)
+        _ = try await PlexAuthClient(deviceProfile: profile, http: stub).createPin()
+        XCTAssertEqual(stub.sentHeaders.last, expected)
+
+        stub.stub(pathSuffix: "/:/timeline", json: "{}")
+        let client = PlexClient(
+            baseURL: URL(string: "https://plex.example")!,
+            deviceProfile: profile,
+            token: "TOKEN",
+            http: stub
+        )
+        try await client.reportTimeline(
+            ratingKey: "1", playSessionID: nil, state: "playing", timeMs: 1000, durationMs: 10000
+        )
+        XCTAssertEqual(stub.sentHeaders.last, expected.merging(["X-Plex-Token": "TOKEN"]) { _, new in new })
     }
 
     func testAuthorizationURLCarriesPinAndDeviceIdentity() {

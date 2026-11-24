@@ -1,41 +1,22 @@
 #if canImport(UIKit)
 import CoreGraphics
+import CoreModels
 import Foundation
 import Observation
 
-public struct PlayerVideoZoom: Equatable, Sendable {
-    public enum Mode: Int, CaseIterable, Sendable {
-        case fit, fill, stretch, custom
+public typealias PlayerVideoZoom = VideoZoomPreference
 
-        public var title: LocalizedStringResource {
-            switch self {
-            case .fit: "Normal"
-            case .fill: "Crop"
-            case .stretch: "Stretch"
-            case .custom: "Custom"
-            }
-        }
-
-        public var menuTitle: LocalizedStringResource {
-            self == .fit ? "Normal (Default)" : title
-        }
-    }
-
-    public static let customPercentRange = 50...200
-    public var mode: Mode
-    public let customPercent: Int
-
-    public init(mode: Mode = .fit, customPercent: Int = 100) {
-        self.mode = mode
-        self.customPercent = min(max(customPercent, Self.customPercentRange.lowerBound),
-                                 Self.customPercentRange.upperBound)
-    }
-
-    /// `fitBounds` constrains Normal and Custom's base, never Crop or Stretch.
+extension VideoZoomPreference {
+    /// `fitBounds` constrains Normal, cutout-safe Auto-crop, and Custom's base.
     /// Both rectangles use the presentation view's coordinate space.
-    func scaleFactors(in bounds: CGRect, aspectRatio: Double?, fitBounds: CGRect? = nil) -> CGVector {
+    func scaleFactors(in bounds: CGRect, aspectRatio: Double?, fitBounds: CGRect? = nil,
+                      activePicture: CGRect? = nil) -> CGVector {
+        if let transform = pictureTransform(in: bounds, fitBounds: fitBounds,
+                                            aspectRatio: aspectRatio, activePicture: activePicture) {
+            return CGVector(dx: transform.scale, dy: transform.scale)
+        }
         switch mode {
-        case .fit, .custom:
+        case .fit, .custom, .picture:
             let viewport = fittingBounds(in: bounds, fitBounds: fitBounds)
             let custom = mode == .custom ? CGFloat(customPercent) / 100 : 1
             guard viewport != bounds else { return CGVector(dx: custom, dy: custom) }
@@ -58,26 +39,51 @@ public struct PlayerVideoZoom: Equatable, Sendable {
         }
     }
 
-    func surfaceFrame(in bounds: CGRect, aspectRatio: Double?, fitBounds: CGRect? = nil) -> CGRect {
-        scaled(bounds, around: bounds, to: surfaceCenter(in: bounds, fitBounds: fitBounds),
-               by: scaleFactors(in: bounds, aspectRatio: aspectRatio, fitBounds: fitBounds))
+    func surfaceFrame(in bounds: CGRect, aspectRatio: Double?, fitBounds: CGRect? = nil,
+                      activePicture: CGRect? = nil) -> CGRect {
+        scaled(bounds, around: bounds, to: surfaceCenter(in: bounds, fitBounds: fitBounds,
+                                                        aspectRatio: aspectRatio, activePicture: activePicture),
+               by: scaleFactors(in: bounds, aspectRatio: aspectRatio, fitBounds: fitBounds,
+                                activePicture: activePicture))
     }
 
-    func videoRect(in bounds: CGRect, aspectRatio: Double?, fitBounds: CGRect? = nil) -> CGRect? {
+    func videoRect(in bounds: CGRect, aspectRatio: Double?, fitBounds: CGRect? = nil,
+                   activePicture: CGRect? = nil) -> CGRect? {
         guard let fitted = SubtitleOverlayGeometry.aspectFitRect(
             in: bounds, aspectRatio: aspectRatio.map { CGFloat($0) }
         ) else { return nil }
-        return scaled(fitted, around: bounds, to: surfaceCenter(in: bounds, fitBounds: fitBounds),
-                      by: scaleFactors(in: bounds, aspectRatio: aspectRatio, fitBounds: fitBounds))
+        return scaled(fitted, around: bounds, to: surfaceCenter(in: bounds, fitBounds: fitBounds,
+                                                              aspectRatio: aspectRatio, activePicture: activePicture),
+                      by: scaleFactors(in: bounds, aspectRatio: aspectRatio, fitBounds: fitBounds,
+                                       activePicture: activePicture))
     }
 
-    func surfaceCenter(in bounds: CGRect, fitBounds: CGRect? = nil) -> CGPoint {
-        let viewport = mode == .fit || mode == .custom
+    func surfaceCenter(in bounds: CGRect, fitBounds: CGRect? = nil,
+                       aspectRatio: Double? = nil, activePicture: CGRect? = nil) -> CGPoint {
+        if let transform = pictureTransform(in: bounds, fitBounds: fitBounds,
+                                            aspectRatio: aspectRatio, activePicture: activePicture) {
+            return transform.center
+        }
+        let viewport = mode == .fit || mode == .custom || mode == .picture
             ? fittingBounds(in: bounds, fitBounds: fitBounds) : bounds
         return CGPoint(x: viewport.midX, y: viewport.midY)
     }
 
+    private func pictureTransform(in bounds: CGRect, fitBounds: CGRect?, aspectRatio: Double?,
+                                  activePicture: CGRect?) -> (scale: CGFloat, center: CGPoint)? {
+        guard mode == .picture, let activePicture, VideoActivePictureGeometry.isValid(activePicture),
+              let fitted = SubtitleOverlayGeometry.aspectFitRect(in: bounds, aspectRatio: aspectRatio.map { CGFloat($0) })
+        else { return nil }
+        let active = VideoActivePictureGeometry.map(activePicture, into: fitted)
+        let viewport = fittingBounds(in: bounds, fitBounds: fitBounds)
+        let scale = min(viewport.width / active.width, viewport.height / active.height)
+        guard scale.isFinite, scale > 0, scale <= 2 else { return nil }
+        return (scale, CGPoint(x: viewport.midX - (active.midX - bounds.midX) * scale,
+                               y: viewport.midY - (active.midY - bounds.midY) * scale))
+    }
+
     private func fittingBounds(in bounds: CGRect, fitBounds: CGRect?) -> CGRect {
+        if mode == .picture, !pictureFitsInsideSafeArea { return bounds }
         guard let fitBounds,
               fitBounds.minX.isFinite, fitBounds.minY.isFinite,
               fitBounds.width.isFinite, fitBounds.height.isFinite else { return bounds }
@@ -92,22 +98,69 @@ public struct PlayerVideoZoom: Equatable, Sendable {
     }
 }
 
-/// Playback-session presentation, never persisted as a profile/global preference.
+/// Playback-session presentation. The owning player persists explicit title choices.
 @MainActor
 @Observable
 public final class PlayerVideoZoomModel {
-    public var settings = PlayerVideoZoom()
+    public var settings = PlayerVideoZoom() {
+        didSet {
+            if !isRestoring { onUserChange?(settings) }
+        }
+    }
+    @ObservationIgnored var onUserChange: ((PlayerVideoZoom) -> Void)?
+    @ObservationIgnored private var isRestoring = false
+    @ObservationIgnored private var autoCropPreference: (model: PlaybackSettingsModel, platform: VideoZoomDefaults.Platform)?
+    public var supportsActivePicture = false
+    public var availableModes: [PlayerVideoZoom.Mode] {
+        supportsActivePicture ? [.fit, .picture, .fill, .stretch, .custom] : [.fit, .fill, .stretch, .custom]
+    }
 
     public init() {}
 
+    public func bindAutoCropFraming(to model: PlaybackSettingsModel, platform: VideoZoomDefaults.Platform) {
+        autoCropPreference = (model, platform)
+        var choice = settings
+        choice.pictureFitsInsideSafeArea = model.settings.videoZoom[platform].pictureFitsInsideSafeArea
+        restore(choice)
+    }
+
+    func restore(_ settings: PlayerVideoZoom) {
+        isRestoring = true
+        self.settings = settings
+        isRestoring = false
+    }
+
+    func restoreForPlayback(_ preference: PlayerVideoZoom?, defaultPreference: PlayerVideoZoom,
+                            supportsActivePicture: Bool) {
+        self.supportsActivePicture = supportsActivePicture
+        var choice = preference ?? defaultPreference
+        choice.pictureFitsInsideSafeArea = autoCropPreference.map {
+            $0.model.settings.videoZoom[$0.platform].pictureFitsInsideSafeArea
+        } ?? defaultPreference.pictureFitsInsideSafeArea
+        if choice.mode == .picture, !supportsActivePicture { choice.mode = .fit }
+        restore(choice)
+    }
+
     public func cycleMode(forward: Bool) {
-        let count = PlayerVideoZoom.Mode.allCases.count
-        let index = (settings.mode.rawValue + (forward ? 1 : count - 1)) % count
-        settings.mode = PlayerVideoZoom.Mode.allCases[index]
+        let modes = availableModes
+        let index = ((modes.firstIndex(of: settings.mode) ?? 0) + (forward ? 1 : modes.count - 1)) % modes.count
+        settings.mode = modes[index]
     }
 
     public func setCustomPercent(_ percent: Int) {
-        settings = PlayerVideoZoom(mode: .custom, customPercent: percent)
+        settings = PlayerVideoZoom(mode: .custom, customPercent: percent,
+                                  pictureFitsInsideSafeArea: settings.pictureFitsInsideSafeArea)
+    }
+
+    public func setPinchZoom(fillsScreen: Bool) {
+        if settings.mode == .picture, supportsActivePicture {
+            if let preference = autoCropPreference {
+                preference.model.settings.videoZoom[preference.platform].pictureFitsInsideSafeArea = !fillsScreen
+            }
+            settings.pictureFitsInsideSafeArea = !fillsScreen
+        } else {
+            settings.mode = fillsScreen ? .fill : .fit
+        }
     }
 }
 #endif

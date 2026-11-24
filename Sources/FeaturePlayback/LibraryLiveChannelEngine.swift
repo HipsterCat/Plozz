@@ -30,11 +30,15 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
         hasSource && decoderGeneration == generation && underlyingEngine.isCapturingLiveFailureDiagnostic
     }
     public var isPlaybackPositionReady: Bool { status == .ready && underlyingEngine.isPlaybackPositionReady }
+    public var isAudioOnlyPlaybackReady: Bool {
+        hasSource && !isLoading && decoderGeneration == generation
+            && status == .ready && underlyingEngine.isAudioOnlyPlaybackReady
+    }
     public var hasPresentedVideoFrame: Bool {
         hasSource && !isLoading && decoderGeneration == generation
             && status == .ready && underlyingEngine.hasPresentedVideoFrame
     }
-    #if os(iOS)
+    #if os(iOS) || os(tvOS)
     public func previewVideoFrame() -> CVPixelBuffer? {
         hasPresentedVideoFrame ? underlyingEngine.previewVideoFrame() : nil
     }
@@ -43,6 +47,18 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
     }
     #endif
     public var subtitlePresentationTime: TimeInterval { underlyingEngine.subtitlePresentationTime }
+    public var supportsActivePictureAnalysis: Bool { underlyingEngine.supportsActivePictureAnalysis }
+    public var activePictureSourceID: UUID? {
+        hasSource && decoderGeneration == generation ? underlyingEngine.activePictureSourceID : generation
+    }
+    public func sampleActivePicture() async -> VideoActivePictureState {
+        guard hasPresentedVideoFrame else { return .unavailable }
+        let stamp = generation
+        let result = await underlyingEngine.sampleActivePicture()
+        guard generation == stamp, hasPresentedVideoFrame else { return .unavailable }
+        return result
+    }
+    public func stopActivePictureAnalysis() { underlyingEngine.stopActivePictureAnalysis() }
     public func renderSubtitles(at time: TimeInterval, style: SubtitleStyle) {
         underlyingEngine.renderSubtitles(at: time, style: style)
     }
@@ -63,6 +79,7 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
     private var intendedPause = false
     private var loadFailure: AppError?
     private var outputPolicy = LiveChannelOutputPolicy()
+    private var appliedOutputPolicy: LiveChannelOutputPolicy?
 
     public init(
         engine: any LiveChannelEngine,
@@ -70,9 +87,11 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
     ) {
         underlyingEngine = engine
         self.librarySessionFactory = librarySessionFactory
+        applyOutputPolicy()
     }
 
     public var onProgress: (@MainActor () -> Void)?
+    public var onLiveOutputReadinessChanged: (@MainActor () -> Void)?
     public var onFailure: (@MainActor (AppError) -> Void)?
     public var onEnded: (@MainActor () -> Void)?
     public var onTracksChanged: (@MainActor () -> Void)?
@@ -99,6 +118,7 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
     ) async -> Result<Void, Error> {
         if currentInput == input, operation == nil, let session = librarySession {
             isLoading = true
+            applyOutputPolicy()
             self.initialErrorsAreThrown = initialErrorsAreThrown
             loadFailure = nil
             return await operateOnCurrentSource { [self] in
@@ -123,6 +143,11 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
                 }
                 librarySession = session
                 installCallbacks(stamp: stamp, scheduled: true)
+                session.onStateChanged = { [weak self, weak session] in
+                    guard let self, let session, self.generation == stamp,
+                          self.librarySession === session else { return }
+                    self.applyOutputPolicy()
+                }
                 session.onSourceReset = { [weak self, weak session] in
                     guard let self, let session, self.generation == stamp,
                           self.librarySession === session else { return }
@@ -198,6 +223,7 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
             try check(stamp)
             if intendedPause { pause() }
             isLoading = false
+            applyOutputPolicy()
             if operationID == id {
                 operation = nil
                 operationID = nil
@@ -239,9 +265,11 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
         isLoading = false
         initialErrorsAreThrown = false
         loadFailure = nil
+        applyOutputPolicy()
         clearCallbacks()
         if let session {
             session.onSourceReset = nil
+            session.onStateChanged = nil
             session.onPlaybackFailure = nil
             session.setWatching(false)
             session.stop()
@@ -280,10 +308,12 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
         intendedPause = false
         if let librarySession { librarySession.resume() }
         else if hasSource { underlyingEngine.play() }
+        applyOutputPolicy()
     }
 
     public func pause() {
         intendedPause = true
+        applyOutputPolicy()
         if let librarySession { librarySession.pause() }
         else if hasSource { underlyingEngine.pause() }
     }
@@ -372,7 +402,19 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
 
     public func configureLiveOutput(_ policy: LiveChannelOutputPolicy) {
         outputPolicy = policy
-        underlyingEngine.configureLiveOutput(policy)
+        applyOutputPolicy()
+    }
+
+    private func applyOutputPolicy() {
+        var effective = outputPolicy
+        effective.isAudible = outputPolicy.isAudible
+            && hasSource && decoderGeneration == generation && !isLoading
+            && loadFailure == nil && !intendedPause && status == .ready
+            && (liveSnapshot.firstFrameReady || isAudioOnlyPlaybackReady)
+        guard effective != appliedOutputPolicy else { return }
+        appliedOutputPolicy = effective
+        underlyingEngine.configureLiveOutput(effective)
+        onLiveOutputReadinessChanged?()
     }
 
     public var liveSnapshot: LiveChannelEngineSnapshot {
@@ -432,6 +474,7 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
         let mapped = Self.appError(error)
         guard loadFailure != mapped else { return }
         loadFailure = mapped
+        applyOutputPolicy()
         if publish ?? (!isLoading || !initialErrorsAreThrown) {
             onFailure?(mapped)
         }
@@ -445,11 +488,16 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
         decoderGeneration = stamp
         callbackGeneration = UUID()
         let callbackStamp = callbackGeneration
+        underlyingEngine.onLiveOutputReadinessChanged = { [weak self] in
+            guard let self, self.generation == stamp, self.callbackGeneration == callbackStamp else { return }
+            self.applyOutputPolicy()
+        }
         #if os(iOS)
         installPresentationCallback(stamp: stamp)
         #endif
         underlyingEngine.onProgress = { [weak self] in
             guard let self, self.generation == stamp, self.callbackGeneration == callbackStamp else { return }
+            self.applyOutputPolicy()
             self.onProgress?()
         }
         underlyingEngine.onTracksChanged = { [weak self] in
@@ -488,6 +536,7 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
     private func clearCallbacks() {
         decoderGeneration = nil
         underlyingEngine.onProgress = nil
+        underlyingEngine.onLiveOutputReadinessChanged = nil
         underlyingEngine.onFailure = nil
         underlyingEngine.onEnded = nil
         underlyingEngine.onTracksChanged = nil
@@ -502,6 +551,7 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
 
     public var displayName: String { underlyingEngine.displayName }
     public var capabilities: PlayerEngineCapabilities { underlyingEngine.capabilities }
+    public var isSessionReloading: Bool { underlyingEngine.isSessionReloading }
     public var isPaused: Bool { !hasSource || intendedPause || underlyingEngine.isPaused }
     public var preventsDisplaySleep: Bool {
         hasSource && !isLoading && !isPaused
@@ -528,6 +578,8 @@ public final class LibraryLiveChannelEngine: LiveChannelEngine {
     public func selectSecondarySubtitleTrack(_ track: MediaTrack?) { underlyingEngine.selectSecondarySubtitleTrack(track) }
     public func setPlaybackSpeed(_ rate: Double) { underlyingEngine.setPlaybackSpeed(rate) }
     public func setAudioDelay(_ seconds: TimeInterval) { underlyingEngine.setAudioDelay(seconds) }
+    public var audioDelaySeconds: TimeInterval { underlyingEngine.audioDelaySeconds }
+    public func setAudioDelayLive(_ seconds: TimeInterval) -> Bool { underlyingEngine.setAudioDelayLive(seconds) }
     public func setSubtitleDelay(_ seconds: TimeInterval) { underlyingEngine.setSubtitleDelay(seconds) }
     public func updateSubtitleStyle(_ style: SubtitleStyle) { underlyingEngine.updateSubtitleStyle(style) }
     public func setDialogEnhanceEnabled(_ enabled: Bool) { underlyingEngine.setDialogEnhanceEnabled(enabled) }

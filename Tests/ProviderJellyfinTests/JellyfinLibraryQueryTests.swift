@@ -4,6 +4,127 @@ import XCTest
 @testable import ProviderJellyfin
 
 final class JellyfinLibraryQueryTests: XCTestCase {
+    func testHomeRowSourcesExplicitlyRequestReleaseAndSortMetadata() async throws {
+        for kind: ProviderKind in [.jellyfin, .emby] {
+            let http = StubHTTPClient()
+            for path in ["/Items", "/Resume", "/NextUp", "/Recordings"] {
+                http.stub(pathSuffix: path, json: #"{"Items":[],"TotalRecordCount":0}"#)
+            }
+            http.stub(pathSuffix: "/Latest", json: "[]")
+            http.stub(pathSuffix: "/Recommendations", json: "[]")
+            let client = JellyfinClient(
+                baseURL: URL(string: "https://jellyfin.test")!, deviceProfile: .init(deviceID: "device"),
+                providerKind: kind, token: "test", http: http
+            )
+            _ = try await client.items(userID: "user", parentID: "movies", includeItemTypes: ["Movie"],
+                                       recursive: true, startIndex: 0, limit: 20,
+                                       sort: .init(field: .name, direction: .ascending))
+            _ = try await client.items(userID: "user", parentID: "movies", includeItemTypes: ["Movie"],
+                                       recursive: true, startIndex: 0, limit: 20,
+                                       sort: .init(field: .name, direction: .ascending), fields: "MediaStreams")
+            _ = try await client.collectionMembers(userID: "user", collectionID: "collection", page: .init())
+            _ = try await client.playlistItems(userID: "user", playlistID: "playlist", start: 0, limit: 20)
+            _ = try await client.resumeItems(userID: "user", limit: 20)
+            _ = try await client.nextUpItems(userID: "user", limit: 20)
+            _ = try await client.latestItems(userID: "user", limit: 20)
+            _ = try await client.nativeHomeItems(userID: "user", sectionID: "recommendations", limit: 20, parentID: nil)
+            _ = try await client.activeHomeRecordings(userID: "user", limit: 20)
+            _ = try await client.movieRecommendations(userID: "user", parentID: "movies", limit: 20)
+            _ = try await client.libraryItems(userID: "user", ids: ["movie"])
+            XCTAssertEqual(http.sentQueryItems.count, 11)
+            for query in http.sentQueryItems {
+                let fields = Set(try XCTUnwrap(query.first { $0.name.lowercased() == "fields" }?.value)
+                    .split(separator: ",").map(String.init))
+                XCTAssertTrue(Set(["ProductionYear", "PremiereDate", "SortName", "DateCreated"]).isSubset(of: fields))
+            }
+        }
+    }
+
+    func testBrowseLeavesCollectionPolicyToEachServerWithoutForcingItOn() async throws {
+        for kind: ProviderKind in [.jellyfin, .emby] {
+            for serverType in ["BoxSet", "Movie"] {
+                let http = StubHTTPClient()
+                http.stub(pathSuffix: "/Users/user/Items", json: """
+                {"Items":[{"Id":"original-id","Name":"Server result","Type":"\(serverType)"}],"TotalRecordCount":7}
+                """)
+                let page = try await provider(http, kind: kind).items(
+                    in: "library", kind: .movie,
+                    page: .init(startIndex: 2, limit: 1, collectionPresentation: .serverDefault)
+                )
+                XCTAssertEqual(page.items.map(\.id), ["original-id"])
+                XCTAssertEqual(page.items.first?.kind, serverType == "BoxSet" ? .collection : .movie)
+                XCTAssertEqual(page.totalCount, 7)
+                XCTAssertEqual(page.startIndex, 2)
+                XCTAssertEqual(http.sentPaths, ["/Users/user/Items"])
+                let query = try XCTUnwrap(http.queryItems(forPathSuffix: "/Items"))
+                XCTAssertFalse(query.contains {
+                    ["CollapseBoxSetItems", "GroupItemsIntoCollections"].contains($0.name)
+                }, "Omitting the override follows the server policy; true would force grouping.")
+                XCTAssertTrue(query.contains(.init(name: "ParentId", value: "library")))
+                XCTAssertTrue(query.contains(.init(name: "IncludeItemTypes", value: "Movie")))
+                XCTAssertTrue(query.contains(.init(name: "StartIndex", value: "2")))
+            }
+        }
+    }
+
+    func testInventoriesFiltersOtherSortsAndNonmovieQueriesKeepIndividualItems() async throws {
+        for kind: ProviderKind in [.jellyfin, .emby] {
+            let http = StubHTTPClient()
+            http.stub(pathSuffix: "/Users/user/Items", json: #"{"Items":[],"TotalRecordCount":0}"#)
+            let source = provider(http, kind: kind)
+            let parameter = kind == .emby ? "GroupItemsIntoCollections" : "CollapseBoxSetItems"
+            let requests: [(MediaItemKind, PageRequest)] = [
+                (.movie, .init()),
+                (.movie, .init(sort: .init(field: .year, direction: .descending), collectionPresentation: .serverDefault)),
+                (.movie, .init(filters: .init(filter: .unwatched), collectionPresentation: .serverDefault)),
+                (.movie, .init(filters: .init(genre: "Drama"), collectionPresentation: .serverDefault)),
+                (.movie, .init(filters: .init(year: 2024), collectionPresentation: .serverDefault)),
+                (.series, .init(collectionPresentation: .serverDefault)),
+                (.episode, .init(collectionPresentation: .serverDefault))
+            ]
+            for (itemKind, request) in requests {
+                _ = try await source.items(in: "library", kind: itemKind, page: request)
+                XCTAssertTrue(try XCTUnwrap(http.queryItems(forPathSuffix: "/Items"))
+                    .contains(.init(name: parameter, value: "false")))
+            }
+            _ = try await source.libraryQueryInventory(
+                in: "library", kind: .movie, page: .init(collectionPresentation: .serverDefault)
+            )
+            XCTAssertTrue(try XCTUnwrap(http.queryItems(forPathSuffix: "/Items"))
+                .contains(.init(name: parameter, value: "false")))
+        }
+    }
+
+    func testGroupedAlphabetUsesBoxSetNamesAndOffsetsInsteadOfMemberPredicates() async throws {
+        for kind: ProviderKind in [.jellyfin, .emby] {
+            for direction: SortDirection in [.ascending, .descending] {
+                let http = StubHTTPClient()
+                let movie = #"{"Id":"movie","Name":"Apple","Type":"Movie"}"#
+                let collection = #"{"Id":"set","Name":"Zebra cuts","Type":"BoxSet"}"#
+                let rows = direction == .ascending ? [movie, collection] : [collection, movie]
+                http.stubSequence(pathSuffix: "/Users/user/Items", jsons: rows.map {
+                    #"{"Items":["# + $0 + #"],"TotalRecordCount":2}"#
+                })
+                let source = provider(http, kind: kind)
+                let request = PageRequest(
+                    sort: .init(field: .name, direction: direction), collectionPresentation: .serverDefault
+                )
+                let entries = try await source.libraryQueryLetterIndex(in: "library", kind: .movie, page: request)
+                XCTAssertEqual(entries, LibraryLetterIndex.deferredEntries(direction: direction))
+                XCTAssertTrue(http.sentPaths.isEmpty)
+                let position = try await source.libraryQueryLetterPosition(
+                    in: "library", kind: .movie, letter: "Z", page: request
+                )
+                XCTAssertEqual(position, direction == .ascending ? 1 : 0)
+                XCTAssertTrue(http.sentQueryItems.allSatisfy { query in
+                    !query.contains {
+                        ["CollapseBoxSetItems", "GroupItemsIntoCollections", "NameLessThan", "NameStartsWith"].contains($0.name)
+                    }
+                })
+            }
+        }
+    }
+
     func testRandomFilterInventoryUsesStablePagingOnBothBackends() async throws {
         for kind: ProviderKind in [.jellyfin, .emby] {
             let http = StubHTTPClient()

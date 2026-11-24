@@ -17,13 +17,21 @@ first-class backends; co-equal with `ProviderJellyfin`.
 - `PlexConnectionResolver` + `PlexConnectionSelector` — pick the best
   reachable server connection from `plex.tv` (LAN vs WAN vs relayed),
   prioritising local & direct over relayed.
-- `PlexDeviceProfile` — the direct-play / transcode capability matrix sent
-  to the server, parameterised by whether the on-device decode engine
-  (Plozzigen) is linked.
+- `PlexDeviceProfile` — the client identity sent to Plex.tv and media servers.
+  Defaults report the runtime device family, friendly device name, OS version,
+  and app bundle version on both platforms. The per-install client identifier
+  stays stable; playback capabilities remain separate from this identity.
 - `PlexDTOs` — Plex JSON shapes, mapped into `CoreModels` at the seam.
 
 ## Invariants
 
+- HTTP sharing defaults off. Library sections and the
+  stream-enriched browse helper explicitly opt in at their request definitions.
+  Item/batch metadata, watched, rating, progress/timeline and transcode-session
+  GET operations remain independent. An older response still in flight cannot
+  stand in for a later write or session action, even when their URLs match. Metadata also authorizes
+  queued resets and must observe newer playback independently of pending reads.
+  Address retry is unchanged.
 - Manually verified alternate addresses supplement, rather than replace, Plex's
   advertised local/remote/relay candidates. Discovery refresh retains the manual
   set, and removed aliases cannot be resurrected by a last-reachable seed.
@@ -38,6 +46,9 @@ first-class backends; co-equal with `ProviderJellyfin`.
 - **Tokens never logged.** `X-Plex-Token` flows through `CoreNetworking`
   redaction; PIN values are never persisted (see `PlexPinFlow`).
 - **All errors become `AppError`.**
+- Lenient scalar decoders check key presence before trying alternate types.
+  Sparse stream records must not construct decoding errors for absent optional
+  fields; present values retain the existing conversion order and metadata.
 - **Co-equal with `ProviderJellyfin`.** Any new `MediaProvider` capability
   must ship for Plex whenever it ships for Jellyfin (and vice versa).
 - Home-user identity changes happen **in-memory only** — Plozz never
@@ -55,12 +66,48 @@ first-class backends; co-equal with `ProviderJellyfin`.
   Home-user token, never the server-scoped token, and rechecks identity after
   the cloud response before publishing an empty inventory.
 
+## Related card batches
+
+Related card reads support `LibraryItemBatchProviding` through the server's
+multi-rating-key metadata endpoint. Batches retain native titles, artwork, GUIDs
+and watch state, remain bounded to 50 distinct native numeric keys, and reject
+duplicate or unrequested responses. Global Discover IDs never enter this path;
+the shared loader retains individual/search recovery for unavailable copies.
+
+## Extra resume fallback
+
+Plex can accept short progress writes without retaining an offset, including for
+trailers and special features. Explicit extras use `LocalMediaWatchStore` as a
+device-local fallback, scoped by Plozz profile, account, server and effective Plex
+Home user. Both shells capture that viewer context when resolving the provider;
+token refresh does not change the durable identity. Movies and ordinary episodes
+remain server-managed, including Plex's short-progress cutoff.
+
+Item, extra/trailer lists and playback requests apply the fallback. Timestamped
+resume and played writes preserve ordering across provider reconstruction;
+start-over clears the local offset and completion marks the extra itself watched.
+Newer server progress still wins. Server-report failures remain errors even when
+local persistence succeeds. Extras never propagate inherited parent identities
+or tracker scrobbles; trailers remain excluded from Continue Watching. This does
+not synchronize extra progress to other devices.
+
 ## Live TV tuning
 
 Plex DVR tuning uses the lineup's native channel `id`, never its display number
 (`vcn`). Channels without display numbers remain playable. Native IDs are
 validated as a single path component; invalid IDs do not fall back to another
 channel or tuner.
+
+Tune responses may wrap `MediaGrabOperation` in `MediaSubscription`.
+Playback parsing follows that envelope but excludes its `Timeline` and
+`AlsoAiring` guide metadata: those records must not select a stream or change
+the owned session's cleanup identity.
+
+Live TV uses the native HLS player. Only known, native-compatible source codecs
+enable Plex's `directPlay` flag; MPEG-2, incompatible audio, and unknown codec
+metadata request H.264/AAC compatibility conversion. The decision and start
+requests share that profile and viewer identity. Compatible H.264/HEVC channels
+retain direct playback.
 
 Failed tune requests use the consent-gated playback diagnostics sink under
 `plexLiveTune`. Evidence retains HTTP status, numeric Plex failure status,
@@ -110,8 +157,31 @@ when the suggested movie or person changes; ordinary genre/collection IDs remain
 server-authored. The shared library key scopes both forms to their account.
 Explicit row choices can include person or sparse shelves that legacy Home
 excluded. The library Recommended view retains `libraryHubs` behavior.
+An explicitly added library Recently Added row follows the library's native
+Recently Added hub, including its paging key. In TV libraries this preserves
+Plex's choice of episode, season or show rather than sorting shows by `addedAt`.
 Home continues to use the canonical Continue Watching feed rather than
 duplicating a resume/on-deck hub inside each library.
+
+Match server retains each promoted row's sanitized native shelf key separately
+from its stable row identity. If the content response omits that row or truncates
+its inline items, Home loads that exact shelf rather than substituting the full
+recommendation menu. Older rows without a shelf key get one shared retry per
+library; unrecoverable rows report an error without discarding successful siblings.
+Surviving shelves match their saved keys before positional recommendation slots,
+so an omitted sibling cannot shift another shelf into two rows. Unmatched slots
+can still adopt genuinely new recommendation subjects.
+Explicitly empty shelves remain empty. Key-only promotions have a stable identity
+derived from the credential-free key, never the translated display title.
+Persisted keys are revalidated before use, and recovery keeps the active viewer's
+credentials and library filtering. Browse continuation verifies preview anchors
+before falling back to a saved shelf, so a rotating recommendation cannot silently
+open an unrelated subject.
+Fresh server-row content also carries its sanitized continuation beside its
+items. Curated hubs issue a new `curatedHubSeed` on each promoted-hub request;
+See all pages use the preview's seed directly rather than rediscovering the hub
+or using the older layout-discovery key. Recovered rows carry the exact recovery
+key. Legacy previews without a captured key retain the anchor-checked fallback.
 
 Home and library Continue Watching share the same endpoint selection: items hub,
 plain hub, then legacy on-deck only after an initial unsupported, invalid-response,
@@ -129,7 +199,23 @@ Failed reads also record the failing endpoint category and paging invariant for
 the shared Details sheet. These opt-in diagnostics preserve error/fallback
 behavior and never export item identities or response bodies.
 
+## Hero artwork
+
+Plex's selected `Image` entry with type `backgroundSquare` is retained as
+`.squareHero`, separately from posters, logos, and landscape backgrounds.
+Compact iPhone Home and detail heroes prefer it under Recommended or Library
+artwork preferences; an explicit Metadata providers preference still wins.
+Relative paths use the existing server-authenticated artwork route, while
+Discover paths remain on Discover. Missing square art retains the existing
+fallback, and landscape heroes and poster cards are unchanged.
+
 ## Continue Watching artwork
+
+Persisted artwork first matches the connection resolver's live in-memory origins.
+Only unmatched URLs load historical origins from preferences, avoiding a
+preferences read for each poster and cast credit during cached Home restoration.
+Historical origins remain server-scoped and live, including reverse-proxy paths;
+reauthentication still uses the current provider's credentials and route.
 
 The existing parent-series metadata batches (at most 50 referenced series per
 request) provide both recency and artwork context. Episodes retain their own
@@ -140,6 +226,21 @@ Unrequested or non-series records are rejected, and a failed parent lookup keeps
 the original feed available.
 
 ## Collections
+
+Movie Browse follows the server's library collection policy and per-collection
+overrides automatically under All + Name sorting. Its existing section query
+sends `includeCollections=1`; Plex supplies the mixed rows and authoritative
+total, without a client membership scan or a second global collection listing.
+Grouped Browse omits both `includeElements=Stream` and
+`includeOptionalElements=Stream`: some servers return HTTP 200 with collection
+cards silently removed and a reduced total even for optional enrichment, while
+their members remain hidden. This can reduce stream-derived badges on the mixed
+grid; detail and playback still fetch full item metadata. Other sorts, filters,
+background inventories and feeds retain stream enrichment and request individual
+titles. There is no new setting or persistent Browse control.
+For grouped Browse, A-Z targets resolve against the actual paged mixed result
+on demand, not the movie-only `firstCharacter` facet. Ordinary paging does not
+enumerate the library; a late-letter jump can read multiple cancellable pages.
 
 `libraries()` returns actual server sections only. Collection discovery is an
 option inside a movie/TV library, exposed by `.libraryCollections` and
@@ -239,6 +340,15 @@ options translate selected audio/subtitle indexes to Plex's database stream
 IDs, using the selected media version's stream inventory. Decision and playback
 requests must carry identical selections and limits.
 
+Before negotiating a server rendition with a selected audio track, Plozz awaits
+`PUT /library/parts/{partID}?audioStreamID={streamID}&allParts=1` using the active
+Plex user's credentials. Plex can ignore the audio selection in decision/start
+URLs alone. The part and database stream ID come from the selected version;
+the player's container index remains unchanged. Selection failures or cancellation
+stop negotiation rather than silently playing the previous language. Direct-file
+playback does not write the server's track selection. This follows
+[`MediaPart.setSelectedAudioStream` in PlexAPI](https://github.com/pushingkarmaorg/python-plexapi/blob/master/plexapi/media.py).
+
 Bounded video encoding reserves the quality policy's audio budget. Plex receives
 the documented `audioChannelCount` parameter and a `videoAudioCodec` /
 `audio.bitrate` profile limitation, rather than relying on `audioChannels` or
@@ -290,6 +400,15 @@ selection, quality limits, or server-transcode negotiation.
 
 Tests: `ProviderPlexTests` covers MKV and MP4 original-file playback, scrubbing,
 selected media versions, and the separately preserved offline-download URL.
+
+New reduced offline requests use a single native download-queue MP4 with
+H.264/AAC and `DirectPlayStreamSelection=true` in the all-context client profile.
+They retain every audio track without setting `audioStreamID` or changing the
+server's saved selection. The requested bitrate, resolution and exact media/part
+indices remain pinned. Actual audio inventory, resolution and complete media
+samples are validated before completion; playback uses the normal language
+preference against local tracks. Legacy single-audio requests remain compatible.
+See [MediaDownloads](../MediaDownloads/README.md#download-quality-and-tracks).
 
 ## Playback session reporting
 

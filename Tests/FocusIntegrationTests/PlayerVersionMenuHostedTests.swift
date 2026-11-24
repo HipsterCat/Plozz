@@ -8,6 +8,31 @@ import XCTest
 
 @MainActor
 final class PlayerVersionMenuHostedTests: XCTestCase {
+    func testOpaqueSourceNamesUseReadableFallbackInOptimizedBuild() {
+        let token = String(repeating: "Ab7_xQ4-", count: 20) + "." + String(repeating: "Cd8_Rs5-", count: 6)
+        for rawName in [token, "https://media.example/stream/\(token)"] {
+            XCTAssertNil(MediaSourceDisplayName.fileName(from: rawName))
+            let version = MediaVersion(
+                id: "source", name: "📁 Episode.S02E01.1080p.WEB-DL.mkv\n🌐 English",
+                fileName: rawName, height: 1080
+            )
+            XCTAssertEqual(
+                MediaVersion.PickerPresentation(version).releaseName, "Episode.S02E01.1080p.WEB-DL.mkv"
+            )
+            XCTAssertEqual(version.fileName, rawName)
+            XCTAssertEqual(version.playbackMediaSourceID, "source")
+        }
+        XCTAssertEqual(
+            MediaSourceDisplayName.fileName(
+                from: "https://media.example/\(token)?filename=Episode.S02E01.1080p.mkv"
+            ),
+            "Episode.S02E01.1080p.mkv"
+        )
+        let unknown = MediaVersion(id: "unknown", name: token, fileName: token, height: 1080)
+        XCTAssertNil(MediaVersion.PickerPresentation(unknown).releaseName)
+        XCTAssertEqual(unknown.displayLabel, "1080p")
+    }
+
     func testVersionFilenameQueriesRejectControlCharactersInOptimizedBuild() {
         XCTAssertEqual(
             MediaSourceDisplayName.fileName(from: "filename=Movie.Extended-GROUP.mkv"),
@@ -228,7 +253,7 @@ final class PlayerVersionMenuHostedTests: XCTestCase {
             guard let frame = self.focusFrame(in: window) else { return false }
             return frame.midX > window.bounds.midX && frame.width < 200
         }
-        XCTAssertEqual(model.trackControlCategories, [.version])
+        XCTAssertEqual(model.trackControlCategories, [.playback])
         model.controlBar.settled = true
 
         PlayerScreenshotHook.pendingPanel = .versions

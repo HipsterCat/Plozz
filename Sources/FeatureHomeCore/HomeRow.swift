@@ -92,6 +92,7 @@ public struct HomeRow: Identifiable, Equatable, Sendable {
     public var loadingPlaceholderCount: Int
     public var failure: AppError?
     public var hasMore = false
+    public var customTitle: String?
 
     /// True when this row would draw nothing on Home. A row survives the
     /// visibility filter as an empty shell, so "are there any rows" is not the
@@ -135,6 +136,7 @@ public struct HomeRow: Identifiable, Equatable, Sendable {
 struct HomeRowPreview: Sendable {
     var items: [MediaItem]
     let hasMore: Bool
+    var browseID: String?
 
     init(_ candidates: [MediaItem], limit: Int, retainsCandidates: Bool = false) {
         var seen = Set<String>()

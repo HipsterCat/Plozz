@@ -76,7 +76,7 @@ struct ServerDetailView: View {
                     // Safety net if the group vanishes while viewing (e.g. a remote
                     // "Remove Everywhere" landed): offer a working way back.
                     VStack(alignment: .leading, spacing: 16) {
-                        SettingsPageHeader("Servers")
+                        SettingsPageHeader(SettingsCopy.sources)
                         Text("This server is no longer signed in.")
                             .font(.headline)
                             .plozzForeground(.secondary)
@@ -196,6 +196,8 @@ struct ServerDetailView: View {
             return "Emby signs in per profile, each with its own credentials. Choose what shows on your Home under Libraries."
         case .silo:
             return "Each Silo connection uses the household profile selected during pairing. Its library access and watch history stay on Silo."
+        case .subsonic:
+            return "Music access and favorites belong to your server account."
         case .iptv:
             return "Your provider supplies channels, movies, and series. Watch history stays separate for each Plozz profile on this device."
         case .mediaShare:

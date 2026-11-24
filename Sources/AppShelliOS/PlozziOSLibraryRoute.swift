@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import CoreModels
+import PlozzCoreUI
 import FeatureHomeCore
 
 /// A pushed library grid, addressed by value rather than by an eagerly-built view.
@@ -76,6 +77,10 @@ struct PlozziOSLibraryDestinationView: View {
     }
 
     private var title: String { // l10n:content - provider name or locale-scoped resource bridged to the grid's String API
+        if let accountID = route.accountID,
+           let name = appModel.settings.navigation.libraryLayout.customNames["\(accountID):\(route.containerID)"] {
+            return name
+        }
         let library = MediaLibrary(
             id: route.containerID,
             title: route.title,
@@ -120,6 +125,10 @@ extension View {
     func plozziOSLibraryDestination(appModel: PlozziOSAppModel) -> some View {
         navigationDestination(for: PlozziOSLibraryRoute.self) { route in
             PlozziOSLibraryDestinationView(appModel: appModel, route: route)
+        }
+        .navigationDestination(for: MediaArtworkZoomRoute<PlozziOSLibraryRoute>.self) { route in
+            PlozziOSLibraryDestinationView(appModel: appModel, route: route.value)
+                .mediaArtworkZoomDestination(route.source)
         }
     }
 }

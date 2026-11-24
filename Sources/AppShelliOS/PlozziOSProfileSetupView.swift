@@ -2,6 +2,7 @@
 import AppRuntime
 import CoreModels
 import PlozzCoreUI
+import FeatureLiveTV
 import FeatureProfiles
 import FeatureSettings
 import SwiftUI
@@ -20,6 +21,7 @@ import SwiftUI
 struct PlozziOSProfileSetupView: View {
     let appModel: PlozziOSAppModel
     let onDone: () -> Void
+    @Environment(\.themePalette) private var palette
 
     @State private var showingAddServer = false
     @State private var addUserServer: MediaServer?
@@ -39,18 +41,12 @@ struct PlozziOSProfileSetupView: View {
                     Button("Done", action: onDone)
                 }
             }
-            .safeAreaInset(edge: .top) {
-                Text(
-                    "Pick the servers \(appModel.profiles.activeProfile.name) watches with, and who they are on each."
-                )
-                .font(.subheadline)
-                .plozzForeground(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-            }
         }
+        .guidePreparationOverlay(
+            model: appModel.guidePreparation, presenter: appModel.transientStatusPresenter,
+            palette: palette
+        )
+        .offlineStatusOverlay(appModel: appModel, palette: palette)
         // Setup has to finish deliberately: the model releases the watchlist
         // import when it does, so a swipe-away is handled as an explicit cancel
         // rather than being allowed to strand the profile mid-flow.
@@ -64,7 +60,7 @@ struct PlozziOSProfileSetupView: View {
         ) {
             AddServerView(
                 appModel: appModel,
-                initialProvider: addUserServer?.provider ?? .jellyfin,
+                initialProvider: addUserServer?.provider,
                 initialAddress: addUserServer?.baseURL.absoluteString ?? ""
             )
             .presentationSizing(.page)
@@ -130,8 +126,30 @@ struct PlozziOSProfileSetupView: View {
     }
 }
 
-/// Asks who a profile watches as on a Plex server it just switched on.
-///
+struct PlozziOSServerIdentityPresenter: ViewModifier {
+    let appModel: PlozziOSAppModel
+    let isEnabled: Bool
+    @State private var displayed: PlozziOSAppModel.ServerIdentityQuestion.ID?
+
+    func body(content: Content) -> some View {
+        let question = isEnabled ? appModel.presentableIdentityQuestion : nil
+        return content.plozzSheet(item: Binding(
+            get: { question },
+            set: { value in
+                guard value == nil, let question, displayed == question.id else { return }
+                appModel.concludeIdentityPrompt(question)
+            }
+        )) { presented in
+            PlozziOSServerIdentityPromptView(
+                appModel: appModel, account: presented.account,
+                onFinish: { appModel.concludeIdentityPrompt(presented) },
+                onDecline: { appModel.concludeIdentityPrompt(presented, decline: true) }
+            )
+            .onAppear { displayed = presented.id }
+        }
+    }
+}
+
 /// Reuses the Home-user page from Settings, which is already the screen for this
 /// question on iOS — the difference is only that here it's asked rather than
 /// gone looking for. See `ProfileServerIdentityPrompts` for why enabling a
@@ -139,10 +157,7 @@ struct PlozziOSProfileSetupView: View {
 struct PlozziOSServerIdentityPromptView: View {
     let appModel: PlozziOSAppModel
     let account: Account
-    /// Closes the question. Whether that counts as answered or declined is
-    /// decided by whether a user was actually picked — see
-    /// `PlozziOSAppModel.concludeIdentityPrompt(for:)`. Done and a swipe are the
-    /// same gesture here, and neither is consent on its own.
+    /// Done and swipe keep the current identity; declining the watchlist is explicit.
     let onFinish: () -> Void
     let onDecline: () -> Void
 
@@ -233,6 +248,7 @@ struct PlozziOSProfileOnboardingCover: View {
                 EmptyView()
             }
         }
+        .prepareSeerrSetup(appModel.seerService)
         .id(appModel.profileOnboardingID)
         .transaction { $0.animation = nil }
     }

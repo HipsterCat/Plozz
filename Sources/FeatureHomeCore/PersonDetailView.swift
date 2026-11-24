@@ -29,8 +29,18 @@ public struct PersonDetailView: View {
     private let onSelectItem: (MediaItem) -> Void
 
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.locale) private var locale
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var onSelectArtwork: ((MediaItem, MediaArtworkZoomSource) -> Void)?
+
+    public func artworkNavigation(
+        _ action: @escaping (MediaItem, MediaArtworkZoomSource) -> Void
+    ) -> Self {
+        var copy = self
+        copy.onSelectArtwork = action
+        return copy
+    }
     #endif
     @Environment(\.dismiss) private var dismiss
 
@@ -165,6 +175,7 @@ public struct PersonDetailView: View {
             }
         }
         .task { await viewModel.load() }
+        .task(id: locale.identifier) { await viewModel.updateMetadataLanguage(locale.identifier) }
         .detailOpenFeedback()
         .environment(\.plozzCardCaptionView, .filmography)
     }
@@ -220,8 +231,11 @@ public struct PersonDetailView: View {
                         .plozzForeground(.secondary)
                 }
                 if let biography = viewModel.biography {
+                    // Providers return prose as HTML (`<p><strong>Hobbies…</strong></p>`).
+                    // Rendering it raw showed the tags to the viewer; convert at the
+                    // point of display so truncation measures visible characters.
                     ExpandableOverviewText(
-                        text: biography,
+                        text: HTMLText.plainText(from: biography),
                         title: person.name,
                         lineLimit: 3,
                         font: bodyFont
@@ -418,6 +432,9 @@ public struct PersonDetailView: View {
                 leadingInset: railInset,
                 onSelect: onSelectItem
             )
+                #if os(iOS)
+                .artworkNavigation(onSelectArtwork)
+                #endif
                 // Each shelf is its own focus section, which MediaRowView
                 // deliberately does NOT do by default — ordinary rows stay
                 // unsectioned to preserve tvOS's column-aligned projection.

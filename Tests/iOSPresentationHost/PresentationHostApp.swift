@@ -13,6 +13,21 @@ import FeatureSettings
     var supportedPresentationOrientations: UIInterfaceOrientationMask { get }
 }
 
+private extension View {
+    /// Exercise a conventional iPhone's horizontal bars on the Duo-only 27.1 simulator.
+    @ViewBuilder func fixtureNavigationBarAxis() -> some View {
+        #if canImport(SwiftUI, _version: 8.0.85)
+        if #available(iOS 27.1, *), ProcessInfo.processInfo.arguments.contains("--back-interaction") {
+            toolbarVerticalBehavior(.disabled)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+}
+
 @main
 struct PresentationHostApp: App {
     @UIApplicationDelegateAdaptor(PresentationOrientationDelegate.self) private var orientationDelegate
@@ -33,10 +48,13 @@ struct PresentationHostApp: App {
             Self.seedSyncBreakdown()
         }
         let model: PlozziOSAppModel
-        if ProcessInfo.processInfo.arguments.contains("--libraries-in-more") {
+        if ProcessInfo.processInfo.arguments.contains("--libraries-in-more")
+            || ProcessInfo.processInfo.arguments.contains("--navigation-scroll-fixture")
+            || ProcessInfo.processInfo.arguments.contains("--streaming-settings-source") {
             let accounts = AccountStore(secureStore: InMemorySecureStore())
             let provider = CollectionSettingsProvider(
-                includesAllLibrariesFixture: ProcessInfo.processInfo.arguments.contains("--all-libraries-fixture")
+                includesAllLibrariesFixture: ProcessInfo.processInfo.arguments.contains("--all-libraries-fixture"),
+                includesNavigationScrollFixture: ProcessInfo.processInfo.arguments.contains("--navigation-scroll-fixture")
             )
             let account = Account(id: "navigation-library", from: provider.session)
             let defaults = UserDefaults(suiteName: "MoreNavigationFixture.\(UUID().uuidString)")!
@@ -76,7 +94,10 @@ struct PresentationHostApp: App {
         } else if ProcessInfo.processInfo.arguments.contains("--search-black-theme") {
             model.settings.theme.theme = .pureBlack
         }
-        model.settings.theme.gradientEnabled = true
+        model.settings.theme.gradientEnabled =
+            !ProcessInfo.processInfo.arguments.contains("--navigation-flat-background")
+        model.settings.transparency.preference =
+            ProcessInfo.processInfo.arguments.contains("--opaque-navigation") ? .off : .system
         model.settings.playback.settings = .default
         if ProcessInfo.processInfo.arguments.contains("--reset-read-ahead") {
             PlaybackReadAheadStore().save(.default)
@@ -97,7 +118,14 @@ struct PresentationHostApp: App {
         if ProcessInfo.processInfo.arguments.contains("--navigation-interaction-fixture") {
             var available = NavigationDestinationDefaults.iOS
             let enabled: [String]
-            if ProcessInfo.processInfo.arguments.contains("--libraries-in-more") {
+            if ProcessInfo.processInfo.arguments.contains("--navigation-scroll-fixture") {
+                available.append("navigation-library:movies")
+                enabled = [
+                    NavigationLibraryLayout.homeKey, "navigation-library:movies",
+                    NavigationLibraryLayout.downloadsKey, NavigationLibraryLayout.settingsKey,
+                    NavigationLibraryLayout.searchKey
+                ]
+            } else if ProcessInfo.processInfo.arguments.contains("--libraries-in-more") {
                 let libraryKey = "navigation-library:movies"
                 available.append(libraryKey)
                 if ProcessInfo.processInfo.arguments.contains("--all-libraries-fixture") {
@@ -113,7 +141,8 @@ struct PresentationHostApp: App {
                 enabled = [
                     NavigationLibraryLayout.homeKey, NavigationLibraryLayout.liveTVKey,
                     NavigationLibraryLayout.settingsKey, NavigationLibraryLayout.watchlistKey,
-                    NavigationLibraryLayout.searchKey, NavigationLibraryLayout.downloadsKey
+                    NavigationLibraryLayout.searchKey, NavigationLibraryLayout.downloadsKey,
+                    NavigationLibraryLayout.upcomingKey
                 ]
             } else if ProcessInfo.processInfo.arguments.contains("--profile-rail-fixture") {
                 enabled = [
@@ -205,6 +234,19 @@ struct PresentationHostApp: App {
         func application(
             _ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?
         ) -> UIInterfaceOrientationMask {
+            let arguments = ProcessInfo.processInfo.arguments
+            // This fixture renders the controls directly, without the production player's orientation owner.
+            if arguments.contains("--player-layout-fixture") {
+                if arguments.contains("--capture-player-landscape-left") { return .landscapeLeft }
+                return arguments.contains("--capture-player-landscape") ? .landscapeRight : .all
+            }
+            if arguments.contains("--continue-watching-player-fixture") { return .all }
+            if arguments.contains("--disc-touch-fixture") { return .allButUpsideDown }
+            if let index = arguments.firstIndex(of: "--disc-review-fixture"),
+               arguments.indices.contains(index + 1),
+               !arguments[index + 1].hasPrefix("detail") {
+                return .landscape
+            }
             // Hosted XCTest links its own package globals; ask its window for its registry's policy.
             if let owner = window?.windowScene?.keyWindow as? PresentationOrientationWindow {
                 return owner.supportedPresentationOrientations
@@ -215,12 +257,69 @@ struct PresentationHostApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--diagnostics-sharing-fixture") {
+            if ProcessInfo.processInfo.arguments.contains("--upcoming-capture-fixture") {
+                UpcomingCaptureFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--detail-selection-fixture") {
+                DetailSelectionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--content-refresh-return-fixture") {
+                ContentRefreshReturnFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--music-profile-fixture") {
+                MusicProfileFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--music-landing-fixture") {
+                MusicLandingFixture(
+                    palette: ProcessInfo.processInfo.arguments.contains("--music-light") ? .light :
+                        ProcessInfo.processInfo.arguments.contains("--music-oled") ? .pureBlack : .dark,
+                    textSize: ProcessInfo.processInfo.arguments.contains("--music-large-text") ? .accessibility3 : .large
+                )
+            } else if ProcessInfo.processInfo.arguments.contains("--music-detail-fixture") {
+                MusicDetailFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--music-player-fixture") {
+                MusicPlayerFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--offline-review-fixture") {
+                OfflineModeReviewFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--home-empty-fixture") {
+                let palette = ProcessInfo.processInfo.arguments.contains("--light") ? ThemePalette.light : .dark
+                ScrollView {
+                    HomeSectionStatusView(
+                        issue: .init(
+                            choice: .init(
+                                id: .server(accountID: "fixture", section: "seasonal"),
+                                title: "Seasonal picks", isProviderDefault: true
+                            ),
+                            reason: .empty, serverName: "Media server", providerKind: .silo
+                        ),
+                        onCustomizeHome: {}, onDismissEmpty: {}, onRetry: {}
+                    )
+                    .padding(24)
+                }
+                .environment(\.themePalette, palette)
+                .preferredColorScheme(palette.isLight ? .light : .dark)
+                .background(palette.backgroundBase.ignoresSafeArea())
+            } else if let page = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--onboarding-page=") }) {
+                MobileServerOnboardingFixture(
+                    page: String(page.dropFirst("--onboarding-page=".count)), presentsAsSheet: true
+                )
+                    .environment(\.themePalette, ProcessInfo.processInfo.arguments.contains("--light")
+                                 ? ThemePalette.light : .dark)
+                    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light") ? .light : .dark)
+                    .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility5 : .large)
+            } else if ProcessInfo.processInfo.arguments.contains("--detail-information-fixture") {
+                DetailInformationFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--continue-watching-details-fixture") {
+                ContinueWatchingDetailsFixture()
+                    .fixtureNavigationBarAxis()
+            } else if ProcessInfo.processInfo.arguments.contains("--search-keyboard-fixture") {
+                SearchKeyboardInteractionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--diagnostics-sharing-fixture") {
                 DiagnosticsSharingFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--source-settings") {
                 SourceOnboardingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--poster-zoom-fixture") {
+                PosterZoomFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--featured-card-fixture") {
                 FeaturedCardInteractionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--discover-fixture") {
+                DiscoverBrowseFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--collection-settings-fixture") {
                 CollectionSettingsInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--hero-request-controls-fixture") {
@@ -229,10 +328,15 @@ struct PresentationHostApp: App {
                 ThemeMusicMuteFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--home-hero-fixture") {
                 HomeHeroInteractionFixture()
+                    .fixtureNavigationBarAxis()
             } else if ProcessInfo.processInfo.arguments.contains("--player-layout-fixture") {
                 PlayerLayoutFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--device-setup-fixture") {
                 DeviceSetupInteractionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--disc-review-fixture") {
+                DiscReviewFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--disc-touch-fixture") {
+                DiscTouchFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--player-glass-fixture") {
                 PlayerGlassAppearanceFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--playback-failure-fixture") {
@@ -261,6 +365,8 @@ struct PresentationHostApp: App {
                 ProfileSelectionInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--profile-picker-fixture") {
                 ProfilePickerInteractionFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--download-selection-fixture") {
+                DownloadSelectionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--downloads-interaction-fixture") {
                 DownloadsInteractionFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--iptv-removal-fixture") {
@@ -382,8 +488,9 @@ private struct CollectionSettingsInteractionFixture: View {
     }
 }
 
-private struct CollectionSettingsProvider: MediaProvider, CapabilityReporting {
+private struct CollectionSettingsProvider: MediaProvider, CapabilityReporting, StreamingQualityProviding {
     var includesAllLibrariesFixture = false
+    var includesNavigationScrollFixture = false
     let kind: ProviderKind = .plex
     let capabilities: ProviderCapability = [.libraryCollections]
     let session = UserSession(
@@ -410,6 +517,12 @@ private struct CollectionSettingsProvider: MediaProvider, CapabilityReporting {
     func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
     func latest(limit: Int) async throws -> [MediaItem] { [] }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        if includesNavigationScrollFixture {
+            return .init(
+                items: Array(navigationScrollItems.dropFirst(page.startIndex).prefix(page.limit)),
+                startIndex: page.startIndex, totalCount: navigationScrollItems.count
+            )
+        }
         guard includesAllLibrariesFixture else {
             return .init(items: [], startIndex: page.startIndex, totalCount: 0)
         }
@@ -422,8 +535,28 @@ private struct CollectionSettingsProvider: MediaProvider, CapabilityReporting {
     }
     func item(id: String) async throws -> MediaItem { throw AppError.notFound }
     func children(of itemID: String) async throws -> [MediaItem] { [] }
-    func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
+    func search(query: String, limit: Int) async throws -> [MediaItem] {
+        guard includesNavigationScrollFixture else { return [] }
+        return navigationScrollItems.prefix(limit).map {
+            var item = $0
+            item.title = "Search \(item.title)"
+            return item
+        }
+    }
+    private var navigationScrollItems: [MediaItem] {
+        (1...60).map {
+            .init(
+                id: "navigation-\($0)", title: String(format: "Navigation item %02d", $0), kind: .movie,
+                allowsTitleBasedMetadataMatching: false, sourceAccountID: "navigation-library"
+            )
+        }
+    }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }
+    func playbackInfo(
+        for itemID: String, mediaSourceID: String?, forceTranscode: Bool,
+        streaming: StreamingPlaybackOptions
+    ) async throws -> PlaybackRequest { throw AppError.notFound }
+    func releaseStreamingSession(_ request: PlaybackRequest) async {}
     func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
     func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }
@@ -584,6 +717,7 @@ private struct IPTVRemovalFixture: View {
 }
 
 private struct SettingsInteractionFixture: View {
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
     let appModel: PlozziOSAppModel
     @State private var language = AppLanguageSettingsModel()
     @State private var showingSettings = false
@@ -611,7 +745,7 @@ private struct SettingsInteractionFixture: View {
                 .environment(heroTrailers)
                 .task {
                     let arguments = ProcessInfo.processInfo.arguments
-                    if arguments.contains("--libraries-in-more") {
+                    if arguments.contains("--libraries-in-more") || arguments.contains("--navigation-scroll-fixture") {
                         await appModel.refreshNavigationLibraries()
                         precondition(!appModel.visibleNavigationLibraries.isEmpty, "The library fixture must discover Movies")
                     }
@@ -658,6 +792,10 @@ private struct SettingsInteractionFixture: View {
                 .task {
                     let arguments = ProcessInfo.processInfo.arguments
                     do {
+                        if arguments.contains("--custom-zoom-fixture") {
+                            appModel.settings.playback.settings.videoZoom[.current] =
+                                .init(mode: .custom, customPercent: 117)
+                        }
                         if let index = arguments.firstIndex(of: "--playback-scroll-offset"),
                            arguments.indices.contains(index + 1),
                            let offset = Double(arguments[index + 1]) {
@@ -725,12 +863,16 @@ private struct SettingsInteractionFixture: View {
                 }
             }
         }
+        .plozzOpaqueNavigationChrome()
+        .environment(\.plozzReduceTransparency, appModel.settings.transparency.preference
+            .reducesTransparency(systemReduceTransparency: systemReduceTransparency))
         .environment(appModel)
         .environment(language)
         .environment(\.locale, Locale(identifier: "en_US"))
         .environment(\.themePalette, ThemePalette.palette(
             for: appModel.settings.theme.theme, systemColorScheme: .dark
         ))
+        .environment(\.gradientBackgroundsEnabled, appModel.settings.theme.gradientEnabled)
         .environment(\.plozzMetrics, .touch(density: .standard))
         .preferredColorScheme(appModel.settings.theme.theme.preferredColorScheme ?? .dark)
         .overlay(alignment: .bottomLeading) {

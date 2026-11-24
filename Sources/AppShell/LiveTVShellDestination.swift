@@ -1,5 +1,6 @@
 #if os(tvOS)
 import CoreModels
+import PlozzCoreUI
 import CoreSecureStore
 import AppRuntime
 import EnginePlozzigen
@@ -9,20 +10,33 @@ import FeaturePlayback
 import SwiftUI
 
 /// Match native tabs: construct Live TV on its first visit, then retain its state.
+///
+/// With `preloads`, it is constructed shortly after launch instead, hidden and inactive, so its
+/// lineup is already in place when it is first opened.
 struct RetainedLiveTVDestination<Content: View>: View {
+    static var preloadDelay: Duration { .seconds(2) }
     let isActive: Bool
+    let preloads: Bool
     private let content: () -> Content
     @State private var hasAppeared = false
 
-    init(isActive: Bool, @ViewBuilder content: @escaping () -> Content) {
+    init(isActive: Bool, preloads: Bool = false, @ViewBuilder content: @escaping () -> Content) {
         self.isActive = isActive
+        self.preloads = preloads
         self.content = content
     }
 
     var body: some View {
-        if isActive || hasAppeared {
-            content()
-                .onAppear { hasAppeared = true }
+        ZStack {
+            if LiveTVCatalogActivation.mountsDestination(isActive: isActive, hasAppeared: hasAppeared) {
+                content()
+                    .onAppear { hasAppeared = true }
+            }
+        }
+        .task(id: preloads) {
+            guard LiveTVCatalogActivation.shouldPreload(preloads: preloads, hasAppeared: hasAppeared) else { return }
+            try? await Task.sleep(for: Self.preloadDelay)
+            if !Task.isCancelled { hasAppeared = true }
         }
     }
 }
@@ -35,10 +49,17 @@ struct RetainedLiveTVDestination<Content: View>: View {
 struct LiveTVShellDestination: View {
     let isActive: Bool
     let profileID: String
+    let preloadsCatalog: Bool
     let usesNativeNavigation: Bool
     let onExpandedChange: (Bool) -> Void
 
     @Environment(ProfilesModel.self) private var profiles
+    @Environment(PlaybackSettingsModel.self) private var playbackSettings: PlaybackSettingsModel?
+    @Environment(LiveTVGuidePreparationModel.self) private var guidePreparation: LiveTVGuidePreparationModel?
+    @Environment(NavigationStyleSettingsModel.self) private var navigationStyle: NavigationStyleSettingsModel?
+    @Environment(GlassPerformanceModel.self) private var glassPerformance: GlassPerformanceModel?
+    @Environment(DisplayVeilModel.self) private var displayVeil: DisplayVeilModel?
+    @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
     @State private var hidesNavigation = false
     @State private var liveOutputGroup = LiveChannelOutputGroup()
     private let preferencesStore: LiveTVPreferencesStore
@@ -55,6 +76,7 @@ struct LiveTVShellDestination: View {
 
     init(
         isActive: Bool,
+        preloadsCatalog: Bool = false,
         profileID: String,
         preferencesNamespace: String?,
         accountsProviders: AccountsProvidersModel? = nil,
@@ -68,6 +90,7 @@ struct LiveTVShellDestination: View {
         onOpenTitle: ((MediaItem) -> Void)? = nil
     ) {
         self.isActive = isActive
+        self.preloadsCatalog = preloadsCatalog
         self.profileID = profileID
         self.usesNativeNavigation = usesNativeNavigation
         self.onExpandedChange = onExpandedChange
@@ -86,8 +109,22 @@ struct LiveTVShellDestination: View {
         self.onOpenTitle = onOpenTitle
     }
 
-    @ViewBuilder
     var body: some View {
+        RetainedFullscreenWorkspace {
+            navigationContent
+                .environment(profiles)
+                .environment(playbackSettings)
+                .environment(guidePreparation)
+                .environment(navigationStyle)
+                .environment(glassPerformance)
+                .environment(displayVeil)
+                .environment(\.managedProviderSetupRouter, providerSetupRouter)
+        }
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var navigationContent: some View {
         if usesNativeNavigation {
             LiveTVNavigationContainer {
                 liveTVContent
@@ -112,6 +149,7 @@ struct LiveTVShellDestination: View {
     private func liveTVContent(cache: LiveTVIndexedCache, library: LiveTVLibraryRuntime) -> some View {
         LiveTVPrototypeView(
             isActive: isActive,
+            preloadsCatalog: preloadsCatalog,
             usesNativeFullscreen: usesNativeNavigation,
             preferencesStore: preferencesStore,
             viewSettingsStore: viewSettingsStore,
@@ -128,6 +166,9 @@ struct LiveTVShellDestination: View {
             didConfigurePlaylist: didConfigurePlaylist,
             onExpandedChange: updateExpandedState,
             catalogCache: cache,
+            lastSeenStore: LiveTVLastSeenStore(
+                profileID: profileID, secureStore: LiveTVSourceStorage.catalogSecrets()
+            ),
             sourceLoader: LiveTVCatalogStorage.loader(profileID: profileID, namespace: preferencesNamespace),
             profileID: profileID,
             preferencesNamespace: preferencesNamespace,
@@ -153,7 +194,10 @@ struct LiveTVShellDestination: View {
                     library.makeEngine(
                         engine: try PlozzigenVideoEngine(
                             authenticatedHTTPResolver: playback.authenticatedHTTPResolver,
-                            liveBufferPreference: { LivePlaybackBufferStore().load() }
+                            liveBufferPreference: { LivePlaybackBufferStore().load() },
+                            videoUpscalingPreference: { [preferencesNamespace] in
+                                PlaybackSettingsStore(namespace: preferencesNamespace).load().videoUpscaling
+                            }
                         ),
                         onCompleted: completeLibraryChannelPlayback
                     )
@@ -173,7 +217,6 @@ struct LiveTVShellDestination: View {
                 onPlaybackUpdate: playback.playbackUpdate,
                 onPlaybackFailed: playback.playbackFailed,
                 onVideoAspectRatioChange: playback.videoAspectRatioChanged,
-                preparingChannelName: playback.preparingChannelName,
                 onMultiview: playback.canOpenMultiview ? playback.openMultiview : nil,
                 outputGroup: liveOutputGroup,
                 outputID: playback.paneID,
@@ -181,6 +224,9 @@ struct LiveTVShellDestination: View {
                 countsAsWatching: playback.countsAsWatching,
                 isMultiview: playback.isMultiview,
                 trackPreferences: library.trackPreferences,
+                displayTransitionSettings: {
+                    PlaybackSettingsStore(namespace: preferencesNamespace).load()
+                },
                 isAuthorized: playback.isAuthorized,
                 onOpenLibraryItem: playback.openLibraryItem,
                 program: playback.program,

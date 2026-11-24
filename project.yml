@@ -15,6 +15,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "3" # Apple TV
     SWIFT_STRICT_CONCURRENCY: complete
+    LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
     # Build number (CFBundleVersion) fallback. tools/generate-project.sh bakes the
     # real value into the generated project on every regenerate — from the git
     # commit count (local/device/simulator builds) or PLOZZ_BUILD_NUMBER (the
@@ -63,6 +64,10 @@ targets:
   Plozz:
     type: application
     platform: tvOS
+    postBuildScripts:
+      - name: Embed disc runtime
+        script: python3 "$SRCROOT/tools/embed-disc-runtime.py"
+        basedOnDependencyAnalysis: false
     deploymentTarget: "18.0"
     sources:
       - path: App/Plozz
@@ -83,6 +88,7 @@ targets:
       - path: App/Resources/InfoPlist.xcstrings
       - path: App/Resources/ReleaseNotes.json
       - path: App/Resources/LibassNotices.txt
+      - path: App/Resources/LibblurayNotices.txt
       - path: App/Resources/LibTrueHDNotices.txt
       - path: App/Resources/LibTrueHDLicense.txt
       - path: App/Resources/LibTrueHDApacheLicense.txt
@@ -334,6 +340,10 @@ targets:
   PlozziOS:
     type: application
     platform: iOS
+    postBuildScripts:
+      - name: Embed disc runtime
+        script: python3 "$SRCROOT/tools/embed-disc-runtime.py"
+        basedOnDependencyAnalysis: false
     deploymentTarget: "18.0"
     sources:
       - path: App/PlozziOS
@@ -345,6 +355,7 @@ targets:
       - path: App/Resources/Localizable.xcstrings
       - path: App/Resources/ReleaseNotes.json
       - path: App/Resources/LibassNotices.txt
+      - path: App/Resources/LibblurayNotices.txt
       - path: App/Resources/LibTrueHDNotices.txt
       - path: App/Resources/LibTrueHDLicense.txt
       - path: App/Resources/LibTrueHDApacheLicense.txt
@@ -364,6 +375,7 @@ targets:
         UIRequiresFullScreen: false
         BGTaskSchedulerPermittedIdentifiers:
           - "$(PRODUCT_BUNDLE_IDENTIFIER).downloads.*"
+          - "$(PRODUCT_BUNDLE_IDENTIFIER).external-stream.*"
         # remote-notification lets CloudKit (CKSyncEngine) wake the app to pull
         # config changes pushed from another device on the same Apple ID.
         UIBackgroundModes:
@@ -410,6 +422,7 @@ targets:
           - "OpenDyslexic-Bold.otf"
           - "OpenDyslexic-BoldItalic.otf"
         NSLocalNetworkUsageDescription: "Plozz uses your local network to discover media servers and network shares."
+        NSMotionUsageDescription: "Plozz uses device motion to follow your phone's landscape direction during playback."
         NSBonjourServices:
           - _jellyfin._tcp
           - _smb._tcp
@@ -473,15 +486,29 @@ targets:
   PlozzFocusHost:
     type: application
     platform: tvOS
+    postBuildScripts:
+      - name: Embed disc runtime
+        script: python3 "$SRCROOT/tools/embed-disc-runtime.py"
+        basedOnDependencyAnalysis: false
     sources:
       - path: Tests/FocusHost
+      - path: Tests/HomePresentationSupport/UpcomingCaptureFixture.swift
+      - path: Tests/HomePresentationSupport/DetailSelectionFixture.swift
+      - path: Tests/HomePresentationSupport/ContentRefreshReturnFixture.swift
+      - path: Tests/iOSPresentationHost/DetailInformationFixture.swift
+      - path: Tests/DiscoverPresentationSupport/DiscoverBrowseFixture.swift
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureFixture.swift
+      - path: Tests/PlaybackPresentationSupport/DiscReviewFixture.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationFixture.swift
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchFixture.swift
+      - path: Tests/SubtitlePresentationSupport/Fixtures/live-continuity.mp4
+        buildPhase: resources
       - path: Tests/AuthPresentationSupport/IPTVSetupFixture.swift
       - path: Tests/AuthPresentationSupport/ServerAddressNavigationFixture.swift
       - path: Tests/AuthPresentationSupport/PlexHomeOnboardingFixture.swift
       - path: Tests/FeatureLiveTVRemoteTests/NavigationRailFixture.swift
+      - path: Tests/FeatureLiveTVRemoteTests/MultiviewFixture.swift
+      - path: Tests/FeatureLiveTVRemoteTests/SourceOnboardingFixture.swift
       - path: App/Resources/Assets.xcassets
       - path: App/Resources/CommunityAssets.xcassets
       - path: App/Resources/Localizable.xcstrings
@@ -511,10 +538,21 @@ targets:
   PlozziOSPresentationHost:
     type: application
     platform: iOS
+    postBuildScripts:
+      - name: Embed disc runtime
+        script: python3 "$SRCROOT/tools/embed-disc-runtime.py"
+        basedOnDependencyAnalysis: false
     sources:
       - path: Tests/iOSPresentationHost
+      - path: Tests/HomePresentationSupport/UpcomingCaptureFixture.swift
+      - path: Tests/HomePresentationSupport/DetailSelectionFixture.swift
+      - path: Tests/HomePresentationSupport/ContentRefreshReturnFixture.swift
+      - path: Tests/DiscoverPresentationSupport/DiscoverBrowseFixture.swift
+      - path: Tests/AuthPresentationSupport/MobileServerOnboardingFixture.swift
+      - path: Tests/AuthPresentationSupport/OnboardingPreviewHTTP.swift
       - path: Tests/FeatureLiveTVRemoteTests/SourceOnboardingFixture.swift
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureFixture.swift
+      - path: Tests/PlaybackPresentationSupport/DiscReviewFixture.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationFixture.swift
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchFixture.swift
       - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
@@ -534,8 +572,10 @@ targets:
     info:
       path: Tests/iOSPresentationHost/Info.plist
       properties:
+        NSMotionUsageDescription: "Plozz uses device motion to follow your phone's landscape direction during playback."
         BGTaskSchedulerPermittedIdentifiers:
           - "$(PRODUCT_BUNDLE_IDENTIFIER).downloads.*"
+          - "$(PRODUCT_BUNDLE_IDENTIFIER).external-stream.*"
         UIBackgroundModes:
           - audio
           - processing
@@ -569,17 +609,40 @@ targets:
     platform: iOS
     sources:
       - path: Tests/iOSPresentationTests
+      - path: Tests/AppShellTests/WatchlistCloudApplyTests.swift
+      - path: Tests/FocusIntegrationTests/ContentRefreshSurfaceHostedTests.swift
+      - path: Tests/PlaybackPresentationSupport/PlayerSongLayoutPreviewTests.swift
+      - path: Tests/PlaybackPresentationSupport/PlayerContinueWatchingPresentationTests.swift
+      - path: Tests/CoreModelsTests/ContinueWatchingInPlayerSettingsTests.swift
+      - path: Tests/FeaturePlaybackTests/ContinueWatchingSelectionTests.swift
+      - path: Tests/CoreUITests/DetailInformationPreviewTests.swift
+      - path: Tests/CoreUITests/AmbientGradientTests.swift
+      - path: Tests/CoreUITests/DetailHeaderMetadataRowTests.swift
       - path: Tests/EnginePlozzigenTests/SpatialAudioLayoutPreferenceTests.swift
       - path: Tests/FeaturePlaybackTests/NativePlaybackLifecycleTests.swift
+      - path: Tests/FeaturePlaybackTests/PlayerVideoZoomTests.swift
+      - path: Tests/FeaturePlaybackTests/PlayerViewModelEOFTests.swift
+      - path: Tests/FeaturePlaybackTests/VideoNowPlayingCoordinatorTests.swift
+      - path: Tests/FeaturePlaybackTests/SystemPlaybackAudioTests.swift
+      - path: Tests/FeaturePlaybackTests/SeriesTrackMemoryTests.swift
+      - path: Tests/FeaturePlaybackTests/StreamingPlaybackTests.swift
+      - path: Tests/FeaturePlaybackTests/SubtitleTrackControllerTests.swift
+      - path: Tests/CoreModelsTests/SeriesTrackPreferenceStoreTests.swift
       - path: Tests/FeatureLiveTVCoreTests/LiveTVPlaybackCoordinatorTests.swift
       - path: Tests/FeatureLiveTVTests/LiveTVGuideRowLayoutTests.swift
       - path: Tests/CoreModelsTests/SettingsHydrationTests.swift
+      - path: Tests/CoreModelsTests/DiscPlaybackTests.swift
+      - path: Tests/CoreModelsTests/PlaybackOrientationSettingsTests.swift
       - path: Tests/CoreModelsTests/ResumeRewindSettingsTests.swift
+      - path: Tests/CoreModelsTests/SubtitleStylePreferencesTests.swift
+      - path: Tests/CoreModelsTests/SettingsSearchTests.swift
       - path: Tests/CoreModelsTests/ProfileLockPresentationTests.swift
       - path: Tests/FeaturePlaybackTests/SubtitleOverlayGeometryTests.swift
       - path: Tests/FocusIntegrationTests/LiveTVSourcesRuntimeHostedTests.swift
+      - path: Tests/FocusIntegrationTests/DiagnosticRecordingStatusHostedTests.swift
       - path: Tests/FocusIntegrationTests/PINRequirementPresentationTests.swift
       - path: Tests/HomePresentationSupport
+        excludes: ["ContentRefreshReturnFixture.swift", "ContentRefreshReturnInteractionTests.swift", "DetailSelectionFixture.swift", "DetailSelectionInteractionTests.swift"]
       - path: Tests/TestSupportPerformance
       - path: Tests/PerformancePresentationSupport
       - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
@@ -604,13 +667,17 @@ targets:
       - target: PlozziOSPresentationHost
       - package: Plozz
         product: AppShelliOS
+        link: false
 
   PlozziOSInteractionTests:
     type: bundle.ui-testing
     platform: iOS
     sources:
       - path: Tests/iOSInteractionTests
+      - path: Tests/HomePresentationSupport/DetailSelectionInteractionTests.swift
+      - path: Tests/HomePresentationSupport/ContentRefreshReturnInteractionTests.swift
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureInteractionTests.swift
+      - path: Tests/PlaybackPresentationSupport/DiscReviewScreenshotTests.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchInteractionTests.swift
       - path: Tests/HomeRemoteTests/ServerAddressNavigationInteractionTests.swift
@@ -629,7 +696,11 @@ targets:
     platform: tvOS
     sources:
       - path: Tests/HomeRemoteTests
+      - path: Tests/HomePresentationSupport/DetailSelectionInteractionTests.swift
+      - path: Tests/HomePresentationSupport/ContentRefreshReturnInteractionTests.swift
+      - path: Tests/FeatureLiveTVRemoteTests/LiveTVMultiviewRemoteTests.swift
       - path: Tests/PlaybackPresentationSupport/PlaybackFailureInteractionTests.swift
+      - path: Tests/PlaybackPresentationSupport/DiscReviewScreenshotTests.swift
       - path: Tests/LiveTVPresentationSupport/IPTVOrganizationInteractionTests.swift
       - path: Tests/LiveTVPresentationSupport/LiveTVCategorySearchInteractionTests.swift
       - path: Sources/FeatureHomeCore/LibraryTraversalEvidence.swift
@@ -642,12 +713,23 @@ targets:
     type: bundle.unit-test
     platform: tvOS
     sources:
+      - path: Tests/PlaybackPresentationSupport/FLACMusicPlaybackHostedTests.swift
       - path: Tests/FocusIntegrationTests
+      - path: Tests/PlaybackPresentationSupport/PlayerSongLayoutPreviewTests.swift
+      - path: Tests/PlaybackPresentationSupport/PlayerContinueWatchingPresentationTests.swift
+      - path: Tests/CoreModelsTests/ContinueWatchingInPlayerSettingsTests.swift
+      - path: Tests/FeaturePlaybackTests/ContinueWatchingSelectionTests.swift
+      - path: Tests/CoreUITests/DetailInformationPreviewTests.swift
+      - path: Tests/CoreUITests/ChannelLogoArtworkTests.swift
+      - path: Tests/EnginePlozzigenTests/SpatialAudioLayoutPreferenceTests.swift
       - path: Tests/HomePresentationSupport
+        excludes: ["ContentRefreshReturnFixture.swift", "ContentRefreshReturnInteractionTests.swift", "DetailSelectionFixture.swift", "DetailSelectionInteractionTests.swift"]
       - path: Tests/TestSupportPerformance
       - path: Tests/PerformancePresentationSupport
       - path: Tests/ProviderIPTVTests/IPTVTestHTTPServer.swift
       - path: Tests/FeatureLiveTVTests/LiveTVGuideFocusTests.swift
+      - path: Tests/FeatureLiveTVTests/LiveTVGuideRowLayoutTests.swift
+      - path: Tests/FeatureLiveTVCoreTests/LiveTVPreviewControllerTests.swift
       - path: Tests/AppearancePresentationSupport
       - path: Tests/CoreUITests/DialogSurfaceTests.swift
       - path: Tests/AuthPresentationSupport
@@ -660,10 +742,12 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.FocusTests
         GENERATE_INFOPLIST_FILE: YES
+        OTHER_LDFLAGS: "$(inherited) -framework AetherEngine"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PlozzFocusHost.app/FocusHost"
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
       - target: PlozzFocusHost
+      # Resolve package symbols from the host, without duplicating Objective-C classes.
       - package: Plozz
         product: PlozzCoreUI
       - package: Plozz
@@ -674,6 +758,7 @@ targets:
         product: FeatureHomeCore
       - package: Plozz
         product: AppShell
+        link: false
 
 schemes:
   PlozziOSInteractionTests:

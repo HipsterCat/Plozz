@@ -4,32 +4,24 @@ import SwiftUI
 import UIKit
 
 public struct PlaybackAdvancedSettingsView: View {
-    @Bindable var playback: PlaybackSettingsModel
     @Bindable var model: ExternalPlayerSettingsModel
     @State private var showsExternalPlayer = false
 
-    public init(playback: PlaybackSettingsModel, model: ExternalPlayerSettingsModel = .shared) {
-        self.playback = playback
+    public init(model: ExternalPlayerSettingsModel = .shared) {
         self.model = model
     }
 
     public var body: some View {
         #if os(tvOS)
-        SettingsSplitLayout(title: "Advanced", rows: Self.rows(playback: playback, model: model))
+        SettingsSplitLayout(title: "Advanced", rows: Self.rows(model: model))
         #else
         List {
             SettingsSectionGroup {
                 Button { showsExternalPlayer = true } label: {
                     SettingsDisclosureLabel { Text("External player") }
                 }
-            }
-            SettingsSectionGroup {
-                DolbyVisionFELControl(isOn: $playback.settings.dolbyVisionFELEnabled)
-            }
-            if #available(iOS 26.0, *) {
-                SettingsSectionGroup {
-                    SpatialAudioLayoutControl()
-                }
+                .settingsActionRow()
+                .accessibilityIdentifier("playback-external-player")
             }
         }
         .settingsPageSurface()
@@ -40,48 +32,8 @@ public struct PlaybackAdvancedSettingsView: View {
         #endif
     }
 
-    static func rows(
-        playback: PlaybackSettingsModel, model: ExternalPlayerSettingsModel = .shared
-    ) -> [SettingsSplitRow] {
-        var rows = ExternalPlayerSettingsRows.advanced(model: model) + [
-            SettingsSplitRow(id: "dolby-vision-fel", title: "Video") {
-                DolbyVisionFELControl(isOn: Binding(
-                    get: { playback.settings.dolbyVisionFELEnabled },
-                    set: { playback.settings.dolbyVisionFELEnabled = $0 }
-                ))
-            }
-        ]
-        #if os(tvOS)
-        if #available(tvOS 26.0, *) {
-            rows.append(SettingsSplitRow(id: "spatial-audio-layout", title: "Audio") {
-                SpatialAudioLayoutControl()
-            })
-        }
-        #endif
-        return rows
-    }
-}
-
-private struct DolbyVisionFELControl: View {
-    @Binding var isOn: Bool
-
-    private var helperText: LocalizedStringResource {
-        #if os(tvOS) || os(iOS)
-        if #available(tvOS 26.0, iOS 26.0, *) {
-            return "May impact performance."
-        }
-        #endif
-        return "May impact performance. Disables spatial audio."
-    }
-
-    var body: some View {
-        SettingsControlRows {
-            Toggle("Dolby Vision FEL (experimental)", isOn: $isOn)
-                .accessibilityIdentifier("playback-dolby-vision-fel")
-            Text(helperText)
-                .settingsHelperText()
-                .fixedSize(horizontal: false, vertical: true)
-        }
+    static func rows(model: ExternalPlayerSettingsModel = .shared) -> [SettingsSplitRow] {
+        ExternalPlayerSettingsRows.advanced(model: model)
     }
 }
 
@@ -89,42 +41,72 @@ struct ExternalPlayerSettingsRows {
     static func advanced(model: ExternalPlayerSettingsModel = .shared) -> [SettingsSplitRow] {
         [
             .page(id: "external-player", title: "External player") {
-                [
+                external(model: model)
+            }
+        ]
+    }
+
+    static func external(
+        model: ExternalPlayerSettingsModel, installedPlayers: Set<ExternalPlayer>? = nil
+    ) -> [SettingsSplitRow] {
+        [
                     SettingsSplitRow(id: "default-player", title: "Default player") {
+                        #if os(tvOS)
+                        ExternalPlayerConfiguration(model: model, installedPlayers: installedPlayers)
+                        #else
                         ExternalPlayerChoices(model: model)
-                    },
+                        #endif
+                    }.groupedContent(),
                     SettingsSplitRow(id: "external-player-help", title: "About external playback") {
                         ExternalPlayerHelp()
                     }.page(),
                     SettingsSplitRow(id: "custom-player", title: "Custom player") {
                         CustomExternalPlayerControls(model: model)
                     }.page()
-                ]
-            }
         ]
     }
 }
 
-#if os(iOS)
-private struct ExternalPlayerSettingsView: View {
+public struct ExternalPlayerSettingsView: View {
     @Bindable var model: ExternalPlayerSettingsModel
+    private let custom: Bool
     @State private var showsAbout = false
     @State private var showsCustomPlayer = false
 
-    var body: some View {
+    public init(model: ExternalPlayerSettingsModel = .shared, custom: Bool = false) {
+        self.model = model
+        self.custom = custom
+    }
+
+    public var body: some View {
+        if custom { customContent }
+        else { root }
+    }
+
+    private var root: some View {
+        #if os(tvOS)
+        SettingsSplitLayout(title: "External player", rows: ExternalPlayerSettingsRows.external(model: model))
+        #else
         List {
             SettingsSectionGroup("Default player") {
                 ExternalPlayerChoices(model: model)
+            }
+            if model.settings.player != .builtIn {
+                SettingsSectionGroup("\(model.settings.player.name) limitations") {
+                    ExternalPlayerSupportSummary(player: model.settings.player)
+                }
             }
             SettingsSectionGroup {
                 Button { showsAbout = true } label: {
                     SettingsDisclosureLabel { Text("About external playback") }
                 }
+                .settingsActionRow()
             }
             SettingsSectionGroup {
                 Button { showsCustomPlayer = true } label: {
                     SettingsDisclosureLabel { Text("Custom player") }
                 }
+                .settingsActionRow()
             }
         }
         .settingsPageSurface()
@@ -137,13 +119,48 @@ private struct ExternalPlayerSettingsView: View {
             .navigationTitle("About external playback")
         }
         .navigationDestination(isPresented: $showsCustomPlayer) {
-            List {
-                SettingsSectionGroup {
-                    CustomExternalPlayerControls(model: model)
-                }
+            customContent
+        }
+        #endif
+    }
+
+    private var customContent: some View {
+        #if os(tvOS)
+        SettingsFormLayout(
+            title: Text("Custom player"),
+            rows: [SettingsSplitRow(id: "custom-player", title: "Custom player") {
+                CustomExternalPlayerControls(model: model)
+            }], showsBack: true
+        )
+        #else
+        List {
+            SettingsSectionGroup { CustomExternalPlayerControls(model: model) }
+        }
+        .settingsPageSurface()
+        .navigationTitle("Custom player")
+        #endif
+    }
+}
+
+#if os(tvOS)
+private struct ExternalPlayerConfiguration: View {
+    @Bindable var model: ExternalPlayerSettingsModel
+    let installedPlayers: Set<ExternalPlayer>?
+    @FocusState private var focusedPlayer: ExternalPlayer?
+
+    private var previewPlayer: ExternalPlayer { focusedPlayer ?? model.settings.player }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SettingsFormMetrics.sectionSpacing) {
+            SettingsControlGroup {
+                ExternalPlayerChoices(model: model, installedPlayers: installedPlayers, focus: $focusedPlayer)
             }
-            .settingsPageSurface()
-            .navigationTitle("Custom player")
+            if previewPlayer != .builtIn {
+                SettingsFormGroup(title: Text("\(previewPlayer.name) limitations")) {
+                    ExternalPlayerSupportSummary(player: previewPlayer)
+                }
+                .accessibilityIdentifier("external-player-support-section")
+            }
         }
     }
 }
@@ -152,6 +169,10 @@ private struct ExternalPlayerSettingsView: View {
 private struct ExternalPlayerChoices: View {
     @Environment(\.scenePhase) private var scenePhase
     @Bindable var model: ExternalPlayerSettingsModel
+    #if os(tvOS)
+    let installedPlayers: Set<ExternalPlayer>?
+    let focus: FocusState<ExternalPlayer?>.Binding
+    #endif
     @State private var installed: Set<ExternalPlayer> = [.builtIn]
 
     private var choices: [ExternalPlayer] {
@@ -175,21 +196,32 @@ private struct ExternalPlayerChoices: View {
                         model.settings.player = player
                     }
                     .disabled(!isAvailable(player))
+                    .focused(focus, equals: player)
                     .accessibilityIdentifier("external-player-\(player.rawValue)")
                 }
             }
             #else
-            Picker("Default player", selection: $model.settings.player) {
+            SettingsControlMenu {
                 ForEach(choices, id: \.self) { player in
-                    title(player).tag(player).disabled(!isAvailable(player))
+                    Button {
+                        model.settings.player = player
+                    } label: {
+                        if model.settings.player == player {
+                            Label { title(player) } icon: { Image(systemName: "checkmark") }
+                        } else {
+                            title(player)
+                        }
+                    }
+                    .disabled(!isAvailable(player))
+                    .accessibilityIdentifier("external-player-\(player.rawValue)")
                 }
+            } label: {
+                SettingsMenuLabel("Default player", value: title(model.settings.player))
             }
-            .accessibilityIdentifier("external-player-selection")
+            .accessibilityLabel("Default player")
+            .accessibilityValue(title(model.settings.player))
+            .accessibilityIdentifier("external-player-selection").settingsSearchAnchor("external-player")
             #endif
-            if model.settings.player == .vlc || model.settings.player == .custom {
-                Text("This player doesn't return watch progress to Plozz.")
-                    .settingsHelperText()
-            }
             if let error = model.error { Text(error.message).settingsHelperText() }
         }
         .task { refreshInstalledPlayers() }
@@ -199,7 +231,10 @@ private struct ExternalPlayerChoices: View {
     }
 
     private func isAvailable(_ player: ExternalPlayer) -> Bool {
-        player == .custom || installed.contains(player)
+        #if os(tvOS)
+        if let installedPlayers { return player == .custom || installedPlayers.contains(player) }
+        #endif
+        return player == .custom || installed.contains(player)
     }
 
     private func title(_ player: ExternalPlayer) -> Text {
@@ -216,11 +251,42 @@ private struct ExternalPlayerChoices: View {
     }
 }
 
+private struct ExternalPlayerSupportSummary: View {
+    let player: ExternalPlayer
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            #if os(tvOS)
+            if player == .nativePlayer || player == .infuse {
+                Text("Live TV and non-WebDAV network shares play in Plozz.")
+                Text("Some WebDAV passwords, extra login headers and pinned certificates also require Plozz.")
+            } else if player == .vlc {
+                Text("Live TV, SMB, NFS, SFTP, FTPS and unsupported share logins play in Plozz.")
+            } else if player == .custom {
+                Text("Live TV, non-WebDAV network shares and links needing passwords play in Plozz.")
+            }
+            #else
+            Text("Live TV and downloads play in Plozz.")
+            if player == .custom {
+                Text("Non-WebDAV network shares and links needing passwords also play in Plozz.")
+            } else {
+                Text("Some network shares stay in Plozz when background streaming is unavailable.")
+            }
+            #endif
+            if player == .vlc || player == .custom {
+                Text("Watch progress isn't returned to Plozz.")
+            }
+        }
+        .settingsHelperText()
+        .accessibilityIdentifier("external-player-support")
+    }
+}
+
 private struct ExternalPlayerHelp: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Supported movies and episodes open in the selected app. Everything else plays in Plozz automatically.")
-            Text("Playable links, including server access tokens when required, are shared with the selected app. Only choose an app you trust.")
+            Text("Compatible library videos open in the selected app, including server-converted streams. Unsupported sources and Live TV play in Plozz.")
+            Text("Playable links may include server access tokens or network-share passwords. Only choose an app you trust.")
             Text("Native Player and Infuse 8.4.7 or later can return progress when their player closes. Plozz's controls, skip markers, and autoplay aren't available in another app.")
             Text("This choice stays on this device. Watch progress still belongs to the active viewer.")
         }
@@ -238,16 +304,18 @@ private struct CustomExternalPlayerControls: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Use {url} for the encoded video link. Custom players don't receive resume positions or return progress.")
                 .settingsHelperText()
-            TextField("myplayer://play?url={url}", text: $template)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityLabel("Player URL template")
-                .accessibilityIdentifier("external-player-custom-template")
+            SettingsInputRow("Player URL template") {
+                TextField("Player URL template", text: $template, prompt: Text(verbatim: "myplayer://play?url={url}"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("external-player-custom-template")
+            }
+            .settingsSearchAnchor("external-template")
             Text("Don't include passwords or access tokens in this template.")
                 .settingsHelperText()
             if let error { Text(error.message).foregroundStyle(.red) }
             if saved { Text("Custom player selected").settingsHelperText() }
-            Button("Save and use custom player") {
+            Button {
                 do {
                     try ExternalPlayerURL.validateCustomTemplate(template)
                     model.settings = .init(player: .custom, customURLTemplate: template)
@@ -258,6 +326,8 @@ private struct CustomExternalPlayerControls: View {
                 } catch {
                     self.error = .invalidTemplate
                 }
+            } label: {
+                Text("Save and use custom player").settingsControlTarget()
             }
             .accessibilityIdentifier("external-player-custom-save")
         }

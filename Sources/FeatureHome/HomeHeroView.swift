@@ -2,6 +2,7 @@
 import SwiftUI
 import UIKit
 import CoreModels
+import CoreNetworking
 import PlozzCoreUI
 import FeatureHomeCore
 import HeroUI
@@ -85,6 +86,8 @@ struct HomeHeroView: View {
     /// animation state out of `HomeView`'s observation surface, so moving between
     /// the hero and Continue Watching no longer invalidates every Home row.
     let recedeModel: HomeHeroRecedeModel
+    var showcaseSuspended = false
+    private var pausedForRows: Bool { receded || showcaseSuspended }
     /// Whether the hero is *receded*: the user has moved focus down onto the
     /// Continue Watching row. When true the content column (logo / metadata /
     /// action buttons / paging dots) lifts up via a transform and the full-bleed,
@@ -203,7 +206,6 @@ struct HomeHeroView: View {
     /// image/timer behavior.
     @State private var activeTrailerSource: HeroTrailerSource?
     @State private var activeTrailerDuration: TimeInterval = 0
-    @State private var trailerVisible = false
     /// Trailer reached its end while interaction/recede blocked automatic paging.
     /// The video and gauge are allowed to finish; paging occurs once interaction
     /// protection is released.
@@ -492,6 +494,7 @@ struct HomeHeroView: View {
                 Color.clear
             }
         }
+        .modifier(HeroShowcaseForeground(surface: .featured))
         .frame(maxWidth: .infinity, minHeight: frameHeight, alignment: .bottomLeading)
         .background(alignment: .top) {
             // Laid out at the FULL hero height and anchored to the frame's TOP, so
@@ -529,10 +532,10 @@ struct HomeHeroView: View {
             }
         }
         .environment(\.plozzArtworkArea, artworkPolicy.heroPolicy.area)
-        .opacity(heroVisible ? 1 : 0)
+        .opacity(heroVisible || showsTrailer ? 1 : 0)
         .trackHeroExposure(
             item: current,
-            isVisible: isFrontmost && !receded && heroVisible && metadataVisible
+            isVisible: isFrontmost && !pausedForRows && heroVisible && metadataVisible
                 && seasonPickerItem == nil && !showingSeasonLookupFailure,
             scopeID: exposureScopeID,
             onExposure: onItemExposed
@@ -564,9 +567,13 @@ struct HomeHeroView: View {
             withAnimation(.easeInOut(duration: 0.35)) { heroVisible = true }
         }
         .onDisappear {
-            onTrailerReturnItemChanged(nil)
-            // Leaving Home means nobody can see this trailer, so it should stop
-            // streaming and decoding rather than play on behind another screen.
+            guard !trailerController.isFullScreen else { return }
+            if let item = current, trailerController.isClaimed(by: .detail, itemID: item.id) {
+                onTrailerReturnItemChanged(item.id)
+            } else {
+                onTrailerReturnItemChanged(nil)
+            }
+            // Detail may already own the same player; only release Home's work.
             resetTrailer(stopPlayer: true)
         }
         .onChange(of: trailerReturnItemID, initial: true) { _, itemID in
@@ -629,7 +636,7 @@ struct HomeHeroView: View {
             // silently resume the carousel and page behind them — defeating the
             // recede pause. Kept coupled to `pausedAt` (not a bare `!receded` task
             // guard) so `resumeFromRecede()` still resumes cleanly on focus return.
-            if receded { pauseWhileReceded() }
+            if pausedForRows { pauseWhileReceded() }
         }
         // Keep Home told which slide is on screen, so a curation landing in the
         // background folds new media into a free slot rather than over this one.
@@ -710,7 +717,8 @@ struct HomeHeroView: View {
         // Fast/local trailers only: resolution and the three-second still-image
         // lead-in overlap. The same single player persists into detail navigation.
         .task(id: trailerTaskKey) {
-            guard isFrontmost, !trailerController.isFeaturedReserved, backgroundSettings.homeTrailerEnabled,
+            guard !trailerController.isFullScreen else { return }
+            guard isFrontmost, !showcaseSuspended, !trailerController.isFeaturedReserved, backgroundSettings.homeTrailerPlaybackEnabled,
                   let item = current else {
                 // When detail is pushed over Home, relinquish control without
                 // stopping the shared player — the detail hero owns it now.
@@ -718,7 +726,16 @@ struct HomeHeroView: View {
                 if isFrontmost { resetTrailer(stopPlayer: true) }
                 return
             }
-            if trailerController.isShowing(item.id) {
+            if trailerController.isShowing(item.id), trailerController.isPlaying {
+                trailerController.claimSurface(.home, itemID: item.id)
+                trailerController.setPaused(pausedForRows, surfaceRole: .home)
+                activeTrailerDuration = trailerController.duration
+                restartDwell()
+                let position = trailerController.player.currentTime().seconds
+                if position.isFinite, trailerController.isPlaying {
+                    dwellStart = Date().addingTimeInterval(-(HeroTrailerTimeline.leadIn + position))
+                }
+                runEpoch &+= 1
                 trailerController.setEndHandler(ownerID: "home-hero") { [itemID = item.id] in
                     guard current?.id == itemID, items.count > 1 else { return }
                     page(
@@ -727,7 +744,6 @@ struct HomeHeroView: View {
                         forward: true
                     )
                 }
-                trailerVisible = trailerController.isPlaying
                 return
             }
             resetTrailer(stopPlayer: !trailerController.isShowing(item.id))
@@ -738,6 +754,7 @@ struct HomeHeroView: View {
                 source = nil
             } else {
                 source = await trailerResolver(item)
+                guard !Task.isCancelled, current?.id == item.id else { return }
                 if let source {
                     trailerSourceCache[item.id] = source
                 } else {
@@ -747,23 +764,31 @@ struct HomeHeroView: View {
             guard let source,
                   !Task.isCancelled,
                   current?.id == item.id else { return }
-            // Fix the timeline BEFORE the visible 3-second lead-in starts. The
-            // progress gauge now has one immutable duration from 0→end and never
-            // jumps when the player becomes ready or the video crossfades in.
             activeTrailerSource = source
-            activeTrailerDuration = source.duration
             trailerController.prepare(
                 itemID: item.id,
                 resolvedURL: source.url,
                 muted: backgroundSettings.homeTrailerMuted
             )
-            // Do not start the progress timeline until AVPlayer is ready. This
-            // absorbs startup latency behind the static image, so 3s + duration
-            // is exact and the timer cannot cut the trailer short.
-            while !trailerController.isReady {
-                try? await Task.sleep(for: .milliseconds(50))
-                guard !Task.isCancelled, current?.id == item.id else { return }
+            trailerController.claimSurface(.home, itemID: item.id)
+            // Loading and failed trailers keep the normal artwork dwell. Only a
+            // playable item earns the longer trailer timeline.
+            do {
+                guard try await trailerController.waitUntilReady(itemID: item.id) else {
+                    guard !Task.isCancelled, current?.id == item.id else { return }
+                    trailerSourceCache[item.id] = nil
+                    noFastTrailerIDs.insert(item.id)
+                    resetTrailer(stopPlayer: false)
+                    return
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                PlozzLog.app.error("Hero trailer: readiness wait failed: \(error.localizedDescription)")
+                return
             }
+            guard !Task.isCancelled, current?.id == item.id else { return }
+            activeTrailerDuration = trailerController.duration > 0 ? trailerController.duration : source.duration
             restartDwell()
             runEpoch &+= 1
             try? await Task.sleep(for: .seconds(HeroTrailerTimeline.leadIn))
@@ -781,15 +806,10 @@ struct HomeHeroView: View {
                 }
             }
             trailerController.startPrepared()
-            trailerVisible = trailerController.isPlaying
         }
-        .onChange(of: trailerController.isPlaying) { _, playing in
-            guard trailerController.currentItemID == current?.id else { return }
-            if playing {
-                trailerVisible = true
-            } else {
-                trailerVisible = false
-            }
+        .onChange(of: trailerController.currentItemID) { _, itemID in
+            guard itemID == nil, isFrontmost, activeTrailerSource != nil else { return }
+            resetTrailer(stopPlayer: false)
         }
         .onChange(of: trailerController.isPaused) { _, paused in
             if paused {
@@ -812,14 +832,22 @@ struct HomeHeroView: View {
         // the user was looking at it. Instead, real remote input pauses it (see
         // `noteInteraction`), so it never pages out from under an interacting user.
         .task(id: autoAdvanceKey) {
-            guard settings.autoAdvance, items.count > 1 else { return }
+            guard isFrontmost, !trailerController.isFullScreen, settings.autoAdvance, items.count > 1 else { return }
+            if pausedForRows {
+                pauseWhileReceded()
+                return
+            }
             // Paused (user is interacting): schedule no fire at all. The gauge is
             // frozen at `pausedAt`; resuming bumps `runEpoch` to reschedule here.
             guard pausedAt == nil, !trailerController.isPaused else { return }
             // Fire after the *remaining* dwell so that resuming after a pause
             // finishes the countdown from where it froze instead of restarting it.
             let duration = currentDwellDuration
-            let remaining = max(0, duration - Date().timeIntervalSince(dwellStart))
+            let position = trailerController.player.currentTime().seconds
+            let elapsed = showsTrailer && position.isFinite
+                ? HeroTrailerTimeline.leadIn + position
+                : Date().timeIntervalSince(dwellStart)
+            let remaining = max(0, duration - elapsed)
             try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
             guard !Task.isCancelled else { return }
             HeroFocusDiagnostics.emit("auto-advance FIRE (from idx=\(index)) | \(hfState())")
@@ -859,7 +887,7 @@ struct HomeHeroView: View {
                 // whole backdrop blends together while browsing the rows below.
                 receded: receded,
                 trailerController: trailerController,
-                showsTrailer: trailerVisible,
+                showsTrailer: showsTrailer,
                 // Gate on STYLE, not the live inset. The rail hides (and publishes
                 // inset 0) during a detail push while Home remains alive underneath;
                 // using the inset would recenter artwork mid-transition.
@@ -872,7 +900,7 @@ struct HomeHeroView: View {
             ))
             .heroArtworkSource(
                 id: item.id,
-                isActive: isFrontmost
+                isActive: isFrontmost && !showcaseSuspended
             )
         } else {
             Color.clear.frame(width: w, height: height)
@@ -895,7 +923,7 @@ struct HomeHeroView: View {
     /// forever. Because the restart re-derives its sleep from `dwellStart`, an
     /// ordinary set update resumes the countdown rather than restarting it.
     private var autoAdvanceKey: String {
-        "\(index)-\(advanceToken)-\(runEpoch)-\(slideToken)-\(activeTrailerDuration)-\(items.count)"
+        "\(index)-\(advanceToken)-\(runEpoch)-\(slideToken)-\(activeTrailerDuration)-\(items.count)-\(isFrontmost)-\(trailerController.isFullScreen)"
     }
 
     /// One continuous wall-clock timeline from initial still through trailer end.
@@ -904,17 +932,22 @@ struct HomeHeroView: View {
     private var currentDwellDuration: TimeInterval {
         HeroTrailerTimeline.duration(
             autoAdvanceSeconds: settings.autoAdvanceSeconds,
-            mode: backgroundSettings.homeTrailerEnabled ? .trailer : .off,
+            mode: backgroundSettings.homeTrailerPlaybackEnabled ? .trailer : .off,
             trailerDuration: activeTrailerDuration
         )
     }
 
     private var trailerReturnItemID: String? {
-        backgroundSettings.homeTrailerEnabled && !receded && heroVisible ? current?.id : nil
+        backgroundSettings.homeTrailerPlaybackEnabled && !pausedForRows && heroVisible ? current?.id : nil
+    }
+
+    private var showsTrailer: Bool {
+        backgroundSettings.homeTrailerPlaybackEnabled && trailerController.isPlaying
+            && current.map { trailerController.isShowing($0.id) } == true
     }
 
     private var trailerTaskKey: String {
-        "\(current?.id ?? "-")|\(backgroundSettings.homeTrailerEnabled)|\(isFrontmost)|\(trailerController.isFeaturedReserved)"
+        "\(current?.id ?? "-")|\(backgroundSettings.homeTrailerPlaybackEnabled)|\(isFrontmost)|\(trailerController.isFeaturedReserved)|\(showcaseSuspended)|\(trailerController.isFullScreen)"
     }
 
     // MARK: - Content column
@@ -1509,6 +1542,7 @@ struct HomeHeroView: View {
                     .accessibilityLabel(accessibilityLabel(for: item))
                     .accessibilityAction { activateSelected() }
                     .modifier(HeroActionAccessibility(actions: a11yActions))
+                    .navigationEntryFocus(.content)
             }
             // Pin a *constant* identity so focus is retained across a page (item
             // id changes). Never key this on the item id — that would drop focus.
@@ -1535,12 +1569,15 @@ struct HomeHeroView: View {
         // target leaf. Apple's guidance is to put `.onMoveCommand` on a container
         // rather than the focused element, and doing so is what lets the leaf's
         // `.onTapGesture` (Select) fire reliably — a move handler on the same view
-        // was intercepting the select press. Its ONLY job now is to pause the
-        // auto-advance on any directional input (see `handleMove`): all
-        // paging/interior behaviour is driven by the invisible Left/Right guards,
-        // Up is left to the system, and the Down-recede is driven by the page
-        // scroll in `HomeView` — not by this handler.
-        .onMoveCommand { _ in handleMove() }
+        // was intercepting the select press. Up opens the active trailer with
+        // Pinned Sidebar; other layouts retain their native Up navigation.
+        .trailerFullScreenOnMove(
+            controller: trailerController, itemID: item.id, role: .home,
+            title: item.title,
+            navigationStyle: navigationStyle,
+            enabled: isFrontmost && !pausedForRows && showsTrailer,
+            onMove: handleMove
+        )
         .preloadDetailBackdropOnFocus(for: current, isFocused: focus != nil && isFrontmost)
         .onChange(of: focus) { old, new in
             pinnedSidebarInteraction?.setHeroFocused(new != nil)
@@ -1571,6 +1608,7 @@ struct HomeHeroView: View {
                 // the `receded` state (see `.onChange(of: receded)` below), which is
                 // the reliable "focus moved DOWN to Continue Watching" signal.
                 if old == nil {
+                    HeroFocusDiagnostics.entry("hero-focusstate")
                     HeroFocusDiagnostics.emit("focus ENTER hero (row, from outside) | \(hfState())")
                     if let item = current {
                         selectedButton = min(selectedButton, max(0, buttons(for: item).count - 1))
@@ -1592,7 +1630,7 @@ struct HomeHeroView: View {
         // focus returns to the hero. Moving focus UP to the tab bar (or LEFT to the
         // sidebar) does NOT scroll the page down, so `receded` stays false there and
         // the carousel keeps playing — exactly the requested behavior.
-        .onChange(of: receded) { _, isReceded in
+        .onChange(of: pausedForRows) { _, isReceded in
             if isReceded { pauseWhileReceded() } else { resumeFromRecede() }
         }
         .onDisappear {
@@ -1850,8 +1888,11 @@ struct HomeHeroView: View {
         guard let onRequest else { return }
         noteInteraction()
         requestOverrides[item.id] = .pending
+        let context = seasonRequestContext
         Task {
-            if let status = await onRequest(item) {
+            let status = await onRequest(item)
+            guard seasonRequestContext == context else { return }
+            if let status {
                 requestOverrides[item.id] = status
             } else {
                 requestOverrides[item.id] = nil
@@ -1907,6 +1948,7 @@ struct HomeHeroView: View {
         let context = "\(seasonRequestContextID)|\(seerConnected)"
         if seasonRequestContext != context {
             seasonRequestContext = context
+            requestOverrides = [:]
             seasonRequestStates = [:]
             seasonRequestingItems = []
             seasonLookupFailures = []
@@ -2053,9 +2095,10 @@ struct HomeHeroView: View {
                     title: item.resumeProgressFraction != nil ? "Resume" : item.playActionTitle,
                     progress: item.resumeProgressFraction,
                     remainingText: item.resumeRemainingText,
-                    seasonEpisodeText: HeroForegroundModelBuilder.seasonEpisodeButtonText(for: item),
+                    seasonEpisodeText: item.opensExternalSource ? nil : HeroForegroundModelBuilder.seasonEpisodeButtonText(for: item),
                     onLight: selected || colorScheme == .light,
-                    separatesEpisodeText: item.startsWatching
+                    separatesEpisodeText: item.startsWatching,
+                    systemImage: item.opensExternalSource ? "arrow.up.forward.app" : "play.fill"
                 )
                 .font(.system(size: 28, weight: .semibold))
             }
@@ -2233,7 +2276,6 @@ struct HomeHeroView: View {
     }
 
     private func resetTrailer(stopPlayer: Bool) {
-        trailerVisible = false
         activeTrailerDuration = 0
         activeTrailerSource = nil
         pendingTrailerAdvance = false
@@ -2272,7 +2314,7 @@ struct HomeHeroView: View {
             pausedAt = Date()
             runEpoch &+= 1
         }
-        trailerController.setPaused(true)
+        trailerController.setPaused(true, surfaceRole: .home)
     }
 
     /// Resumes the auto-advance when the hero un-recedes (focus returns to the hero
@@ -2280,6 +2322,7 @@ struct HomeHeroView: View {
     /// slide the user lands back on a fresh full dwell and re-keys the fire `.task`.
     /// No-op if the carousel wasn't paused.
     private func resumeFromRecede() {
+        guard !trailerController.isFullScreen else { return }
         guard settings.autoAdvance, items.count > 1, pausedAt != nil else { return }
         if pendingTrailerAdvance {
             pendingTrailerAdvance = false
@@ -2289,10 +2332,10 @@ struct HomeHeroView: View {
         }
         if activeTrailerDuration > 0 {
             pausedAt = nil
-            trailerController.setPaused(false)
+            trailerController.setPaused(false, surfaceRole: .home)
         } else {
             restartDwell()
-            trailerController.setPaused(false)
+            trailerController.setPaused(false, surfaceRole: .home)
         }
         runEpoch &+= 1
     }
@@ -2310,12 +2353,13 @@ struct HomeHeroView: View {
     /// the pause was held so the gauge continues from where it froze, then re-keys
     /// the fire `.task` to sleep the remaining time.
     private func resumeAutoAdvance() {
+        guard !trailerController.isFullScreen else { return }
         guard let pausedAt else { return }
         // Never let the idle timer (from an earlier in-hero interaction) restart
         // paging while the hero is receded — focus is down on Continue Watching and
         // must not have the carousel page behind it. The `receded` onChange resumes
         // once focus returns to the hero.
-        guard !receded else { return }
+        guard !pausedForRows else { return }
         if pendingTrailerAdvance {
             pendingTrailerAdvance = false
             self.pausedAt = nil

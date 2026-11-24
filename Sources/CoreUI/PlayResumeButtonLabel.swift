@@ -133,7 +133,7 @@ public struct ResumeProgressCapsule: View {
 /// inherit the ambient `.font`, so each caller keeps its own type scale; the
 /// progress bar is a fixed size.
 public struct PlayResumeButtonLabel: View {
-    /// How much of the resume trailing (`S5, E12 • 43m`) to show. Callers can offer
+    /// How much of the resume trailing (`S5 E12 • 43m`) to show. Callers can offer
     /// the same button in decreasing widths (inside a `ViewThatFits`) so the row
     /// shrinks the Play pill before wrapping: full → season/episode only (drop the
     /// remaining time) → hidden (progress bar only). The bar always stays.
@@ -150,8 +150,8 @@ public struct PlayResumeButtonLabel: View {
     public let progress: Double?
     /// Remaining-time text (e.g. "20m") shown after the bar in the resume form.
     public let remainingText: String?
-    /// The episode the button will play, as `S{n}, E{m}` — appended to the plain
-    /// title ("Play S21, E8") and prefixed to the resume trailing ("S5, E12 • 43m").
+    /// The episode the button will play, as `S{n} E{m}` — appended to the plain
+    /// title ("Play S21 E8") and prefixed to the resume trailing ("S5 E12 • 43m").
     /// `nil` for movies/series, which keep their plain label.
     public var seasonEpisodeText: String?
     /// Whether the label sits on a light background, forwarded to the progress bar.
@@ -170,12 +170,16 @@ public struct PlayResumeButtonLabel: View {
     /// width-constrained caller can request a shorter form to avoid wrapping.
     public var resumeTrailingStyle: ResumeTrailingStyle
     public var isPlaceholder: Bool
+    /// Keeps the placeholder's footprint while revealing the ready label.
+    public var crossfadesPlaceholder: Bool
     public var isLoading: Bool
     public var separatesEpisodeText: Bool
     public var wrapsText: Bool
+    public var systemImage: String
 
     /// Supplies the default bar height, which tracks the reader's text size.
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
         title: LocalizedStringResource,
@@ -188,9 +192,11 @@ public struct PlayResumeButtonLabel: View {
         barHeight: CGFloat? = nil,
         resumeTrailingStyle: ResumeTrailingStyle = .full,
         isPlaceholder: Bool = false,
+        crossfadesPlaceholder: Bool = false,
         isLoading: Bool = false,
         separatesEpisodeText: Bool = false,
-        wrapsText: Bool = false
+        wrapsText: Bool = false,
+        systemImage: String = "play.fill"
     ) {
         self.title = title
         self.progress = progress
@@ -202,9 +208,11 @@ public struct PlayResumeButtonLabel: View {
         self.barHeight = barHeight
         self.resumeTrailingStyle = resumeTrailingStyle
         self.isPlaceholder = isPlaceholder
+        self.crossfadesPlaceholder = crossfadesPlaceholder
         self.isLoading = isLoading
         self.separatesEpisodeText = separatesEpisodeText
         self.wrapsText = wrapsText
+        self.systemImage = systemImage
     }
 
     /// The in-progress fraction that switches the label to the resume form: a
@@ -216,8 +224,8 @@ public struct PlayResumeButtonLabel: View {
         return progress
     }
 
-    /// The resume trailing string for the current width style: `S5, E12 • 43m`,
-    /// `S5, E12`, or `nil` (bar only).
+    /// The resume trailing string for the current width style: `S5 E12 • 43m`,
+    /// `S5 E12`, or `nil` (bar only).
     private var resumeTrailing: String? {
         switch resumeTrailingStyle {
         case .hidden:
@@ -233,10 +241,10 @@ public struct PlayResumeButtonLabel: View {
     }
 
     /// The plain (non-resume) label: the base title with the season/episode appended
-    /// when present — "Play S21, E8" — else just the base title ("Play").
+    /// when present — "Play S21 E8" — else just the base title ("Play").
     ///
     /// Composed as `Text` rather than an interpolated `String`: the base title is
-    /// localized copy while "S21, E8" is generated content, so joining them as a
+    /// localized copy while "S21 E8" is generated content, so joining them as a
     /// String would drop the title's localization on the floor.
     private var plainTitle: Text {
         guard let seasonEpisodeText else { return Text(title) }
@@ -247,7 +255,18 @@ public struct PlayResumeButtonLabel: View {
     public var body: some View {
         ZStack(alignment: .leading) {
             Text(title).lineLimit(1).hidden().frame(width: 0).accessibilityHidden(true)
-            if isPlaceholder {
+            if crossfadesPlaceholder {
+                resolvedContent
+                    .opacity(isPlaceholder ? 0 : 1)
+                    .accessibilityHidden(isPlaceholder)
+                    .overlay(alignment: .leading) {
+                        placeholderContent
+                            .opacity(isPlaceholder ? 1 : 0)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(Text(title))
+                            .accessibilityHidden(!isPlaceholder)
+                    }
+            } else if isPlaceholder {
                 placeholderContent
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(Text(title))
@@ -255,6 +274,22 @@ public struct PlayResumeButtonLabel: View {
                 resolvedContent
             }
         }
+        // The label changes from "Play" to "Resume · 43m" when the detail data
+        // lands; crossfade it instead of letting the words snap.
+        .contentTransition(.opacity)
+        .transaction(value: isPlaceholder) { transaction in
+            guard crossfadesPlaceholder else { return }
+            // Resolution also changes the title; its existing animation must not
+            // override the shorter placeholder transition.
+            transaction.animation = reduceMotion ? nil : .easeInOut(duration: 0.15)
+            transaction.disablesAnimations = true
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: transitionKey)
+    }
+
+    private var transitionKey: String {
+        "\(String(describing: title))|\(isPlaceholder)|\(isLoading)"
+            + "|\(resumeTrailing ?? "")|\(resumeProgress != nil)|\(seasonEpisodeText ?? "")"
     }
 
     private var placeholderContent: some View {
@@ -263,7 +298,7 @@ public struct PlayResumeButtonLabel: View {
             Text(title)
                 .lineLimit(1)
                 .hidden()
-                .padding(.trailing, capsuleWidth)
+                .padding(.trailing, crossfadesPlaceholder ? 0 : capsuleWidth)
                 .overlay {
                     Capsule()
                         .fill(onLight ? Color.black.opacity(0.18) : Color.white.opacity(0.18))
@@ -298,7 +333,7 @@ public struct PlayResumeButtonLabel: View {
     }
 
     private var playIcon: some View {
-        ActionProgressIcon(systemName: "play.fill", isLoading: isLoading, onLight: onLight)
+        ActionProgressIcon(systemName: systemImage, isLoading: isLoading, onLight: onLight)
     }
 }
 

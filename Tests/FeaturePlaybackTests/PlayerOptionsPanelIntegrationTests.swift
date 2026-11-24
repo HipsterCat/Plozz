@@ -11,6 +11,34 @@ import XCTest
 final class PlayerOptionsPanelIntegrationTests: XCTestCase {
     private typealias Screen = PlayerControls.SubtitleScreen
 
+    func testAudioSyncAndUpscalingUseTheExistingOptionsNavigation() throws {
+        throw XCTSkip(
+            "The tvOS package-test process reports system audio settings, so the "
+                + "default hasAudioControls precondition is not empty on CI."
+        )
+        let model = PlayerControlsModel()
+        XCTAssertFalse(model.hasAudioControls)
+        model.engineCapabilities = [.audioDelay]
+        XCTAssertTrue(model.hasAudioControls)
+        XCTAssertEqual(
+            PlayerOptionsPanel.preferredFocus(for: .audio, subtitleScreen: .tracks, model: model, audioScreen: .sync),
+            .row(0)
+        )
+        model.upscaling.isAvailable = true
+        model.upscaling.selection = .animation
+        XCTAssertTrue(model.trackControlCategories.contains(.playback))
+        let rows = PlaybackOptionsPane.rows(
+            model: model, zoom: model.videoZoom, actions: .init(), openScreen: { _ in }
+        )
+        XCTAssertTrue(rows.contains { $0.id == PlaybackOptionsPane.upscalingSlot })
+        XCTAssertEqual(
+            PlayerOptionsPanel.preferredFocus(
+                for: .playback, subtitleScreen: .tracks, model: model, playbackScreen: .upscaling
+            ),
+            .row(3)
+        )
+    }
+
     func testChaptersUseTheBottomCardAndEnterOnTheirTab() {
         let model = PlayerControlsModel()
         XCTAssertTrue(PlayerControls.usesBottomCard(.chapters))
@@ -96,7 +124,7 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         model.secondarySubtitleImagePrimaryFormat = "PGS"
         XCTAssertEqual(
             PlayerOptionsPanel.preferredFocus(for: .subtitles, subtitleScreen: .style, model: model),
-            .subBack
+            .row(0)
         )
     }
 
@@ -214,7 +242,7 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         model.playbackSpeed = 1.5
         model.engineCapabilities = [.playbackSpeed]
         XCTAssertEqual(PlayerOptionsPanel.preferredFocus(
-            for: .playback, subtitleScreen: .tracks, model: model),
+            for: .speed, subtitleScreen: .tracks, model: model),
                        .row(PlaybackOptionsPane.speedSlot))
         model.engineCapabilities = []
         XCTAssertNil(PlayerOptionsPanel.preferredFocus(for: .sync, subtitleScreen: .tracks, model: model))
@@ -313,6 +341,18 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
             let rows = try XCTUnwrap(captured)
             XCTAssertEqual(rows.map(\.slot), Array(0..<rows.count))
             XCTAssertEqual(rows.first?.title, SystemCaptionStyleCopy.optionTitle)
+            XCTAssertFalse(rows.contains { $0.title == LocalizedStringResource("Position relative to") })
+            let position = try XCTUnwrap(rows.first { $0.title == LocalizedStringResource("Position") })
+            if case let .choice(_, _, next) = position.kind {
+                next()
+                XCTAssertEqual(model.subtitleStyle.positionReference, .picture)
+                XCTAssertEqual(model.subtitleStyle.verticalPosition, 0.06)
+            } else { XCTFail("Position must select the reference, not change the vertical offset.") }
+            let offset = try XCTUnwrap(rows.first { $0.title == LocalizedStringResource("Vertical offset") })
+            if case let .number(_, step) = offset.kind {
+                step(1)
+                XCTAssertEqual(model.subtitleStyle.verticalPosition, 0.065, accuracy: 0.000_001)
+            } else { XCTFail("Vertical offset must keep the existing percentage stepper.") }
             XCTAssertFalse(rows.contains { $0.title == LocalizedStringResource("Use File Positions") })
             XCTAssertFalse(rows.contains { $0.title == LocalizedStringResource("Use File Colors") })
             XCTAssertFalse(rows.contains { $0.title == LocalizedStringResource("Use Bold and Italic") })

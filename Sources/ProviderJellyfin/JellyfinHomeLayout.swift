@@ -27,6 +27,20 @@ struct EmbyHomeQueryDto: Decodable {
 }
 
 extension JellyfinProvider {
+    public func libraryRecentlyAddedPage(
+        in libraryID: String, kind: MediaItemKind, startIndex: Int, limit: Int
+    ) async throws -> HomeRowPage {
+        guard kind == .series || kind == .movie else {
+            return try await catalogRecentlyAddedPage(in: libraryID, kind: kind, startIndex: startIndex, limit: limit)
+        }
+        guard startIndex >= 0, limit > 0, startIndex < Int.max - limit else { throw AppError.invalidResponse }
+        // The server ranks grouped shows by new episodes, not by the series' DateCreated.
+        let items = try await client.latestItems(
+            userID: session.userID, limit: startIndex + limit + 1, parentID: libraryID, videoOnly: true
+        )
+        return .prefix(items.map { map(item: $0).taggingLibrary(libraryID) }, startIndex: startIndex, limit: limit)
+    }
+
     public func homeRowPage(_ feed: HomeRowFeed, startIndex: Int, limit: Int) async throws -> HomeRowPage {
         guard startIndex >= 0, limit > 0, limit <= PageRequest.defaultLimit,
               startIndex < Int.max - limit else { throw AppError.invalidResponse }
@@ -42,7 +56,7 @@ extension JellyfinProvider {
             }
             return .prefix(items, startIndex: startIndex, limit: limit)
         }
-        guard case let .server(section, excluded, _) = feed else {
+        guard case let .server(section, excluded, _, _) = feed else {
             return try await homeRowPrefixPage(feed, startIndex: startIndex, limit: limit)
         }
         let items = try await loadServerHomeItems(
@@ -257,13 +271,15 @@ extension JellyfinProvider {
         )
         var seen = Set<String>()
         for section in native {
+            let sectionType = section.SectionType?.lowercased()
             let parent = section.ParentId ?? section.ParentItem?.Id
             let collectionType = section.CollectionType ?? section.ParentItem?.CollectionType
                 ?? views.first(where: { $0.Id == parent })?.CollectionType
             let collections = Set(([collectionType].compactMap { $0 }
                 + (section.Query?.CollectionTypes ?? [])).map { $0.lowercased() })
             let itemTypes = Set((section.ItemTypes ?? []).map { $0.lowercased() })
-            let music = collections.contains(where: { Self.isMusicCollection($0) })
+            let music = sectionType == "resumeaudio"
+                || collections.contains(where: { Self.isMusicCollection($0) })
                 || !itemTypes.isDisjoint(with: ["audio", "musicalbum", "musicartist"])
             let reading = collections.contains(where: { Self.isReadingCollection($0) })
                 || !itemTypes.isDisjoint(with: ["book", "audiobook"])
@@ -276,12 +292,12 @@ extension JellyfinProvider {
             if collections.contains("livetv")
                 || !itemTypes.isDisjoint(with: ["tvchannel", "program"]) {
                 kind = .liveTV
-            } else if !itemTypes.isEmpty
-                        && itemTypes.isSubset(of: ["collectionfolder", "userview"]) {
+            } else if sectionType == "userviews"
+                        || (!itemTypes.isEmpty && itemTypes.isSubset(of: ["collectionfolder", "userview"])) {
                 kind = .libraries
-            } else if section.Query?.IsResumable == true {
+            } else if sectionType == "resume" || section.Query?.IsResumable == true {
                 kind = .continueWatching
-            } else if section.SectionType?.lowercased() == "latestmedia" {
+            } else if sectionType == "latestmedia" {
                 kind = .recentlyAdded
             } else {
                 kind = .recommendations

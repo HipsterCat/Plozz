@@ -62,10 +62,14 @@ actor ShareLibraryStore {
         try await browser.statForOpening(relativePath)
     }
 
+    func externalPlaybackURL(for locator: NetworkFileLocator, player: ExternalPlayer) async throws -> URL {
+        try await browser.externalPlaybackURL(for: locator, player: player)
+    }
+
     /// Read a file's bytes off the share (share-relative path). Used to pull small
     /// sidecar subtitles into a local temp for the overlay.
-    func readFile(_ relPath: String) async throws -> Data {
-        try await browser.readFile(relPath)
+    func readFile(_ relPath: String, maximumBytes: Int = 16 * 1_024 * 1_024) async throws -> Data {
+        try await browser.readFile(relPath, maximumBytes: maximumBytes)
     }
 
     /// A share presents exactly one browsable "library": its root folder. Kept as
@@ -99,8 +103,8 @@ actor ShareLibraryStore {
     /// sub-folders become navigable `.folder` items, playable files become
     /// `.video` items, everything else (photos, docs, `.DS_Store`, …) is hidden.
     /// Folders sort first, then files, both case-insensitively by name.
-    func entries(forContainerID id: String) async throws -> [MediaItem] {
-        try await loadEntries(forContainerID: id, sort: nil)
+    func entries(forContainerID id: String, rawFiles: Bool = false) async throws -> [MediaItem] {
+        try await loadEntries(forContainerID: id, sort: nil, rawFiles: rawFiles)
     }
 
     /// Paged file browsing needs filesystem-backed "Date Added" ordering before
@@ -110,32 +114,48 @@ actor ShareLibraryStore {
     func entries(
         forContainerID id: String,
         sort: CoreModels.SortDescriptor,
-        foldersFirst: Bool = true
+        foldersFirst: Bool = true,
+        rawFiles: Bool = false
     ) async throws -> [MediaItem] {
-        try await loadEntries(forContainerID: id, sort: sort, foldersFirst: foldersFirst)
+        try await loadEntries(forContainerID: id, sort: sort, foldersFirst: foldersFirst, rawFiles: rawFiles)
     }
 
     private func loadEntries(
         forContainerID id: String,
         sort: CoreModels.SortDescriptor?,
-        foldersFirst: Bool = true
+        foldersFirst: Bool = true,
+        rawFiles: Bool = false
     ) async throws -> [MediaItem] {
         let relPath = Self.relativePath(forContainerID: id)
         guard let relPath else { return [] }
         let entries = try await browser.listDirectory(relPath)
+        let browser = self.browser
+        let disc = rawFiles ? nil : try await ShareBluRayFolder.discover(in: relPath, entries: entries) {
+            try await browser.listDirectory($0)
+        }
 
         var folders: [(item: MediaItem, addedAt: Date?)] = []
         var videos: [(item: MediaItem, addedAt: Date?)] = []
+        if let disc {
+            videos.append((
+                videoItem(
+                    relPath: disc.indexPath,
+                    name: (ShareBluRayFolder.classificationPath(disc.indexPath) as NSString).lastPathComponent
+                ),
+                disc.index.createdAt ?? disc.index.modifiedAt
+            ))
+        }
         for entry in entries {
             let childPath = relPath.isEmpty ? entry.name : "\(relPath)/\(entry.name)"
             let row: (item: MediaItem, addedAt: Date?)
             if entry.kind == .directory {
+                if disc?.excludesDirectory(childPath) == true { continue }
                 row = (
                     folderItem(relPath: childPath, name: entry.name),
                     entry.createdAt ?? entry.modifiedAt
                 )
                 folders.append(row)
-            } else if ShareMediaParser.isVideoFile(entry.name) {
+            } else if ShareMediaParser.isLibraryMediaFile(entry.name) {
                 row = (
                     videoItem(relPath: childPath, name: entry.name),
                     entry.createdAt ?? entry.modifiedAt
@@ -244,6 +264,16 @@ actor ShareLibraryStore {
     }
 
     private func videoItem(relPath: String, name: String) -> MediaItem {
+        let name = ShareBluRayFolder.isIndex(relPath)
+            ? (ShareBluRayFolder.classificationPath(relPath) as NSString).lastPathComponent : name
+        var item = classifiedVideoItem(relPath: relPath, name: name)
+        if ShareMediaParser.isExternalLinkFile(name) {
+            item.versions = [MediaVersion(id: relPath, fileName: name, isDefault: true, container: "strmlnk")]
+        }
+        return item
+    }
+
+    private func classifiedVideoItem(relPath: String, name: String) -> MediaItem {
         // Enrich the bare file into a movie/episode so the generic MetadataKit
         // artwork pipeline (ArtworkRouter → TMDb/TVmaze/AniList) can resolve a
         // poster/backdrop and the detail page can look up an overview. Nothing

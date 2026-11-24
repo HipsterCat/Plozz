@@ -11,10 +11,10 @@ final class IPTVGuideDiagnosticsTests: XCTestCase {
     }
 
     func testMissingGuideRetainsAPIAndXMLTVResponsesWithoutSecretsOrExtraRequests() async throws {
-        for (status, body, fallback) in [
-            (404, "", "Unavailable"), (405, "", "Unavailable"), (501, "", "Unavailable"),
-            (200, "<html>private-login-body</html>", "Malformed"),
-            (200, #"{"epg_listings":[]}"#, "Empty")
+        for (status, body) in [
+            (404, ""), (405, ""), (501, ""),
+            (200, "<html>private-login-body</html>"),
+            (200, #"{"epg_listings":[]}"#)
         ] {
             let provider = try await provider()
             IPTVFixture.state.reset()
@@ -23,18 +23,15 @@ final class IPTVGuideDiagnosticsTests: XCTestCase {
                 return (xml ? 404 : status, ["Content-Type": "text/html; private-header"], Data(body.utf8))
             }
             let since = Date()
-            do {
-                _ = try await load(provider)
-                XCTFail("Failed XMLTV must remain an error")
-            } catch { XCTAssertEqual(error as? AppError, .notFound) }
+            let rows = try await load(provider)
+            XCTAssertTrue(rows.isEmpty, "Malformed and unavailable native answers tolerate missing listings")
             let log = report(since: since)
             XCTAssertTrue(log.contains("endpoint=get_simple_data_table"))
             XCTAssertTrue(log.contains("http=\(status)"))
             XCTAssertTrue(log.contains("endpoint=xmltv"))
             XCTAssertTrue(log.contains("http=404 response=html"))
-            XCTAssertTrue(log.contains("fallback\(fallback)=1"))
-            XCTAssertTrue(log.contains("outcome=failed operations=2"))
-            XCTAssertTrue(log.contains("rows=unknown reason=notFound"))
+            XCTAssertTrue(log.contains("operations=2"))
+            XCTAssertTrue(log.contains("reason=notFound"))
             for secret in ["provider.test", "private-user", "private-password", "private-login-body",
                            "private-header", "Private channel", "live:10", "stream_id", "https://"] {
                 XCTAssertFalse(log.contains(secret), secret)
@@ -76,10 +73,11 @@ final class IPTVGuideDiagnosticsTests: XCTestCase {
                 XCTAssertTrue(log.contains("outcome=cancelled"))
                 XCTAssertFalse(log.contains("outcome=failed"))
             }
-            XCTAssertFalse(log.contains("endpoint=xmltv"))
+            XCTAssertTrue(log.contains("endpoint=xmltv"))
+            XCTAssertFalse(log.contains("get_simple_data_table"))
             XCTAssertFalse(log.contains("private-error-description"))
             XCTAssertFalse(log.contains("private-host"))
-            XCTAssertEqual(IPTVFixture.state.requests.count, 1)
+            XCTAssertEqual(IPTVFixture.state.requests.count, status == 429 || status == 503 || status == -1001 ? 3 : 1)
             await provider.teardown()
         }
     }
@@ -100,12 +98,13 @@ final class IPTVGuideDiagnosticsTests: XCTestCase {
         XCTAssertEqual(programmes.count, 1)
         let fresh = report(since: first)
         XCTAssertTrue(fresh.contains("stage=parse outcome=succeeded requests=1 http=200 response=xml bytes=5 cached=false rows=1"))
-        XCTAssertTrue(fresh.contains("outcome=succeeded operations=2"))
+        XCTAssertTrue(fresh.contains("outcome=succeeded operations=1"))
         let second = Date()
         _ = try await load(provider)
         let cached = report(since: second)
         XCTAssertTrue(cached.contains("stage=parse outcome=succeeded requests=0 http=unknown response=unknown bytes=5 cached=true rows=1"))
-        XCTAssertEqual(IPTVFixture.state.requests.count, 3)
+        // The batch response is reused; neither load asks the native API.
+        XCTAssertEqual(IPTVFixture.state.requests.count, 1)
         XCTAssertFalse(cached.contains("Private program"))
         await provider.teardown()
     }
@@ -152,6 +151,25 @@ final class IPTVGuideDiagnosticsTests: XCTestCase {
         XCTAssertTrue(entries.contains { $0.contains("operations=2000 omitted=1994 fallbackEmpty=2000") })
     }
 
+    func testRejectedGuideIsNotReusedOnTheNextRefresh() async throws {
+        let provider = try await provider(explicit: true) { data, _, _, _, _ in
+            guard data == Data("<tv/>".utf8) else { throw LiveTVSourceImportError.invalidGuide }
+            return []
+        }
+        IPTVFixture.state.reset()
+        IPTVFixture.state.handler = { _ in
+            let body = IPTVFixture.state.requests.count == 1 ? "<html>login</html>" : "<tv/>"
+            return (200, ["Cache-Control": "max-age=60"], Data(body.utf8))
+        }
+        do {
+            _ = try await load(provider)
+            XCTFail("Malformed guides must fail, not become an empty guide")
+        } catch { XCTAssertEqual(error as? LiveTVSourceImportError, .invalidGuide) }
+        _ = try await load(provider)
+        _ = try await load(provider)
+        XCTAssertEqual(IPTVFixture.state.requests.count, 2, "Discard rejected bytes, but retain the valid replacement")
+    }
+
     func testRepeatedMissingExplicitGuideReportsReusedFailureWithoutInventingRequests() async throws {
         let provider = try await provider(explicit: true)
         IPTVFixture.state.reset()
@@ -177,6 +195,53 @@ final class IPTVGuideDiagnosticsTests: XCTestCase {
         IPTVFixture.state.handler = { _ in (200, [:], Data("<tv/>".utf8)) }
         _ = try await ServerLiveTVGuideRefreshScope.$current.withValue(.init()) { try await load(provider) }
         XCTAssertEqual(IPTVFixture.state.requests.count, 3, "The next refresh retries the preferred override immediately")
+        await provider.teardown()
+    }
+
+    func testRejectedGuidesAreReusedOnlyWithinTheirRefresh() async throws {
+        for failure in [LiveTVSourceImportError.invalidGuide] {
+            let provider = try await provider(explicit: true) { data, _, _, _, _ in
+                guard data == Data("<tv/>".utf8) else { throw failure }
+                return []
+            }
+            IPTVFixture.state.reset()
+            IPTVFixture.state.handler = { _ in (200, [:], Data("<rejected/>".utf8)) }
+            let since = Date()
+            await ServerLiveTVGuideRefreshScope.$current.withValue(.init()) {
+                for _ in 0..<3 {
+                    do {
+                        _ = try await load(provider)
+                        XCTFail("Rejected guide must remain failed")
+                    } catch { XCTAssertEqual(error as? LiveTVSourceImportError, failure) }
+                }
+            }
+            XCTAssertEqual(IPTVFixture.state.requests.count, 1)
+            XCTAssertTrue(report(since: since).contains("reusedFailure=true"))
+            IPTVFixture.state.handler = { _ in (200, [:], Data("<tv/>".utf8)) }
+            _ = try await ServerLiveTVGuideRefreshScope.$current.withValue(.init()) { try await load(provider) }
+            XCTAssertEqual(IPTVFixture.state.requests.count, 2)
+            await provider.teardown()
+        }
+    }
+
+    func testRetentionLimitFailureDoesNotRejectAnotherWindowInTheSameRefresh() async throws {
+        let provider = try await provider(explicit: true) { _, _, _, from, _ in
+            if from == Date(timeIntervalSince1970: 100) { throw LiveTVSourceImportError.guideTooLarge }
+            return []
+        }
+        IPTVFixture.state.reset()
+        IPTVFixture.state.handler = { _ in (200, [:], Data("<tv/>".utf8)) }
+        try await ServerLiveTVGuideRefreshScope.$current.withValue(.init()) {
+            do {
+                _ = try await load(provider)
+                XCTFail("The selected window exceeds its retention budget")
+            } catch { XCTAssertEqual(error as? LiveTVSourceImportError, .guideTooLarge) }
+            _ = try await provider.liveTVGuide(
+                channelIDs: ["live:10"], from: Date(timeIntervalSince1970: 200),
+                to: Date(timeIntervalSince1970: 500)
+            )
+        }
+        XCTAssertEqual(IPTVFixture.state.requests.count, 2)
         await provider.teardown()
     }
 
@@ -212,7 +277,7 @@ final class IPTVGuideDiagnosticsTests: XCTestCase {
                 .queryItems?.first { $0.name == "action" }?.value
             let body: String
             if action == nil { body = #"{"user_info":{"auth":1,"status":"Active"}}"# }
-            else if action == "get_live_streams" { body = #"[{"stream_id":10,"name":"Private channel"}]"# }
+            else if action == "get_live_streams" { body = #"[{"stream_id":10,"name":"Private channel","epg_channel_id":"private-guide-id"}]"# }
             else { body = "[]" }
             return (200, ["Content-Type": "application/json"], Data(body.utf8))
         }

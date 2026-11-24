@@ -1,6 +1,7 @@
 #if os(iOS)
 import CoreModels
 import PlozzCoreUI
+import FeatureAuth
 import FeatureHomeCore
 import SwiftUI
 import UIKit
@@ -9,6 +10,71 @@ import XCTest
 
 @MainActor
 final class HomeModelLifetimeTests: XCTestCase {
+    func testHomeStateBoxRetiresOnlyDiscardedScopes() {
+        let box = LazyViewState<String>()
+        var retired: [String] = []
+        XCTAssertEqual(box.value(forKey: "a", onDiscard: { retired.append($0) }) { "first" }, "first")
+        XCTAssertEqual(box.value(forKey: "a", onDiscard: { retired.append($0) }) { "unused" }, "first")
+        XCTAssertTrue(retired.isEmpty)
+        XCTAssertEqual(box.value(forKey: "b", onDiscard: { retired.append($0) }) { "second" }, "second")
+        XCTAssertEqual(retired, ["first"])
+        box.discard { retired.append($0) }
+        XCTAssertEqual(retired, ["first", "second"])
+        XCTAssertNil(box.existingValue(forKey: "b"))
+    }
+
+    func testPerformanceRetiredHomeModels() async throws {
+        try PerformanceProbe.requireEnabled()
+        let suite = "HomeModelLifetime.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let app = PlozziOSAppModel(
+            accountStore: AccountStore(secureStore: InMemorySecureStore()),
+            profileStore: ProfileStore(defaults: defaults)
+        )
+        let original = app.profiles.activeProfileID
+        let other = app.profiles.add(name: "Home lifetime fixture", isAwaitingSetup: false)
+        defer {
+            for key in UserDefaults.standard.dictionaryRepresentation().keys
+            where key.components(separatedBy: ".").contains(other.id) {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        let box = LazyViewState<HomeViewModel>()
+        func model() -> HomeViewModel {
+            PlozziOSTabShell(
+                appModel: app, homeViewModelBox: box, onAddServer: {},
+                showingSettings: .constant(false), showingProfileSwitcher: .constant(false),
+                deferredPairingURL: .constant(nil), systemColorScheme: .dark
+            ).sharedHomeViewModel
+        }
+        await app.ensureTrackersScopedToActiveProfile()
+        try await Task.sleep(for: .seconds(1))
+        try await PerformanceProbe.measure(self, scenario: "mobile-home-lifecycle") {
+            for _ in 0..<20 {
+                weak var retired = model()
+                weak var retiredSettings = app.settings
+                weak var retiredDownloads = app.downloads
+                app.selectProfile(app.profiles.activeProfileID == original ? other.id : original)
+                _ = model()
+                let deadline = ContinuousClock.now + .seconds(5)
+                while (retired != nil || retiredSettings != nil || retiredDownloads != nil),
+                      ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                let released = retired == nil && retiredSettings == nil && retiredDownloads == nil
+                _ = try XCTUnwrap(
+                    released ? true : nil,
+                    "Retained profile models: Home=\(retired != nil), settings=\(retiredSettings != nil), downloads=\(retiredDownloads != nil)"
+                )
+            }
+            await app.ensureTrackersScopedToActiveProfile()
+            try await Task.sleep(for: .seconds(1))
+            return ["replacements": 20, "survivingModels": 0]
+        }
+        try await PerformanceProbe.attachMemoryAfterOneSecond(self, scenario: "mobile-home-lifecycle")
+    }
+
     func testDefaultTabsKeepSettingsOptionalOnPhoneAndTablet() async throws {
         let app = PlozziOSAppModel()
         let original = app.profiles.activeProfileID
@@ -165,7 +231,7 @@ final class HomeModelLifetimeTests: XCTestCase {
         XCTAssertEqual(constructions, 1, "Root presentation updates must not rehydrate disposable Home models.")
     }
 
-    func testProfileSwitchReplacesTheModelBeforeRenderingTheNewScope() {
+    func testProfileSwitchReplacesTheModelBeforeRenderingTheNewScope() async {
         let app = PlozziOSAppModel()
         let original = app.profiles.activeProfileID
         let profile = app.profiles.add(name: "Home lifetime fixture")
@@ -183,10 +249,35 @@ final class HomeModelLifetimeTests: XCTestCase {
         }
         let first = model()
         XCTAssertTrue(first === model())
+        let started = expectation(description: "Outgoing feed is loading")
+        let finish = AsyncStream<Void>.makeStream()
+        let load = Task {
+            await first.upcoming.refresh(scope: original, namespace: nil, isCurrent: { true }) {
+                started.fulfill()
+                for await _ in finish.stream { break }
+                return .init(failedSourceCount: 1)
+            }
+        }
+        await fulfillment(of: [started], timeout: 3)
+        withObservationTracking {
+            _ = first.upcoming.releases
+            _ = first.upcoming.isLoading
+            _ = first.upcoming.scopeKey
+        } onChange: {
+            XCTFail("Replacing Home must not publish into the observed outgoing feed.")
+        }
         app.profiles.select(profile.id)
         let second = model()
         XCTAssertFalse(first === second)
         XCTAssertTrue(second === model())
+        finish.continuation.finish()
+        await load.value
+        XCTAssertEqual(first.upcoming.failedSourceCount, 0)
+        XCTAssertNil(second.upcoming.scopeKey)
+        await first.upcoming.refresh(scope: original, namespace: nil, isCurrent: { true }) {
+            XCTFail("A discarded Home cannot start a second feed load.")
+            return .init()
+        }
         app.profiles.select(original)
         let restored = model()
         XCTAssertFalse(second === restored)

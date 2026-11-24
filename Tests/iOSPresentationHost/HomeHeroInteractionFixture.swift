@@ -69,22 +69,30 @@ struct FeaturedCardInteractionFixture: View {
 
 struct HomeHeroInteractionFixture: View {
     @Environment(\.plozziOSUsesVerticalToolbar) private var usesVerticalToolbar
+    @Environment(\.horizontalSizeClass) private var sizeClass
     private var colorScheme: ColorScheme {
         ProcessInfo.processInfo.arguments.contains("--hero-light") ? .light : .dark
     }
     @State private var appModel: PlozziOSAppModel
+    @State private var seriesLookup: HeroInteractionLookupGate
     @State private var trailer = HeroTrailerController()
     @State private var sidebar = PlozziOSSidebarGeometryModel()
     @State private var pull = PlozziOSHomeHeroPullModel()
     @State private var actions = HeroInteractionActions()
     @State private var playCount = 0
+    @State private var settingsCount = 0
+    @State private var isMuted = true
     @State private var presentsSeasons = false
+    @State private var homePageIsVisible = false
     @State private var pinnedIDs = ""
     private var testsAutoAdvance: Bool {
         ProcessInfo.processInfo.arguments.contains("--hero-auto-advance")
     }
     private var usesNativeChrome: Bool {
         ProcessInfo.processInfo.arguments.contains("--hero-native-chrome")
+    }
+    private var usesScrollingPageActions: Bool {
+        usesNativeChrome && sizeClass == .compact && !usesVerticalToolbar
     }
 
     init() {
@@ -136,8 +144,10 @@ struct HomeHeroInteractionFixture: View {
         let defaults = UserDefaults(suiteName: "HomeHeroInteractionFixture")!
         defaults.removePersistentDomain(forName: "HomeHeroInteractionFixture")
         let model = PlozziOSAppModel(accountStore: accounts, profileStore: ProfileStore(defaults: defaults))
+        let seriesLookup = HeroInteractionLookupGate()
+        _seriesLookup = State(initialValue: seriesLookup)
         for kind in [ProviderKind.jellyfin, .emby] {
-            let provider = HeroInteractionProvider(kind: kind)
+            let provider = HeroInteractionProvider(kind: kind, seriesLookup: seriesLookup)
             model.accountsProviders.registry.register(kind) { _ in provider }
             do {
                 try accounts.add(provider.account, token: "fixture")
@@ -147,26 +157,59 @@ struct HomeHeroInteractionFixture: View {
         }
         model.accountsProviders.reloadAccounts()
         model.settings.heroBackground.settings.homeTrailerEnabled = false
-        model.settings.heroBackground.settings.detailMode = .off
+        model.settings.heroBackground.settings.detailMode = HeroInteractionProvider.hasDetailTrailer ? .trailer : .off
         _appModel = State(initialValue: model)
     }
 
     private var home: some View {
         NavigationStack {
-            PlozziOSHomeScrollView(heroActive: true) {
+            PlozziOSHomeScrollView(
+                heroActive: !ProcessInfo.processInfo.arguments.contains("--hero-disabled"),
+                showsPageActions: usesScrollingPageActions
+            ) {
                 PlozziOSHomeHeroCarousel(
                     items: HeroInteractionProvider.slides,
                     autoAdvance: testsAutoAdvance,
                     autoAdvanceSeconds: 3,
                     onPlay: { _ in playCount += 1 },
                     onPinnedItemsChanged: { pinnedIDs = $0.sorted().joined(separator: ",") },
-                    isFrontmost: !presentsSeasons,
+                    isFrontmost: homePageIsVisible && !presentsSeasons,
                     pullModel: pull
                 )
             } rows: {
                 Text("Below the hero").accessibilityIdentifier("hero-following-row")
+                if ProcessInfo.processInfo.arguments.contains("--poster-home-menu") {
+                    PlozziOSHomeMediaCard(
+                        item: HeroInteractionProvider.slides[1], isLandscape: true,
+                        interaction: .play, showsSeriesArtwork: true,
+                        provider: HeroInteractionProvider(kind: .emby)
+                    )
+                    .frame(width: 300)
+                    .accessibilityIdentifier("home-menu-poster")
+                    PlozziOSInlineEpisodeEntry(
+                        episode: HeroInteractionProvider.slides[1],
+                        episodes: [HeroInteractionProvider.slides[1]],
+                        onPlay: { _, _ in playCount += 1 }
+                    )
+                }
+                if ProcessInfo.processInfo.arguments.contains("--poster-home-card") {
+                    PlozziOSHomeMediaCard(
+                        item: HeroInteractionProvider.slides[0], isLandscape: false,
+                        interaction: .openDetail, provider: HeroInteractionProvider(kind: .jellyfin)
+                    )
+                    .frame(width: 150)
+                    .accessibilityIdentifier("home-poster")
+                }
                 Color.clear.frame(height: 1_200)
+            } pageActions: {
+                PlozziOSHomePageActions(
+                    showsAudio: ProcessInfo.processInfo.arguments.contains("--hero-header-audio"),
+                    isMuted: isMuted, onToggleMute: { isMuted.toggle() },
+                    onShowSettings: { settingsCount += 1 }
+                )
             }
+            .scrollClipDisabled()
+            .plozzOnPageAppearanceChange { homePageIsVisible = $0 }
             .overlay(alignment: .topTrailing) {
                 if testsAutoAdvance {
                     Button("Open Seasons") { presentsSeasons = true }
@@ -184,12 +227,27 @@ struct HomeHeroInteractionFixture: View {
                 }
             }
             .navigationTitle(usesNativeChrome ? "" : "Home fixture")
+            .plozziOSItemNavigation(appModel: appModel)
+            .plozziOSRailPlay { _ in playCount += 1 }
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
-            .toolbar(usesVerticalToolbar ? .visible : .automatic, for: .navigationBar)
+            .toolbar(
+                usesScrollingPageActions || usesVerticalToolbar ? .visible : .automatic,
+                for: .navigationBar
+            )
             .toolbar {
-                if usesNativeChrome {
-                    PlozziOSSettingsToolbarItem {}
+                if usesNativeChrome && !usesScrollingPageActions {
+                    if ProcessInfo.processInfo.arguments.contains("--hero-header-audio") && usesVerticalToolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            PlozziOSHeroAudioMuteToolbarButton(isMuted: true, onToggle: {})
+                        }
+                    }
+                    PlozziOSSettingsToolbarItem(leadingActions: {
+                        if ProcessInfo.processInfo.arguments.contains("--hero-header-audio") && !usesVerticalToolbar {
+                            PlozziOSHeroAudioMuteToolbarButton(isMuted: true, onToggle: {})
+                                .plozziOSPageAction()
+                        }
+                    }, action: {})
                 }
             }
         }
@@ -199,10 +257,24 @@ struct HomeHeroInteractionFixture: View {
         HeroInteractionNavigationChrome(enabled: usesNativeChrome, sidebar: sidebar) {
             home
         }
+        .overlay(alignment: .bottomLeading) {
+            if ProcessInfo.processInfo.arguments.contains("--hero-series-loading") {
+                Button("Complete lookup") {
+                    seriesLookup.complete()
+                }
+                .accessibilityIdentifier("hero-complete-series-lookup")
+                .padding(.bottom, 90)
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             VStack {
                 Text(verbatim: "\(playCount)").accessibilityIdentifier("hero-play-count")
                 Text(verbatim: "\(actions.watchlistCount)").accessibilityIdentifier("hero-watchlist-count")
+                Text(verbatim: "\(settingsCount)").accessibilityIdentifier("hero-settings-count")
+                if ProcessInfo.processInfo.arguments.contains("--hero-series-loading") {
+                    Text(verbatim: "\(seriesLookup.requests)")
+                        .accessibilityIdentifier("hero-series-lookup-count")
+                }
             }
             .allowsHitTesting(false)
         }
@@ -234,6 +306,7 @@ private struct HeroInteractionNavigationChrome<Content: View>: View {
                 Tab("Search", systemImage: "magnifyingglass", value: 3, role: .search) { Text("Search fixture") }
             }
             .tabViewStyle(.sidebarAdaptable)
+            .modifier(PlozziOSNavigationBackground(hidesRegularTabBackdrop: selection == 0))
             .background {
                 PlozziOSHomeSidebarOverlapProbe(enabled: selection == 0, geometryModel: sidebar)
                     .frame(width: 0, height: 0)
@@ -250,7 +323,10 @@ private final class HeroInteractionActions: MediaItemActionHandling {
     var watchlistCount = 0
 
     func actions(for item: MediaItem, context: MediaItemActionContext) -> [MediaItemAction] {
-        [.addToWatchlist]
+        if ProcessInfo.processInfo.arguments.contains("--poster-home-menu"), item.kind == .episode {
+            return [.goToSeason, .goToEpisode]
+        }
+        return [.addToWatchlist]
     }
 
     func perform(_ action: MediaItemAction, on item: MediaItem, context: MediaItemActionContext) {
@@ -258,8 +334,32 @@ private final class HeroInteractionActions: MediaItemActionHandling {
     }
 }
 
+@MainActor
+@Observable
+private final class HeroInteractionLookupGate {
+    private(set) var requests = 0
+    private var completions = 0
+
+    func complete() { completions += 1 }
+
+    func wait(remainsOpen: Bool) async throws {
+        requests += 1
+        if remainsOpen, completions > 0 { return }
+        let initial = completions
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        while completions == initial {
+            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try Task.checkCancellation()
+    }
+}
+
 private struct HeroInteractionProvider: MediaProvider {
+    static var hasDetailTrailer: Bool { ProcessInfo.processInfo.arguments.contains("--hero-detail-trailer") }
+    static let clip = MediaItem(id: "local-trailer", title: "Trailer", kind: .video, isTrailer: true)
     let kind: ProviderKind
+    var seriesLookup: HeroInteractionLookupGate?
     static let logoURL = URL(string: "https://hero.invalid/logo.png")!
     static let artworkURL = URL(string: "https://hero.invalid/full-width.png")!
 
@@ -276,19 +376,24 @@ private struct HeroInteractionProvider: MediaProvider {
     var session: UserSession { account.session(token: "fixture") }
 
     static var slides: [MediaItem] {
-        [
+        let items = [
             MediaItem(
                 id: "movie", title: "Hero Movie", kind: .movie,
                 overview: "A movie description in the Home hero.",
+                runtime: hasDetailTrailer ? 7_200 : nil,
+                resumePosition: hasDetailTrailer ? 600 : nil,
                 backdropURL: ProcessInfo.processInfo.arguments.contains("--hero-native-chrome") ? artworkURL : nil,
                 logoURL: ProcessInfo.processInfo.arguments.contains("--hero-logo") ? logoURL : nil
             ).taggingSource(ProviderKind.jellyfin.rawValue),
             MediaItem(
                 id: "episode", title: "Hero Episode", kind: .episode,
                 overview: "An episode description in the Home hero.",
-                parentTitle: "Hero Series", seasonNumber: 1, episodeNumber: 2, seriesID: "series"
+                parentTitle: "Hero Series", seasonNumber: 1, episodeNumber: 2, seriesID: "series",
+                backdropURL: ProcessInfo.processInfo.arguments.contains("--hero-native-chrome") ? artworkURL : nil,
+                allowsTitleBasedMetadataMatching: false
             ).taggingSource(ProviderKind.emby.rawValue)
         ]
+        return ProcessInfo.processInfo.arguments.contains("--hero-series-loading") ? [items[1]] : items
     }
 
     func libraries() async throws -> [MediaLibrary] { [] }
@@ -299,9 +404,21 @@ private struct HeroInteractionProvider: MediaProvider {
     }
     func item(id: String) async throws -> MediaItem {
         if id == "series" {
+            if ProcessInfo.processInfo.arguments.contains("--hero-series-loading") {
+                let fails = ProcessInfo.processInfo.arguments.contains("--hero-series-failure")
+                guard let seriesLookup else {
+                    fatalError("Loading fixture requires a controlled series lookup")
+                }
+                try await seriesLookup.wait(remainsOpen: !fails)
+                if fails {
+                    throw AppError.notFound
+                }
+            }
             return MediaItem(
                 id: id, title: "Hero Series", kind: .series,
-                overview: "Details for series from \(account.id)"
+                overview: "Details for series from \(account.id)",
+                backdropURL: ProcessInfo.processInfo.arguments.contains("--hero-native-chrome") ? Self.artworkURL : nil,
+                allowsTitleBasedMetadataMatching: false
             ).taggingSource(account.id)
         }
         guard var item = Self.slides.first(where: { $0.id == id && $0.sourceAccountID == account.id }) else {
@@ -312,7 +429,16 @@ private struct HeroInteractionProvider: MediaProvider {
     }
     func children(of itemID: String) async throws -> [MediaItem] { [] }
     func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
-    func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }
+    func trailers(for itemID: String) async throws -> [MediaItem] {
+        Self.hasDetailTrailer && itemID == "movie" ? [Self.clip] : []
+    }
+    func playbackInfo(for itemID: String) async throws -> PlaybackRequest {
+        guard Self.hasDetailTrailer, itemID == Self.clip.id,
+              let url = Bundle.main.url(forResource: "live-continuity", withExtension: "mp4") else {
+            throw AppError.notFound
+        }
+        return PlaybackRequest(item: Self.clip, streamURL: url)
+    }
     func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
     func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }

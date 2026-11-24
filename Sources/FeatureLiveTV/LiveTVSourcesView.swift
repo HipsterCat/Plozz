@@ -4,7 +4,7 @@ import FeatureLiveTVCore
 import SwiftUI
 
 public struct LiveTVSourcesView: View {
-    public enum Presentation { case page, settingsPane }
+    public enum Presentation { case page, settingsPane, addSource }
 
     @State private var model: LiveTVSourceManagementModel
     @State private var importedRemovalID: UUID?
@@ -107,6 +107,7 @@ public struct LiveTVSourcesView: View {
         imports: LiveTVPrototypeImportModel,
         refresh: @escaping @MainActor () -> Void,
         refreshSource: (@MainActor (String) async throws -> Void)? = nil,
+        presentation: Presentation = .page,
         serverChoices: [LiveTVServerChoice] = [],
         serverProviderResolver: LiveTVServerProviderResolver? = nil,
         connectServer: (() -> Void)? = nil,
@@ -123,7 +124,7 @@ public struct LiveTVSourcesView: View {
         customChannelCount: Int = 0
     ) {
         _model = State(initialValue: model)
-        presentation = .page
+        self.presentation = presentation
         self.imports = imports
         self.refresh = refresh
         self.refreshSource = refreshSource
@@ -148,7 +149,8 @@ public struct LiveTVSourcesView: View {
     public var body: some View {
         LiveTVSourceAccessGate(model: model, unrestrictedContent: settingsPreferences) { canManage in
             let content = LiveTVSourcesContent(
-                model: model, imports: catalog?.isPresentationCurrent == false ? nil : imports, refresh: refresh,
+                model: model, isAddingSource: presentation == .addSource,
+                imports: catalog?.isPresentationCurrent == false ? nil : imports, refresh: refresh,
                 retrySource: sourceRetry, retryingSourceIDs: retryingSourceIDs,
                 serverChoices: serverChoices, serverProviderResolver: serverProviderResolver,
                 connectServer: connectServer, sourceFilterID: sourceFilterID,
@@ -166,7 +168,7 @@ public struct LiveTVSourcesView: View {
                     content
                 }
             } else {
-                LiveTVSettingsPage(title: "Sources") {
+                LiveTVSettingsPage(title: presentation == .addSource ? SettingsCopy.addTVSource : SettingsCopy.tvSources) {
                     catalogStatus
                     content
                 }
@@ -302,6 +304,7 @@ private enum LiveTVSourceRemoval {
 private struct LiveTVSourcesContent: View {
     @Environment(\.managedProviderSetupRouter) private var providerSetupRouter
     let model: LiveTVSourceManagementModel
+    let isAddingSource: Bool
     let imports: LiveTVPrototypeImportModel?
     let refresh: (@MainActor () -> Void)?
     let retrySource: (@MainActor (String) async throws -> Void)?
@@ -337,12 +340,14 @@ private struct LiveTVSourcesContent: View {
                 }
             } else if !model.hasLoaded {
                 ProgressView("Loading sources")
+            } else if isAddingSource {
+                setupActions
             } else {
                 if settingsPreferences != nil {
                     LiveTVSettingsSourceList(sources: configuredSources) { source in
                         sourceRow(source)
                     } setup: {
-                        LiveTVSettingsPage(title: "Add TV source") { setupActions }
+                        LiveTVSettingsPage(title: SettingsCopy.addTVSource) { setupActions }
                     }
                 } else {
                     if !model.configuration.playlists.isEmpty || !model.configuration.servers.isEmpty {
@@ -351,7 +356,7 @@ private struct LiveTVSourcesContent: View {
                     setupActions
                 }
             }
-            if let settingsPreferences {
+            if let settingsPreferences, !isAddingSource {
                 if let automaticChannels, let createChannel {
                     LiveTVAutomaticChannelsOverview(
                         state: automaticChannels, customChannelCount: customChannelCount,
@@ -359,8 +364,9 @@ private struct LiveTVSourcesContent: View {
                     )
                 }
                 settingsPreferences
+                    .environment(\.liveTVChannelNamePreviewSamples, imports?.channelNamePreviewSamples ?? [])
             }
-            if model.hasLoaded {
+            if model.hasLoaded, !isAddingSource {
                 if browseSource != nil || (settingsPreferences == nil && createChannel != nil)
                     || (refresh != nil && !configuredSources.isEmpty)
                     || (scanChannels != nil && !model.configuration.playlists.isEmpty)
@@ -470,6 +476,9 @@ private struct LiveTVSourcesContent: View {
     }
 
     private struct LiveTVConfiguredSourceRow: View {
+        #if os(tvOS)
+        @Environment(LiveTVGuidePreparationModel.self) private var guidePreparation: LiveTVGuidePreparationModel?
+        #endif
         let source: LiveTVConfiguredSourceItem
         let model: LiveTVSourceManagementModel
         let imports: LiveTVPrototypeImportModel?
@@ -551,6 +560,13 @@ private struct LiveTVSourcesContent: View {
                     }
                     .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     .accessibilityIdentifier("live-tv-source-details-\(source.id)")
+                    #if os(tvOS)
+                    if source.isEnabled, let preparation = guidePreparation?.statuses[source.accountID] {
+                        LiveTVGuidePreparationStatus(status: preparation)
+                            .font(SettingsRowMetrics.descriptionFont)
+                            .padding(.horizontal, SettingsRowMetrics.horizontalPadding)
+                    }
+                    #endif
                     if source.isEnabled, let imports {
                         LiveTVSourceErrors(imports: imports, sourceID: source.id, retry: retrySource)
                     }
@@ -561,7 +577,7 @@ private struct LiveTVSourcesContent: View {
     }
 
     private var setupActions: some View {
-        SettingsSectionGroup("Add a source") {
+        SettingsSectionGroup(isAddingSource ? nil : SettingsCopy.addTVSource) {
             if connectIPTV != nil || providerSetupRouter != nil {
                 Button {
                     if let connectIPTV { connectIPTV(nil, .playlist) }
@@ -740,7 +756,7 @@ private struct LiveTVPlaylistSourceDetails: View {
                     )) {
                         Label("Use this source", systemImage: "antenna.radiowaves.left.and.right")
                     }
-                    .accessibilityIdentifier("live-tv-source-enabled-\(source.id)")
+                    .accessibilityIdentifier("live-tv-source-enabled-\(source.id)").settingsSearchAnchor("live-source-enabled")
                     LiveTVSourceApprovalControl(
                         source: source, sourceStore: model.sourceStoreForApproval,
                         onChange: {
@@ -898,6 +914,7 @@ private struct LiveTVPlaylistGuideSettings: View {
                             set: { model.setGuidePolicy(sourceID, lookbackDays: $0) }
                         ), identifier: "live-tv-guide-lookback"
                     )
+                    .settingsSearchAnchor("guide-lookback")
                     LiveTVGuideDaysPicker(
                         title: "Look ahead", symbol: "calendar",
                         options: [1, 3, 7, 14, 28], selection: Binding(
@@ -905,6 +922,7 @@ private struct LiveTVPlaylistGuideSettings: View {
                             set: { model.setGuidePolicy(sourceID, lookaheadDays: $0) }
                         ), identifier: "live-tv-guide-lookahead"
                     )
+                    .settingsSearchAnchor("guide-lookahead")
                 } footer: {
                     Text("Keeps the listings provided within this range. A guide may supply fewer days.")
                 }
@@ -974,7 +992,7 @@ private struct LiveTVPlaylistImportStatus: View {
     }
 }
 
-private struct LiveTVServerSourceDetails: View {
+struct LiveTVServerSourceDetails: View {
     let model: LiveTVSourceManagementModel
     let imports: LiveTVPrototypeImportModel?
     let sourceID: String
@@ -982,6 +1000,7 @@ private struct LiveTVServerSourceDetails: View {
     var retrySource: (@MainActor (String) async throws -> Void)? = nil
     @State private var confirmsRemoval = false
     @SettingsPageDismiss private var dismiss
+    @Environment(LiveTVGuidePreparationModel.self) private var guidePreparation: LiveTVGuidePreparationModel?
 
     var body: some View {
         if let source = model.configuration.servers.first(where: { $0.id == sourceID }) {
@@ -993,11 +1012,14 @@ private struct LiveTVServerSourceDetails: View {
                 SettingsSectionGroup {
                     Toggle(isOn: Binding(
                         get: { source.isEnabled },
-                        set: { model.setServerEnabled(source.id, enabled: $0) }
+                        set: {
+                            model.setServerEnabled(source.id, enabled: $0)
+                            if !$0 { guidePreparation?.cancel(accountID: source.accountID) }
+                        }
                     )) {
                         Label("Use this source", systemImage: "server.rack")
                     }
-                    .accessibilityIdentifier("live-tv-source-enabled-\(source.id)")
+                    .accessibilityIdentifier("live-tv-source-enabled-\(source.id)").settingsSearchAnchor("live-source-enabled")
                     SettingsPageLink {
                         LiveTVServerSourceRename(model: model, source: source)
                     } label: {
@@ -1010,12 +1032,26 @@ private struct LiveTVServerSourceDetails: View {
                 if let status = imports?.serverSources.first(where: { $0.id == sourceID }) {
                     SettingsSectionGroup("Live TV status") {
                         LiveTVServerSourceSummary(source: source, status: status)
-                        Text("\(status.channelCount) channels")
-                        Text("\(status.programCount) loaded program listings")
-                        if let date = status.lastGuideRefresh {
+                        Text("\(guidePreparation?.statuses[source.accountID]?.channelCount ?? status.channelCount) channels")
+                        if guidePreparation?.statuses[source.accountID] == nil {
+                            Text("\(status.programCount) loaded program listings")
+                        }
+                        if let date = guidePreparation?.statuses[source.accountID]?.refreshedAt ?? status.lastGuideRefresh {
                             Text("Guide refreshed: \(date, format: .dateTime.month().day().hour().minute())")
                                 .font(.caption)
                         }
+                    }
+                }
+                if let guidePreparation, guidePreparation.canPrepare(accountID: source.accountID) {
+                    SettingsSectionGroup {
+                        Button {
+                            guidePreparation.start(accountID: source.accountID, refresh: true)
+                        } label: {
+                            SettingsRowLabel(icon: "arrow.clockwise", title: "Refresh guide")
+                        }
+                        .disabled(!source.isEnabled || guidePreparation.statuses[source.accountID]?.phase == .loading)
+                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        .accessibilityIdentifier("live-tv-refresh-guide-\(source.id)")
                     }
                 }
                 SettingsSectionGroup {
@@ -1024,7 +1060,10 @@ private struct LiveTVServerSourceDetails: View {
                     }
                     .confirmationDialog("Remove this source?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
                         Button("Remove source", role: .destructive) {
-                            if removeSource(source) { dismiss() }
+                            if removeSource(source) {
+                                guidePreparation?.cancel(accountID: source.accountID)
+                                dismiss()
+                            }
                         }
                     } message: {
                         Text("The server account stays connected.")
@@ -1271,9 +1310,10 @@ private struct LiveTVPlaylistSourceEditor: View {
     }
 }
 
-private struct LiveTVServerSourceSummary: View {
+struct LiveTVServerSourceSummary: View {
     let source: LiveTVServerSource
     let status: LiveTVServerSourceStatus?
+    @Environment(LiveTVGuidePreparationModel.self) private var guidePreparation: LiveTVGuidePreparationModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1287,8 +1327,20 @@ private struct LiveTVServerSourceSummary: View {
                     LiveTVServerAvailabilitySummary(availability: availability)
                 } else if status.phase == .loading {
                     ProgressView("Loading channels")
-                } else {
+                } else if guidePreparation?.statuses[source.accountID] == nil {
                     Text("Ready to load").font(.caption)
+                }
+                if let preparation = guidePreparation?.statuses[source.accountID] {
+                    #if os(tvOS)
+                    LiveTVGuidePreparationStatus(status: preparation)
+                    #else
+                    if preparation.phase != .loading {
+                        LiveTVGuidePreparationStatus(status: preparation)
+                    }
+                    #endif
+                } else if status.guidePhase == .loading {
+                    ProgressView("Loading guide")
+                        .accessibilityIdentifier("live-tv-source-guide-loading-\(source.id)")
                 }
             }
         }
@@ -1320,18 +1372,17 @@ private struct LiveTVPlaylistSourceRow: View {
             title: Text(verbatim: source.name),
             contentInsets: liveTVSourceRowInsets,
             icon: {
-                #if os(tvOS)
-                ProviderSiteIcon(url: source.playlistURL, size: 40) {
+                ProviderSiteIcon(url: source.playlistURL, size: iconSize) {
+                    #if os(tvOS)
                     Image(systemName: source.importedPlaylistID == nil ? "antenna.radiowaves.left.and.right" : "doc")
                         .font(.body)
                         .settingsRowIcon()
+                    #else
+                    Image(systemName: source.importedPlaylistID == nil ? "list.bullet.rectangle" : "doc")
+                        .font(.system(size: 22))
+                        .settingsRowIcon()
+                    #endif
                 }
-                #else
-                Image(systemName: source.importedPlaylistID == nil ? "list.bullet.rectangle" : "doc")
-                    .font(.system(size: 22))
-                    .settingsRowIcon()
-                    .frame(width: SettingsRowMetrics.iconColumnWidth, height: SettingsRowMetrics.iconColumnWidth)
-                #endif
             },
             secondary: {
                 HStack(spacing: 6) {
@@ -1350,5 +1401,13 @@ private struct LiveTVPlaylistSourceRow: View {
             },
             trailing: { LiveTVSourceChevron() }
         )
+    }
+
+    private var iconSize: CGFloat {
+        #if os(tvOS)
+        40
+        #else
+        SettingsRowMetrics.iconColumnWidth
+        #endif
     }
 }

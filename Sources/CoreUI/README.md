@@ -1,11 +1,84 @@
 # CoreUI
 
+`SettingsAdjustmentFocusScope` optionally reports `onEditingEnded(cancelled:)`.
+Arrow release commits an adjustment; focus loss, disappearance, app deactivation
+and recognizer cancellation discard pending input. Swipes default to one step;
+`SettingsStepper.swipeToAdjust` opts into continuous distance-based adjustment.
+The same native input owner tracks the gesture through lift or cancellation,
+including the final sample of a fast flick. The control accumulates whole steps
+and clamps each update, allowing immediate reversal at either bound. Its editing
+callback begins before the first value update and ends only on lift/cancellation.
+Existing immediate settings adjustments do not need the callbacks.
+
+`ProfileSettingsCategory.localizedTitle` contains app copy only. Branded categories
+such as Seerr have no localized title; their platform rows render the name verbatim.
+
+`ServerDiscoveryRow` is the shared discovery-button label for media-server and
+Seerr setup: leading icon, server name, secondary address, and disclosure
+chevron. In-place selections, such as Seerr setup, omit the disclosure chevron.
+The surrounding settings group/action owns padding and interaction.
+
+`PosterCardView.captionSubtitle` supplies localized, caller-owned context in the
+normal caption and accessibility value without mutating media metadata. Omitting
+it preserves the standard provider subtitle and runtime.
+`PosterCardView.statusCue` and `MediaRowView.statusCue` accept `Text` so callers
+can distinguish localized labels from preformatted content such as release dates.
+Combined release cues keep their localized subtitle deferred until rendering.
+On iOS, `PosterCardView` supplies the card visuals, not a tap handler. Callers
+must wrap it in a native button or navigation link; `MediaArtworkZoomButton`
+supports closure-driven selection with the shared artwork transition. tvOS
+selection remains owned by the card's focus control.
+
+`MediaRowScroll` owns the horizontal lazy stack, shared card spacing, and unclipped
+focus-lift clearance for Home rails and TV Upcoming date rails. Its callers apply
+the shared rail clearance offsets to preserve heading and inter-row spacing.
+Upcoming retains release identities rather than deduplicating by media identity,
+so different releases of the same series keep their own cards and captions.
+
+`mediaRowRefreshStatus` opts a rail heading into a reserved, subtle refresh/status
+indicator. Both native TV and mobile headings use the same control; card content
+does not inherit it. Failures open recovery details only on selection, never an
+automatic alert. Reduce Motion uses a static refresh symbol.
+
+`PlozziOSPageHeader` owns the mobile scrolling header's 20-point horizontal
+insets, 44-point minimum height and 12-point action spacing. Callers must not
+add another top or horizontal inset. `plozziOSPageAction` gives each button or
+menu its own 44-point native circular glass surface and full-size label hit
+target, instead of relying on different intrinsic button/menu paddings. It
+uses the existing shared frosted surface when glass is unavailable or transparency
+is reduced, keeping the same control bounds rather than reintroducing native
+bordered button/menu padding differences. Profile photos have a two-point surround. Native vertical toolbar
+items may use their 48-point size based on the actual toolbar orientation,
+not the OS version; horizontal headers remain 44 points.
+Home places its horizontal mute/profile group inside one native toolbar item,
+so toolbar item padding cannot change the shared action gap. Native vertical
+toolbar placement and iPad tab/sidebar integration stay with the system.
+
+`HomeRowPreviewView` renders the actual Home rail presentation, not a separately
+scaled card sample. TV uses `MediaRowView`; mobile Home and the preview share
+`PlozziOSHomeRailLayout`, `PlozziOSMediaSection` and `PlozziOSMediaRailScroll`.
+Featured Home rows and previews share `FeaturedMediaRowPresentation` and
+`FeaturedCardControl`, while HeroUI retains trailer ownership. Preview routing,
+playback and context actions are inert without disabling/dimming the cards;
+TV focus and horizontal scrolling remain available.
+
 Home row browsing uses `BrowseRowHeading` for a single accessible title/chevron
 touch target and `MediaRowBrowseCard` for a native TV rail action. Opt a rail in
 with `browsingRow`; existing collection-detail `onSeeAll` headers elsewhere keep
 their behavior. Passing `nil` opts into Home browsing without showing an action
 or falling back to the old header action. Browse actions carry no media identity
 or context-menu actions.
+Pinned-sidebar rail parking clamps both native targets and idle corrections to
+the scrollable content bounds. A partial final slot must not overscroll: UIKit
+would clamp it when returning from a page, then parking would shift it again.
+Full-bleed media rows retain the consumed trailing safe area as content padding,
+so the final card's native focus lift fits on screen without overscrolling.
+This changes the scrollable tail, not the viewport or portrait density.
+`loadingMoreOnScroll` is the opt-in pagination hook shared by TV and mobile
+rails. It observes actual scroll geometry and visibility, not lazy card creation;
+new pages re-arm it only after their content width has been laid out. Rails
+exclude trailing skeleton slots from that boundary so loading placeholders
+cannot cancel or retrigger the active page request.
 
 Shared, **focusable** UI primitives, the app theme, and the artwork image
 cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
@@ -13,16 +86,226 @@ cache that every feature module reuses on tvOS and iOS/iPadOS — guarded behind
 
 ## Responsibility
 
+Mobile Settings roots and detail pages share `MobileSettingsMetrics`: 16-point
+page/row insets, 28-point section gaps, 52-point minimum rows and 26-point
+continuous group corners. Rows grow with their content and Dynamic Type.
+`SettingsDescribedControl` keeps a control and its helper in one row, so the
+separator follows the description rather than splitting it from the control.
+The control keeps the same top clearance as a plain row, and the helper retains
+the matching bottom inset. On mobile, no extra gap separates the control's
+minimum-height area from its helper. Supporting copy uses `SettingsRowMetrics.descriptionFont`
+through `settingsHelperText()` (including group footers); do not add local font
+sizes or manually spaced control/description stacks.
+`SettingsIconLabelStyle` supplies title anchors for one-pixel group separators:
+they start at the actual text column, mirror in RTL, and run to the trailing
+edge. Text-only rows use the standard inset. Groups consume their own anchors
+so nested groups cannot move a parent's separators. Native controls, theme
+surfaces and tvOS focus geometry remain unchanged.
+Mobile leading icons use medium-weight monochrome symbols in the same primary
+text color as their titles. Supporting text and chevrons retain secondary
+emphasis; tvOS keeps its existing icon and focus treatment.
+
+New tvOS Settings pages enter their first content control, not the header Back
+button. `settingsPageEntryFocus` requests that control only on first entry and
+leaves search targeting and retained-parent restoration alone. Until native
+focus enters the page, `SettingsBackButton` renders the same enabled native
+control in a non-interactive hosting view; it does not dim the button. The
+original SwiftUI button returns as soon as entry succeeds. Keep the header's
+full-width focus section so Up from right-aligned controls still reaches Back.
+
+TV Settings editors can use `settingsPageBackConfirmation` to request confirmation
+for both the header Back button and remote Back on the current page. Pass `nil`
+when no unsaved changes need protection. Explicit `SettingsPageDismiss`
+still dismisses directly after saving or confirming discard; retained parent
+pages do not intercept a nested page's Back.
+
+`RetainedFullscreenWorkspace` presents the same tvOS hosting controller outside
+app navigation, then returns it to its original container. Place the feature's
+state and focus owners inside it, and inject required app models into its content.
+It forwards public presentation values, not the presenting host's private focus
+environment. Its scoped transfer flag distinguishes reparenting from removal;
+playback may ignore disappearance during that transfer only while still active
+and authorized. Deactivation, authorization loss and teardown must still retire
+playback. Live TV uses it for the entire Multiview workspace, including its guide.
+Full-bleed callers must ignore the outer container safe area so the retained
+host receives the physical canvas; content still owns its control-safe insets.
+The transparent full-screen container must already be presented before moving
+the host into it. Return the host inline before dismissing that empty container,
+so no displayed frame loses the live tree during a UIKit presentation.
+Native player presentation waits until the workspace's observable
+`isHostingFullscreen` flag clears after dismissal, not merely until its desired
+`isPresented` state changes; otherwise dismissal can consume the new player cover.
+
+`videoCardFocusSurface()` gives tvOS live video and its subtitles native card
+focus without wrapping player state or transport controls. Its environment
+configuration supplies channel actions, focus requests and interactive spacing.
+Idle presentation retains a focusable surface without a visual lift; other
+platforms leave the content unchanged. A persistent `TVCardView` hosts the video,
+subtitles, loading state and caption in its `contentView`. Idle uses a full-picture
+focus control without replacing the card or detaching its renderer. The native
+focus background can therefore never appear as an empty replacement card.
+The caller interpolates focus clearance together with the picture's placement.
+The focus surface consumes that inset directly, without another animation
+clock. The video reads the container's current animated size rather than
+starting a second resize for every layout frame.
+TVUIKit supplies the focus styling and sizing. Its default `focusSizeIncrease`
+is applied to the complete surface's single transform, rather than also scaling
+the card's contents independently. Ordinary focus movement uses the native focus
+animation coordinator. Entry/restoration moves that same surface from its displayed
+frame over half a second; interrupted entry yields to native focus from the current
+presentation. The caller suppresses competing setup resizing when focus returns;
+ordinary layout changes retain their own animation. Reduce Motion skips these
+surface animations.
+Only the picture is rounded and clipped. Callers must not clip the outer card
+or its clearance, because the native shadow needs to feather beyond it.
+An opaque black backing extends 40 points beyond the video inside the native
+floating clip, matching Home's scrim-outset treatment. This covers differences
+between the video mask and native corners without adding an outer black border
+or clipping the audio glow.
+Multiview scopes `VideoCardFocusMemory` to its workspace. The toolbar's
+`VideoCardFocusReturnGuide` bridges the empty space above the controls to the
+last actual native picture owner, before another picture can receive focus.
+The guide stays inside its own visible UIKit region and is enabled only while
+the toolbar owns focus. Its remembered owner is weak; missing or removed
+pictures fall back to ordinary native navigation.
+The optional video background sits behind the card but inside the same motion
+container, outside TVUIKit's internal clipping. An audio indicator must not change
+card sizing or styling.
+Native menu presentation synchronously suppresses the button's activation so
+holding Select cannot also trigger the short-press action. Dismissal restores
+normal activation, whether the menu was cancelled or an action was selected.
+
+`MultiviewLayoutSymbol` supplies real SF Symbol images for native labels and
+menus. Standard two/four-picture grids use Apple's symbols; original custom
+symbol assets cover the three-picture grid, Main picture, and Corner
+count/position/size combinations. Each custom asset has compatible ultralight,
+regular and black masters for native weight/scale interpolation. Their outlines
+are calibrated against rendered native symbols at matching point sizes, weights
+and scales; matching bounding boxes alone does not establish matching weight.
+Corner insets retain clearance from the outline at every master weight. Regenerate
+with `python3 tools/generate-multiview-symbols.py`; `--check` verifies the
+committed assets. Keep menu selection checkmarks separate from layout previews.
+Preserve the native button's animation transaction: clearing it snaps the live
+video on focus gain/loss even though the system focus decoration still animates.
+
+`homeResponsivenessDiagnostics` passively observes visible mobile Home in
+opted-in diagnostic builds. Its cancellable 100 ms main-actor wake-up sampler
+and content-height callback feed the bounded CoreModels recorder without
+observable state writes or scroll corrections. Scene inactivity, view removal,
+owner replacement and consent revocation stop collection. Scheduling delay is
+not presented-frame timing; see [diagnostic interpretation](../../docs/performance-debugging.md).
+
+`PlozzMetrics.desktop` supplies artwork width limits for the iOS-on-Mac shell
+without scaling touch controls, captions, or overlays with the artwork.
+`fittingDesktopRail` resolves those limits against the content viewport, leaving
+a gap-sized preview of the next card at every width. Page containers publish
+the resolved metrics through `plozzDesktopMediaRailLayout`; Featured rows use
+the same fitting policy for their 4:5 cards.
+Poster breakpoints preserve eight full cards plus a ninth-card preview around
+the wide reference viewport (1,960 points), including Home and Related. Verify
+the complete-card count as well as the preview when changing these limits.
+`HeroLogoSizing.Layout.desktop` retains the same logo-preference scaling and
+width containment as other hero layouts. The shell selects these policies;
+shared components do not infer their platform from a wide viewport.
+Framed landscape cards, like portrait and borderless cards, fit their proposed
+slot width while retaining the artwork aspect ratio. Rails supply their normal
+fixed slots; narrower grid cells must not inherit a rail-sized minimum width.
+
+`PosterCardView.artworkOnly` renders the same artwork, spoiler protection, logo
+fallback and playback indicators inside a caller-owned button. It does not add
+Home's sizing, captions, focus target, context menu, or detail transition.
+The player uses this mode with readable, single-line playback text fitted to its
+artwork slot, rather than scaling an entire Home card. Shared fitting removes the
+play glyph and then the progress bar before reducing text. The player's final
+fallback keeps remaining time ahead of the episode qualifier; mobile Home keeps
+its existing accessibility wrapping behavior. `ContinueWatchingPresentation`
+carries the active profile's artwork choice and Home Showcase caption context
+through hosted presentation boundaries; it does not persist player-specific
+styling settings.
+
+Mobile full-width page actions use `plozzPageActionLabel()` inside a native
+`plozzPageActionButton`. The label owns body typography, multiline expansion, and a
+32-point minimum label height; primary and secondary actions differ in prominence,
+not sizing. On iOS 26, disabled page actions use the same native glass treatment
+as secondary actions instead of a separate prominent-button outline.
+Toolbar actions and native form rows retain their system metrics.
+Mobile Back, Close, and Cancel toolbar actions use `cancellationAction` placement
+and a localized title plus symbol. Native navigation containers own their
+position, including iPhone Duo's vertical bars; do not pin them to a physical
+left or right edge. Text-only task actions may remain horizontal; use the native
+`EditButton` for Edit/Done and keep related selection actions grouped with it
+rather than moving the exit action to a different axis. Validate with
+the iOS 27.1 SDK or later, not merely a Duo runtime running an older-SDK build.
+Mobile settings actions inside `SettingsSectionGroup` use `settingsActionRow()`.
+It puts the group's 16-point horizontal and 12-point vertical insets inside the
+button or menu's hit area, with a 44-point minimum height. A container value tells
+the group not to add those insets twice. Keep `SettingsDisclosureLabel` padding-free.
+
+Ordinary Settings fields use `SettingsInputRow` inside their existing group or
+panel. It supplies a persistent, wrapping label and forwards that name to the
+native input for accessibility without speaking a second static label. Callers
+retain bindings, keyboard/content types, secure entry, focus and submit behavior.
+Short form values can opt into `axis: .horizontal` for an inline label and input;
+accessibility text sizes fall back to the stacked layout. Other fields retain
+their existing stacked presentation.
+An optional secondary-sized status shares the label's baseline in the stacked
+layout or sits below the trailing input in the inline layout, without hiding its
+accessibility text. Autosaving editors own that status and its announcement; the
+input row does not imply persistence or add a focus target.
+Simple iPhone/iPad sign-in forms opt into `settingsSignInFields()`. Native
+placeholders replace the duplicate small labels, while `SettingsInputRow` keeps
+its accessible name after entry. The shared plain field style supplies a minimum
+44-point input and vertical breathing room inside the existing group insets.
+Keep account/server section context, content types, focus, and submit behavior.
+Ordinary settings retain persistent visible labels; tvOS presentation is unchanged.
+The row owns no background or outer insets; do not nest settings surfaces around
+it. Search, code-entry, and message-composition controls are intentional exceptions.
+Composite rows use `settingsControlTarget()` inside each control label for separate,
+non-overlapping 44-by-44 minimum targets; do not mark the entire composite as one action.
+`SettingsControlMenu` places that minimum inside the native menu label: a frame
+outside a native Picker can enlarge accessibility bounds without enlarging its
+real touch target. Verify the native trigger's bounds in a split view, not only
+its List accessibility container, whose reported frame may include the other column.
+`SettingsPageLink` uses a button-backed native destination on mobile so a link
+cannot take over its sibling switch or menu's action in a composite List cell.
+TV navigation, focus styles, and row geometry are unchanged.
+Mobile `settingsPageSurface` paints the shared dialog background inside each
+native navigation destination. A clear pushed page reveals UIKit's opaque
+default instead of the sheet behind it, so it must retain the same palette and
+gradient preference as the Settings root.
+
+Mobile `ConnectionCodeView` uses `settingsGroupSurface` so code tiles follow the
+same gradient, theme, and reduced-transparency treatment as surrounding groups,
+without an extra dark overlay. TV code panels retain their existing treatment.
+
+`diagnosticRecordingStatus()` installs the local-Debug recording indicator in a
+non-key, input-transparent window owned by the current scene. It stays above
+full-screen playback, sheets, and secondary app windows without taking remote
+focus or intercepting touches. Its acknowledgement follows mounted, in-bounds
+overlay layout; hosted tests check the composited scene rather than only the
+existence of a label. Heartbeats expire in the render server even during a
+main-thread stall. Preparation, ready, recording, saving, and terminal states
+are distinct; only the external recorder starts or verifies a capture.
+
 `PlaybackResumePrompt` owns the native Resume / Start Over dialog on both
 platforms. It retains the full pending playback request through the choice so
 source, version and playlist context are preserved; cancellation starts nothing.
 Callers apply the profile's opt-in setting before presenting it.
+On mobile detail pages, `resumePromptAnchor()` marks the Play button so the
+native popover follows that control instead of anchoring to the whole page.
+Home uses item-keyed anchors and retains the initiating hero's anchor through
+play-target resolution. Non-hero playback does not select a hero anchor.
 
 `TopNavigationScroll` connects each root vertical scroll owner to the custom
 top bar. `scrollsTopNavigation()` handles ordinary SwiftUI roots; native grids
 and Showcase report through their existing owners. Source tokens reject late
 callbacks from departed pages. Back resets the active owner to the page top;
 scroll updates invalidate only the bar's position, not the page builder.
+Stage transitions report their target separately from the logical scroll offset.
+On TV, a bound native surface receives the stage's additive translation in the
+same Core Animation transaction, with bounded offscreen travel and no frame-by-frame
+SwiftUI state writes. Focus admission and Back still use the full logical offset.
+Source changes, Back, and unregistering clear owned animations and presentation state.
 There is no top-navigation foreground mask. Native and pinned sidebars do not
 receive this coordinator and retain their existing behavior.
 
@@ -74,6 +357,12 @@ without geometry state or an extra hidden copy of the badge views.
 `ActionProgressIcon` overlays native progress inside the original symbol's
 layout footprint. `PlayResumeButtonLabel.isLoading` uses it without changing the
 button's dimensions or the existing resume/placeholder layout.
+The mobile Home/Detail request action uses the same icon slot and retains its
+Request text while choosing an account or submitting, so neither the button nor
+its neighboring actions move when native progress appears.
+Omitting `onLight` lets the owning button supply the indicator tint. The mobile
+hero style uses its disabled-surface foreground for disabled native glass,
+rather than retaining the inverted ink of an enabled prominent button.
 
 `TrailerActionButtonLabel` always renders icon-only on TV and mobile, preserving
 the destination description for accessibility regardless of available width.
@@ -100,6 +389,11 @@ single-line navigation, menus, and form controls share their minimum height and
 interior padding. Explicit content insets retain compact source-row sizing.
 Padding-free disclosure labels and bare form actions use `SettingsFormButtonStyle`,
 which puts the shared minimum height and padding inside the TV focus fill.
+`SettingsSectionGroup` supplies this style by default on TV, with the same
+uniform outer focus clearance and corner radius as other Settings form groups.
+Grouped checkable rows leave that outer clearance to the group on TV; their
+mobile hit-area inset ownership is unchanged. Horizontal `SettingsInputRow`
+uses the shared form layout so its label joins the other control labels.
 `SettingsFocusButtonStyle` is only for labels that already supply their own
 control geometry. Standalone and inline actions use `plozzActionButton`; do not
 use a text-height focus strip as a smaller action-button variant.
@@ -114,7 +408,11 @@ Keep it in the header's full-width focus section and scroll the header with the
 page; do not add a separate action strip or shrink the native button.
 
 `SettingsStepper` retains every adjustment stop while limiting dense range tracks
-to 21 visual ticks. `ThemeMusicPreviewControlling` is the Settings-to-runtime
+to 21 visual ticks. `onDirectionalAdjustment` lets a caller own TV hold acceleration
+and release/cancellation handling while retaining the stepper's single native focus
+target and input scope. Dense numeric values can reserve width using representative
+extremes through `reservingValueWidth(for:)` rather than hidden labels for every stop.
+`ThemeMusicPreviewControlling` is the Settings-to-runtime
 preview seam; it carries ownership, availability, and errors without coupling
 Settings to the Home feature or a concrete audio player.
 The shared TV adjustment scope defaults to its standard hold-repeat speed.
@@ -127,6 +425,16 @@ layout: a name-first title and inset pixel-mascot signature. Its optional
 Category tint blends over `themePalette.cardOpaqueSurface`, so Light, Dark,
 and Black keep their own brightness and foreground contrast. Supplied logos
 always retain precedence; external channels keep the ordinary name fallback.
+Native guide controls opt into `usesControlBackground` so native focus can
+illuminate the original full-tile plate. The plate stays opaque at rest and
+becomes partly translucent on focus; artwork and text stay opaque with their
+existing contrast treatment. The shared cached logo analysis supplies source
+background colours or a restrained brand tint, without additional image work.
+Generated Plozz wordmarks use the same backdrop behavior. Standalone artwork
+keeps its existing plate and colours by default.
+Independent `horizontalArtworkInset` lets dense guide cells reserve side clearance
+for wide marks without reducing the height available to square or tall marks.
+Stacked marks also respect a square logo's area budget; the backing plate is unchanged.
 
 `PlozzStartupLogo` starts from a smile and rotates through wink, delight, and
 surprise on successive cold launches. The device-local choice is saved once per
@@ -142,6 +450,9 @@ Loading placeholders share `shimmering()`. Its static gradient band is rasterize
 before the animated translation, avoiding repeated gradient work without
 rasterizing the placeholder content or changing the sweep, masking, or intensity.
 Inactive placeholders remain unmodified; Reduce Motion retains the static dim.
+Eager scroll containers can set `plozzShimmerEnabled` to false for offscreen
+rows, retaining their static geometry without mounting animated gradient layers.
+Visible rows resume the same sweep; the Reduce Motion appearance is unchanged.
 The simulator lab's `skeletons-idle` and `skeletons-static` scenarios isolate this
 cost from loaded cards and network/provider work.
 
@@ -151,6 +462,8 @@ default delay; individual callers can still supply an explicit grace period.
 
 Continue Watching's profile-scoped Playback details choice applies to Artwork + logo,
 Thumbnail, and Poster, on Home and library rows.
+Mobile Home's reserved row includes the refresh indicator's header height even
+when idle, so the fixed row cannot compress the artwork and remove its reflection.
 Detailed keeps the existing play/progress/text overlay; Progress only uses the
 shared white progress bar without that overlay. Other cards are unaffected.
 The previously stored portrait-only preference is retained.
@@ -180,6 +493,11 @@ Progress only uses the ordinary 2:3 poster and existing
 insets, watch-state rules and download badges; it does not create another bar style.
 The shared indicator falls back to the existing resume fraction when the provider
 omits a percentage, so switching treatments does not lose known progress.
+Cards, detail Play buttons and episode chips share `hasVisiblePlaybackProgress`:
+below Continue Watching's minimum position they show no progress or remaining-time
+label, and an unwatched title keeps its unstarted marker and spoiler protection.
+Saved resume positions and completed-watch history are unchanged. Series/season
+completion percentages are not timed playback and retain their existing treatment.
 They resolve movie or series posters, never episode stills or textless backdrops.
 Portrait uses zero side crop, no duplicate logo or logo dimming. Detailed keeps
 the landscape Continue Watching scrim's start, easing and depth; the slight
@@ -221,6 +539,9 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   ownership. `MediaVersionPicker` supplies the sheet used by mobile playback
   and hero context-menu actions; context menus link to it rather than rendering
   a second text-only version list.
+  The full filename is visible directly above the badges, wrapping without a line
+  cap. Preserve its separators, technical suffix, release group and extension;
+  no abbreviated title or extra File menu is needed.
   On iOS/iPadOS, version sheets use an inline centered navigation title and a
   leading native X close action, with no bottom Cancel button. The pre-play X
   cancels the pending playback choice; tvOS retains its existing dialog controls.
@@ -318,8 +639,64 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   top for a softly faded reflection, shifting the original artwork below more
   of the status-bar chrome without moving metadata or growing the hero.
   Home and Details share this still-image layout, including swipe reflections.
+  Home and Details share progressive blur across the top reflection, with the
+  same sharp fallback when Reduce Transparency is enabled.
   The bottom reflection and minimum dissolve span remain intact; trailers keep
   their full-stage presentation. Landscape and tvOS heroes are unchanged.
+
+  Detail title artwork stays attached to the page's root title, not its Play
+  episode, on both compact and regular-width mobile layouts. A visible logo
+  remains unchanged during additive metadata or artwork-reference enrichment,
+  including genre or added-ID enrichment that changes metadata routing.
+  Richer requests are available to later presentations, not replacements for
+  an already painted logo. Changed subjects, accounts, languages, artwork policies or
+  conflicting lookup facts clear the old logo immediately. A completed miss
+  returns to the text fallback.
+  Detail pages on iOS/iPadOS and tvOS keep that text invisible during the initial
+  logo lookup and decoding, rather than flashing it before the logo arrives.
+  Titles with no logo sources show text immediately; cached logos also paint immediately.
+
+  `ArtworkPresentationPolicy` and `MediaArtworkSource` own source ordering;
+  `MediaArtworkSource.heroFallback` supplies the same placement-aware online
+  chooser and last-resort library poster to both platform heroes. Episode stills explicitly use the Episodes
+  preference. Placements can intentionally choose different pictures.
+  `ItemDetailViewModel.artworkSourceIsReady` releases the hero's
+  `plozzArtworkSourceReady` gate after native hydration or discovery ownership
+  settles, before request status, children, ratings or trailers. List/snapshot seeds must not
+  establish a preferred source prematurely; recoverable offline failures may
+  release an already usable cached detail instead.
+  Mobile Home hero navigation can reuse its actual displayed bitmap before that
+  gate opens. This page-local handoff requires the same subject, profile and
+  effective artwork policy, and a landscape bitmap for a landscape destination;
+  it does not select or authorize a different preferred source.
+  The handoff also carries the actual processed Home wordmark, independently of
+  backdrop readiness. Detail paints it synchronously and retains it when source
+  resolution completes, without another logo lookup. The existing logo request
+  identity rejects changed subjects, accounts, languages, policies, credential
+  revisions or conflicting metadata; compatible enrichment keeps the wordmark.
+  Only the active hero's displayed logo is eligible, not a speculative preload.
+  Mobile detail uses `FallbackAsyncImage.resolvedBitmap(reportingHeroArtwork:)`
+  to share one resolved bitmap across the original and reflected images. Only a
+  late first image fades, after native entry completes with the artwork still
+  missing: the composed layer reveals over 0.15 seconds, or immediately with
+  Reduce Motion. Images arriving during navigation or while the page is covered,
+  cached and handed-off images remain immediate. Resolution upgrades do not
+  restart the reveal. `plozzOnPageAppearanceChange` shares the native lifecycle
+  reader; metadata opts into entry start while artwork observes entry completion.
+  TV transition prefetches are reusable work, not permission to paint. The
+  transition cover receives its image only from the ready destination renderer.
+  `ArtworkDisplayIdentity` separates the visible subject/policy from changing
+  candidates in SwiftUI and native TV cells. Once a preferred-source result
+  paints, only that asset's resolution may improve. New subjects, account scopes,
+  policies, shapes, spoiler protection or network credential revisions start a fresh selection.
+  Prepared cache entries remain exact-request-qualified; cache warmth never
+  selects a different provisional image. Stable lookup identities qualify
+  metadata-dependent prepared results; per-appearance shared-work identities
+  group concurrent requests without preventing prepared-cache reuse.
+  Detail and playback data loading remain independent of artwork, as do native
+  navigation and Play. A cold preferred source can keep a placeholder visible
+  longer. The optional TV zoom cover waits for the destination's artwork-ready
+  or artwork-unavailable signal instead of choosing its own image.
 
 - **Setup presentation** — `ConnectionCodeView` shares the readable monospaced
   code panel across server sign-in and device pairing. `SetupCodeComparisonView`
@@ -345,6 +722,9 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   playback-version introduction heading, native actions, and Settings reminder.
   Hosts own persistence and cancellation; dismissing a version prompt never
   records a mode. Mobile uses a vertically stacked, scrolling adaptation.
+  The shared prompt supplies the palette's accent tint to its native controls,
+  including the focused TV fill, rather than relying on a host's inherited tint.
+  Description accessories center beside the text without shrinking their hit target.
 
 - **Settings row typography** — `SettingsRowMetrics.titleFont` is the shared
   body-size label for navigation rows, TV switch variants, and labeled controls.
@@ -365,6 +745,9 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   checkmark groups retain their separate focus-bleed geometry.
   Standalone page links use the `.navigation` row role: idle and focused surfaces
   both read the same 28pt radius, with no focus bleed or corner tightening.
+  `SettingsFocusRow` owns both surfaces, with the idle surface behind the focus
+  fill. Keep navigation labels surface-free so opaque backgrounds cannot cover
+  the highlight when gradients or Liquid Glass are disabled.
   Adjacent page links have an 8pt gap; separate control sections keep their larger gap.
   Page titles and Back belong inside the scrolling content, not in a fixed
   header strip that shortens the viewport. `SettingsPageHeader` supplies their
@@ -394,8 +777,23 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   It starts when the native page appears, without a cover, window
   input guard, artwork wait, or custom Back handler. Leaving cancels the reveal;
   returning to an existing page does not replay it. Reduce Motion shows everything
-  immediately. iOS/iPadOS navigation is unchanged.
-- **Retained cinematic transition infrastructure** — the zoom implementation and
+  immediately.
+- **Mobile artwork navigation** — iOS/iPadOS poster detail links use the system
+  interactive zoom transition. `MediaArtworkZoomLink`, its value-based variant,
+  and `MediaArtworkZoomButton` give each card occurrence its own namespace.
+  `PosterCardView` registers the final artwork bounds and corner radius after
+  layout for framed/borderless, portrait/landscape, and Continue Watching cards;
+  captions, padding, density, and user-selected aspect ratios do not become
+  guessed transition geometry. Featured cards register their own artwork.
+  Home, library/recommendation/collection grids, search, watchlist, related
+  titles, and filmography carry the originating source into their destination.
+  Card menus share that origin for Go to Show, Go to Episode, and Go to Movie,
+  including direct-play posters and inline episode artwork. Menu navigation
+  waits for dismissal before opening the destination. Source-less menus,
+  deep links, folders, playback actions, and the Home hero retain their existing
+  behavior. iOS owns the gesture, cancellation, return animation, and Reduce
+  Motion treatment; no drag recognizer or per-frame layout state is installed.
+- **Retained tvOS cinematic transition infrastructure** — the custom zoom implementation and
   its focused fixtures remain available for future work, but no production shell
   enables it. TV browse stacks install
   `cinematicDetailNavigation(path:)` on the stack so its destinations inherit it.
@@ -438,6 +836,8 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   progress over a subdued track even in the light-theme fallback.
   `playerPlatformAppearance` scopes tvOS playback chrome to dark regular glass,
   as in build 57, without changing the surrounding browsing or window appearance.
+  Apply it outside playback alerts and confirmation dialogs too, so their native
+  focused buttons do not inherit a white browsing tint and lose their labels.
   It is a no-op on iOS.
 - **Settings steppers** — TV makes the whole labeled row one focus target using
   the existing `SettingsFormButtonStyle`, including its helper, persistent minus/plus cues and
@@ -558,15 +958,21 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   24 artwork-identity-keyed palettes. Replaced/cancelled sources cannot publish
   stale colours or clear another source. Only the background leaf observes the
   colour array; no full-screen clock, blur, or per-frame page invalidation runs.
-  Reduce Motion disables the palette crossfade. Dark uses a softer wash and Black
-  retains more visible colour while staying darker; Light's palette is unchanged.
+  Reduce Motion disables the palette crossfade. Black retains 75% of the original decorative
+  gradient contribution through `ThemePalette.backgroundGradientIntensity`,
+  including stock and artwork-tinted page backgrounds, native sampled fills,
+  and theme previews. Dark, Light, flat fills, artwork and foregrounds are unchanged.
   Fullscreen Hero Home uses half the artwork tint's saturation on both platforms,
   retaining its hue and brightness without desaturating the hero image. Showcase,
   detail pages, and untinted stock gradients retain their existing treatment.
   Tint saturation is page-scoped and shared with native card fills/textures.
-  Settings panels and detail information cards share a
-  5%-white wash in Dark and Black, or a 5%-black wash in Light, so they remain
-  distinct without replacing the gradient's colour. SwiftUI surfaces keep their
+  Settings panels use a 5% wash; custom detail information surfaces use a stronger 12%
+  wash so grouped content remains distinct from the artwork gradient. Both use
+  white in Dark/Black and black in Light without replacing the gradient's colour.
+  System-style tvOS information cards retain the native material instead of
+  matching that custom wash. Gradient Off and Reduce Transparency keep the
+  underlying information band opaque, so changes behind it cannot tint the cards.
+  SwiftUI surfaces keep their
   shadow and a matching hairline edge. Gradient Off or Reduce Transparency restores the original solid
   surface and border; unrelated raised cards remain unchanged.
   PIN digit/delete keys use native Liquid Glass at rest and during interaction
@@ -590,11 +996,43 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   heights. Standalone PIN prompts and tvOS keep their existing presentation.
   The detail information band retains its darker 40%-opaque surface.
   Compact mobile detail metadata and actions reveal the page gradient instead
-  of covering it with a solid rectangle; Gradient Off and Reduce Transparency
-  retain the original opaque base. The artwork's existing readability fade stays.
-  Native tvOS cards display their local portion of a shared page-mesh texture,
-  with the information band and wash precomposed because TVUIKit replaces fill
-  alpha. The texture is created only when a card needs it, its longest edge is
+  of covering it with a solid rectangle, including with Reduce Transparency:
+  the page gradient itself is opaque, not a glass/material surface. Gradient Off
+  retains the original opaque base. The artwork's existing readability fade stays.
+  On iOS 26+, `PlozziOSNavigationBackground` removes full-width scroll-edge
+  backdrops when either system or app transparency is reduced. Native navigation
+  buttons and tabs use Apple's opaque accessibility treatment when the OS
+  reduces transparency. App-only Liquid Glass Off uses
+  `plozzOpaqueNavigationChrome()` for opaque native Back and toolbar surfaces,
+  retaining the original actions, menus and navigation gestures. Shared tab
+  shells and dialog presenters install it; toolbar updates are observed through
+  a passive UIKit update link without requesting continuous frames or replacing
+  navigation delegates. Back uses a temporary native back item; restoration also
+  refreshes UIKit's cached Back rendering, with pixel coverage for the live
+  On/Off transition in both themes. Multi-item
+  UIKit groups are temporarily separated because UIKit otherwise ignores their
+  shared-background visibility. Turning glass back on restores their grouping
+  and surfaces without replacing the navigation stack.
+  The opaque navigation fill is precomposed from the theme's decorative gradient
+  colors (or raised surface with Gradient Off), with a subtle outline. It does
+  not sample artwork or scrolling content. Selected tabs retain an accent-colored
+  label on a quiet opaque highlight, rather than inverting to a white pill.
+  `PlozzOpaqueTabBar` replaces the floating bottom controls in app-only Off mode,
+  retaining the configured destination order, labels, badges and Settings action.
+  Overflow scrolls horizontally; the underlying native TabView retains its
+  selection and navigation state. The tab bridge hides the native bar and
+  includes the replacement in music-dock clearance. Hero artwork and the page
+  background continue behind the controls. Normal iPhone
+  scroll-edge effects, older iOS navigation, and Mac's clear top edge are preserved.
+  Pushed detail scroll views apply this policy locally; the tab shell's edge
+  preference alone does not cover subsequent navigation destinations. Home and
+  detail pages add a noninteractive, page-colored status-area fade only as they
+  scroll under reduced transparency, preserving status-text readability without
+  covering the hero at rest or restoring a full-width opaque footer.
+  TVUIKit-backed tvOS cards display their local portion of a shared page-mesh texture,
+  with the information band precomposed because TVUIKit replaces fill alpha.
+  A background-only tint layer applies each card's wash without fading text or
+  rerendering the shared texture. The texture is created only when a card needs it, its longest edge is
   capped at 480 pixels, and it is rebuilt only for palette or viewport size
   changes. Scrolling updates each background's sampling rectangle, not its
   texture or foreground content. `settingsPageBackground()` provides the same
@@ -602,8 +1040,16 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   detail page's darker information band. Nested workspace pages inherit that
   background instead of painting another gradient. Native focus,
   clipping and text remain TVUIKit-owned.
+  On iOS, reduced-transparency Settings groups reuse that page-aligned texture
+  with their normal tint and outline, instead of switching to flat charcoal.
+  `SettingsPageSurface` owns the texture for pushed pages, including pages inside
+  sheets; shared dialog presenters provide it to other presented content.
+  The texture contains only the decorative background, so foreground content
+  cannot show through a group. Rendering coverage compares On/Off pixels in dark,
+  light and pure-black themes and verifies that changing content underneath does
+  not alter the opaque fill. Gradient Off retains the theme's solid raised fill.
   Text stays opaque and native focus geometry is unchanged. Gradient Off or
-  Reduce Transparency restores both the solid band and solid card fills.
+  Reduce Transparency restores both the solid band and solid card fills on tvOS.
 - **Episode loading preview** — the tvOS entry overlay leaves gutters and caption
   spacing transparent to the owning page, including artwork-tinted gradients.
   Only the real cards' drawing is hidden while their lazy layout realizes the
@@ -628,6 +1074,36 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   Native card focus observation is separate from explicit focus requests.
   Caption, overlay and transition-anchor readers update without rebuilding
   the poster's artwork loader or context menu.
+  Detail episode cards using system focus attach a `UIContextMenuInteraction`
+  to the poster's enclosing native view. Its artwork and hosted caption form one
+  targeted preview, so the title and synopsis lift with the thumbnail. Caption
+  travel runs in UIKit's focus-animation coordinator alongside the artwork,
+  not a later SwiftUI focus-state animation. Focus-only synopses may fade in,
+  but do not start a second delayed position animation on native cards.
+  Caption presentation remains active until dismissal completes; an older dismissal
+  cannot collapse a newly reopened preview. Keep the existing row spacing and
+  card positions. UIKit still controls preview placement and may nudge an
+  enlarged preview inward at the screen's safe-area edge.
+  Keep the interaction off the `UIButton`: button-owned holds intermittently
+  stopped reopening after dismissal even without a menu rebuild. Do not
+  substitute `UIButton.menu`: its control-menu presentation omits the contextual
+  thumbnail lift. The SwiftUI context-menu bridge replaced its action
+  list during opening even with unchanged actions; the native menu keeps one
+  list and does not fade its contents after presentation begins. Keep its menu
+  instance and interaction stable across callback and unrelated metadata updates.
+  Rebuild actions for changed item/account identities, action lists, ordered
+  sibling identities, handler/router identity, or locale. Obsolete actions are
+  invalidated when that context changes or the poster is dismantled. A changed
+  action scope dismisses an already presented menu.
+  Dismantling clears presentation callbacks before dismissing the interaction:
+  removed SwiftUI content must not receive state writes during graph teardown.
+  Live scope changes still notify the mounted content normally.
+  Custom-focus episode cards and other SwiftUI-owned controls retain their
+  existing menu path; mobile menus and their artwork routing are unchanged.
+  Episode-card captions collapse paragraph breaks and whitespace into one
+  continuous synopsis, including blurred captions. Provider metadata and
+  expanded synopsis formatting remain unchanged; protected prose stays absent
+  from presentation accessibility and debug output.
 - **QR images** — `QRCodeView` renders on a worker actor, including Core Image
   initialization. Settings, account authorization and device pairing share it.
   Payload/correction/mask changes replace the request; cancelled work cannot
@@ -643,8 +1119,9 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   viewport, text-size, or option changes. Callers supply localized or verbatim
   labels and page keylines; native app tabs and tvOS focus controls are separate.
 - **Container covers** — collection, playlist, and folder cards accept landscape
-  and square primary covers and fit the complete image within the shared card
-  footprint on mobile and tvOS. Media posters retain their portrait aspect guard;
+  and square primary covers on mobile and tvOS. Collection covers fill the shared
+  card footprint proportionally, cropping excess artwork rather than leaving gaps.
+  Playlist and folder covers still fit the complete image. Media posters retain their portrait aspect guard;
   accepting curated container logos must not admit landscape episode stills as
   movie/series posters. Library-tile collages likewise accept wide container covers
   while retaining their aspect guard for ordinary media posters.
@@ -653,8 +1130,8 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   landscape majority, and falls back to posters for ties or unknown artwork.
   Server-reported ratios avoid image requests; absent ratios use the normal
   authenticated artwork loader before publication. Paging never changes the
-  browser's chosen shape. The native tvOS grid accepts and fits container covers
-  without relaxing the portrait filter for ordinary media.
+  browser's chosen shape. The native tvOS grid uses the same collection fill and
+  playlist/folder fit behavior without relaxing the portrait filter for ordinary media.
 - **Home row recovery** — ordinary rails and compact empty/failed rows share
   `MediaRowSection` and `MediaRowHeader`, including typography, header spacing,
   pinned-navigation inset, and trailing safe space. `MediaRowStatusContent`
@@ -677,6 +1154,16 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
 - **Provider marks** — IPTV uses coral-red while Media Share keeps teal.
   `ProviderBrandMark` owns their shared icon and badge tints, including deeper
   colors on white focus cards and brighter colors on black focus cards.
+  When an IPTV source supplies `siteURL`, it uses the source origin's favicon
+  on TV and mobile, falling back to the shared IPTV mark if unavailable.
+  Requests omit source credentials, cookies, paths, and query parameters;
+  no third-party favicon service is used.
+  Silo retains its multicolor logo over a warm-stone (`#CDB795`) tint at the
+  same 18% badge opacity as the other providers. Its narrow artwork is 15%
+  larger within the unchanged badge bounds.
+  Navidrome (Subsonic) uses the vector record logo from
+  [Mozz's Navidrome asset](https://github.com/brandomoore/Mozz/blob/main/Sources/MozzApp/Resources/Brands.xcassets/NavidromeLogo.imageset/navidrome-logo.svg),
+  with the same template rendering and focus-aware tint on both platforms.
 - **Media-row focus** — a dedicated modifier owns the row's `FocusState`
   and supplies its binding to tracked cards. Focus callbacks and prefetch
   bookkeeping must not invalidate the row that constructs all card inputs.
@@ -721,11 +1208,44 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
 - **Touch action feedback** — `TouchFeedback` gives mobile skip actions a light
   impact and committed scrubs / explicit reorder moves a selection tick. Native
   List drag reordering retains system feedback without a second app vibration.
+  Pull resistance can request intensity-scaled weighted tension ticks and a distinct
+  rigid pop. The gesture owns milestone and one-shot gating; all output remains
+  silent while the app is inactive or the device does not support haptics.
   Watchlist actions acknowledge the press immediately with a light tap and stay
   silent on success; an error haptic accompanies a failed save and rollback.
   Their shared toast uses "Added to Watchlist" / "Removed from Watchlist" for
   the optimistic local change, not lingering progress wording. A failed save
   replaces that confirmation with "Couldn't update Watchlist".
+  Ordinary feedback and guide-progress toasts share `transientStatusSurface`:
+  an 18-point rounded rectangle, 24-point horizontal / 16-point vertical insets,
+  and the lighter `ThemePalette.toast` surface rather than modal overlay colors.
+  The opt-in `.compact` surface is for short dismissible notices: content-sized
+  width, a 16-point leading inset, and 4-point top/bottom/trailing insets around
+  a centered 44-by-44 dismissal target. A normal one-line notice is 52 points
+  tall; longer or accessibility-sized text can wrap without shrinking the target.
+  Standard feedback and multi-line guide progress retain their existing spacing.
+  Guide progress uses a leading spinner centered beside a left-aligned title and
+  detail column, with dismissal centered at the trailing edge. Determinate
+  progress stays in the text column so stage changes preserve horizontal alignment.
+  Downloads show transferred and total bytes below the bar, without a redundant
+  numeric percentage.
+  Mobile feedback uses `adaptiveStatusOverlay` to keep a 16-point gap above the
+  visible native bottom navigation, toolbar, or search bar, falling back to the
+  bottom safe area when none is present. Layout changes animate over 0.25 seconds;
+  Reduce Motion changes position without animation. The passive UIKit layout
+  reader measures the current presentation without polling or changing its controls.
+  Side-mounted navigation constrains the toast's horizontal content area instead
+  of adding bottom clearance; native tab containers supply their unobscured
+  content layout guide on iOS 26 and later.
+  Each host measures its own presentation hierarchy, including both dimensions
+  of the native tab content guide. Window measurements are converted back into
+  the host's local coordinates so sheet presentation scaling cannot leave stale
+  widths or offsets in the covered screen.
+  While feedback is visible, passive observers in loaded navigation pages also
+  trigger measurement when a page reattaches, its safe area changes, or a native
+  transition completes. This covers search bars returning after a navigation pop
+  without polling or waiting for another progress update.
+  tvOS retains its 48-point bottom clearance.
   Manual watched actions retain the immediate tap and separate confirmation of
   durable outbox acceptance, not eventual server synchronization.
   Favorites confirm successful writes. Capture asynchronous completion haptics
@@ -737,12 +1257,33 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   on-disk + in-memory image cache shared with `MetadataKit`'s URL cache,
   with profile-scoped source choices in Appearance > Artwork. Recommended uses
   metadata providers first for Home and library Showcase heroes, movie/show detail
-  backgrounds and logos, and textless Continue Watching artwork. Ordinary rows,
-  related-title posters, and episode thumbnails remain library-first. Detail hero
+  backgrounds and logos, and textless Continue Watching artwork. Ordinary posters,
+  related-title posters, and episode thumbnails remain library-first. Landscape
+  movie/show cards have a separate `landscapeCard` key-art placement: advertised
+  Jellyfin/Emby Thumb images and validated share landscape/thumb sidecars do not
+  depend on the hero's backdrop ordering. Artwork-only cards can fill a missing
+  native slot from enabled metadata providers; explicit Library stays native-first.
+  Custom collection rows persist Logo as On or Off (default); retired Automatic
+  values decode as Off. On prefers clean backgrounds and reuses Continue
+  Watching's logo composition, but artwork-type and textless-availability guesses
+  cannot suppress the explicitly requested overlay. It waits for the current
+  background to resolve, including a native thumbnail or poster fallback.
+  Off draws artwork only, preserving any logo embedded in that image.
+  Continue Watching keeps its separate duplicate-title protection.
+  Logo-free sources retain the shared text-title
+  fallback. These choices do not change episode stills, extras, portrait cards,
+  Continue Watching preferences, captions, card geometry or focus. Preview, tvOS
+  and mobile rows use the same profile-scoped setting.
+  Detail hero
   placement is carried through resolution, cache identity, prewarming, and mobile
   reflections without changing the surrounding page's card policy.
   Shared hero/reflection first-paint results are qualified by source and provider
   policy so changing those settings cannot reuse a previous provider's winner.
+  Wide heroes opt into `prefersLandscape`: check both sources for a usable
+  landscape before accepting a portrait/square fallback, preserving source order
+  within each shape. Raw cached posters cannot bypass that check. Prepared images,
+  transition handoffs, and shared lookup identities include the shape preference;
+  ordinary cards and explicitly compact portrait heroes do not opt in.
   A pinned show identity keeps its current image visible during hydration, not
   permanently selected. New artwork references or source preferences resolve
   again before replacing it at full quality, so an early poster fallback cannot
@@ -876,11 +1417,127 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   review scores, or parental restrictions; copy it across native hosting boundaries.
   Featured cards use compact visual metadata and full accessible classifications.
   Title-information facts retain the full original classification when visible.
-- **Detail information focus** — the tvOS About/Ratings/Information band uses
-  native focus with at most 2% growth and 6pt of expansion per edge, leaving
-  clearance in its 18pt gutters. Focused read-only cards and card buttons draw
-  above their peers. This policy does not change ordinary media-card growth,
-  custom focus styles, or touch layouts.
+- **Detail information layout** — TV and mobile share ordered information
+  sections. About and Ratings sit beside each other when both have readable space;
+  otherwise they stack. Side-by-side About and Ratings share top and bottom
+  edges for multi-tile groups; stacked sections keep their natural height. Numeric scores use
+  individual equal-width tiles in one grid. Each icon-and-score pair is centered
+  as a unit, with its source centered underneath
+  and a consistent gap measured from the mark's visible edge. Rows start at the
+  leading grid line. On TV, multiple ratings use up to two reading columns;
+  a lone guide uses only one. A lone score without guidance uses roughly half
+  a reading column, matching About's height when they sit beside each other.
+  Details fills the third TV column, or sits below the score in a two-column
+  layout; supporting sections can start beneath About without waiting for the
+  whole fact list. Phone sections remain stacked with a compact score tile.
+  Regular-width mobile multi-tile ratings fill their allocated reading column.
+  Family guidance completes the remaining columns of the final score row, or
+  starts the next row when the score row is full. On TV it spans at most two
+  score columns, keeping its prose within a reading column. A narrow guidance tile shows
+  its age recommendation and source; wider tiles include a left-aligned overview.
+  Opening either presentation retains the full guidance and source authorization.
+  The grid's accessibility container stays inside its spoiler-protection wrapper,
+  so scores and guidance are hidden from accessibility until the grid is revealed.
+  Stacked phone and tablet grids with multiple tiles use the available section width.
+  The number of scores determines the preferred tile count per row. Without family
+  guidance, four TV scores stay in one row when they fit. Larger score sets and
+  four-score mobile grids retain their balanced-row preference.
+  About keeps its stable line cap when its surface grows to match
+  the adjacent ratings group. Missing summary content reserves no column.
+  About occupies one reading column instead of absorbing leftover space.
+  Supporting sections are unboxed, with headings above vertically stacked facts.
+  Release & Availability leads the lower sections, followed by Details, Crew
+  and Playback (Details is promoted alongside a lone score). Original language
+  is distinct from playable audio. Series status and total seasons/episodes
+  appear only when confirmed; totals describe the catalog, not library ownership.
+  On larger screens, short Details facts pair within their reading column.
+  Long labels/values, dates and prose retain the full column width; narrow
+  windows and large text fall back to a single list. Focus gutters stay intact.
+  TV prefers three columns and regular-width mobile prefers two, falling back
+  when the window or text size cannot support readable widths. Regular-width mobile
+  information is centered within a 1120pt maximum, without narrowing the hero or
+  media rails. Additional sections flow into the shortest column; their intrinsic
+  heights do not stretch neighboring sections. A lone section keeps its reading
+  width rather than filling the page. Compact phones use one column.
+  Playback uses quieter type, including a bounded filename preview.
+  TV facts use stable borderless native buttons for scroll-by-focus, with no resting
+  fill. The shared Liquid Glass surface sits in a focus-only, non-sizing underlay
+  with a 22pt horizontal and 12pt vertical outset. Facts reserve 36pt row gaps
+  and 56pt column gaps, leaving 12pt between neighboring focus surfaces without
+  moving text keylines. About, ratings and guidance use the standard native tvOS
+  card focus treatment in System mode, with semantic text contrast rather than
+  the media card's subtle rim. Custom card-focus modes retain their existing fallback.
+  Within the shared About/Ratings summary, System focus moves to an already-visible
+  card suppress native page reveal only for that focus animation. Entry, clipped
+  targets, exits to lower facts and subsequent offscreen focus searches retain
+  normal scrolling; the page offset is never reset after a jump.
+  Reduce Transparency and pre-Liquid-Glass systems retain the shared opaque
+  surface and semantic text contrast. Only truncated
+  facts open their group's full values. Full-value rows remain focusable for remote
+  scrolling through long lists. Mobile keeps inline expansion targets.
+  All detail More dialogs share the existing About reader surface on TV:
+  a content-sized 900pt card, capped at 760pt high, with a 38pt leading title,
+  48pt content insets and Menu/Back dismissal. Metadata uses unboxed
+  scrolling content, including on mobile; mobile retains its native inline title
+  and Done action. `PlozzDialogHeading` owns the TV title treatment shared by
+  About, detail More dialogs, and the song-service picker.
+  Section gaps, gutters, and padding come from `DetailInformationLayout`.
+  Ratings stay separate from editorial facts. Revealing one
+  protected score reveals the shared score group, never the surrounding facts.
+  Missing sections leave no reserved grid cells. Cast rails lazily show the complete
+  supplied cast on both platforms, without a separate More button or dialog,
+  and keep person navigation bound to the owning source. The shared
+  `MediaPersonCredit` presentation starts with seven billed actors, then up to four
+  key-crew portraits, then the remaining actors and crew. The preview takes the
+  first available person for directing/creation, writing, production and music;
+  one person's combined roles cover those groups without adding more preview slots.
+  Seven is a presentation breakpoint, not a principal-cast classification.
+  Server order is preserved within actor/crew groups. Matching person IDs or
+  explicit external identities share one portrait with combined roles. Scoped
+  enrichment can also reconcile a unique same-name, same-role credit across
+  sources; names alone never merge people, and navigation retains the original provider route.
+  Crew-only titles still show the rail. Information previews retain all source
+  values and cap text previews by rendered lines, not an arbitrary number of
+  names. Short genre and studio lists remain complete when they fit. Long text
+  reuses the synopsis's faded inline MORE treatment beside each truncated value.
+  MORE is a non-sizing overlay aligned
+  to the final text baseline. Its soft fade is limited to one measured line at
+  the current font size, leaving the previous line intact. Truncation compares
+  full and visible text at the same allocated width, so native fitting probes
+  do not prematurely mask short values.
+  Sections are eagerly measured so lower facts participate in scrollable height.
+  About and TV fact controls keep the same native owner when truncation changes; only
+  their More action and accessibility role change. Switching between separate read-only
+  and button hosts restarts minimum-size probes and can loop during first layout.
+  Required availability attribution stays visible even when release facts are
+  capped. These presentation limits do not change provider metadata precedence.
+  Both presentation hosts expose `--detail-information-fixture` with
+  `--detail-layout-sparse`, `--detail-layout-rich`, `--detail-layout-episode`,
+  `--detail-layout-discover`, `--detail-layout-personal`, `--detail-layout-guidance`,
+  `--detail-layout-upcoming`, `--detail-layout-ratings-only`, or
+  `--detail-layout-family-only` for native review without server access.
+  `--detail-layout-ratings-0-guide` through `--detail-layout-ratings-5-guide`
+  exercise guidance spanning, including empty and partial score rows.
+  `--detail-layout-lupin` and `--detail-layout-slow-horses` reproduce the visible
+  metadata shapes from reported layout regressions, without private server identities.
+  The fixture uses the production page-scoped gradient host; `--detail-layout-flat`
+  and `--detail-layout-reduced-transparency` cover its opaque fallbacks.
+  `--detail-layout-bottom` reveals Playback.
+  The test hosts also accept `PLOZZ_DETAIL_EXAMPLE_PATH`, an explicit JSON file
+  containing a `MediaItem` under `item` and optional `availability`, `source`, and
+  `version` values. Invalid input fails rather than substituting fixture metadata.
+  Keep captured server data private; label captures with their source, region,
+  and whether enrichment was applied. This input is not part of the production app.
+- **Detail information focus** — About, ratings and family guidance use the
+  standard tvOS card button style in System mode. The system owns the lift,
+  highlight and enlargement; shared grid gutters must keep the painted surfaces
+  separate throughout focus transitions. System-style rating columns use the
+  same two-sided focus clearance as facts: both neighboring cards can be enlarged
+  during a handoff. Custom-focus, vertical, and mobile spacing remain unchanged.
+  Text retains the selected theme on
+  Liquid Glass systems and uses dark text on the older opaque focus plate.
+  Focused read-only cards and card buttons draw above their peers.
+  Ordinary media cards, custom focus styles and touch layouts are unchanged.
 - **Native artwork focus comparison** — launch the separate tvOS focus host
   with `--native-artwork-focus-comparison`. It compares the current poster,
   a single-image poster, a content-masked poster with separate overlays, and a
@@ -913,29 +1570,29 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
 - **Native poster focus** — the shared `NativeTVPoster` uses a
   `NativePosterButton`, not `TVPosterView` or a `TVCardView` ancestor. Its
   `UIImageView` retains native enlargement, remote motion and the moving
-  specular highlight. Portrait rows and native Browse cells share
+  specular highlight. Portrait, landscape, square, Continue Watching and native Browse cards share
   `NativePosterImageView` and UIKit's rectangular focus mask:
   the small native internal crop (about 1-2% in hosted measurements) is an
   intentional tradeoff for retaining that native surface.
   The alpha-derived highlight mask produced an offset crescent at extreme tilt.
-  Continue Watching, landscape/square artwork, transparent landscape library
-  covers keep their no-internal-zoom alpha-masked path.
+  Home library covers use that same rectangular surface. Transparent server
+  reflections fade onto its opaque backing rather than into the page; the source
+  artwork and the separate caption remain unchanged.
   Images arm native enlargement only on actual focus and release it after the
   current native defocus animation completes. This applies to opaque portraits
   too: arming them before focus can mount untouched lazy-row cards already lifted.
   A resting-only rounded clip preserves their corners while native effects are
   disarmed. It is removed before focus, so it never trims enlargement or tilt;
   stale animation completions cannot restore it during a newer transition.
-  Portrait artwork and placeholders are opaque rectangles. Pre-rounded alpha
+  Ordinary native poster artwork and placeholders are opaque rectangles. Pre-rounded alpha
   pixels beneath the focused native mask create
   a second corner silhouette that can separate from the highlight. Transparent
-  portrait sources receive the same dark backing as missing artwork.
-  Alpha-masked landscape/square artwork remains rounded in the bitmap.
+  sources receive the same dark backing as missing artwork.
   Native loading cards bake their neutral fill into that same artwork plane.
   Only the spinner belongs on the nearer overlay plane; a full rounded fill
   there scales independently and exposes the underlying image as an extra rim.
   Corner flags, count-tile backgrounds and legibility washes are composited into
-  the artwork itself. Portrait count digits and floating status/library marks
+  the artwork itself. Count digits and floating status/library marks at every aspect
   use a cached foreground on `overlayContentView`. That surface receives a nearer
   native depth projection; its badge alone is aligned to the public artwork
   viewport so it does not drift outside the image.
@@ -950,6 +1607,10 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   remain anchored to the original artwork height, and artwork, video and
   metadata keep their original layout. Do not clip this overscan back to the
   overlay bounds; the native image surface supplies the final silhouette.
+  Detail-page episode cards use the same live, unclipped 40pt scrim overscan for
+  their runtime/progress chrome. The gradient stays anchored to the artwork,
+  without moving captions or changing card size; custom-focus and mobile cards
+  retain their existing clipped composition.
   See [Featured sections](../FeatureHome/README.md).
   Continue Watching
   keeps its established size, reflection, logo position and resume chrome without
@@ -960,8 +1621,8 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   Its adaptive logo dimming and the shared bottom scrim
   are drawn into the artwork; projecting those backgrounds with the live overlay
   creates a dark rim outside the focused image. Captions stay outside it. Transparent
-  landscape artwork retains its alpha, and protected/extended artwork is prepared before
-  normalization. Portrait count tiles stay flush. Their digits center inside the
+  artwork receives an opaque backing, and protected/extended artwork is prepared before
+  normalization. Count tiles stay flush. Their digits center inside the
   visible tile using the native crop allowance (2pt horizontally, aspect-scaled
   vertically). Badge destination geometry updates in UIKit's focus coordinator
   at the focus event, not in a completion callback. The poster and foreground
@@ -972,8 +1633,7 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   playback progress or download state. Different posters with identical badges
   reuse the same concrete pixels; status/count, environment, size and scale
   changes still invalidate them. Background and combined layers retain all
-  progress, download and scrim inputs. Mobile and
-  landscape cards keep their combined indicator rendering.
+  progress, download and scrim inputs. Mobile keeps its combined indicator rendering.
   The button keeps the existing artwork slot and committed-bounds bitmap
   preparation, preserving row pitch and captions.
   SwiftUI measurement is side-effect-free: candidate widths never resize the
@@ -985,8 +1645,12 @@ Density, Dynamic Type, and the minimum height follow the same shared metric.
   Browse, never synchronously inside native poster layout. The existing native
   image view receives the finished pixels without replacing its focus owner.
   Identical pending requests coalesce; replacement, detachment and dismantling
-  cancel work, and generation checks reject stale completions. A replacement
-  shows a safe placeholder rather than the previous title or unprotected artwork.
+  cancel work, and generation checks reject stale completions. Same-artwork
+  chrome changes and progressive preview upgrades retain the last completed
+  pixels while composing. Background and badge foreground publish together.
+  Progressive retention uses the resolver's displayed source/policy key, which
+  includes the account-qualified artwork identity. A different subject, treatment,
+  size or scale shows a safe placeholder rather than stale or unprotected artwork.
   SwiftUI indicator and protected/extended treatment preparation still requires
   the main actor. Final Home and Browse bitmaps share one memory-budgeted cache;
   warm returning artwork paints immediately, and a memory warning prevents

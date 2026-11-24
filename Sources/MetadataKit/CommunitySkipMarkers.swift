@@ -174,12 +174,13 @@ enum IntroDBClient {
 
     struct Response: Decodable {
         struct Segment: Decodable {
-            let start_ms: Double
-            let end_ms: Double
+            let start_ms: Double?
+            let end_ms: Double?
         }
         let intro: Segment?
         let recap: Segment?
         let outro: Segment?
+        let post_credits: Segment?
     }
 
     static func url(for query: CommunitySkipMarkerQuery) -> URL? {
@@ -204,20 +205,25 @@ enum IntroDBClient {
     static func segments(for query: CommunitySkipMarkerQuery) async -> [MediaSegment] {
         guard let url = url(for: query),
               let response = await MetadataHTTP.get(Response.self, url: url) else { return [] }
-        return segments(from: response)
+        return segments(from: response).normalizedSkipMarkers(duration: query.duration)
     }
 
     static func segments(from response: Response) -> [MediaSegment] {
         let pairs: [(MediaSegment.Kind, Response.Segment?)] = [
             (.intro, response.intro), (.recap, response.recap), (.credits, response.outro)
         ]
-        return pairs.compactMap { kind, segment in
-            guard let segment else { return nil }
-            let start = segment.start_ms / 1000
-            let end = segment.end_ms / 1000
-            guard end > start else { return nil }
+        let segments = pairs.compactMap { kind, segment -> MediaSegment? in
+            guard let segment, let startMS = segment.start_ms, let endMS = segment.end_ms else { return nil }
+            let start = startMS / 1000
+            let end = endMS / 1000
+            guard start.isFinite, end.isFinite, start >= 0, end > start else { return nil }
             return MediaSegment(id: "introdb-\(kind.rawValue)", kind: kind, start: start, end: end)
         }
+        let postCredits = response.post_credits.flatMap { segment -> MediaSegment? in
+            guard let start = segment.start_ms, let end = segment.end_ms else { return nil }
+            return MediaSegment(id: "introdb-post-credits", kind: .unknown, start: start / 1000, end: end / 1000)
+        }
+        return segments.normalizedSkipMarkers(protecting: postCredits)
     }
 }
 
@@ -309,13 +315,23 @@ enum TheIntroDBClient {
         return groups.flatMap { kind, segments -> [MediaSegment] in
             (segments ?? []).enumerated().compactMap { index, segment in
                 let start = (segment.start_ms ?? 0) / 1000
-                // An open end runs to the end of the item — unusable without a
-                // known duration (the skip target would be undefined).
-                guard let end = segment.end_ms.map({ $0 / 1000 }) ?? duration,
+                // An open end means "to the end of the item", which is only true
+                // for closing credits. An intro/recap/preview with a missing end
+                // would otherwise become [start, duration] and an auto-skip would
+                // jump to the next episode instead of past the opening.
+                let resolvedEnd: TimeInterval?
+                if let endMS = segment.end_ms {
+                    resolvedEnd = endMS / 1000
+                } else if kind == .credits {
+                    resolvedEnd = duration
+                } else {
+                    resolvedEnd = nil
+                }
+                guard let end = resolvedEnd,
                       start.isFinite, end.isFinite, start >= 0, end > start else { return nil }
                 if let duration, duration.isFinite, duration > 0, end > duration { return nil }
                 return MediaSegment(id: "theintrodb-\(kind.rawValue)-\(index)", kind: kind, start: start, end: end)
-            }
+            }.normalizedSkipMarkers(duration: duration)
         }
     }
 }

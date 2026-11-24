@@ -97,8 +97,9 @@ class AttributionTests(unittest.TestCase):
             with self.subTest(package=package["identity"]):
                 ref = package["state"].get("version") or package["state"]["revision"]
                 self.assertIn(package["location"].removesuffix(".git") + "/tree/" + ref, attributions)
-        for identity in ("ffmpegbuild", "libdovi", "libtruehd"):
+        for identity in ("ffmpegbuild", "libdovi"):
             self.assertIn(f'`{pins[identity]["version"]}`', notice)
+        self.assertNotIn("libtruehd", pins)
 
     def test_metadata_services_and_bundled_fonts_are_credited(self):
         attributions = (ROOT / "Sources/CoreModels/PlozzAttributions.swift").read_text()
@@ -121,10 +122,10 @@ class AttributionTests(unittest.TestCase):
     def test_current_engine_components_replace_retired_stack_credits(self):
         attributions = (ROOT / "Sources/CoreModels/PlozzAttributions.swift").read_text()
         for current in ("dav1d", "zimg", "WTFPL", "libzvbi", "SMBClient", "Sentry",
-                        "Swift Runtime Library Exception", "FreeType License"):
+                        "Swift Runtime Library Exception", "FreeType License", "libbluray", "OpenJDK", "DejaVu"):
             self.assertIn(current, attributions)
         for retired in ("libavdevice", "libplacebo", "MoltenVK", "GnuTLS", "Nettle",
-                        "GMP", "AMSMB2", "OpenSSL", "libbluray", "YouTubeKit", "LibDTSX"):
+                        "GMP", "AMSMB2", "OpenSSL", "YouTubeKit", "LibDTSX"):
             self.assertNotIn(retired, attributions)
 
 
@@ -159,11 +160,16 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("    needs: guards\n", block)
                 self.assertEqual(block.count("needs:"), 1)
                 self.assertIn("    runs-on: xcode-27\n", block)
-                timeout = {"app-build": 60, "package-tests": 80, "hosted-focus": 140}[lane]
+                timeout = {"app-build": 60, "package-tests": 80, "hosted-focus": 180}[lane]
                 self.assertIn(f"    timeout-minutes: {timeout}\n", block)
                 self.assertIn(f"          lane: {lane}\n", block)
                 self.assertIn("uses: ./.github/actions/ci-prepare", block)
-        self.assertNotIn("strategy:", WORKFLOW)
+        # Heavy lanes are sharded in parallel; the app build stays single.
+        self.assertNotIn("strategy:", JOBS["app-build"])
+        for lane, shards in (("package-tests", "[1, 2, 3]"), ("hosted-focus", "[1, 2]")):
+            with self.subTest(sharded=lane):
+                self.assertIn("      fail-fast: false\n", JOBS[lane])
+                self.assertIn(f"        shard: {shards}\n", JOBS[lane])
         self.assertNotIn("continue-on-error", WORKFLOW + PREPARE + SAVE)
 
     def test_all_original_preflight_checks_still_run_without_cache_gates(self):
@@ -190,21 +196,39 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('GIT_CONFIG_PARAMETERS: "\'safe.bareRepository=all\'"', WORKFLOW)
 
     def test_full_matrix_and_hosted_tests_remain_unconditional_and_bounded(self):
+        self.assertIn("tools/ci-shards.py package --index", JOBS["package-tests"])
+        self.assertIn("tools/ci-shards.py focus --index", JOBS["hosted-focus"])
         self.assertIn(
-            'run: python3 tools/run-bounded.py 3600 "CI full test matrix" -- tools/run-tests.sh\n',
+            'python3 tools/run-bounded.py 3600 "package test shard" -- \\\n'
+            '            tools/run-tests.sh "${SELECTED[@]}"\n',
             JOBS["package-tests"],
         )
         package_deadline = int(re.search(
-            r'run-bounded\.py (\d+) "CI full test matrix"', JOBS["package-tests"]
+            r'run-bounded\.py (\d+) "package test shard"', JOBS["package-tests"]
         )[1])
         package_job_minutes = int(re.search(r"timeout-minutes: (\d+)", JOBS["package-tests"])[1])
         self.assertGreaterEqual(package_job_minutes * 60 - package_deadline, 15 * 60,
                                 "Keep setup, timeout teardown, and diagnostic uploads inside the outer job budget.")
-        self.assertIn("run: tools/run-focus-tests.sh\n", JOBS["hosted-focus"])
-        self.assertIn('PLOZZ_FOCUS_TEST_TIMEOUT: "5400"', JOBS["hosted-focus"])
+        self.assertIn('tools/run-focus-tests.sh "${SELECTED[@]}"', JOBS["hosted-focus"])
+        self.assertIn('PLOZZ_FOCUS_TEST_TIMEOUT: "4800"', JOBS["hosted-focus"])
         self.assertEqual(
             re.findall(r"PLOZZ_FOCUS_TEST_TIMEOUT:\s*([^\n]+)", WORKFLOW + PREPARE),
+            ['"4800"'],
+        )
+        self.assertEqual(
+            re.findall(r"PLOZZ_FOCUS_BUILD_TIMEOUT:\s*([^\n]+)", WORKFLOW + PREPARE),
             ['"5400"'],
+        )
+        hosted_deadlines = [
+            int(re.search(rf'{name}:\s*"(\d+)"', JOBS["hosted-focus"])[1])
+            for name in ("PLOZZ_FOCUS_BUILD_TIMEOUT", "PLOZZ_FOCUS_TEST_TIMEOUT")
+        ]
+        hosted_job_minutes = int(re.search(r"timeout-minutes: (\d+)", JOBS["hosted-focus"])[1])
+        # A cold hosted build takes over 30 minutes on a fork cache; the bounds
+        # match the original single job and leave 20 minutes inside the job.
+        self.assertGreaterEqual(
+            hosted_job_minutes * 60 - sum(hosted_deadlines), 10 * 60,
+            "Keep setup, timeout teardown, and diagnostic uploads outside both hosted deadlines.",
         )
         for lane in ("package-tests", "hosted-focus"):
             before_save = JOBS[lane].split("- name: Save successful trusted caches")[0]
@@ -215,6 +239,16 @@ class WorkflowTests(unittest.TestCase):
             "PLOZZ_RESULT_TIMEOUT:", "PLOZZ_PARALLEL: YES",
         ):
             self.assertNotIn(unsafe, WORKFLOW + PREPARE)
+
+    def test_hosted_individual_hangs_retain_a_bounded_failure_verdict(self):
+        runner = (ROOT / "tools/run-focus-tests.sh").read_text()
+        execution = runner.split("xcodebuild test-without-building", 1)[1]
+        self.assertIn("-test-timeouts-enabled YES", execution)
+        self.assertIn("-default-test-execution-time-allowance 600", execution)
+        self.assertIn("-maximum-test-execution-time-allowance 600", execution)
+        self.assertIn("-collect-test-diagnostics on-failure", execution)
+        self.assertNotIn("-collect-test-diagnostics never", execution)
+        self.assertIn('xcresult-summary.py verdict "$RUN_DIR/summary.json"', execution)
 
     def test_all_macos_lanes_use_the_engine_supported_toolchain(self):
         for lane in ("guards", *CACHE.LANES):
@@ -235,6 +269,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("cache-hit ==", PREPARE)
         self.assertNotIn("xcodegen generate", PREPARE)
 
+    def test_normal_ci_does_not_build_or_enable_the_experimental_java_runtime(self):
+        source = WORKFLOW + PREPARE + SAVE
+        self.assertNotIn("build-disc-runtime.py", source)
+        self.assertNotIn("PLOZZ_EXPERIMENTAL_BDJ", source)
+
     def test_cache_saves_are_successful_main_only_and_have_one_package_writer(self):
         self.assertEqual(WORKFLOW.count("if: ${{ " + TRUST + " }}"), 3)
         self.assertEqual(SAVE.count("if: ${{ " + TRUST), 3)
@@ -243,7 +282,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("inputs.seed-packages == 'true'", SAVE)
         self.assertIn("inputs.build-hit != 'true'", SAVE)
         self.assertIn("inputs.package-hit != 'true'", SAVE)
-        self.assertEqual(SAVE.count("uses: actions/cache/save@v4"), 2)
+        self.assertEqual(SAVE.count("uses: actions/cache/save@v6"), 2)
         self.assertNotIn("actions/cache/save", PREPARE)
         self.assertNotIn("uses: actions/cache@", WORKFLOW + PREPARE + SAVE)
 
@@ -277,7 +316,7 @@ class WorkflowTests(unittest.TestCase):
     def test_all_lanes_retain_unique_diagnostics_even_on_failure(self):
         names = []
         for lane in ("guards", *CACHE.LANES):
-            artifact = JOBS[lane].split("uses: actions/upload-artifact@v4")[1]
+            artifact = JOBS[lane].split("uses: actions/upload-artifact@v7")[1]
             name = re.search(r"(?m)^          name: (.+)$", artifact)[1]
             names.append(name)
             self.assertTrue(name.startswith(f"{lane}-diagnostics-"))

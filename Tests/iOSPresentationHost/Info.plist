@@ -5,6 +5,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).downloads.*</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).external-stream.*</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -27,6 +28,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSMotionUsageDescription</key>
+	<string>Plozz uses device motion to follow your phone's landscape direction during playback.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

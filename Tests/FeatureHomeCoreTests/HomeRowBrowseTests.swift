@@ -4,6 +4,209 @@ import XCTest
 
 @MainActor
 final class HomeRowBrowseTests: XCTestCase {
+    func testContinueWatchingBrowserCuratesWithoutChangingProviderOffsets() async throws {
+        var all = (0..<125).map {
+            MediaItem(id: "\($0)", title: "Video", kind: .movie, runtime: 600, resumePosition: 2)
+        }
+        all[60].resumePosition = 30
+        all[61].resumePosition = 120
+        all[61].isTrailer = true
+        all[124].resumePosition = 45
+        let provider = BrowseFactoryProvider(all)
+        let account = ResolvedAccount(account: Account(id: "account", from: provider.session), provider: provider)
+        let server = HomeServerRowDefinition(
+            accountID: "account", serverName: "Server", providerKind: .plex,
+            section: .init(id: "resume", kind: .continueWatching)
+        )
+        let row = HomePresentationRow(
+            choice: .init(serverRow: server), source: .library(HomeServerRow(definition: server).row)
+        )
+        let visibility = HomeLibraryVisibility(rowCustomization: .init(
+            defaults: .custom, order: [row.id], shown: [row.id], serverRows: [server]
+        ))
+        let browser = HomeRowBrowseFactory.make(row, accounts: [account], visibility: visibility, isCurrent: { true })
+        await browser.load()
+        XCTAssertTrue(browser.items.isEmpty)
+        XCTAssertTrue(browser.hasMore)
+        await browser.load()
+        XCTAssertEqual(browser.items.map(\.id), ["60"])
+        await browser.load()
+        XCTAssertEqual(browser.items.map(\.id), ["60", "124"])
+        XCTAssertFalse(browser.hasMore)
+        XCTAssertNil(browser.error)
+        let offsets = await provider.offsets
+        XCTAssertEqual(offsets, [0, 60, 120])
+        await browser.applyMutation(.init(itemIDs: ["60"], resumePosition: 2))
+        XCTAssertEqual(browser.items.map(\.id), ["124"])
+        await browser.applyMutation(.init(itemIDs: ["60"], resumePosition: 30))
+        XCTAssertEqual(browser.items.map(\.id), ["60", "124"])
+    }
+
+    func testBrowserRetainsResolvedCollectionCoverShapeForBothProviders() async throws {
+        for providerKind in [ProviderKind.plex, .jellyfin] {
+            let definition = HomeServerRowDefinition(
+                accountID: "account", serverName: "Server", providerKind: providerKind,
+                section: .init(id: "collections", kind: .recommendations, title: "Collections")
+            )
+            let covers = (0..<3).map {
+                MediaItem(
+                    id: "collection-\($0)", title: "Collection \($0)", kind: .collection,
+                    primaryImageAspectRatio: 16.0 / 9
+                )
+            }
+            let content = HomeViewModel.Content(serverRows: [.init(definition: definition, items: covers)])
+            let visibility = HomeLibraryVisibility(rowCustomization: .init(
+                defaults: .custom, order: [definition.id], shown: [definition.id], serverRows: [definition]
+            ))
+            for layout in CollectionCoverLayout.allCases {
+                var presentation = LibraryPresentationSettings.default
+                presentation.collectionCoverLayouts[
+                    LibraryPresentationSettings.collectionCoverAddress(for: definition.id)
+                ] = layout
+                let row = try XCTUnwrap(HomePresentationRow.resolve(
+                    rows: [], content: content, visibility: visibility, presentation: presentation
+                ).first)
+                let browser = HomeRowBrowseFactory.make(
+                    row, accounts: [], visibility: visibility, isCurrent: { true }
+                )
+                let expected: LibrarySection.Style = layout == .poster ? .poster : .landscape
+                XCTAssertEqual(browser.style, expected)
+                browser.query.sort = .init(field: .name, direction: .descending)
+                browser.query.media = .movies
+                await browser.load()
+                XCTAssertEqual(browser.style, expected, "Query changes and failed loads must retain the row shape.")
+            }
+        }
+    }
+
+    func testCollectionMembersUsePostersRegardlessOfHomeRowLayout() throws {
+        for style in CollectionSection.CardStyle.allCases {
+            let definition = CollectionSection(
+                source: .init(accountID: "account", collectionID: "collection", title: "Collection"),
+                cardStyle: style
+            )
+            let visibility = HomeLibraryVisibility(rowCustomization: .init(
+                defaults: .custom, order: [definition.rowID], shown: [definition.rowID]
+            ), collectionSections: [definition])
+            let row = try XCTUnwrap(HomePresentationRow.resolve(
+                rows: [], content: .init(collectionRows: [.init(definition: definition, items: items(2))]),
+                visibility: visibility
+            ).first)
+            let browser = HomeRowBrowseFactory.make(
+                row, accounts: [], visibility: visibility, isCurrent: { true }
+            )
+            XCTAssertEqual(browser.style, .poster, "The custom row layout does not change its members' grid.")
+        }
+    }
+
+    func testGlobalBrowsersUsePostersRegardlessOfHistoryLayout() throws {
+        for kind in [HomeRowKind.recentlyAdded, .continueWatching] {
+            let choice = try XCTUnwrap(HomeRowChoice.shared.first { $0.id == .global(
+                kind == .recentlyAdded ? .recentlyAdded : .continueWatching
+            ) })
+            for layout in ContinueWatchingCardLayout.allCases {
+                var visibility = HomeLibraryVisibility.default
+                visibility.continueWatchingLayout = layout
+                let browser = HomeRowBrowseFactory.make(
+                    .init(choice: choice, source: .home(.init(kind: kind, items: items(2)))),
+                    accounts: [], visibility: visibility, isCurrent: { true }
+                )
+                XCTAssertEqual(browser.style, .poster, "Continue Watching's special layout stays on its row.")
+            }
+        }
+        XCTAssertEqual(HomeRowBrowseModel(title: "Related").style, .poster)
+    }
+
+    func testLandscapeMediaAndMixedRowsDoNotChooseLandscapeBrowserCards() async {
+        let kinds: [[MediaItemKind]] = [
+            [.movie], [.series], [.episode], [.collection, .movie]
+        ]
+        for group in kinds {
+            let members = group.enumerated().map {
+                MediaItem(
+                    id: "\($0.offset)", title: "Title \($0.offset)", kind: $0.element,
+                    primaryImageAspectRatio: 16.0 / 9
+                )
+            }
+            let section = LibrarySection(id: "shelf", title: "Shelf", style: .landscape, items: members)
+            let choice = HomeRowChoice(section: section, library: movieLibrary)
+            let visibility = HomeLibraryVisibility(rowCustomization: .init(
+                defaults: .custom, order: [choice.id], shown: [choice.id]
+            ))
+            let browser = HomeRowBrowseFactory.make(
+                .init(choice: choice, source: .library(.init(section: section, isLoading: false, failure: nil))),
+                accounts: [], visibility: visibility, isCurrent: { true }
+            )
+            await browser.load()
+            XCTAssertNil(browser.error)
+            XCTAssertEqual(browser.items, members)
+            XCTAssertEqual(browser.style, .poster)
+        }
+    }
+
+    func testCollectionCoverAutoAndOverridesDoNotDependOnRailOrientation() throws {
+        let samples: [([Double?], LibrarySection.Style)] = [
+            ([16.0 / 9, 16.0 / 9, nil], .landscape),
+            ([2.0 / 3, 2.0 / 3], .poster),
+            ([nil, nil], .poster),
+            ([16.0 / 9, 2.0 / 3], .poster)
+        ]
+        for (ratios, automaticStyle) in samples {
+            let covers = ratios.enumerated().map {
+                MediaItem(
+                    id: "collection-\($0.offset)", title: "Collection", kind: .collection,
+                    primaryImageAspectRatio: $0.element
+                )
+            }
+            for layout in CollectionCoverLayout.allCases {
+                let section = LibrarySection(
+                    id: "collections", title: "Collections", style: .landscape, items: covers
+                ).resolvingCollectionCovers(layout)
+                let choice = HomeRowChoice(section: section, library: movieLibrary)
+                let browser = HomeRowBrowseFactory.make(
+                    .init(choice: choice, source: .library(.init(section: section, isLoading: false, failure: nil))),
+                    accounts: [], visibility: .default, isCurrent: { true }
+                )
+                let expected: LibrarySection.Style = switch layout {
+                case .auto: automaticStyle
+                case .poster: .poster
+                case .landscape: .landscape
+                }
+                XCTAssertEqual(browser.style, expected)
+            }
+        }
+    }
+
+    func testServerPreviewCarriesItsContinuationThroughAggregationAndPresentation() async throws {
+        let browseID = "/hubs/items?identifier=curated&curatedHubSeed=preview"
+        let provider = BrowseFactoryProvider(items(65), browseID: browseID)
+        let account = ResolvedAccount(account: Account(id: "account", from: provider.session), provider: provider)
+        let definition = HomeServerRowDefinition(
+            accountID: "account", serverName: "Server", providerKind: .plex,
+            section: .init(id: "curated", kind: .recommendations, libraryID: "movies", contentKey: "/old-seed")
+        )
+        let visibility = HomeLibraryVisibility(rowCustomization: .init(
+            defaults: .custom, order: [definition.id], shown: [definition.id], serverRows: [definition]
+        ))
+        let content = await HomeAggregator().unmergedContent(from: [account], visibility: visibility)
+        let shelf = try XCTUnwrap(content.serverRows.first)
+        XCTAssertEqual(shelf.items.count, 20)
+        XCTAssertTrue(shelf.hasMore)
+        XCTAssertEqual(shelf.browseID, browseID)
+        XCTAssertEqual(shelf.definition.section.contentKey, "/old-seed", "Discovery preferences must not change")
+        let row = try XCTUnwrap(HomePresentationRow.resolve(
+            rows: [], content: .init(serverRows: content.serverRows), visibility: visibility
+        ).first)
+        let browser = HomeRowBrowseFactory.make(row, accounts: [account], visibility: visibility, isCurrent: { true })
+        await browser.load()
+        await browser.load()
+        XCTAssertNil(browser.error)
+        XCTAssertEqual(browser.items.count, 65)
+        XCTAssertFalse(browser.hasMore)
+        let requests = await provider.serverBrowseIDs
+        XCTAssertEqual(requests, [browseID, browseID])
+    }
+
     func testCombinedRecentlyAddedExcludesMusicWithoutChangingRawPageOffsets() async throws {
         let all = (0..<125).map {
             MediaItem(id: "\($0)", title: "Title \($0)", kind: .movie)
@@ -70,13 +273,13 @@ final class HomeRowBrowseTests: XCTestCase {
             await model.load()
             XCTAssertNil(model.error, scope)
             XCTAssertEqual(model.items.map(\.id), scope == "nextUp" ? ["unwatched", "watched"] : ["unwatched"], scope)
-            model.applyMutation(.init(itemIDs: ["unwatched"], scopedItemIDs: ["account:unwatched"], played: true))
+            await model.applyMutation(.init(itemIDs: ["unwatched"], scopedItemIDs: ["account:unwatched"], played: true))
             XCTAssertEqual(model.items.count, scope == "nextUp" ? 2 : 0, scope)
             await model.load()
             XCTAssertEqual(model.items.count, scope == "nextUp" ? 2 : 0, scope)
-            model.applyMutation(.init(itemIDs: ["watched"], scopedItemIDs: ["other:watched"], played: false))
+            await model.applyMutation(.init(itemIDs: ["watched"], scopedItemIDs: ["other:watched"], played: false))
             XCTAssertEqual(model.items.count, scope == "nextUp" ? 2 : 0, scope)
-            model.applyMutation(.init(itemIDs: ["watched"], scopedItemIDs: ["account:watched"], played: false))
+            await model.applyMutation(.init(itemIDs: ["watched"], scopedItemIDs: ["account:watched"], played: false))
             XCTAssertEqual(model.items.map(\.id), scope == "nextUp" ? ["unwatched", "watched"] : ["watched"], scope)
         }
     }
@@ -135,7 +338,7 @@ final class HomeRowBrowseTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(presentation(eligible)).canBrowse, "Hidden-library overflow must not add an action")
     }
 
-    func testCompleteHistoryAndFailedRowsDoNotOfferBrowse() throws {
+    func testCompleteHistoryAndEmptyRowsDoNotOfferBrowseButCachedRowsRemainInteractive() throws {
         let shared = HomeRowChoice.shared
         let history = try XCTUnwrap(shared.first { $0.id == .global(.continueWatching) })
         let row = HomePresentationRow(choice: history, source: .home(.init(kind: .continueWatching, items: items(100))))
@@ -143,10 +346,14 @@ final class HomeRowBrowseTests: XCTestCase {
         let choice = try XCTUnwrap(shared.first { $0.id == .global(.recentlyAdded) })
         let section = LibrarySection(id: "shelf", title: "Shelf", items: items(20), hasMore: true)
         for (loading, failure): (Bool, AppError?) in [(true, nil), (false, .serverUnreachable)] {
-            let row = HomePresentationRow(
+            let retained = HomePresentationRow(
                 choice: choice, source: .library(.init(section: section, isLoading: loading, failure: failure))
             )
-            XCTAssertFalse(row.canBrowse)
+            XCTAssertTrue(retained.canBrowse, "Cached cards remain usable while their source refreshes or fails.")
+            let empty = LibrarySection(id: "shelf", title: "Shelf", items: [], hasMore: true)
+            XCTAssertFalse(HomePresentationRow(
+                choice: choice, source: .library(.init(section: empty, isLoading: loading, failure: failure))
+            ).canBrowse)
         }
         XCTAssertTrue(HomePresentationRow(
             choice: choice, source: .library(.init(section: section, isLoading: false, failure: nil))
@@ -156,7 +363,7 @@ final class HomeRowBrowseTests: XCTestCase {
     func testDefaultOrderLoadsBeyondHomePreviewAndStopsAtExhaustion() async {
         let all = items(145)
         let source = Pages(all)
-        let model = HomeRowBrowseModel(title: "Shelf", loaders: [{ start, limit in
+        let model = HomeRowBrowseModel(title: "Shelf", style: .landscape, loaders: [{ start, limit in
             await source.page(start, limit)
         }])
         await model.load()
@@ -166,6 +373,7 @@ final class HomeRowBrowseTests: XCTestCase {
         XCTAssertEqual(model.items.count, 120)
         await model.load()
         XCTAssertEqual(model.items, all)
+        XCTAssertEqual(model.style, .landscape)
         XCTAssertFalse(model.hasMore)
         let requests = await source.requests
         XCTAssertEqual(requests, [0, 60, 120])
@@ -205,6 +413,47 @@ final class HomeRowBrowseTests: XCTestCase {
         XCTAssertNil(model.error)
         XCTAssertEqual(model.items.count, 143)
         XCTAssertEqual(model.items.first?.id, "142")
+    }
+
+    func testCustomRowFailedCompleteQueryKeepsPreviousProjectionUntilRetry() async throws {
+        let source = Pages(items(143), failureAt: 60)
+        let pager = HomeContentPager(sources: [.init(home: .watchlist), .init(home: .continueWatching)]) {
+            feed, start, limit in
+            if feed.home == .continueWatching { return .init(items: [], nextOffset: nil) }
+            return try await source.falliblePage(start, limit)
+        }
+        let model = HomeRowBrowseModel(title: "Custom row", contentPager: pager)
+        await model.load()
+        XCTAssertEqual(model.items.count, 60)
+        let original = model.items
+        model.query.sort = .init(field: .name, direction: .descending)
+        model.query.filters = .init(filter: .unwatched)
+        await model.load()
+        XCTAssertEqual(model.error, .serverUnreachable)
+        XCTAssertEqual(model.items.map(\.id), original.map(\.id))
+        XCTAssertNotEqual(model.query, model.appliedQuery)
+        await source.recover()
+        await model.load()
+        XCTAssertNil(model.error)
+        XCTAssertFalse(model.hasMore)
+        XCTAssertEqual(model.items.count, 71)
+        XCTAssertEqual(model.items.first?.id, "141")
+        XCTAssertEqual(model.query, model.appliedQuery)
+    }
+
+    func testCustomRowDefaultOrderStillPublishesHealthySourcesWithFailure() async {
+        let healthy = items(3)
+        let pager = HomeContentPager(sources: [.init(home: .watchlist), .init(home: .continueWatching)]) {
+            feed, start, limit in
+            if feed.home == .watchlist { throw AppError.serverUnreachable }
+            return .prefix(healthy, startIndex: start, limit: limit)
+        }
+        let model = HomeRowBrowseModel(title: "Custom row", contentPager: pager)
+        await model.load()
+        XCTAssertEqual(model.items.map(\.id), healthy.map(\.id))
+        XCTAssertEqual(model.error, .serverUnreachable)
+        XCTAssertTrue(model.hasMore)
+        XCTAssertTrue(model.appliedQuery.isDefault)
     }
 
     func testScopeChangeClearsItemsAndRejectsLatePage() async {
@@ -301,6 +550,33 @@ final class HomeRowBrowseTests: XCTestCase {
         XCTAssertEqual(model.items.map(\.id), ["second"])
     }
 
+    func testMutationProjectionCannotOverwriteANewerQueryOrProfile() async {
+        let items = (0..<5_000).map {
+            MediaItem(id: "\($0)", title: "Title \(5_000 - $0)", kind: $0.isMultiple(of: 2) ? .movie : .series)
+        }
+        var current = true
+        let model = HomeRowBrowseModel(title: "Mutation race", snapshot: items, isCurrent: { current })
+        for id in ["2", "4", "6"] {
+            let mutation = Task { await model.applyMutation(.init(itemIDs: [id], played: true)) }
+            await Task.yield()
+            model.query = .init(sort: .init(field: .name, direction: .descending), media: .shows)
+            await model.load()
+            await mutation.value
+            XCTAssertEqual(model.appliedQuery, model.query)
+            XCTAssertEqual(model.items.count, 2_500)
+            XCTAssertTrue(model.items.allSatisfy { $0.kind == .series })
+        }
+        model.query = .init(media: .movies, filters: .init(filter: .unwatched))
+        await model.load()
+        XCTAssertEqual(model.items.count, 2_497)
+        let mutation = Task { await model.applyMutation(.init(itemIDs: ["8"], played: true)) }
+        await Task.yield()
+        current = false
+        model.invalidate()
+        await mutation.value
+        XCTAssertTrue(model.items.isEmpty)
+    }
+
     func testScopedWatchMutationReevaluatesTheWholeLoadedFilter() async {
         let all = [
             MediaItem(id: "same", title: "A", kind: .movie, isPlayed: true).taggingSource("a"),
@@ -310,7 +586,7 @@ final class HomeRowBrowseTests: XCTestCase {
         model.query.filters = .init(filter: .unwatched)
         await model.load()
         XCTAssertTrue(model.items.isEmpty)
-        model.applyMutation(.init(itemIDs: ["same"], scopedItemIDs: ["a:same"], played: false))
+        await model.applyMutation(.init(itemIDs: ["same"], scopedItemIDs: ["a:same"], played: false))
         XCTAssertEqual(model.items.map(\.sourceAccountID), ["a"])
     }
 
@@ -346,14 +622,25 @@ private actor BrowseFactoryProvider: MediaProvider {
     )
     let media: [MediaItem]
     let hasLibraries: Bool
+    let browseID: String?
     private(set) var offsets: [Int] = []
-    init(_ media: [MediaItem], hasLibraries: Bool = true) {
+    private(set) var serverBrowseIDs: [String?] = []
+    init(_ media: [MediaItem], hasLibraries: Bool = true, browseID: String? = nil) {
         self.media = media
         self.hasLibraries = hasLibraries
+        self.browseID = browseID
     }
     func homeRowPage(_ feed: HomeRowFeed, startIndex: Int, limit: Int) async throws -> HomeRowPage {
         offsets.append(startIndex)
+        if case let .server(_, _, _, browseID) = feed { serverBrowseIDs.append(browseID) }
         return .prefix(media, startIndex: startIndex, limit: limit)
+    }
+    func serverHomeContent(
+        sections: [ServerHomeSection], limit: Int, excludingLibraryIDs: Set<String>
+    ) async -> [String: Result<ServerHomeRowContent, AppError>] {
+        Dictionary(uniqueKeysWithValues: sections.map {
+            ($0.id, .success(.init(items: Array(media.prefix(limit)), browseID: browseID)))
+        })
     }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         .init(items: Array(media.dropFirst(page.startIndex).prefix(page.limit)),

@@ -4,7 +4,97 @@ Aether-primary playback coordination, engine-agnostic playback surface, resume
 reporting back to the server, caption style rules, trickplay scrubbing,
 and the diagnostics overlay.
 
+Original HDMV disc navigation shares the existing player through
+`VideoEngine.discMenu`; this module does not import the native runtime.
+Java (BD-J) menus are excluded from distribution builds and retained only as an
+explicit local Debug experiment. Unsupported menus retain direct title playback.
+The profile default and transient entry intent keep direct playback separate
+from menu navigation. Menu failures require an explicit retry or direct-play
+choice, and menu clocks never reach ordinary watch reporting.
+Stopping an unidentified menu/playlist also bypasses shell watch-state mutations;
+the captured account/profile session is released separately without publishing
+progress. Confirmed disc-authored subtitle choices are reapplied after a load
+clears the live overlay, without changing profile or series defaults.
+Disc actions on mobile use a native menu anchored to the disc control; only
+playlist selection opens a shared sheet. TV dialogs use native bordered rows
+without individual glass highlights and remain in the player hierarchy so
+presenting one does not tear down playback. TV action-to-picker transitions
+wait for dismissal.
+Startup loading follows first-play setup, not an implicit top-menu request:
+authored movie playback returns to normal controls after its first presented frame.
+Nonfatal disc notices use the shared transient status toast across menu and movie
+surfaces. Audio warnings require ready playback and a known missing transport PID;
+pending track discovery or a representation switch is not an unavailable track.
+Disc presentation retains localized resources until rendering. Native failures
+keep their diagnostic detail in logs while presenting localized actionable copy
+or the shared menu-unavailable message.
+See [disc navigation](../../docs/playback-engines.md#original-disc-navigation)
+for the initial compatibility and track-selection limits.
+
 ## Responsibility
+
+Automatic video upscaling uses the shared metadata classifier before engine
+load. An episode without animation hints may query its exact series through
+the current provider, with a two-second cooperative timeout and source-account validation.
+Unavailable or unrelated metadata is logged and selects Standard; cancellation
+does not continue loading. Explicit Standard/Animation/Off skip this lookup.
+Native playback is unchanged. The engine still owns decoded-format, resolution,
+display and route eligibility; metadata never enables HDR or 4K enhancement.
+
+The player also offers a session-only upscaling override on seekable, reloadable,
+URL-backed AetherEngine video. TV uses Playback > Upscaling; mobile uses
+Video > Upscaling. Switching reuses the engine's session-preserving reload,
+not a fresh provider load, retaining the playhead, pause intent, track choices,
+subtitle timing and audio offset. This is not a seamless A/B switch.
+Automatic uses the same source-scoped metadata classification as initial load.
+Only one change runs at a time; stop/new-load cancellation fences stale results,
+and failures leave the selected control unchanged with visible feedback.
+Custom-reader shares, interactive disc menus, separate audio and Live TV do
+not offer this switch. The saved profile default is never changed.
+Transient empty track lists during session reloads do not clear secondary
+subtitle selection or styling; readiness triggers reconciliation with the
+replacement tracks.
+
+Audio Sync is available on AetherEngine routes that can retime audio and
+re-anchor playback. TV's Audio header opens the shared single-focus settings
+control; mobile exposes Audio Sync in the Audio menu. Both use 10 ms steps
+and Reset. On-demand playback allows ten seconds in each direction, matching
+Kodi's default range. Live TV retains its two-second limit because the wider
+read-ahead and restart preroll apply only to on-demand sources.
+Positive means audio later,
+negative earlier. TV Left/Right holds repeat and accelerate to 50 ms steps.
+Buffered direct-rendering PCM changes the audio queue without seeking or moving
+the video clock. When live correction is unavailable, the shared audio editor
+previews immediately and waits 600 ms after input settles before committing.
+Rapid taps, successive swipes and holds accumulate one pending value; no commit is
+scheduled during an active swipe or hold, including at the bounds. This is independent of play/
+pause state. Reset supersedes pending work; cancellation, dismissal, backgrounding
+and a new playback session discard unapplied previews. Native
+loopback and other unsupported formats still seek/reload on that final commit.
+Audio may briefly skip/repeat during a correction; output latency still applies.
+Large offsets can require a reload and temporary silence when the required
+samples are not buffered; the wider range does not imply live coverage of every value.
+No format or route is downgraded to enable the feature. Offsets reset with a new stream. Native AVPlayer, remote bypass,
+audio-only sources and live streams without an engine rewind window do not
+advertise this control. Live controls use the same engine capability and offset;
+their editor, TV stepper, mobile stepper and final setter share the narrower range.
+
+TV Subtitle Sync uses the same single-focus settings stepper and Reset. Its
+existing 50 ms steps and +/-10 second range are unchanged; held Left/Right repeats
+without losing focus at the limits. Subtitle offsets apply immediately to the
+overlay timeline, with no audio-style reload debounce.
+Both sync controls opt into distance-based remote swipes: a short swipe keeps
+the fine step, and continued travel adds a step per 20 points without requiring
+another gesture. Longer swipes move farther, with no momentum after lift.
+Taps, held-arrow timing, value limits and compact styling remain unchanged.
+Both sync panels give the compact stepper a full-width native focus section so
+Back, the control and Reset remain vertically reachable. On submenu entry,
+Back and Reset become eligible only after the stepper reports actual native
+focus; writing the panel's row FocusState does not focus a separately hosted
+stepper. This entry gate resets on reopening, not on ordinary Up/Down movement.
+Reset clears the offset and explicitly returns focus to the stepper's own
+button. Disabling Reset at zero does not itself move tvOS focus; the next Up
+from the stepper must reach Back.
 
 Automatic on-demand subtitle selection applies the profile's **SDH subtitles**
 preference to embedded tracks and external files, including network shares and
@@ -32,10 +122,115 @@ bounded language-match/accessibility flags without track titles or URLs.
     The adapter loads the server-selected source, never a preview-only original.
     See [playback engines](../../docs/playback-engines.md#routing-logic).
 - **View model / view** —
+  - `BorrowedTrailerPlayer` hosts the same TV transport and seek coordinator over
+    the hero's existing AVPlayer and persistent video surface. The app shell
+    injects this presentation into Home, keeping feature modules independent.
+    It does not resolve a source, start provider reporting, change display mode,
+    or stop the borrowed player on dismissal. Only available transport capabilities
+    are exposed; the hero owner restores ambient playback and mute state.
   - `PlayerViewModel` orchestrates engine lifecycle, audio/subtitle
     selection, scrub state, resume, and progress reporting.
+  - Resume progress is saved independently of Continue Watching eligibility:
+    `ContinueWatchingPolicy` requires 5% of the duration, bounded to 5–60 seconds
+    (60 seconds when duration is unknown). Provider-supported trailer progress
+    is preserved, but trailers never appear in Continue Watching, converge onto their parent,
+    or scrobble their parent's identity to trackers.
+    This client-side visibility rule does not override server resume policies.
+    Plex can accept a short progress write without retaining a resume offset;
+    live verification observed that behavior at 60 seconds and below.
+    Plex trailers and special features additionally retain a device-local,
+    profile/account/server-viewer-scoped resume fallback; ordinary movies and
+    episodes remain server-managed. See ProviderPlex's extra resume contract.
   - `PlayerView` + `CustomPlayerContainer` host the engine's vended
     bare video surface and overlay the shared transport chrome.
+  - `PlayerCardMetrics` scales touch-player typography to a wide-tablet maximum
+    of 24-point titles, 17-point body text, and 14-point metadata. Card geometry,
+    weights, and controls retain their existing styling; TV keeps its separate
+    across-the-room type scale.
+- **Song identification** (#351) — `SongRecognizer` feeds the engine's
+  decoded-audio tap (not the microphone) to ShazamKit's streaming matcher while
+  a title plays, when the profile's **Identify songs** setting is on. A song is
+  shown beside the Info card only after a second match whose offset advances
+  consistently with rendered source-time progress; sound-effect albums and genre-less uploads are ignored. A skip clears
+  the song. Errors (offline, service unavailable) show nothing and rest the
+  matcher for 30 seconds with the audio tap removed. Pausing also removes the tap
+  while retaining the displayed song; seeks clear it and restart analysis only
+  after the seek settles. Engine handoffs replace the recognition owner. A generation-scoped owner
+  rejects late results and teardown from superseded sessions. The adapter pulls
+  directly from the engine's bounded PCM stream without a second queue or a
+  per-buffer main-actor forwarding task. A cancellable pacer holds decoded-ahead
+  audio until its end is within 50 ms of `audioTapPresentationTime` (the engine's
+  rendered source PTS, not a normalized scrub position). Pending chunks wait in
+  cancellable 100 ms intervals; chunks covered by the sampled clock reuse it.
+  No additional PCM queue is introduced. Upstream overflow remains bounded and
+  marks a discontinuity instead of blocking playback. Audio discontinuities restart matching
+  rather than stitching unrelated samples. Only supported Plozzigen routes take
+  part; standalone native playback and remote-HLS/server-transcode bypass
+  return no tap. `SongRecognitionModel` independently expires the card after
+  25 seconds without an accepted match. Pausing preserves the remaining lifetime;
+  resuming restarts it even if the new matcher never returns a result. Repeated
+  accepted sightings renew expiry without changing equal observable state, and
+  cancelled timers cannot clear a newer song.
+  The separate neighboring card (stacked on phones) places a rounded square album cover beside the song
+  details, matching the Info thumbnail's height, content insets, and shared media-edge
+  treatment on wide layouts.
+  TV song cards reuse Continue Watching's over-video focus treatment and
+  reduced-effects fallbacks. Info actions receive focus before the song becomes
+  eligible; Right can then continue from Restart through episode actions to the
+  song. The visible panel allows focus lift/shadow overflow, while the parked
+  panel still clips its shadow. Song titles and artists wrap rather than
+  truncating to fixed line counts. Mobile retains the shared Info panel surface.
+  Selecting a song offers Spotify, Apple Music, YouTube Music, Amazon Music,
+  Deezer, and TIDAL, in that order. Apple Music uses the exact recognition link
+  when supplied and is omitted otherwise; the other services search by title and
+  artist. YouTube Music replaces regular YouTube. The first four follow global
+  music subscription shares in
+  [MIDiA's Q4 2025 report](https://www.midiaresearch.com/blog/music-subscriber-market-shares-q4-2025-the-chess-board-is-set)
+  (published June 2026). Deezer and TIDAL follow as smaller services; that public
+  chart does not rank them individually. This is a static approximate popularity
+  order, not a live or country-specific ranking.
+  The chooser pairs album artwork with wrapping song
+  metadata above full-width native service buttons, rather than inline text links.
+  TV uses a compact floating card with scroll fallback, the shared detail-dialog
+  heading, and extra space around song metadata; iPhone/iPad use an inline
+  navigation title and native sheet sizing. All service rows use an external-open
+  accessory. Bundled monochrome service marks inherit
+  the native control's contrast. Apple Music, Spotify, YouTube Music, Deezer, and
+  TIDAL marks come from
+  [Simple Icons](https://github.com/simple-icons/simple-icons/tree/1bb2f6e6ea50f920de8d2f3d273ae48564a5eaee/icons)
+  under CC0 (see `Resources/SongServiceIconsLicense.txt`); trademarks remain their
+  owners' property. Amazon Music uses a generic system music-note symbol:
+  [Simple Icons removed Amazon assets pending permission](https://github.com/simple-icons/simple-icons/pull/13056).
+  Searches use the title and artist, not inferred service track IDs, and need no
+  catalog API or account connection in Plozz. The destinations are public HTTPS
+  search routes, not an in-app streaming integration; playback on those services
+  may require an account or subscription. YouTube Music's
+  [OpenSearch template](https://music.youtube.com/opensearch?locale=en_US)
+  uses `search?q=`, while Spotify, Amazon Music, Deezer, and TIDAL use an encoded
+  path component. Deezer publishes its
+  [OpenSearch template](https://cdn-files.dzcdn.net/xml/opensearch.xml);
+  Amazon Music and TIDAL's path routes are also listed in
+  [DuckDuckGo's public search shortcuts](https://duckduckgo.com/bang.js).
+  TIDAL redirects `listen.tidal.com` to `tidal.com`; its anti-bot page prevents
+  automated end-to-end search verification. No third-party native-app handoff is
+  guaranteed. TV attempts
+  an installed universal-link handler; if unavailable, it shows a locally
+  generated QR code for the selected service. App routing depends on that app's
+  supported links. The chooser retains the selected song if recognition expires.
+  Space is used only while a recognized song card is visible. Without a match,
+  Info keeps its full width and phone layouts have no empty row or gap. Song
+  appearance, expiry and availability changes preserve the Info view's identity;
+  disappearing song focus returns to Playback Info. `PlayerSongLayoutPreviewTests`
+  captures the production controls over native video with a seeded song match.
+  Opt in with `TEST_RUNNER_PLOZZ_SONG_PREVIEW_DIRECTORY` pointing to an owned
+  directory containing `film.mp4`, `still.jpg`, and `album.jpg`; these captures
+  are layout evidence, not evidence of a live Shazam result.
+  The [performance lab](../../docs/performance-lab.md#song-recognition) exercises
+  real local-catalog recognition separately. Fingerprinting is not free, and
+  simulator measurements do not establish device energy or native-route cost.
+  Matching Apple's music catalog also requires enabling ShazamKit under the
+  app identifier's **App Services** in the Apple Developer portal. Local custom
+  catalog tests do not verify that service authorization.
 - **Subtitle rendering** — `SubtitleOverlayView` draws in-app captions from
   sidecars, Plozzigen decoders, and `NativeSubtitleCueOutput` for native legible
   tracks. `SubtitleStyleRules` remains the reduced AVPlayer styling adapter
@@ -59,9 +254,17 @@ bounded language-match/accessibility flags without track titles or URLs.
 - **Native-only video assets** — when that engine is selected, tvOS feeds the resolved URL directly to
   AVPlayer even when sidecars are available. Track menus still use provider
   tracks; the owned overlay authorizes and fetches selected SRT/WebVTT sidecars.
-  Embedded captions retain native cue extraction. iOS keeps the existing
-  `SubtitleHLSComposer` / `SubtitleInjectingResourceLoader` path; real provider
-  HLS, trailer audio composition, and Plozzigen are unchanged.
+  Embedded captions retain native cue extraction. Local files on every platform
+  also keep their original asset, preserving selectable audio and saved captions
+  through the owned overlay. Injecting a local MP4 into the HLS wrapper is not a
+  supported file-delivery route and can prevent playback entirely. iOS retains
+  `SubtitleHLSComposer` / `SubtitleInjectingResourceLoader` for remote non-HLS
+  sources; real provider HLS, trailer audio composition, and Plozzigen are unchanged.
+  Saved sidecars use the in-app overlay, not native PiP/AirPlay caption injection.
+  When a local asset has no provider audio inventory, the native engine discovers
+  its audible selection group asynchronously and updates the existing track menu.
+  Selection uses the exact local option index, including unnamed and same-language
+  tracks; preferred-language startup selection and teardown remain item-scoped.
 - **Trickplay scrubbing** — `ScrubGeometry`, `ScrubThumbnailProviding`,
   `TrickplayThumbnailLoader`, `PlexBIFThumbnailLoader`: focus-driven
   scrub bar with per-provider thumbnail loaders (Jellyfin "trickplay"
@@ -69,7 +272,25 @@ bounded language-match/accessibility flags without track titles or URLs.
   `GeneratedScrubThumbnailLoader` decodes keyframe stills on the device from
   the original file through `ScrubStillExtracting`, which Plozzigen supplies
   via `EngineFactory.makeScrubStillExtractor`. Pending requests in the same
-  two-second cell share one decode. Playback teardown invalidates stills and
+  two-second cell share one decode. The shared preview coordinator completes
+  one request at a time and retains only the latest pending position, so
+  continuous scanning cannot starve the decoder. Cache hits remain immediate;
+  late results cannot overwrite them or cross a direction reversal. Transient
+  misses retain the last useful frame. Clearing a preview cancels generated
+  extraction, and a replacement waits for cancelled work to finish rather than
+  opening another decoder concurrently. Server index/tile warmups remain reusable.
+  TV touch swipes separately pace preview requests using the smoothed finger
+  speed: up to 30 requests/second for precision below 500 points/second, easing
+  down to four/second above 2,500 points/second. The playhead still follows every
+  input. Deferred requests use the latest position, remain anchored across
+  flick-bridged swipes, and catch up when motion slows; reversing requests a new
+  frame immediately. Commit, cancellation and teardown discard pending requests.
+  Held directional scanning, button skips, and mobile scrubbing are unchanged.
+  Final settling may require finishing the current extraction and one latest
+  extraction; this trades a bounded extra decode for continuous motion feedback.
+  The opt-in `seek-generated-*` and `seek-plex-bif` workloads in
+  [the performance lab](../../docs/performance-lab.md) cover this contract.
+  Playback teardown invalidates stills and
   closes every network-reader clone before awaiting transport drainage, even
   while the outgoing preview view remains mounted. Original-quality Plex,
   Jellyfin, and Emby transcodes retain a preview-only original source; reduced
@@ -110,10 +331,16 @@ On iPhone and iPad, the Live TV guide's inline preview uses the shared
 previous/play-pause/next controls and an in-place fullscreen action.
 Fullscreen also exposes a bottom-trailing inward-arrow action to return to the
 preview, matching the expand control's placement; the top-left Close remains.
-Mobile fullscreen video fits the full player bounds, independently of the safe
-area used by controls and subtitles. Showing or hiding controls does not resize
+Mobile fullscreen video uses the full player bounds, with Normal and the cutout-safe
+Auto-crop level respecting horizontal cutout insets independently of controls and subtitles.
+Showing or hiding controls does not resize
 the picture. The status bar and persistent system overlays hide with the
 fullscreen controls and return when controls are revealed or fullscreen ends.
+The mobile fullscreen playback cover opts out of iOS 27.1's vertical system bar,
+so iPhone Duo does not reserve a side strip beside the video and custom controls.
+This is a stable presentation policy, not a controls-visibility toggle; physical
+safe-area protection, aspect-ratio fitting, and the browsing/embedded Live TV
+page's native bars are unchanged.
 The engine, video surface, and its native parent remain mounted across expansion, return,
 and rotation. Dark inline previews mirror that same compositor surface above, below,
 and into available side gutters with native blur and gradual transparency fades.
@@ -142,6 +369,38 @@ Leaving the visible inline presentation clears its colors and animations immedia
 Fullscreen, multiview, external playback, and Reduce Transparency disable the reflection. Reduce
 Transparency retains inset-picture rounding; fullscreen restores the unmasked,
 black-backed video surface.
+
+Apple TV Multiview uses a separate soft audio indicator behind the
+audible picture: a 96-point color stroke with a 96-point blur at 36% opacity,
+not a focus border. The narrower bright band starts fading closer to the picture;
+the unchanged outer blur keeps a similarly broad, gradual tail into the surrounding
+black without changing picture size.
+It reuses the same 2 Hz, 24-by-14-pixel color sampler
+and native/software frame access. Neutral footage uses a faint neutral glow.
+The indicator waits for one second of continuous activation before fading in.
+Moving away cancels that pending activation and starts fading the old glow out
+immediately. Fade-in takes three seconds; fade-out and palette changes retain
+their 1.5-second duration, retargeting from their displayed state without resizing
+or replacing the renderer. Audio changes immediately; only the glow waits.
+Moving focus to the toolbar leaves it
+on the audible video.
+When the video is not visibly focused, a rim uses a brighter tint of
+the same sampled colors at 44% opacity, with a width of two physical pixels plus
+one point. A one-pixel-radius dark shadow separates
+the rim from bright imagery. This treatment does not change the broad glow,
+picture bounds, or decoder sampling; it hides during native focus.
+Muted, unavailable, hidden, fullscreen, external, unauthorized, and background pictures stop sampling;
+Reduce Transparency removes the indicator and Reduce Motion disables its fades.
+The existing Audio on/Muted accessibility value remains authoritative.
+
+Multiview retains one native card and renderer host across idle, editing and
+fullscreen layout changes. Focus never detaches the live output into a separate
+window bridge. The native sheen, caption, glow and picture share one motion
+container; TVUIKit's default focus sizing is applied there rather than through a
+second content transform. Entry starts from the displayed frame and takes half
+a second. Ordinary focus changes use the native focus animation coordinator,
+interrupting entry from its current presentation when necessary. Reduce Motion
+bypasses the surface animation.
 
 When loading a new mobile native source, disconnect the outgoing player from
 the retained `AVPlayerLayer` before teardown and replacement. Retuning must
@@ -174,6 +433,56 @@ watchdog, periodic reload or engine-phase inference is added. See
 
 ## Player appearance
 
+**Continue Watching** uses Home's visible row and profile-scoped artwork, label,
+and playback-detail preferences. Artwork + logo, thumbnails and portrait posters
+reuse Home's artwork renderer, including spoiler protection and fallback rules.
+The player owns geometry: every horizontal card fills the same fixed-height
+stage as Chapters, fitting its artwork width to the measured caption and chosen
+aspect ratio. Hiding labels returns that space to the artwork. Framed cards use
+Chapters' surface and focus clearance, with the same `contentPadding` inset as
+Info. Captions add only a four-point horizontal inset; top and bottom padding stay
+equal, with no extra footer or reduction in artwork size. Hidden labels keep the
+full artwork area. Borderless cards retain their own caption padding and omit the
+glass. Reduced-transparency fallbacks remain available.
+Phone portrait keeps the existing bounded, compact vertical-list layout, with
+the same row height and natural content sizing as Chapters. Playback details
+and progress-only bars sit beside the small artwork rather than shrinking Home's overlays.
+The Continue Watching button label defines the whole rounded card's touch area,
+including artwork and padding, even with labels hidden or a borderless surface.
+The shared artwork renderer stays non-interactive; taps must not fall through
+to the player's background gesture surface.
+Home's Showcase background and absolute card sizing are not copied into playback.
+Narrow artwork keeps detailed playback indicators on one line. It uses the same
+fitting order as mobile Home: drop the play glyph, then the progress bar, before
+reducing text. The fixed-height player additionally prioritizes remaining time
+over an episode qualifier rather than stacking the decorations or wrapping text.
+
+Settings > Playback > **Player tabs** controls Chapters, Cast, Episodes, Playlist,
+and Continue Watching independently on TV, iPhone, and iPad. All five default on;
+existing Continue Watching choices are preserved. Info is always available.
+The profile-scoped preferences filter the shared tab list without changing its
+order or fixed panel height. Enabled tabs still require relevant content.
+Hiding Episodes or Playlist does not disable their playback contexts, autoplay,
+or the Up Next card. If an open tab loses its content, its panel closes and a
+later TV card entry falls back to Info when the remembered tab is unavailable.
+
+The current title and other episodes from its series are excluded within their
+source account, not by raw IDs across servers. Selection uses the normal version
+preparation and authorized playback handoff, saves the outgoing position, and
+resumes the chosen title on its own provider. Missing/failed preparation is
+reported without swapping the outgoing provider. The tab remains part of the
+existing fixed-height horizontal player stage and follows the other media tabs' idle fade.
+Current-title filtering retains the playback origin account when a provider's
+fresh playback metadata has no app-owned account tag; matching IDs on other
+accounts remain available.
+`PlayerContinueWatchingModel` observes the shell's cached Home snapshot and
+playback identity, deriving the filtered row only when those inputs change.
+Controls reveal, playback-clock updates and native focus moves read the cached
+array; they do not reaggregate Home or request provider data. Replacing the source
+invalidates pending observations, and stopping releases the source and clears the
+row. Disabled playback settings never read Home. Artwork remains asynchronous
+and is mounted only with the selected, lazy Continue Watching panel.
+
 On tvOS, iPhone, and iPad, **Chapters** joins the bottom player tabs only when the
 server metadata or the playing file supplies usable chapter positions. Individual
 chapter cards use Cast's shared over-video glass, focus treatment, and reduced-effects
@@ -183,11 +492,13 @@ have thumbnails, portrait rows show left-aligned text without an artwork placeho
 and wide layouts vertically center that text in narrow, full-height glass cards.
 Text-only cards use Cast's width with a minimum text allowance on small screens;
 cards with thumbnails retain their wider artwork layout. Mixed-thumbnail lists
-retain aligned artwork slots. On tvOS, artwork cards size their width from the
-measured caption so thumbnails have equal top and side insets; the thumbnail's
+retain aligned artwork slots. All horizontal artwork cards size their width from the
+measured caption so thumbnails have equal top and side insets, using Info's
+`contentPadding` rather than a separate corner-based allowance; the thumbnail's
 continuous corner radius is the outer glass radius minus that inset.
-Chapter titles and start times share one leading text
-edge with corner-aware inner padding. They show titles (or numbered chapter labels),
+Artwork captions share one leading text edge, inset four points from the artwork.
+Their bottom inset matches the artwork's top inset.
+Cards show titles (or numbered chapter labels),
 start times, available server thumbnails, and the current chapter. On portrait iOS,
 Cast and Chapters use the same tab-to-content gap as Info, with directional scroll
 fades only at edges where more content remains.
@@ -210,6 +521,18 @@ services. Engine/load generation guards reject late results after replacement or
 stop. Files without chapters still have no tab. Title-relative DVD/Blu-ray chapters
 are not exposed by this container fallback.
 
+The tvOS transport reserves the bottom card's fixed-height stage immediately,
+but initializes its optional content only when a card is first requested.
+Timeline/title/buttons do not wait for off-screen Info layout or artwork.
+After first use, the selected card stays mounted while parked, preserving state
+and the existing single-transform reveal. First insertion has no extra fade.
+This shifts card initialization to first use; it does not eliminate that work
+or defer it with a timer. Mobile card presentation is unchanged.
+Native tvOS focus owns movement between Info, Chapters, Cast and the other card
+tabs. One focus observer switches their content without replaying the reveal or
+queuing a focus restoration; an older tab must never reclaim a newer native
+focus move. Deferred selected-row focus remains limited to floating track menus.
+
 On tvOS, the shared Audio menu offers **Reduce Loud Sounds** and **Enhance
 Dialogue** when Apple TV reports support for the current output. These are
 Apple TV-wide settings, not profile preferences or engine capabilities; VOD and
@@ -222,6 +545,13 @@ notification bridge, fails closed when it is unavailable, and requires bounded
 state readback before showing a changed selection. Controls refresh while visible,
 on route changes and on foreground return. No preference is changed on startup,
 profile changes, or teardown, and Plozz never writes the system preference domain.
+Preference synchronization and validated commands run on a serial actor, never
+on the UI thread. Initialization, reveal, route-change and confirmation refreshes
+share one in-flight read; the menu retains its last confirmed state until that
+read completes. Pending changes are reserved before awaiting preflight, so rapid
+repeat presses cannot post duplicate commands. Cancellation is checked again
+after preflight and before posting. A delayed preference service must not block
+the transport's existing fade animation or remote input.
 When tvOS reports dialogue-level support, **Enhance Dialogue** opens the existing
 player-style submenu with **Enhance More**, **Enhance**, and **Off**. Outputs with
 binary-only support keep a toggle. The tvOS Audio menu and its submenu use a
@@ -237,14 +567,12 @@ processing for every engine route. Undocumented integration carries OS
 compatibility and App Review risk. This system-preference bridge is tvOS-only.
 
 On iPhone and iPad, VOD and Live TV share adaptive native `PlayerMoreMenuButton`
-controls. Portrait uses one ellipsis; landscape exposes the available menus as
-separate controls, with Version and Multiview opening their existing destinations
-directly. Audio, Subtitles and Video reuse the existing player-category icons
-(waveform, captions and adjustment sliders) in both VOD and Live TV. Video combines
-zoom choices with Quality in both layouts; Quality opens its existing editor and
-never acts as a selectable zoom mode. The standalone Video popup omits its redundant
-category heading; portrait retains the named Video entry. Quality remains
-available in Video even when zoom is unsupported. Layout follows the actual player
+controls. Portrait uses one ellipsis. Landscape shows Audio, Subtitles, the
+current speed (on demand), and an ellipsis, omitting unavailable controls.
+Quality lists the server-supported presets and marks the current limit. Selecting
+a preset keeps the codec and other stream settings; Advanced opens the full editor
+for custom limits, transcoding and stream details. Version (on demand) or Multiview (live) also lives
+in overflow when available. Layout follows the actual player
 viewport, including iPad split windows, not the device's global orientation.
 Subtitles and Audio offer their existing tracks directly with real active-track
 checkmarks. Audio has no redundant track-section heading. Subtitles lists all
@@ -252,13 +580,13 @@ tracks first, then Search & Download, then Advanced. Native menu configurations
 preserve this top-to-bottom order even when opening upward. Advanced opens a touch sheet for supported
 appearance, timing and dual-track controls. Live TV
 does not offer search/download or dual subtitles. Native speed presets and Video
-modes apply immediately; Custom, Quality, Version and supported sync controls
+modes apply immediately; Custom Speed, Advanced Quality, Version and supported sync controls
 open their existing editors. Live multiview is another menu action; Go Live
 remains a transport action. A sole audio track stays visible as disabled metadata.
 Opening a menu pins transport controls; playback-clock updates do not rebuild
 its snapshot. `PlayerMenuPresentation` releases editor requests only after native
 menu dismissal completes. Context changes invalidate pending requests and old
-audio/subtitle/speed/zoom actions, and programme transitions release live controls.
+audio/subtitle/speed/quality/zoom actions, and programme transitions release live controls.
 Each native popup has its own presentation owner, so overlapping dismissal and
 teardown callbacks cannot unpin a newer popup or release a sheet too early.
 Popup rows are text-only: checkmarks belong to real track/mode/rate choices.
@@ -274,20 +602,162 @@ Native and tvOS track menus share `TrackLabeling` and `TrackMenuBuilder`.
 Bare language titles no longer suppress known codec/channel facts, for example
 `English (Opus 5.1)`. Custom names and commentary are retained, existing format
 facts are not duplicated, and unknown formats are not invented.
+Plex and Jellyfin/Emby keep original container track names separately from
+generated display titles. Audio, primary-subtitle, and secondary-subtitle menus
+retain names such as `Director Commentary`, `Full subs`, and `Signs & Songs`
+alongside the existing language/format label. Names are content, not translated
+app copy; empty/generic names keep the previous fallback. Matching provider
+names fill engine metadata gaps without replacing an explicit engine name.
+Plozzigen also retains names read directly from the container when the server
+omits them. Its generated language/codec and numbered fallback labels are not
+treated as authored names. Real-world metadata regression cases cover release
+groups, translation credits, regional/script variants, colored SDH and commentary;
+names never change automatic selection or forced-subtitle disposition.
+Colliding subtitle labels first expose known format differences, such as SRT,
+ASS or WebVTT. Codec aliases normalize to the same format, and missing/unknown
+formats are not invented. Labels still identical after that gain a localized
+track-number suffix. This applies to primary and secondary subtitles, including
+the native mobile menu; unique names,
+selection IDs, preferred-language ordering and external-subtitle markers are unchanged.
+This keeps the useful title/language/format distinction found in
+[Kodi](https://github.com/xbmc/xbmc/blob/master/xbmc/video/dialogs/GUIDialogSubtitleSettings.cpp)
+and [mpv](https://github.com/mpv-player/mpv/blob/master/player/lua/select.lua)
+without adding format noise to every subtitle row.
+Native subtitle renditions also reserve original names before numbering duplicates,
+so a title such as `English 2` cannot collide with a generated suffix.
+Source version tags are deduplicated only when actually shown in the label; conflicting
+source/display metadata is preserved, not interpreted as a correction or a language.
+Explicit audio-description flags from Plex, Plozzigen and native local audio
+selection appear as `Audio Description`, independently of commentary. Jellyfin/Emby
+titles remain intact; their current stream DTOs do not expose a separate equivalent
+flag, but direct Plozzigen demuxing retains the container disposition.
+MP4 stream `title`, `name` and custom `handler_name` values are resolved in the
+engine, not guessed in the app. Muxer defaults such as `SoundHandler` and
+`SubtitleHandler` retain generated fallback labels.
+
+`TrackMenuBuilderTests.testSampledServerMetadataHasDistinctLabelsAndStableSelections`
+accepts a private normalized corpus through `PLOZZ_TRACK_METADATA_CORPUS`; it
+checks audio and both subtitle menus in four locales without changing selection.
+The corpus must contain track metadata only, never tokens, server URLs, media paths
+or item identifiers. Do not commit personal-library samples or rendered output.
+The small `track-names.mp4`, `track-metadata-name.mp4`, `track-defaults.mp4`
+and `track-names.mkv` fixtures
+contain 0.2 seconds of generated silent AAC and the original cue
+`Track metadata fixture.` They verify actual demuxed names, default handlers and
+accessibility flags without downloading copyrighted media.
+`track-name-collisions.mp4` repeats the same original cue on three subtitle tracks
+to cover native rendition names that collide with numeric suffixes.
+Explicit French audio/subtitle version tags (`VFQ`, `VFF`, `VFI`, `VFB`, `VQ`, `VOF`,
+`VOQ`) survive generated server titles, matching-track provider enrichment, and
+app-locale changes. These are source-authored community conventions, rendered
+verbatim, not codec names or proof of a particular dub inferred from `fr`.
+For example, `fr` plus `VFQ` and DTS six-channel metadata becomes
+`French (VFQ, DTS 5.1)`. A container's existing version tag takes precedence over
+conflicting provider hints. Release-wide counts such as `VF2`, subtitle labels
+such as `VOSTFR`, and encoder-name substrings do not identify an audio version.
+
+Audio and subtitle display preserve explicit BCP 47 details, including Brazilian/European
+Portuguese (`pt-BR`/`pt-PT`), Latin American/Spain Spanish (`es-419`/`es-ES`),
+Canadian/France French (`fr-CA`/`fr-FR`), and Cantonese (`yue`/`zh-yue`).
+If the OS collapses an explicit tag such as Mandarin `cmn` to a macrolanguage
+name, the supplied tag remains visible. Script subtags describe writing, not
+proof of an audio dialect; generic `zh`, `fr`, `es`, or `pt` never acquires an
+inferred regional version. Language matching, preferred ordering, selection IDs,
+and automatic track selection are unchanged. Locale extensions such as calendar
+preferences are not track-language details. This preserves metadata actually
+supplied by the provider/engine, not distinctions missing from that metadata.
+Primary and secondary subtitle menus retain these distinctions together with
+localized Forced, SDH, Commentary, and auto-detection qualifiers and bitmap format
+hints. For example, two forced French tracks titled `French (VFF)` and
+`French (VFQ)` remain distinct as `French (VFF, Forced)` and `French (VFQ, Forced)`.
+Plex and Jellyfin/Emby preserve version tags from raw titles when their generated
+display titles omit them; matching provider tags also fill engine-label gaps.
+The secondary menu enriches only its presentation, without changing eligibility.
+
+Conventions: [French version tags](https://github.com/TRaSH-Guides/Guides/blob/master/includes/cf-descriptions/french-vfq.md),
+[BCP 47 language tags](https://www.w3.org/International/articles/language-tags/),
+and [Matroska language handling](https://mkvtoolnix.download/doc/mkvmerge.html#mkvmerge.language_handling).
+
+Audio labels retain per-track codec profiles and confirmed spatial-format flags:
+for example `Dolby TrueHD Atmos`, `Dolby Digital+ Atmos`, or
+`DTS-HD MA + DTS:X IMAX`. These identify the encoded source independently of
+device capabilities, spatial-rendering preferences, and the active output path.
+Plain channel audio keeps its codec and channel layout; unavailable profiles
+fall back to the known codec rather than inferring a richer format.
 The Aether adapter's native-bypass track list also retains observed media subtype
 and channel information from the already-playing asset, rather than manufacturing
 language-only tracks. Single tracks are exposed as metadata without offering a
 redundant switch. Synthetic native-selection IDs remain separate from provider
 IDs and still route through AVPlayer's own selection group or muxed tracks.
 
+Live TV channel selection does not display an "Opening [channel]" toast in the
+guide or player. Existing in-player loading indicators, playback errors, retry
+actions, and cancellation on navigation remain unchanged.
+
+SwiftUI video containers defer attachment when their replacement host is
+offscreen and the engine's output is already windowed. The replacement claims
+that same output when it enters a window. This prevents controller preparation
+from stealing a visible renderer; initial
+unattached outputs can still mount before playback becomes ready. Once the new
+host owns the windowed output, updates to an outgoing label cannot steal it back
+during its removal animation.
+When native fullscreen playback enters Multiview, a temporary, noninteractive
+window host carries the same live renderer across cover dismissal. The inline
+host must be windowed, laid out at full size, and have a visible presentation
+layer before the resize begins; a task yield alone is not a presentation boundary.
+Subsequent native card focus/layout changes keep that host and renderer together.
+A rejected Multiview request restores the inline output; cancellation
+releases the handoff without starting Multiview. Focus spacing outside each Multiview picture
+is transparent, so an inset does not mask the main picture with a black border.
+Multiview startup uses an opaque, shimmering picture-sized skeleton, including
+engine initialization and the wait for the first frame. The skeleton lives
+inside the native video card's inset and clipping boundary, never across its
+transparent focus clearance. The renderer remains mounted underneath it so
+readiness does not depend on showing the output first. Interrupted and paused
+states retain their status UI without an animated loading skeleton; fullscreen
+and inline-preview startup treatment is unchanged.
+
+The retained channel engine keeps output muted until the current source has
+finished loading and its first-frame signal permits presentation. Scheduled
+programme boundaries and live-clock reconciliation close the same gate; decoder
+playback continues underneath it. Readiness changes are pushed immediately, not
+delayed until the watch-reporting timer. Readiness never overrides the requested mute,
+pause intent, or multiview audio owner. Confirmed audio-only output uses its own
+readiness signal; external playback retains the engine's receiver-readiness
+contract rather than waiting for a local video layer.
+
+On tvOS, opening a fullscreen HDR channel uses the same probe-aware fade as
+movies and episodes. The local veil reaches black before enabling display
+matching; playback and display-settle signals govern its reveal, with the
+existing bounded fallback. Returning to the guide fades the player first, then
+engages the root display veil before restoring fixed-output preview playback.
+The retained preview clears its local exit veil after collapse. Profile
+dynamic-range and frame-rate fade preferences apply; guide channel browsing,
+secondary multiview panes, and mobile playback do not acquire an HDMI veil.
+Ready SDR preview/fullscreen transitions still use the in-place engine path.
+Known SDR entry and exit use only the existing **Frame rate** fade preference,
+not the **HDR & Dolby Vision** preference, unless replacing HDR output. Both
+preferences retain their existing defaults; neither changes the Apple TV's
+system Match Content settings. Frame-rate entry has a two-second safety cap.
+Unknown incoming sources retain the conservative dynamic-range veil; an old
+channel's SDR range is not evidence about the new channel. Engine correction of
+an SDR hint to HDR can still protect the actual range switch.
+Live loads publish generation-fenced source range after probing and when native
+HLS discovers its video description later. The native mount's provisional SDR
+default is not evidence; confirmed source facts and display-settle notifications
+resolve the probe-aware veil, with the bounded timeout as fallback.
+
 Mobile transport buttons, timelines, and tabs use native **clear** Liquid Glass,
 without tint or a colored backing. Like AVKit video chrome, their symbols and
 progress remain white in both appearances. Mobile Live TV's top presentation
 group contains only available Picture in Picture and AirPlay controls, with no
 separate Stop button. Pause/resume, player dismissal, and session cleanup retain
-their existing behavior. Playback options, track selection, and multiview sit
+their existing behavior. When playback is behind live, a separate **Jump to live**
+button returns to the live edge and disappears. Scheduled channels use **Jump to
+now**. In landscape the button sits immediately before the playback menus.
+Playback options, track selection, and multiview sit
 at the bottom trailing edge above the timeline. Portrait keeps the title on its
-own row above those actions; track menus open upward without covering the seek
+own row above a single options menu; track menus open upward without covering the seek
 bar. The controls scrim dims the video
 beneath the transport as well as the edge chrome, so white scenes remain legible
 without coloring the glass itself. Mobile Info, Cast, and Live TV Info/On Now/Guide
@@ -342,7 +812,13 @@ badge during transient phases and while paused at the edge, retaining its
 localized layout space so the header and timeline do not shift.
 VOD and Live chrome use the larger of the
 window safe area and native edge margins (21 horizontal, 24 vertical), rather
-than adding the two. Adjacent
+than adding the two. When UIKit identifies a landscape corner occlusion on a
+phone with a one-sided safe inset, main and Live use the ordinary margin on
+unobstructed rows. Close moves inward when its corner is occupied. The timeline
+keeps both time labels aligned with the title and options; if its 44-point hit
+area meets a lower camera corner, it rises just enough to clear it. Video is not inset.
+Compact Live TV controls do not reserve fullscreen camera clearance.
+Without that geometry, the controls keep the conservative safe margins. Adjacent
 routing and playback-option controls share one untinted glass capsule while
 retaining independent actions. Grouped children have no individual glass
 backgrounds or circular clipping, including UIKit menu buttons; Close and the
@@ -381,7 +857,10 @@ cancelling a scrub restores the controls. TV's remote scrub presentation is unch
 Double-tap skip, speed, and unavailable-level feedback are Plozz components
 using native media glass and SF Symbols, not stock AVKit HUDs. They share the
 transport's foreground pairing: light ink on native media glass in either theme,
-theme-aware ink on the reduced-glass fallback.
+theme-aware ink on the reduced-glass fallback. A press that lands on the Skip
+button belongs to it, never to the shortcut surface, so it cannot become a
+±interval skip or pair into a double-tap; shortcuts stay live everywhere else
+while that button is visible.
 
 ## Skip-marker timeline
 
@@ -399,6 +878,39 @@ delay, including the credits-based Up Next countdown when autoplay is enabled.
 Countdown deadlines and rings share that duration and remain tied to playback
 time, preserving pause, seek-entry, dismissal and focus behavior.
 
+Server markers are authoritative per kind; community markers only fill kinds the
+server does not report (IntroDB first, then TheIntroDB for gaps). A server window
+is never extended or replaced by a community report, and overlapping reports are
+not unioned into a new one.
+
+Every marker passes one coverage policy before it can drive the player
+(`SegmentPlausibility`, shared by server and community lists): a segment may
+cover at most half the known runtime, only an opening (`intro`, `recap`) may sit
+inside the opening, and an opening may not reach the final frame. A marker that
+fails is absent entirely — no button, no automatic skip and no Up Next window —
+so a server outro running from an intro's end to EOF cannot turn Skip into a jump
+through the episode. Contiguous same-kind pieces are coalesced (a server can split
+an intro at a chapter boundary), while exact duplicates collapse and windows with
+a real gap — a scene between credits — stay separate.
+
+One press, or one automatic skip, moves to that window's end and retires it for
+the rest of the load. Consumption is per window, not per report id, so markers
+re-published under another id cannot bring the button back, and re-entering the
+window by seeking never offers it again. A skip's own landing offers nothing until
+playback has moved the opening grace window into whatever begins there, so a
+marker starting where the skipped one ended cannot appear as a second press of the
+same gesture.
+
+Separate credits windows remain separate: a mid-credits scene is not a duplicate
+marker. Up Next owns only a credits window that reaches the known playback
+duration. A finite earlier window retains its normal Skip Credits behavior and
+lands at its own end; neither a short unmarked tail nor a missing scene marker
+justifies skipping to the next item. Natural EOF still follows episode/playlist
+autoplay preferences. Unknown duration defers the credits-based handoff.
+Exact duplicate ranges collapse, and only directly abutting same-kind pieces
+coalesce; windows with a real gap stay separate, and none of this overrides a
+kind's Off/manual/automatic setting.
+
 The on-demand and Live touch timelines keep the native glass surface continuous wherever
 segment cuts would strand tiny pieces. Each uses its measured track width, not
 orientation or device type: a cut needs enough room on both sides for the
@@ -407,8 +919,15 @@ marker or short unmarked interval are omitted, including near the track ends.
 The same threshold applies at rest and while dragging, so touching does not
 change which cuts appear. Wider layouts retain cuts wherever they fit.
 
-Marker ranges are never enlarged or retimed; skip behavior, linear seeking, and
-existing touch targets remain unchanged. On iPhone and iPad, progress is shown
+Segment marks are guaranteed independently of that cut threshold: a dedicated
+overlay draws one gap per segment, floored to a legible minimum width, so a short
+intro (~1% of a long episode) is still visible even though the cut mask omits it.
+The overlay only floors subpixel widths; wider segments keep their proportional
+width. The player's secondary line uses the app's separator (`S2 · E2 · Title`),
+never a comma.
+
+The timeline does not enlarge or retime normalized marker ranges; linear seeking
+and existing touch targets remain unchanged. On iPhone and iPad, progress is shown
 only by the advancing fill, without a vertical playhead at rest or while dragging.
 The track is 8 points tall at rest and 20 while dragging. The dimmer buffered or
 aired fill remains behind it. Live preserves programme timing, rewind availability,
@@ -423,14 +942,21 @@ drags seek on release. Channel/source changes and overlay teardown cancel pendin
 preview work and discard outgoing frames.
 
 Native HLS previews use bounded segment prefixes, not a second persistent player.
-Channel headers are restricted to their original origin; foreign-origin redirects
-and unsupported encryption/layouts omit the preview without affecting playback.
+Relative playlist URLs resolve against the final serving URL after redirects.
+CDN requests and redirects retain User-Agent, Referer and Origin; credential
+headers remain restricted to the original origin. Every redirect hop rejects
+HTTPS-to-HTTP downgrades, including after an initial HTTP request upgrades.
+If a selected preview rendition is refused, subsequent previews can follow
+AVPlayer's playing playlist; cancelling a request does not discard that selection.
+Unsupported encryption/layouts omit the preview without affecting playback.
 Byte-range playlists and playlists switching initialization maps currently omit
 previews. Segments are capped at 2 MiB, playlists at 512 KiB, initialization files
 at 2 MiB, and identity keys at 16 bytes. Truncated frames are never intentionally
 shown; unsupported or oversized resources leave the preview unavailable.
 The decoded-image cache holds 32 entries; init and key caches each hold at most
 eight. Reduced-transparency/performance presentation retains the non-glass frame.
+On iPhone/iPad, Live TV previews are capped at 180 points wide and still shrink
+to fit small viewports. VOD retains its existing 360-point maximum.
 
 ## Playback completion reporting
 
@@ -548,27 +1074,55 @@ Clock formatting follows the device locale/time-zone conventions. The clock only
 ticks while requested, and mobile label slots retain their width during scrubbing.
 Live TV retains its existing guide-based program times.
 
+The TV timeline isolates text measurement in `PlayerTimelineLabels`: unchanged
+display strings reuse their label view, while its geometry continues observing
+fractional playhead updates. Text, clock-mode, model-identity, and Dynamic Type
+changes still refresh the labels. Controls stay mounted and keep their existing
+reveal/fade behavior; hidden playback positions are not frozen.
+
 ## Mobile player orientation
 
 The iPhone full-screen on-demand and expanded Live TV players read the active profile's
-`PlaybackSettings.orientation` (Landscape by default, Auto, or Portrait).
+`PlaybackSettings.orientation`: Follow device orientation, Portrait, Landscape auto
+(the default), Landscape left, or Landscape right, in one flat native settings menu.
 The existing playback-settings store and profile snapshot transfer carry the
 preference; it has no effect on iPad, tvOS, or inline trailers.
-Landscape permits either sideways direction. Compact iPhone browsing stays
+Landscape auto permits either sideways direction and follows stable sideways
+gravity even with iOS Rotation Lock enabled. One shared Core Motion source samples
+at 5 Hz only for the active compact-phone landscape player. Two consecutive
+unambiguous sideways readings are required; upright, face-up/down, and uncertain
+readings retain the current side. Motion data stays in memory and is neither stored
+nor transmitted. Native menu presentation defers side changes; backgrounding,
+dismissal, ownership loss, and other preferences stop motion tracking.
+Fixed left/right choices refer to the top of the phone, not UIKit's oppositely
+named interface-orientation constants. They never follow physical rotation.
+Compact iPhone browsing stays
 portrait, including the guide when no eligible preview is playing. Expanded phone
 windows with at least 600 points in both dimensions follow system rotation,
 like iPad; opening a larger display does not itself request fullscreen playback.
 
 Orientation is configured only in Settings > Playback, never in the player's
-options menu. Explicitly saved Auto or Portrait choices remain unchanged when
-loading existing profiles; older settings without an orientation use Landscape.
-The on-demand cover stays portrait while loading versions and showing
-the first-use question or pre-play version picker. The saved rotation preference
-activates only after that gate completes; cancelling or failing the gate never
-forces rotation. Episode/version handoffs retain the preference once playback starts.
+options menu. Existing persisted `auto`, `portrait`, and `landscape` values remain
+compatible; `landscape` now displays as Landscape auto. Older settings without an
+orientation still use that default. Both fixed directions use the same
+profile-scoped persistence and transfer path.
+The player opens immediately in the saved orientation, before version loading or
+stream preparation. The first-use question and initial version picker use the
+shared chooser directly inside that player, not a second sheet that can rotate
+during presentation or dismissal. There is no extra browsing-screen loading overlay.
+No stream or engine opens while a version choice is pending. Cancelling the choice
+closes the player; profile/server session checks still gate playback. Episode/version
+handoffs retain the preference. Loading and ready controls share the same top-leading
+Close button and insets.
 The mobile presentation owner supplies the shared player's dismissal action.
 Failure-screen Back and end-of-playback dismissal use that same owner as the
 mobile X button, rather than a SwiftUI dismiss action outside a SwiftUI cover.
+On compact iPhone windows, closing a landscape player releases its orientation
+policy as dismissal begins. A UIKit transition snapshot preserves the outgoing
+screen coordinates and slides the player away while revealing already-upright
+browsing. Reduced Motion, or an unavailable snapshot, uses the native crossfade.
+Portrait exits retain the native slide transition. An existing native transition
+finishes before dismissal starts; iPad and expanded phone windows keep system rotation.
 
 The actual presented UIKit hosting controller owns on-demand orientations.
 Live TV keeps one window-scoped owner while its destination is active, without
@@ -585,7 +1139,7 @@ the coordinator's current authorization and source checks.
 Native options menus and Custom zoom controls retain the
 expanded player's window restriction, including when a presentation temporarily
 covers its embedded owner; only removing that owner ends its policy.
-Auto follows accepted system interface rotation rather than forcing rotation from
+Follow device orientation follows accepted system interface rotation rather than forcing rotation from
 sensor notifications, preserving system rotation lock. Playback ownership never
 applies a different window's or inactive profile's preference. Closing on-demand
 playback also restores the browsing policy.
@@ -593,8 +1147,11 @@ iPad follows system rotation and offers no app orientation control, preserving
 multitasking. iPadOS refuses forced Portrait/Landscape changes in multitasking
 mode, even when a window fills the display.
 Rotation waits for native presentation transitions, including dismissal of the
-pre-play sheet, rather than racing the selection continuation. Transient geometry
-rejections are logged and retried at most three times within a bounded reconciliation
+pre-play sheet, rather than racing the selection continuation. A pending
+presentation permits only the requested playback orientations plus the current
+interface orientation needed to finish an existing sheet. Opening a native audio
+or options menu must not unlock portrait during landscape playback. Transient
+geometry rejections are logged and retried at most three times within a bounded reconciliation
 window; they never replace the saved preference with Auto or show a window-management
 toast. Dismissal, ownership changes, and newer requests cancel stale reconciliation.
 Returning to the foreground rechecks the active player's orientation.
@@ -660,15 +1217,17 @@ style together, keeping symbols proportional to their labels as text size change
 They do not intercept touches. Live TV supports skips only inside an available
 rewind window, not speed boosting.
 
-Pinch inward for Normal fitting clear of the display cutout. Landscape video
-uses the full display height behind the home indicator instead of reserving a
-bottom strip; portrait keeps the full safe-area inset. Controls and ordinary
-captions retain their safe-area placement. Pinch outward for edge-to-edge Crop. This
-uses the existing session-only zoom state without reloading video or revealing
-the timeline. Authored subtitle geometry follows the displayed picture; ordinary
-captions retain their screen-relative placement. Inline, tvOS, and external
-playback keep their existing geometry. Horizontal seeking on the video surface
-is not implemented.
+In Auto-crop, pinch inward for cutout-safe active-picture fitting and outward for
+screen-edge active-picture fitting. Neither deliberately trims detected picture
+content, though the screen-edge level can extend behind the notch. Outside Auto-crop,
+pinch outward for explicit Crop and inward for Normal's whole-frame safe-area fit.
+Landscape safe fitting uses the full height behind the home indicator; portrait
+keeps the full safe-area inset. Controls and ordinary captions retain their safe-area
+placement. These choices use the existing zoom preference path without reloading video
+or revealing the timeline. Authored subtitle geometry follows the displayed picture;
+ordinary captions retain their screen-relative placement. Inline, tvOS, and external
+playback keep their existing geometry. Horizontal seeking on the video surface is
+not implemented.
 
 Vertical, one-finger swipes in the outer 30% of the video adjust screen brightness
 on the left and **system** volume on the right. The center, horizontal movement,
@@ -828,6 +1387,13 @@ the selected speed without replacing the player. Automatic buffering cannot
 predict an arbitrary encoder pause or compensate for a server that cannot
 sustain playback; this fixture does not validate a real server's capacity.
 
+Converted-stream format inspection waits up to 60 seconds for the current
+AVPlayer item to become ready before starting its five-second track-probing
+window. Cold server encoders must not consume that window before media arrives.
+Failed or replaced items stop the probe; missing formats stay unknown rather
+than being inferred from request flags. This affects measured codec and dynamic
+range reporting, not playback buffering or the server's conversion policy.
+
 Plex renditions opt into a session-scoped keepalive every ten seconds after
 playback starts, including while paused or buffering. It does not depend on
 position changes, scan a library, update watch progress, or scrobble to Trakt.
@@ -843,6 +1409,9 @@ even if the layer does not. PiP continuation and background-audio preferences
 remain independent. Native captions switch drawing ownership for external
 presentation and revert to the shared overlay afterward; stop clears the
 presentation state and detaches the old player.
+Returning after backgrounding restores active PiP to the inline player on iOS
+and iPadOS. PiP opened while browsing in the app stays active; transient
+inactivity such as Control Center does not trigger restoration.
 
 ## Invariants
 
@@ -859,6 +1428,12 @@ presentation state and detaches the old player.
 Plozzigen's Audio **Processing** row samples Aether's active audio pipeline
 label, independently of source-video probe availability. `TRUEHD → FLAC
 bridge` or `TRUEHD → EAC3 bridge` identifies ordinary channel processing.
+For on-demand original-source playback, source audio diagnostics sample the
+confirmed active engine track on every tick, not the initial provider snapshot
+or a pending menu selection. Codec, profile, channels/layout, sample rate, and
+bitrate are replaced together; unavailable properties clear the previous track's
+values. Server-transcoded renditions and live-stream sampling retain their own
+metadata paths. Source-track refresh does not change Processing or Encoding.
 Both TV and mobile also show **Encoding**: **Lossless encoding** for an active
 FLAC bridge, **Lossy encoding** for EAC3 or APAC, **No re-encoding** for stream-copy,
 and **Decoded to PCM** for the software decoder. These display-only descriptions
@@ -868,23 +1443,25 @@ step, not the original recording's fidelity, resampling/downmixing, or the
 receiver's final output. In particular, stream-copy of a lossy source is not
 labelled lossless. The same shared rows follow live pipeline changes on both
 platforms, without changing audio selection or conversion behavior.
-On tvOS and iOS/iPadOS 26+, the profile's default-on **Spatial audio** choice requests a
-device-selected intermediate bed for supported on-demand playback. It defaults
-to 9.1.6; Playback > Advanced offers all five engine layouts. The engine chooses
-24-bit PCM at load, or lossy APAC over AirPlay. Diagnostics label the actual
-rendered PCM pipeline **Rendered to PCM**, distinct from ordinary **Decoded to PCM**.
-This is not a speaker inventory or bitstream passthrough. DTS:X heights require
-7.1.4 or 9.1.6; other layouts retain channel playback. Saved Off choices survive.
-`PlayerViewModel` captures the active preference for initial and handoff loads;
-live streams, shared players, muted previews and unsupported OS versions stay off.
-The engine owns source eligibility and fallback. On these supported platforms,
-software/FEL playback can use the same spatial-audio choice; older OS versions keep channel PCM.
+Height-channel conversion and experimental Dolby Vision FEL reconstruction are
+disabled in load options and excluded by engine package traits. Their controls,
+search results and request fields are removed; legacy saved profile values are
+ignored. Ordinary surround audio, standard Dolby Vision playback and native
+E-AC-3/JOC stream-copy remain unchanged. Software playback uses channel PCM.
+The separate beta-only **P7 FEL → P8.1 conversion** setting defaults on per
+profile. It uses native P8.1 curve folding, not full FEL reconstruction. Confirmed
+FEL playback exposes a session-only override in TV Playback/mobile Video options;
+off reloads at the current position and play/pause intent using HDR10. Unknown P7,
+previews and live playback remain conservative; MEL still converts automatically.
+See [FEL policy](../../docs/playback-engines.md#dolby-vision-fel) for limitations.
+Diagnostic parsing still recognizes historical rendered-PCM and APAC labels;
+those labels do not imply that Plozz enables the corresponding conversion.
 Both native and Plozzigen engines declare multichannel content to the audio session.
 Compatible AirPods use Apple's spatial rendering and head-tracking preferences;
 Plozz does not force either setting or require an AirPods-specific toggle.
 Stream-copy and software-decoding routes retain the engine's own labels.
-The software route's compressed E-AC-3/JOC renderer is also **No re-encoding**;
-it is not mislabeled as PCM or inferred from the source badge.
+If an engine reports compressed E-AC-3/JOC, its label is **No re-encoding**,
+not inferred from the source badge or mislabeled as PCM.
 The row is unknown until the engine publishes a pipeline and follows track
 changes, fallbacks, and teardown. Do not infer it from the Atmos source badge,
 channel count or requested bridge mode, or parse the label to make
@@ -959,6 +1536,13 @@ sessions are not rewound. Paused/recovering heartbeat callbacks cannot report
 false playback at zero, and a stop retains the saved position even after load
 generation invalidation.
 
+On iPhone/iPad, `PlayerSceneLifecycleReader` forwards UIKit lifecycle notifications
+from the player's own window scene, including when a full-screen UIKit host has
+retained an active SwiftUI environment. It detaches with the player and ignores
+other scenes. This is the mobile lifecycle source; the SwiftUI scene observer
+remains the tvOS source. A paused engine released in the background must rebuild
+even when its playback clock still contains the saved position.
+
 Diagnostics resolve the active internal AVPlayer on each sample, including
 Plozzigen player/item replacements. The player buffer, engine cache frontier,
 stall count, and dropped-frame count are separate measurements; unavailable
@@ -968,6 +1552,36 @@ server/network throughput, and encoded stream bitrate is not a network rate.
 The instance counter labels native adapters rather than claiming to count every
 AVPlayer hidden inside third-party engines. New stall records retain measured
 player/engine buffer context in the existing playback journal.
+
+The existing TV overlay and mobile sheet also expose the engine's cached 1 Hz
+statistics: recent (~10 seconds) and session-average **played audio + video**
+bitrate, audio-bridge output bitrate, active video decoder, transferred bytes,
+producer restarts, source/mux/server byte counters, bridge buffer, and resident
+memory. These reads add no network requests or second sampling loop. Missing
+measurements disappear rather than retaining a prior route's values or inventing
+zeroes. Real zero counters remain visible.
+
+The TV panel retains its existing background scrim and avoids live-video
+backdrop sampling. Its glass-like edge is a subtle one-point gradient highlight,
+not a full-panel blur or a bright opaque outline. The highlight stays visible
+around the whole perimeter, with only a slight top-to-bottom variation.
+
+**Audio delivery** maps the engine's typed outcome independently of its decoder
+label: stream copy, converted, decoded to PCM, player-managed, no source audio,
+or audio dropped. No source audio and a failed audio pipeline remain distinct.
+The value clears with the rest of the snapshot on teardown or route changes;
+an unknown outcome is omitted, never inferred from the source codec or receiver.
+
+**Local delivery** is the engine-to-AVPlayer link, never the media server's
+network speed. **Source read rate** measures transfers from the source,
+which can also be a local file. **Read / muxed** lists source bytes then
+mux output bytes; **Local server** lists served bytes and requests. **Mux A/V gap**
+is the producer's audio/video timestamp gap, not measured display/speaker lip sync.
+The remote-HLS bypass does not relabel declared playlist bandwidth as measured
+played bitrate. Native AVPlayer transfers, dropped frames, and stalls sum all
+access-log entries for the current item; the engine's session-wide dropped-frame
+counter takes precedence across its internal item replacements. Engine RSS and
+the app's physical memory footprint are distinct measurements.
 
 Playback diagnostics row labels use the shared app localization catalog on TV
 and mobile. Media filenames, server names, codec identifiers, and the HDR format
@@ -998,11 +1612,15 @@ which can retain duplicate highlights. Mobile adds Zoom Mode to its existing
 native playback menu. Live TV offers the same zoom controls without playback-speed
 changes.
 
-The picker labels Normal as the default; concise names follow Infuse's Zoom Mode
-terminology. Crop enlarges proportionally, Stretch fills both axes without
-preserving proportions, and Custom scales relative to Normal. `VideoPresentationView`
-transforms and clips only the stable video surface, without restarting playback,
-changing the engine layer's gravity, or processing frames.
+Normal fits the entire encoded frame inside the cutout-safe viewport without
+cropping picture content. It uses the largest proportional fit, so height-limited
+videos can leave space before the cutout. Safe bounds come from current view/window
+insets rather than device-model or notch-size constants. TV, inline and external
+surfaces retain their whole-frame fitting; Normal is not every player's default.
+Crop enlarges proportionally, Stretch fills both axes without
+preserving proportions, and Custom scales relative to Normal. For these manual
+modes, `VideoPresentationView` transforms and clips only the stable video surface,
+without restarting playback, changing the engine layer's gravity, or processing frames.
 The subtitle overlay uses the same displayed-video rectangle for source-positioned
 and bitmap cues, including both axes under Stretch; ordinary text size, screen
 position, and transport geometry stay independent. Plozzigen uses the software
@@ -1011,14 +1629,200 @@ back to coded dimensions.
 Authored bitmap clearance maps the image, lower-region envelope, and protected
 artwork boundary through that same zoom/stretch geometry before moving a region.
 
-Zoom belongs to the current player session, not a global/profile preference.
-A new VOD player or a different live channel starts at Normal. PiP and AirPlay retain
+The profile's Default zoom is stored separately for iPhone, iPad and Apple TV.
+It applies to movies, episodes, extras, trailers and Live TV; each platform starts
+with Normal. Older saved Auto-crop defaults and title choices reset to Normal once;
+other modes, Custom percentages and cutout-safe preferences remain intact.
+New explicit Auto-crop choices survive reloads and profile transfer.
+Unsupported engines fall back to Normal without changing
+the saved choice. Unidentified disc-menu timelines retain Normal framing.
+An explicit zoom-mode choice, including Normal or a Custom percentage, is remembered
+per profile and movie/series using the existing title preference store. Auto-crop's
+screen-edge/cutout-safe pinch level instead updates the profile's shared framing
+preference for the current device type. It carries across movies, shows and live
+channels, including titles with an older saved Auto-crop level. It does not change
+the default zoom mode or another device type's framing. Player composition binds
+the profile's existing `PlaybackSettingsModel` to `PlayerVideoZoomModel`; Live TV
+receives that same model through the shell environment. Only presentation choices
+are saved, never detected rectangles. Until the first shared pinch choice, Auto-crop
+defaults to screen-edge fitting. Defaults and temporary
+unsupported-engine fallbacks do not write preferences. Series choices follow later
+episodes and shared external IDs across servers; movie keys use strong external
+IDs with an account-scoped fallback, never title matching. Existing series keys
+and profile-transfer storage remain compatible. Changing a live channel restores
+the platform default rather than the previous channel's manual choice. PiP and AirPlay retain
 their system-owned presentation rather than inheriting this local viewport crop.
+Both production playback engines offer **Auto-crop black bars**, with no
+menu subtext. A shared, cancellable
+AetherEngine analysis measures encoded borders in SDR, HDR10/HDR10+, HLG, and
+Dolby Vision output, using existing frames
+and no additional decoder or stream. It scales and translates the original surface
+uniformly, including asymmetric borders, and caps automatic magnification at 2x.
+The detected picture maximizes the screen-edge viewport by default, preserving its
+aspect ratio without deliberately trimming picture content; the notch/Dynamic Island
+can obscure part of that larger picture. In Auto-crop, pinching inward fits the same
+active picture inside the cutout-safe viewport; pinching outward restores screen-edge
+fitting without switching to Crop. Both levels preserve the entire detected picture,
+including on videos without encoded bars. Height-limited videos can have the same size
+at both levels. In landscape, the home-indicator strip does not reduce video height.
+Encoded black borders do not consume usable width. Outside Auto-crop, pinching outward
+selects explicit Crop and pinching inward restores Normal, never Auto-crop.
+Controls and subtitles keep their existing placement.
+On TV and inline surfaces without safe-area fitting, the picture uses the full viewport.
+Aspect-ratio differences can still leave bars.
+Before the first confirmed measurement, Auto-crop fits the whole frame to its selected
+viewport. Once confirmed,
+framing survives seeks, buffering and unavailable/expired detector evidence for
+the same source and display aspect ratio. Fresh confirmed measurements, including
+full-frame evidence, replace it without an intermediate Normal zoom. A separate
+source identity changes on loads/stops, not on seeks or analysis resets; source
+replacement, known display-aspect changes, unsupported/invalid measurements and
+presentation teardown clear retained framing. Engines without a source identity
+do not retain unavailable evidence. Missing or provisional dimensions during a
+seek keep the last confirmed display aspect until playback is ready. Sparse detection
+can miss changing edge content; fitting is best effort, not a guarantee against
+clipping tickers or burned-in captions. Dark or uninformative frames cannot
+establish a crop. Native quarter-turn rotation and mirroring map measurements
+into the upright display canvas after clean-aperture/sample-aspect correction.
+Multiview keeps its original slots and defaults; visible
+panes share the engine's bounded four-session analysis admission.
+Native analysis borrows the decoder's original pixel format and size. A bounded
+worker converts its private copy to CPU-readable NV12 for SDR, P010 for PQ/HLG,
+and half-float RGB for Dolby Vision or unknown source color. It does not
+interpret a Profile 5/10 IPT base layer as ordinary PQ luma or change playback
+color settings. Output selection follows source color, not the panel-clamped
+playback badge, including on SDR displays. `NativeVideoEngine` receives the shared analyzer from both app
+composition roots; its default/test initializer remains explicitly unsupported
+without injection. Load, seek, teardown and PiP release or invalidate analysis.
+Pixel-format and size requirements must not be placed on the AVPlayer output:
+they also renegotiate the displayed format and can persist after the tap is
+removed, affecting HDR/Dolby Vision presentation. Private conversion runs at the
+2 Hz analysis cadence into a buffer no larger than 320x180; the borrowed decoder
+buffer can remain full resolution. Its original display canvas is retained
+separately and size changes invalidate pending results. Disabling analysis
+releases only its owned tap.
+
+Manual movie audio selections now remember the normalized language per profile
+and movie, independently of the per-series audio-memory toggle. Returning playback
+re-matches that language against the current file's tracks, falling back to the
+provider default when unavailable. Audio memory captures the outgoing title before
+a server-rendition replacement clears its request. Series audio/subtitle toggles
+and series-only subtitle memory are unchanged. Storage is read during playback
+setup and written for manual choices, not during frame analysis or seeking.
+Server-rendition selection receives remembered language before requesting the
+stream, using the selected title's metadata or a passive provider metadata read
+when an ID-only caller has no item. Next-title preparation must not reuse the
+outgoing title's preference metadata.
+
+Dark picture content can establish a crop without reaching a bright-scene
+average: the detector also accepts a broadly supported center distinguishable
+from black, with a candidate spanning at least half the frame. Near-black noise
+and isolated dim objects remain unknown. This does not shorten the existing
+three-sample, one-second confirmation or hold playback for detection.
+When a dark foreground hides the center but distinguishable content reaches
+all four sampled edges and covers at least a quarter of the frame, the detector
+can confirm full frame instead of losing confidence. This additional path can
+only preserve or expand to full frame; it never authorizes an inward crop.
+Detector evidence still expires normally, and seeks/source changes still reset it;
+the presentation's retained framing is not a fresh detector observation.
+
+The hosted active-picture regression uses original `testsrc2` fixtures at
+320x180/24 fps for 18 seconds: 28-pixel top/bottom bars before 8 seconds and
+from 14 seconds onward, with full-frame content between. The MP4 uses libx264,
+CRF 28 and yuv420p; its WebM counterpart uses libvpx-vp9, CRF 32. Tests require
+real native/software detection, continuous cropped presentation through forward/
+backward seeks, positive expansion to full frame, pause, and retained surface
+identity. The native case serves the MP4 stream-copied as finite loopback
+HLS, avoiding an assumption that the simulator supports hardware H.264 decoding.
+Checks seek to a known starting position after loading so startup latency cannot
+consume the short test clip. The performance lab uses the existing 1080p fixture
+packaged the same way, with players paused until all have loaded.
 Hosted coverage includes synthetic 4:3 video and a 720x576 H.264 fixture with 64:45
 sample aspect (16:9 display), checking real native and software playback without
 changing the video layer, playback position, or subtitle text geometry.
+The rotated fixture is a stream copy of `active-picture.mp4`, produced with
+FFmpeg `-display_rotation 90 -i active-picture.mp4 -map 0:v:0 -c copy
+active-picture-rotated.mp4`. Native analysis must retain the original upright
+aspect and crop axis while retaining the native output's original dimensions.
+Engine regressions bound the worker-owned buffers to 320x180. A hosted HDR
+regression compares the same displayed frame's native format and linear RGB
+before, during, and after analysis, including the half-float conversion policy.
+This does not substitute for physical-device Dolby Vision output verification.
+
+`active-picture-dark.mp4` is an original six-second SDR fixture with an animated
+dim pattern and 28-pixel top/bottom bars. The native and software hosted regression
+requires a crop within three seconds of the first displayed frame, without a
+bright scene or paused playback. Generate it with FFmpeg:
+
+```sh
+ffmpeg -f lavfi -i "nullsrc=s=320x180:r=24:d=6,geq=lum='if(between(Y,28,151),28+mod(X+Y+N,6),16)':cb=128:cr=128" \
+  -an -c:v libx264 -preset fast -crf 12 -pix_fmt yuv420p -color_range tv \
+  -colorspace bt709 -color_primaries bt709 -color_trc bt709 -movflags +faststart \
+  active-picture-dark.mp4
+```
+
+`testLocalSDRActivePictureSceneReproduction` accepts a private JSON configuration
+file through `PLOZZ_CROP_MEDIA_REPRO` (`TEST_RUNNER_PLOZZ_CROP_MEDIA_REPRO` from
+xcodebuild), containing a local-file or loopback `url` and a `start` time in
+seconds. It uses Plozzigen for SDR media, including HEVC files that the native
+player rejects, and retains twelve seconds of timestamped measurement/unknown
+states and the selected engine route. It checks initial recognition within three
+seconds and advancing playback, not uninterrupted confidence or HDR color
+fidelity. Inspect the entire trace for subsequent confidence loss. Credentials,
+source media, and captures stay outside source control; the operator owns and
+closes any authenticated loopback source.
+
+`testLocalActivePictureVariety` extends real-media coverage through a private
+`PLOZZ_CROP_VARIETY_REPRO` JSON file (`TEST_RUNNER_PLOZZ_CROP_VARIETY_REPRO` from
+xcodebuild). Supply an array of at most twelve cases, each with `label`, local-file
+or loopback `url`, `start` seconds, `videoRange` (`SDR`, `HDR10`, or `DolbyVision`),
+and independently inspected `references`. Each reference contains `from`/`to`
+seconds relative to `start` and a normalized `[x, y, width, height]` `rect`.
+Use reference intervals only where source framing is known; leave transition
+intervals out rather than pretending sparse screenshots locate an exact cut.
+Verify source signaling independently and do not derive reference bounds from
+the detector being tested.
+
+The twelve-second replay retains per-case first-frame readiness, first accurate
+measurement, advancing source positions, unknown states, geometry and route.
+It checks recognition within three seconds of enabling analysis, boundary error
+within 0.015 per normalized edge, no clipping beyond that tolerance, no later
+confidence loss, at least one accurate sample in every reference interval, and
+more than ten seconds of playback progress. Each case runs
+even if an earlier case fails. Native presentation additionally compares a paused,
+same-time displayed frame before, during and after analysis using the HDR
+regression's readback helper; software presentation explicitly reports that
+native color readback is unavailable. This is neither a startup-overhead benchmark
+nor physical-device Dolby Vision verification. Preserve complete traces, including
+failed cases; a single early correct measurement does not establish stability.
+Reference thumbnails may be brightened privately to inspect boundaries, but
+their appearance is not evidence of HDR color fidelity.
+
+The optional `testLocalPictureRelativePGSStaysInsideMeasuredPicture` hosted
+test accepts an authorized local HDR clip through `PLOZZ_PICTURE_MEDIA_REPRO`
+(`TEST_RUNNER_PLOZZ_PICTURE_MEDIA_REPRO` when invoking xcodebuild). It verifies
+decoded dialogue bitmap geometry and actual painted caption bounds against
+the measured picture, then verifies that clearing the overlay removes that text.
+Media and captures stay outside source control. Validation covered real SDR,
+HDR10 and Dolby Vision Profiles 5/8 on macOS, including 4K HDR10 and Profile 8,
+and real HDR10/PGS presentation on both simulators. HLG has pixel-buffer
+regressions, not real-source playback evidence; simulator/macOS results do not
+establish physical-device HDR output or energy use.
 
 ## Subtitle appearance
+
+**Position** selects **Bottom of screen** (the existing default) or
+**Bottom of video**. **Vertical offset** keeps the existing percentage adjustment
+measured upward from that reference's bottom. Saved choices, offsets, and the
+default are unchanged; these labels do not introduce new placement presets.
+This lives in the existing profile-scoped subtitle style, including the separate
+Live TV style. Bottom of video uses measured active bounds when available and otherwise
+the displayed video, intersected with the visible viewport. It does not change
+source aspect ratio or resize authored subtitle canvases. Ordinary dialogue and
+dual lanes use that reference; eligible lower bitmap regions move together
+without scaling, while fixed artwork and independently source-positioned text
+retain their authored placement. Font/color controls do not apply to bitmap
+subtitles; their player editor exposes picture positioning instead.
 
 `Match Apple TV Subtitle Style` (`Match Device Subtitle Style` on mobile)
 reads this device's subtitle appearance through
@@ -1136,6 +1940,28 @@ cue data; backward seeks rebuild the retained event set. Track changes, Off,
 native presentation and teardown fence late output. The existing overlay retains
 video-rect mapping, HDR brightness and control avoidance.
 
+`ASSSubtitleRendererTests` checks authored sign starts and ends at millisecond
+boundaries. A deterministic test feeds the real pacer, render-lead estimator
+and libass a virtual clock with 50 or 100 ms per render at 23.976 and 60 Hz.
+Each completed bitmap must match the cue at its delivery time; a previous
+bitmap may remain visible between completions. This models steady render
+cost, not a particular device, async driver scheduling or screen composition.
+Its opt-in `testLocalASSDriverBoundaryTiming` probe
+(`PLOZZ_ASS_TIMING_PROBE=1`) warms the rasterizer, then measures callback delivery
+for short original vector cues at simulated 23.976, 24 and 60 Hz tick cadences.
+It reports every boundary and rejects missing transitions; it is not a
+wall-clock latency gate. These measurements exclude video decoding, SwiftUI
+overlay composition, physical display latency and cold font initialization.
+Passing parser/rasterizer tests alone does not establish frame-accurate A/V sync;
+small reported offsets require the affected media and a rendered comparison.
+The app-hosted `NativeSubtitlePresentationTests.testLocalASSVideoBoundaryTiming`
+probe (`PLOZZ_ASS_VIDEO_TIMING_PROBE=1`) uses `Fixtures/ass-sync.mkv`: an original
+640x360, 24 fps black video with a green reference square and a separate white
+ASS vector square, both active for the first half of seconds 2 through 9.
+It logs overlay delivery against the engine clock. A screen recording must
+compare the two squares' actual painted transitions separately; the callback
+log is not proof of compositor timing or physical Apple TV/iPhone behavior.
+
 Authored ASS frames keep clearly separated upper and lower artwork in separate
 bitmap regions. The upper region stays fixed; only a lower region that intersects
 visible controls can lift. Its clearance envelope absorbs small animated
@@ -1221,12 +2047,19 @@ while the title fades, preventing subtitles from dropping into its empty space.
 The normal transport reserves its full title-to-tabs band, including gaps between
 controls: a short title must not let centered captions stay beneath the timeline.
 Info/Cast and full appearance editing release that reserved clearance.
-On iPhone and iPad, the visible center transport also reserves the band down to
-the bottom controls, so lower captions move above the play/pause and skip row
-rather than into its buttons or the space below it. Top controls are measured
-separately. A mobile caption moves only when the complete text/dual-lane block
+On iPhone, iPad and Mac, the visible center transport reserves only its actual
+buttons, leaving the space between them and the bottom controls available.
+Captions move only enough to clear intersecting controls, not automatically
+above the center row. Top controls are measured separately.
+A mobile caption moves only when the complete text/dual-lane block
 or movable artwork fits above every obstruction; otherwise its original
 position is retained, without a partial lift. TV placement is unchanged.
+**Auto-Move Away from Controls** in subtitle appearance enables this adjustment by
+default. Turning it off preserves the chosen text, dual-lane and movable bitmap
+positions while controls are shown. It does not change font/style matching to
+the device, authored fixed artwork, or the user's saved offsets. The preference
+uses the existing profile style, including independent Live TV overrides, and
+is available in Settings and the in-player editors on both platforms.
 Hiding the controls restores normal placement; style
 editing, previews, and saved position values are unchanged. The normal dialogue
 percentage remains screen-relative. Captions already encoded into video pixels
@@ -1533,6 +2366,17 @@ and stale seek completions cannot finish a newer target. A failed/cancelled load
 cannot report playback started while its failure callback is still queued.
 Terminal managed-stream failures stop the decoder so audio cannot continue
 behind the error screen and immediately release the owned server rendition.
+An AVFoundation media-services reset (`-11819`) rebuilds the same engine once,
+without changing codecs, renegotiating the source, or releasing its server
+rendition. Recovery keeps the actual playhead (or pending seek), pause, speed and
+track choices. Stop, a newer load, duplicate callbacks and a second reset cannot
+resurrect or repeatedly rebuild playback. Until the replacement presents video,
+another failure is terminal rather than a codec/transcode cascade; a recovered
+session retains its normal compatibility handling. Audio-session setup failures retain
+their OSStatus domain/code and the specific audio-session error message.
+Native media-selection reads run off the UI actor with two reader lanes per
+library and a half-second waiter deadline. Timeout is not an empty selection,
+and blocked native workers keep their lane until they actually return.
 Retry/dismiss joins that same cleanup instead of issuing duplicate stop requests.
 Retry copy names the codec requested, not an encoder we cannot prove ran; the
 negotiated codec is shown separately and all attempts are journaled.
@@ -1666,6 +2510,23 @@ position while leaving UIKit in charge of input and menu focus. The tvOS app
 declares both remote profiles and separate micro gamepads in `project.yml`;
 newer directional remotes keep their native press behavior.
 
+On-demand tvOS playback distinguishes short directional clicks from a 0.4-second
+hold. Short clicks retain the profile's skip intervals; holding Left/Right (or a
+first-generation touchpad edge) starts continuous preview scanning. Releasing
+does not stop it. Further same-direction clicks increase the scan level through
+8, 24, 48, 96, 192, 384, 768 and 1536 content-seconds per second. Opposite clicks
+reduce the level, then reverse at level 1 without discarding the preview position.
+The timeline shows a directional circle beside the timestamp, with levels 2–8
+outside it; rewind feedback sits on the left and forward feedback on the right.
+
+Scanning moves only the existing scrub timeline and thumbnail preview, not the
+engine's playback rate or seek queue. Select commits once and preserves the
+pre-scrub play/pause intent; Play/Pause commits and resumes. Back cancels without
+seeking. At either endpoint the preview stops and waits for confirmation or a
+direction change. A deliberate horizontal swipe takes over from scanning using
+the normal swipe-commit behavior. Cancelled holds, app inactivity, focus handoff,
+and player teardown stop the scan task. Live TV and mobile gestures are unchanged.
+
 `RemoteClickInterpreter` resolves left/right edges to the configured skip
 intervals and keeps center clicks as Select. UIKit press timestamps use uptime,
 while GameController snapshots use Unix time, so event matching converts clocks
@@ -1708,26 +2569,22 @@ There are no internal cutouts, patterns, or user-selectable marker styles.
 The base 4pt gaps are centered on the original time boundaries. Each half-gap is
 capped at a quarter of either neighboring section's width so a tiny range is
 not consumed or enlarged. Outer timeline ends remain unchanged.
-Both sides of each gap use the narrower rendered section to size their corners,
-with a small amount of extra rounding capped at half the bar height. Slivers use
-slightly taller elliptical corners without exceeding their available width;
-wider neighbors can use the corresponding circular corner. Base facing corners meet
-the gap at the same height. Roomy joins retain full rounding, and rounding never
-removes a divider. Live programme tracks use the same geometry.
-On TV, constrained corners grow vertically from the 12pt resting geometry as
-focus expands the bar to 20pt. Their horizontal width stays constrained while
-the curves retain their resting proportions instead of becoming squarer.
-The wider side of a tight join gains up to 1.5pt of additional rounding during
-focus, without changing the smaller piece or exceeding a fully rounded end.
-Tight TV joins also gain up to 1pt of optical spacing at rest, increasing to
-2pt at full focus, taken only from the wider neighbor. The smaller piece stays
-in place, and the original time boundary remains inside the gap. Spacing tapers
-away at fully rounded joins and is bounded so a section contributing to both
-neighboring gaps retains at least half its width. Neither seek positions nor
-marker times change.
-Full-radius roomy joins are unchanged.
-Touch timelines retain their existing minimum-width suppression, so expanding
-the bar does not introduce tiny sections or change its established rounded caps.
+Only the two outer ends retain full rounding. Internal cuts have vertical sides
+with small 3pt corner curves, constrained by either neighboring section's width.
+The same small internal radius applies at rest,
+during scrubbing, and when TV focus expands the bar from 12pt to 20pt.
+Live programme tracks use the same geometry.
+TV and touch skip-marker timelines both require 20pt of solid section width
+between retained cuts. First, skip windows too narrow to display are omitted
+from the visual layout. Spacing is then measured again between the remaining
+boundaries, so a short nearby window cannot erase a long credits section.
+Both cuts around any still-undersized unmarked interval are omitted together;
+cuts too close to the timeline ends are also hidden. Crowded endings avoid
+slivers; readable cuts keep their exact timestamps. This threshold is
+fixed while focus or touch expands the bar, and does not depend on progress.
+Only the visual cuts are suppressed: stored ranges, skip buttons, post-credits
+gaps, and autoplay decisions are unchanged. Live programme boundaries retain
+their separate layout policy.
 The mask applies to the base, buffered, and played fills and glass backing
 together, never the white playhead. Each section retains the bar's exact
 material and opacity; only its rounded ends and full-height gaps reveal the
@@ -1852,8 +2709,9 @@ the single control the pressed direction targets.
 
 `LiveChannelTransport.swift` is the expanded live player's chrome, assembled from
 the VOD transport's parts rather than drawn separately: the title block and
-`playerGlassButton` badges (Audio · Subtitles · Multiview, plus Go Live when
-time-shifted), `PlayerScrubTrackSurface` for the timeline, `PlayerTabButtonStyle`
+track controls (Audio · Subtitles · More, with Zoom and Multiview under More).
+The separate Jump to live action precedes them when time-shifted. The player uses
+`PlayerScrubTrackSurface` for the timeline, `PlayerTabButtonStyle`
 tabs, the shared `PlayerOptionsPanel` for track/style menus, and
 `PlayerOverVideoCardStyle` cards. The card parks by one cluster offset exactly as
 rules 2–3 above describe, with the same constants on tvOS. Track menus live in

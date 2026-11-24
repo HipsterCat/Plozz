@@ -1,8 +1,10 @@
 #if os(tvOS)
 import CoreModels
 import PlozzCoreUI
+import FeatureHome
 import FeatureProfiles
 import SwiftUI
+import UIKit
 
 enum NavigationChromeMotion {
     static let distance: CGFloat = 12
@@ -33,6 +35,7 @@ struct TopBarNavigation: View {
     var chrome: NavigationChromeModel?
     var pinsSettings = true
     @State private var fallbackChrome = NavigationChromeModel()
+    @Environment(\.navigationStartupFocusAllowed) private var startupFocusAllowed
 
     var body: some View {
         let chrome = chrome ?? fallbackChrome
@@ -49,6 +52,7 @@ struct TopBarNavigation: View {
                     chrome: chrome, safeAreaInsets: geometry.safeAreaInsets,
                     maximumBarWidth: geometry.size.width * TopBarNavigationMetrics.maximumWidthFraction,
                     pinsSettings: pinsSettings,
+                    startupFocusAllowed: startupFocusAllowed,
                     onNavigationFocusChanged: { [weak owner] in owner?.isNavigationFocused = $0 }
                 )
             }
@@ -71,15 +75,19 @@ private struct TopBarNavigationContent: View {
     let safeAreaInsets: EdgeInsets
     let maximumBarWidth: CGFloat
     let pinsSettings: Bool
+    let startupFocusAllowed: Bool
     let onNavigationFocusChanged: (Bool) -> Void
 
     @Namespace private var focusScope
     @State private var isNavigating = true
     @State private var navigationHasFocus = false
+    @State private var hasEnteredContent = false
     @State private var navigationRequest: Int? = 0
     @State private var navigationGeneration = 0
     @State private var contentRequest: UInt64?
     @State private var contentGeneration: UInt64 = 0
+    @State private var hasStarted = false
+    @State private var isStartupEntry = true
     @State private var returnFocus = NavigationContentFocusRequester.ReturnFocus()
     @State private var destinationFocus = NavigationDestinationFocusHandoff()
     @State private var scroll = TopNavigationScroll()
@@ -104,12 +112,24 @@ private struct TopBarNavigationContent: View {
     }
 
     var body: some View {
+        let holdsPageFocus = destinationFocus.isWaiting || (isNavigating && contentRequest == nil && !hasEnteredContent)
         ZStack(alignment: .top) {
             pages
+                // While the top bar owns focus, keep the guide's native controls at their resting brightness.
+                .allowsHitTesting(current != .liveTV || !holdsPageFocus)
+                .accessibilityHidden(current == .liveTV && holdsPageFocus)
                 .background {
                     NavigationContentFocusRequester(
                         request: contentRequest, onCompleted: contentFocused,
-                        returnFocus: returnFocus, restoresPreviousFocus: true
+                        returnFocus: returnFocus, restoresPreviousFocus: true,
+                        onDirectionalEntry: isShellActive && isNavigating
+                            && !chrome.isChromeHidden && !chrome.transitionSuppressesFocus
+                            ? { enterContent(current) } : nil,
+                        isStartupRequest: isStartupEntry && startupFocusAllowed,
+                        onStartupCancelled: {
+                            isStartupEntry = false
+                            destinationFocus.cancel()
+                        }
                     )
                     .padding(.top, TopBarNavigationMetrics.foregroundTop)
                 }
@@ -119,7 +139,7 @@ private struct TopBarNavigationContent: View {
                         onPresented: destinationPresented
                     )
                 }
-                .disabled(isNavigating && contentRequest == nil)
+                .disabled(current != .liveTV && holdsPageFocus)
                 .environment(\.plozzTopNavigationContentInsets, contentInsets)
                 .environment(\.plozzTopNavigationScroll, scroll)
             TopBarNavigationBar(
@@ -140,27 +160,42 @@ private struct TopBarNavigationContent: View {
                 .padding(.leading, contentInsets.leading)
                 .padding(.trailing, contentInsets.trailing)
                 .padding(.top, TopBarNavigationMetrics.topMargin)
+                .focusScope(focusScope)
                 .disabled(!isShellActive || chrome.isChromeHidden || chrome.transitionSuppressesFocus)
                 .modifier(TopBarScrollPosition(
                     scroll: scroll, chromeHidden: chrome.isChromeHidden,
-                    suppressesFocus: chrome.transitionSuppressesFocus
+                    suppressesFocus: chrome.transitionSuppressesFocus,
+                    onDown: { enterContent(current) }
                 ))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
         .focusScope(focusScope)
         .background { NavigationChromeTransitionAnchor(chrome: chrome) }
+        #if DEBUG
+        .background {
+            if ProcessInfo.processInfo.arguments.contains("--top-bar-entry-probe") {
+                TopBarEntryProbe { enterContent(current) }
+            }
+        }
+        #endif
         .tvNavigationExitProtection(
             isEnabled: preventsAccidentalExit,
             navigationHasFocus: isNavigating && !chrome.isChromeHidden
         )
         .onExitCommand(perform: !isNavigating && !chrome.isChromeHidden ? openNavigation : nil)
         .onAppear {
-            if current == .settings {
-                enterContent(.settings)
-            } else if isNavigating {
-                openNavigation()
-            }
+            guard !hasStarted else { return }
+            hasStarted = true
+            navigationRequest = nil
+            if startupFocusAllowed { destinationFocus.begin(current) }
+        }
+        .onChange(of: startupFocusAllowed) { _, allowed in
+            guard hasStarted, isStartupEntry else { return }
+            navigationRequest = nil
+            contentRequest = nil
+            destinationFocus.cancel()
+            if allowed { destinationFocus.begin(current) }
         }
         .onChange(of: isNavigating && isShellActive, initial: true) { _, value in
             onNavigationFocusChanged(value)
@@ -169,29 +204,35 @@ private struct TopBarNavigationContent: View {
             if active {
                 openNavigation()
             } else {
+                isStartupEntry = false
                 navigationRequest = nil
                 contentRequest = nil
                 destinationFocus.cancel()
             }
         }
         .onChange(of: current) { _, _ in
+            isStartupEntry = false
             chrome.resetForDestinationChange()
+            hasEnteredContent = false
             if destinationFocus.request?.destination != current { destinationFocus.cancel() }
             contentRequest = nil
             returnFocus.clear()
-            if current == .settings, destinationFocus.request == nil {
+            if destinationFocus.request == nil {
                 navigationRequest = nil
                 isNavigating = true
-                destinationFocus.begin(.settings)
+                destinationFocus.begin(current)
             }
         }
         .onChange(of: profile?.id) { _, _ in
+            isStartupEntry = false
+            hasEnteredContent = false
             returnFocus.clear()
             destinationFocus.cancel()
             contentRequest = nil
         }
         .onChange(of: chrome.isChromeHidden) { _, hidden in
             if hidden {
+                isStartupEntry = false
                 navigationRequest = nil
                 contentRequest = nil
                 destinationFocus.cancel()
@@ -199,6 +240,7 @@ private struct TopBarNavigationContent: View {
             }
         }
         .onDisappear {
+            if startupFocusAllowed { isStartupEntry = false }
             navigationRequest = nil
             contentRequest = nil
             destinationFocus.cancel()
@@ -228,7 +270,7 @@ private struct TopBarNavigationContent: View {
 
     private func navigationFocusChanged(_ hasFocus: Bool) {
         navigationHasFocus = hasFocus
-        guard hasFocus, isShellActive, !destinationFocus.isWaiting else { return }
+        guard hasFocus, isShellActive, !destinationFocus.isWaiting, !isStartupEntry else { return }
         isNavigating = true
         contentRequest = nil
         destinationFocus.cancel()
@@ -236,6 +278,7 @@ private struct TopBarNavigationContent: View {
 
     private func openNavigation() {
         guard isShellActive, !chrome.isChromeHidden, !chrome.transitionSuppressesFocus else { return }
+        isStartupEntry = false
         contentRequest = nil
         destinationFocus.cancel()
         isNavigating = true
@@ -249,15 +292,32 @@ private struct TopBarNavigationContent: View {
     }
 
     private func enterContent(_ destination: NavigationRailDestination) {
-        guard isShellActive, isNavigating, !chrome.transitionSuppressesFocus else { return }
+        HeroFocusDiagnostics.entry("topbar-intent")
+        guard isShellActive, isNavigating, !chrome.transitionSuppressesFocus else {
+            HeroFocusDiagnostics.entry("topbar-intent-rejected")
+            return
+        }
+        HeroFocusDiagnostics.emit("topbar.entry begin")
         navigationRequest = nil
-        if destination != current { selection = destination }
-        destinationFocus.begin(destination)
+        if destination == current, !destinationFocus.isWaiting {
+            if destination == .home, scroll.scrollToTop() { returnFocus.clear() }
+            requestContentFocus()
+        } else {
+            if destination != current { selection = destination }
+            destinationFocus.begin(destination)
+        }
     }
 
     private func destinationPresented(_ request: NavigationDestinationFocusHandoff.Request) {
-        guard isShellActive, destinationFocus.complete(request), request.destination == current,
+        guard !isStartupEntry || startupFocusAllowed,
+              isShellActive, destinationFocus.complete(request), request.destination == current,
               isNavigating, !chrome.isChromeHidden else { return }
+        HeroFocusDiagnostics.emit("topbar.entry presented")
+        requestContentFocus()
+    }
+
+    private func requestContentFocus() {
+        HeroFocusDiagnostics.entry("content-requested")
         isNavigating = false
         contentGeneration &+= 1
         contentRequest = contentGeneration
@@ -265,19 +325,44 @@ private struct TopBarNavigationContent: View {
 
     private func contentFocused(_ request: UInt64, didFocus: Bool) {
         guard isShellActive, contentRequest == request else { return }
+        let wasStartup = isStartupEntry
+        isStartupEntry = false
+        if didFocus { hasEnteredContent = true }
         contentRequest = nil
-        if !didFocus, navigationHasFocus { openNavigation() }
+        if !didFocus, navigationHasFocus {
+            if wasStartup {
+                isNavigating = true
+            } else {
+                openNavigation()
+            }
+        }
     }
 }
+
+#if DEBUG
+struct TopBarEntryProbe: UIViewRepresentable {
+    let enter: () -> Void
+    func makeUIView(context: Context) -> Marker {
+        let view = Marker()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+    func updateUIView(_ uiView: Marker, context: Context) { uiView.enter = enter }
+    final class Marker: UIView {
+        var enter: (() -> Void)?
+    }
+}
+#endif
 
 private struct TopBarScrollPosition: ViewModifier {
     let scroll: TopNavigationScroll
     let chromeHidden: Bool
     let suppressesFocus: Bool
+    let onDown: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        content
+        TopBarNativeScrollSurface(content: AnyView(content
             .opacity(chromeHidden ? 0 : 1)
             .offset(y: chromeHidden && !reduceMotion ? -NavigationChromeMotion.distance : 0)
             .animation(
@@ -285,10 +370,123 @@ private struct TopBarScrollPosition: ViewModifier {
                     ? nil : NavigationChromeMotion.animation,
                 value: chromeHidden
             )
-            .offset(y: -scroll.offset)
             .disabled(scroll.offset >= TopBarNavigationMetrics.foregroundTop)
             .accessibilityHidden(chromeHidden || scroll.offset >= TopBarNavigationMetrics.foregroundTop)
+        ), scroll: scroll, onDown: chromeHidden || suppressesFocus ? nil : onDown)
     }
+}
+
+private struct TopBarNativeScrollSurface: UIViewControllerRepresentable {
+    let content: AnyView
+    let scroll: TopNavigationScroll
+    let onDown: (() -> Void)?
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller(content: hosted(context), scroll: scroll, onDown: onDown)
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        if controller.scroll !== scroll {
+            controller.scroll.unbindMotionView(controller.host.view)
+            controller.scroll = scroll
+            scroll.bindMotionView(controller.host.view, maximumOffset: TopBarNavigationMetrics.foregroundTop)
+        }
+        controller.host.rootView = hosted(context)
+        controller.onDown = onDown
+    }
+
+    private func hosted(_ context: Context) -> AnyView {
+        AnyView(content.transformEnvironment(\.self) { target in
+            target.copyHostedPresentation(from: context.environment)
+            target.plozzReducePanelGlass = context.environment.plozzReducePanelGlass
+            target.plozzHDRDisplayActive = context.environment.plozzHDRDisplayActive
+        })
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiViewController: Controller, context: Context) -> CGSize? {
+        uiViewController.host.sizeThatFits(in: CGSize(
+            width: proposal.width ?? UIView.layoutFittingExpandedSize.width,
+            height: proposal.height ?? UIView.layoutFittingExpandedSize.height
+        ))
+    }
+
+    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
+        controller.scroll.unbindMotionView(controller.host.view)
+    }
+
+    final class Controller: UIViewController {
+        let host: UIHostingController<AnyView>
+        var scroll: TopNavigationScroll
+        var onDown: (() -> Void)?
+
+        init(content: AnyView, scroll: TopNavigationScroll, onDown: (() -> Void)?) {
+            host = UIHostingController(rootView: content)
+            host.safeAreaRegions = []
+            self.scroll = scroll
+            self.onDown = onDown
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func loadView() {
+            view = UIView()
+            view.backgroundColor = .clear
+            addChild(host)
+            host.view.backgroundColor = .clear
+            view.addSubview(host.view)
+            host.didMove(toParent: self)
+            scroll.bindMotionView(host.view, maximumOffset: TopBarNavigationMetrics.foregroundTop)
+            let down = TopBarDownPressRecognizer()
+            down.canEnter = { [weak self] in self?.ownsFocus == true && self?.onDown != nil }
+            down.onDown = { [weak self] in self?.onDown?() }
+            view.addGestureRecognizer(down)
+        }
+
+        private var ownsFocus: Bool {
+            guard let item = UIFocusSystem.focusSystem(for: view)?.focusedItem else { return false }
+            var owner = NativeFocusRegion.owningController(of: item)
+            while let current = owner {
+                if current === host { return true }
+                owner = current.parent
+            }
+            return false
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            host.view.bounds = CGRect(origin: .zero, size: view.bounds.size)
+            host.view.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        }
+    }
+}
+
+/// Down is an explicit page-entry command, not a geometric move within the bar.
+final class TopBarDownPressRecognizer: UIGestureRecognizer {
+    var canEnter: () -> Bool = { false }
+    var onDown: (() -> Void)?
+
+    init() {
+        super.init(target: nil, action: nil)
+        allowedPressTypes = [NSNumber(value: UIPress.PressType.downArrow.rawValue)]
+        allowedTouchTypes = []
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent) {
+        guard presses.contains(where: { $0.type == .downArrow }), canEnter() else {
+            state = .failed
+            return
+        }
+        state = .began
+        HeroFocusDiagnostics.emit("topbar.entry native-down")
+        HeroFocusDiagnostics.entry("native-down")
+        onDown?()
+    }
+
+    override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent) {}
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent) { state = .ended }
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent) { state = .cancelled }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 }
 
 private struct TopBarNavigationBar: View {
@@ -397,6 +595,7 @@ private struct TopBarNavigationBar: View {
         .focusSection()
         .onMoveCommand { direction in
             if direction == .down, focused != nil {
+                HeroFocusDiagnostics.entry("move-down")
                 onEnter(current)
             }
         }

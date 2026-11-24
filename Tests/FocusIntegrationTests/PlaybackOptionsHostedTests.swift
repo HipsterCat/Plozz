@@ -9,6 +9,34 @@ import XCTest
 
 @MainActor
 final class PlaybackOptionsHostedTests: XCTestCase {
+    func testFELConversionRowUsesNativeFocusAndUpdatesSelection() async throws {
+        try await withPanel { probe, _, window in
+            probe.model.felConversion.isAvailable = true
+            try await self.waitUntil {
+                (try? self.text(in: DetailTransitionSnapshot.image(of: window))
+                    .contains { $0.text.contains("FEL") }) == true
+            }
+            probe.request(.row(3))
+            try await self.waitUntil { probe.focus == .row(3) }
+            try await Task.sleep(for: .milliseconds(350))
+            try self.assertFocusedText("P7 FEL → P8.1 conversion", in: window)
+            XCTAssertFalse(try self.text(in: DetailTransitionSnapshot.image(of: window))
+                .contains { $0.text.contains("Playback Speed") })
+            let rows = PlaybackOptionsPane.rows(
+                model: probe.model, zoom: probe.model.videoZoom,
+                actions: .init(setDolbyVisionFELConversion: { probe.model.felConversion.isEnabled = $0 }),
+                openScreen: { _ in }
+            )
+            let row = try XCTUnwrap(rows.first { $0.slot == 3 })
+            guard case let .toggle(isOn, flip) = row.kind else { return XCTFail("Expected a native toggle row") }
+            XCTAssertTrue(isOn)
+            flip()
+            XCTAssertFalse(probe.model.felConversion.isEnabled)
+            try await Task.sleep(for: .milliseconds(100))
+            self.attach(window, name: "FEL conversion playback override")
+        }
+    }
+
     func testNativeInputHostPreservesPresentationEnvironmentWithoutCopyingFocus() async throws {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
@@ -50,32 +78,16 @@ final class PlaybackOptionsHostedTests: XCTestCase {
         XCTAssertEqual(report.foreground, ThemePalette.light.primaryText)
     }
 
-    func testInlineSpeedKeepsNativeFocusAndZoomBackRestoresItsEntryRow() async throws {
+    func testZoomBackRestoresItsOverflowEntryRow() async throws {
         try await withPanel { probe, host, window in
             let input = try XCTUnwrap(self.inputController(in: host))
             XCTAssertFalse(input.ownsHorizontalNavigationInput)
             try self.assertFocusedText("Zoom Mode", in: window)
-            probe.request(.row(PlaybackOptionsPane.speedSlot))
-            try await self.waitUntil { probe.focus == .row(PlaybackOptionsPane.speedSlot) }
-            try self.assertFocusedText("Playback Speed", in: window)
-            let initialFrame = try XCTUnwrap(self.focusFrame(in: window))
-            input.beginPress(.right)
-            input.stopRepeating()
-            try await self.waitUntil { probe.model.playbackSpeed == 1.55 }
-            try await Task.sleep(for: .milliseconds(100))
-            XCTAssertEqual(self.focusFrame(in: window), initialFrame)
-            try self.assertFocusedText("Playback Speed", in: window)
-            input.beginPress(.left)
-            input.stopRepeating()
-            XCTAssertEqual(probe.model.playbackSpeed, 1.5)
-
-            probe.request(.row(PlaybackOptionsPane.zoomSlot))
-            try await self.waitUntil { probe.focus == .row(PlaybackOptionsPane.zoomSlot) }
             input.beginPress(.right)
             input.stopRepeating()
             try await self.waitUntil { probe.screen == .zoom && probe.focus == .row(PlaybackOptionsPane.modeSlot(.fit)) }
             try await Task.sleep(for: .milliseconds(350))
-            try self.assertFocusedText("Normal (Default)", in: window)
+            try self.assertFocusedText("Normal", in: window)
             let labels = try self.text(in: DetailTransitionSnapshot.image(of: window)).map(\.text)
             XCTAssertTrue(labels.contains { $0 == "Crop" })
             XCTAssertTrue(labels.contains { $0 == "Stretch" })
@@ -107,7 +119,7 @@ final class PlaybackOptionsHostedTests: XCTestCase {
                           "Submenu navigation must retain the native input host.")
             XCTAssertEqual(probe.model.videoZoom.settings.customPercent, percent)
             XCTAssertEqual(probe.model.playbackSpeed, 1.5)
-            self.attach(window, name: "Playback fixed zoom and speed rows")
+            self.attach(window, name: "Overflow after Zoom Mode")
         }
     }
 
@@ -117,7 +129,7 @@ final class PlaybackOptionsHostedTests: XCTestCase {
             let image = DetailTransitionSnapshot.image(of: window)
             let lines = try self.text(in: image).map(\.text)
             XCTAssertTrue(lines.contains { $0.contains("Zoom Mode") })
-            XCTAssertTrue(lines.contains { $0.contains("Playback Speed") })
+            XCTAssertFalse(lines.contains { $0.contains("Playback Speed") })
             XCTAssertFalse(lines.contains { $0.contains("Zoom Amount") })
             input.beginPress(.left)
             input.stopRepeating()

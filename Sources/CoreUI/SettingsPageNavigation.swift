@@ -124,6 +124,14 @@ public final class SettingsPageNavigation<Route: Hashable> {
         returnGeneration = 0
     }
 
+    fileprivate func completeFullScreenDismissal() {
+        guard pages.isEmpty, returnSourceID != nil else { return }
+        // The root cannot accept focus until the native cover has finished dismissing.
+        transitionGeneration += 1
+        isTransitioning = false
+        returnGeneration += 1
+    }
+
     private func change(isReturning: Bool, _ update: () -> Void) {
         transitionGeneration += 1
         let generation = transitionGeneration
@@ -159,6 +167,15 @@ public extension EnvironmentValues {
         get { self[SettingsPageContextKey.self] }
         set { self[SettingsPageContextKey.self] = newValue }
     }
+
+    var settingsPageCoverWrapper: (@MainActor @Sendable (AnyView) -> AnyView)? {
+        get { self[SettingsPageCoverWrapperKey.self] }
+        set { self[SettingsPageCoverWrapperKey.self] = newValue }
+    }
+}
+
+private struct SettingsPageCoverWrapperKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable (AnyView) -> AnyView)? = nil
 }
 
 /// Retains every parent while one current page owns input, accessibility and Back.
@@ -173,6 +190,8 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
     let destination: (Route) -> Destination
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.settingsPageCoverWrapper) private var coverWrapper
+    @State private var contentViewport: HomeRowPreviewViewport?
 
     public init(
         navigation: SettingsPageNavigation<Route>, pageWidth: CGFloat,
@@ -202,24 +221,41 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
                     subpages(in: geometry.size)
                 }
             }
+            .onGeometryChange(for: HomeRowPreviewViewport.self) {
+                HomeRowPreviewViewport(
+                    width: $0.size.width, trailingSafeAreaInset: $0.safeAreaInsets.trailing,
+                    leadingSafeAreaInset: $0.safeAreaInsets.leading
+                )
+            } action: { contentViewport = $0 }
         }
         .plozzFullScreenCover(isPresented: Binding(
             get: { presentsSubpagesFullScreen && !navigation.pages.isEmpty },
-            set: { if !$0 { navigation.reset() } }
-        ), onDismiss: onSubpagesDismiss) {
-            GeometryReader { geometry in
-                subpages(in: geometry.size)
-            }
-            .safeAreaPadding(.top, 36)
-            .ignoresSafeArea(.container, edges: .vertical)
-            .background {
-                SettingsPageBackground()
-                    .environment(\.settingsInWorkspace, false)
+            set: { if !$0, !navigation.pages.isEmpty { navigation.reset() } }
+        ), onDismiss: {
+            navigation.completeFullScreenDismissal()
+            onSubpagesDismiss?()
+        }) {
+            if let coverWrapper {
+                coverWrapper(AnyView(coverContent))
+            } else {
+                coverContent
             }
         }
-        .mask { Rectangle().ignoresSafeArea(.container, edges: .vertical) }
+        .mask { Rectangle().ignoresSafeArea(.container) }
         .onChange(of: reduceMotion, initial: true) { _, value in
             navigation.animationsEnabled = !value
+        }
+    }
+
+    private var coverContent: some View {
+        GeometryReader { geometry in
+            subpages(in: geometry.size)
+        }
+        .safeAreaPadding(.top, 36)
+        .ignoresSafeArea(.container, edges: .vertical)
+        .background {
+            SettingsPageBackground()
+                .environment(\.settingsInWorkspace, false)
         }
     }
 
@@ -269,32 +305,41 @@ public struct SettingsPageStack<Route: Hashable, Root: View, Destination: View>:
             }
         )
         return content()
+            .environment(\.homeRowPreviewViewport, contentViewport ?? HomeRowPreviewViewport(
+                width: viewport.width, trailingSafeAreaInset: 0
+            ))
             .frame(width: size.width, height: size.height, alignment: .topLeading)
             .frame(width: viewport.width, height: viewport.height, alignment: .top)
             .environment(\.settingsPageContext, context)
-            .environment(\.settingsPageBackButton, id.map { _ in
-                AnyView(SettingsBackButton(action: context.pop)
-                    .settingsPageEntryFocus().accessibilityIdentifier("settings-workspace-back"))
-            })
+            .background {
+                NativeFocusRegionObserver(isEnabled: context.requestsEntryFocus) {
+                    guard navigation.pages.last?.id == id, navigation.entryPageID == id else { return }
+                    navigation.entryPageID = nil
+                }
+            }
             .environment(\.isEnabled, isEnabled && interactive)
             .allowsHitTesting(interactive)
             .accessibilityElement(children: interactive ? .contain : .ignore)
             .accessibilityHidden(!interactive)
             .settingsPageVisibility(current)
-            .onExitCommand(perform: current && (id != nil || onRootBack != nil) ? context.pop : nil)
+            .modifier(SettingsPageBackHandler(
+                isCurrent: current, showsBack: id != nil,
+                canGoBack: id != nil || onRootBack != nil, action: context.pop
+            ))
     }
 }
 
 private struct SettingsPageEntryFocus: ViewModifier {
     let enabled: Bool
     @Environment(\.settingsPageContext) private var context
+    @Environment(SettingsSearchRequest.self) private var searchRequest: SettingsSearchRequest?
     @FocusState private var focused: Bool
 
     func body(content: Content) -> some View {
         content
             .focused($focused)
             .task(id: context?.requestsEntryFocus) {
-                guard enabled, context?.requestsEntryFocus == true else { return }
+                guard enabled, searchRequest == nil, context?.requestsEntryFocus == true else { return }
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 focused = true
@@ -305,6 +350,58 @@ private struct SettingsPageEntryFocus: ViewModifier {
 public extension View {
     func settingsPageEntryFocus(enabled: Bool = true) -> some View {
         modifier(SettingsPageEntryFocus(enabled: enabled))
+    }
+
+    /// Requests confirmation for user Back, but not an explicit SettingsPageDismiss.
+    func settingsPageBackConfirmation(_ confirmation: SettingsPageBackConfirmation?) -> some View {
+        preference(key: SettingsPageBackConfirmationKey.self, value: confirmation)
+    }
+}
+
+@MainActor
+@Observable
+public final class SettingsPageBackConfirmation: Equatable {
+    public var isPresented = false
+
+    public init() {}
+
+    public nonisolated static func == (lhs: SettingsPageBackConfirmation, rhs: SettingsPageBackConfirmation) -> Bool {
+        lhs === rhs
+    }
+}
+
+private struct SettingsPageBackConfirmationKey: PreferenceKey {
+    static var defaultValue: SettingsPageBackConfirmation? { nil }
+
+    static func reduce(value: inout SettingsPageBackConfirmation?, nextValue: () -> SettingsPageBackConfirmation?) {
+        value = nextValue() ?? value
+    }
+}
+
+private struct SettingsPageBackHandler: ViewModifier {
+    let isCurrent: Bool
+    let showsBack: Bool
+    let canGoBack: Bool
+    let action: () -> Void
+    @State private var confirmation: SettingsPageBackConfirmation?
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.settingsPageBackButton, showsBack
+                ? AnyView(SettingsBackButton(action: requestBack)
+                    .accessibilityIdentifier("settings-workspace-back"))
+                : nil)
+            .onPreferenceChange(SettingsPageBackConfirmationKey.self) { confirmation = $0 }
+            .onExitCommand(perform: isCurrent && canGoBack ? requestBack : nil)
+    }
+
+    private func requestBack() {
+        guard isCurrent else { return }
+        if let confirmation {
+            confirmation.isPresented = true
+        } else {
+            action()
+        }
     }
 }
 
@@ -352,6 +449,8 @@ public struct SettingsPageLink<Destination: View, Label: View>: View {
     let label: () -> Label
     #if os(tvOS)
     @Environment(\.settingsPageContext) private var context
+    #else
+    @State private var isPresented = false
     #endif
 
     public init(@ViewBuilder destination: @escaping () -> Destination, @ViewBuilder label: @escaping () -> Label) {
@@ -369,7 +468,9 @@ public struct SettingsPageLink<Destination: View, Label: View>: View {
             NavigationLink(destination: destination, label: label)
         }
         #else
-        NavigationLink(destination: destination, label: label)
+        // A NavigationLink can claim all sibling controls in a composite List cell.
+        Button { isPresented = true } label: { label() }
+            .navigationDestination(isPresented: $isPresented, destination: destination)
         #endif
     }
 }

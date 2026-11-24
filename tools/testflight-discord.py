@@ -31,7 +31,10 @@ CHANNEL = "1560139816757235762"
 BUNDLE = "com.thatcube.Plozz"
 GROUP = "Plozz External"
 TESTFLIGHT = "https://testflight.apple.com/join/EKfReNMu"
+ROADMAP = "https://plozz.app/roadmap/"
 PLATFORMS = {"TV_OS": "Apple TV", "IOS": "iPhone and iPad"}
+NOTE_PLATFORMS = {"TV_OS": "tvOS", "IOS": "iOS"}
+DESCRIPTION_LIMIT = 4096
 
 
 def apple_token():
@@ -194,7 +197,42 @@ def announcement_catalog(release, catalog, github_releases, github):
     return tagged
 
 
-def announcement(release, catalog, github_releases):
+def with_release_notes(description, entry, platforms, url):
+    parts = []
+    for section in entry["sections"]:
+        first = True
+        for item in section["items"]:
+            text, scope = NOTES.normalized_item(item, entry["id"])
+            visible = [
+                platform for platform in PLATFORMS
+                if platform in platforms and (scope is None or NOTE_PLATFORMS[platform] in scope)
+            ]
+            if not visible:
+                continue
+            prefix = ""
+            if set(visible) != platforms:
+                prefix = f"**{' and '.join(PLATFORMS[platform] for platform in visible)}:** "
+            heading = f"\n\n**{section['category']}**" if first else ""
+            parts.append(f"{heading}\n• {prefix}{text}")
+            first = False
+    if not parts:
+        return description + "\n\nNo changes for this platform in this build."
+    # Discord counts astral characters as two UTF-16 units.
+    units = lambda value: len(value.encode("utf-16-le")) // 2
+    complete = description + "".join(parts)
+    if units(complete) <= DESCRIPTION_LIMIT:
+        return complete
+    notice = f"\n\nNotes shortened to fit Discord. [Read the full release notes]({url})."
+    if units(description + notice) > DESCRIPTION_LIMIT:
+        raise Error("Announcement links exceed Discord's description limit.")
+    for part in parts:
+        if units(description + part + notice) > DESCRIPTION_LIMIT:
+            break
+        description += part
+    return description + notice
+
+
+def announcement(release, catalog, github_releases, *, roadmap_enabled=False):
     build, marketing = release["build"], release["marketing"]
     entries = [
         entry for entry in catalog["releases"]
@@ -205,8 +243,14 @@ def announcement(release, catalog, github_releases):
     tag = NOTES.release_tag(build)
     platforms = " and ".join(f"**{label}**" for platform, label in PLATFORMS.items() if platform in release["platforms"])
     description = f"Available now for {platforms}.\n\n[Update in TestFlight]({TESTFLIGHT})"
+    if roadmap_enabled:
+        description += f" | [Roadmap]({ROADMAP})"
     if published_release(build, github_releases) is not None:
-        description += f" | [Release notes](https://github.com/{BRIDGE.REPO}/releases/tag/{tag})"
+        url = f"https://github.com/{BRIDGE.REPO}/releases/tag/{tag}"
+        description += f" | [Full release notes]({url})"
+        description = with_release_notes(
+            description, only(entries, "matching tagged release-note entry"), release["platforms"], url,
+        )
     else:
         description += "\nRelease notes are available in TestFlight."
     return {
@@ -216,14 +260,14 @@ def announcement(release, catalog, github_releases):
     }
 
 
-def synchronize(discord, apple, github, catalog, minimum, *, publish=False):
+def synchronize(discord, apple, github, catalog, minimum, *, publish=False, roadmap_enabled=False):
     channel = inspect_channel(discord)
     releases = available_builds(apple, minimum)
     github_releases = github.pages(f"/repos/{BRIDGE.REPO}/releases")
     messages = BRIDGE.thread_messages(discord, CHANNEL)
     for release in releases:
         selected_catalog = announcement_catalog(release, catalog, github_releases, github)
-        embed = announcement(release, selected_catalog, github_releases)
+        embed = announcement(release, selected_catalog, github_releases, roadmap_enabled=roadmap_enabled)
         key = f"testflight:{release['marketing']}:{'.'.join(map(str, NOTES.build_parts(release['build'])))}"
         if publish:
             BRIDGE.discord_upsert(discord, channel, messages, key, embed)
@@ -244,6 +288,7 @@ def main():
             BRIDGE.API("App Store Connect", apple_token()),
             BRIDGE.API("GitHub", os.environ.get("GITHUB_TOKEN")),
             NOTES.load_catalog(NOTES.DEFAULT_CATALOG), minimum, publish=args.mode == "sync",
+            roadmap_enabled=os.environ.get("DISCORD_ROADMAP_LINK_ENABLED") == "true",
         )
     except (Error, ValueError, KeyError, TypeError) as error:
         if isinstance(error, Error):

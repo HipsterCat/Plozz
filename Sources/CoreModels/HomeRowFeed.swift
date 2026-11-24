@@ -4,16 +4,20 @@ public enum HomeRowFeed: Sendable {
     case latest(libraryIDs: [String]?)
     case nextUp(libraryID: String)
     case recommendation(libraryID: String, kind: MediaItemKind, browseID: String, anchorIDs: [String] = [])
-    case server(ServerHomeSection, excludedLibraryIDs: Set<String>, anchorIDs: [String])
+    case server(ServerHomeSection, excludedLibraryIDs: Set<String>, anchorIDs: [String], browseID: String? = nil)
 }
 
 public struct HomeRowPage: Sendable {
     public let items: [MediaItem]
     public let nextOffset: Int?
+    /// Scheduling hint only: providers may estimate totals. Returned offsets
+    /// remain authoritative, including after filtering or server-side page caps.
+    public let totalCountHint: Int?
 
-    public init(items: [MediaItem], nextOffset: Int?) {
+    public init(items: [MediaItem], nextOffset: Int?, totalCountHint: Int? = nil) {
         self.items = items
         self.nextOffset = nextOffset
+        self.totalCountHint = totalCountHint
     }
 
     public init(_ page: MediaPage) throws {
@@ -23,6 +27,7 @@ public struct HomeRowPage: Sendable {
         }
         items = page.items
         nextOffset = page.endIndex < page.totalCount ? page.endIndex : nil
+        totalCountHint = page.totalCount
     }
 
     /// Limit-only feeds are extended on demand; a fixed server shelf ends when
@@ -37,6 +42,18 @@ public struct HomeRowPage: Sendable {
 }
 
 public extension MediaProvider {
+    func libraryRecentlyAddedPage(in libraryID: String, kind: MediaItemKind, startIndex: Int, limit: Int) async throws -> HomeRowPage {
+        try await catalogRecentlyAddedPage(in: libraryID, kind: kind, startIndex: startIndex, limit: limit)
+    }
+
+    func catalogRecentlyAddedPage(in libraryID: String, kind: MediaItemKind, startIndex: Int, limit: Int) async throws -> HomeRowPage {
+        let page = try await items(in: libraryID, kind: kind, page: .init(
+            startIndex: startIndex, limit: limit, sort: .init(field: .dateAdded, direction: .descending)
+        ))
+        guard page.startIndex == startIndex, page.items.count <= limit else { throw AppError.invalidResponse }
+        return try HomeRowPage(page)
+    }
+
     func homeRowPage(_ feed: HomeRowFeed, startIndex: Int, limit: Int) async throws -> HomeRowPage {
         try await homeRowPrefixPage(feed, startIndex: startIndex, limit: limit)
     }
@@ -53,7 +70,7 @@ public extension MediaProvider {
             items = try await homeNextUp(libraryID: library, limit: count)
         case let .recommendation(library, kind, browseID, anchors):
             let shelves = try await homeHubs(
-                libraryID: library, kind: kind, limit: count, includeUnpromoted: true
+                libraryID: library, kind: kind, limit: max(count, anchors.count), includeUnpromoted: true
             )
             guard let shelf = shelves.first(where: {
                 $0.browseID == browseID && Set(anchors).isSubset(of: Set($0.items.map(\.id)))
@@ -61,7 +78,7 @@ public extension MediaProvider {
                 throw AppError.notFound
             }
             items = shelf.items
-        case let .server(section, excluded, _):
+        case let .server(section, excluded, _, _):
             items = try await serverHomeItems(section: section, limit: count, excludingLibraryIDs: excluded)
         }
         try Task.checkCancellation()

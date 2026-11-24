@@ -22,6 +22,8 @@ public struct MediaTrack: Hashable, Identifiable, Sendable {
     public var id: Int
     public var kind: Kind
     public var displayTitle: String
+    /// Original container track name, separate from a server-generated display label.
+    public var sourceTitle: String?
     /// BCP-47 / ISO language code if known (e.g. `en`, `fra`).
     public var language: String?
     /// Raw codec token from the source/demuxer, lowercased where known
@@ -29,6 +31,8 @@ public struct MediaTrack: Hashable, Identifiable, Sendable {
     /// hints in the track menu ("PGS", "SRT") and image-vs-text reasoning.
     /// `nil` when the provider/engine didn't report one.
     public var codec: String?
+    /// Per-track source profile, independent of the decoder or output route.
+    public var profile: String?
     public var isDefault: Bool
     public var isForced: Bool
     /// Audio channel count where known (`2` stereo, `6` 5.1, `8` 7.1). `nil` for
@@ -36,14 +40,17 @@ public struct MediaTrack: Hashable, Identifiable, Sendable {
     /// format hint ("5.1"/"7.1") in the track menu.
     public var channels: Int?
     /// `true` for Dolby Atmos audio (object-based; the channel count is just the
-    /// bed). When set, the menu shows "Dolby Atmos" instead of the bed layout.
+    /// bed). The menu retains the underlying codec and omits the bed layout.
     public var isAtmos: Bool
+    public var isDTSX: Bool
     /// `true` for hearing-impaired / SDH tracks (container disposition). A
     /// reliable signal that supersedes the title-text "SDH" heuristic.
     public var isHearingImpaired: Bool
     /// `true` for commentary tracks (director/cast). Surfaces a "Commentary"
     /// qualifier on audio and subtitle labels.
     public var isCommentary: Bool
+    /// Explicit audio-description disposition; not inferred from a track name.
+    public var isVisualImpaired: Bool
     /// For subtitle tracks: credential-free instructions for loading subtitle
     /// text. Managed-provider credentials are resolved only when the engine or
     /// overlay begins I/O; local share sidecars reference their temporary file.
@@ -66,14 +73,18 @@ public struct MediaTrack: Hashable, Identifiable, Sendable {
         id: Int,
         kind: Kind,
         displayTitle: String,
+        sourceTitle: String? = nil,
         language: String? = nil,
         codec: String? = nil,
+        profile: String? = nil,
         isDefault: Bool = false,
         isForced: Bool = false,
         channels: Int? = nil,
         isAtmos: Bool = false,
+        isDTSX: Bool = false,
         isHearingImpaired: Bool = false,
         isCommentary: Bool = false,
+        isVisualImpaired: Bool = false,
         deliverySource: SubtitleDeliverySource? = nil,
         isImageBasedSubtitle: Bool = false,
         isExternal: Bool = false
@@ -81,14 +92,18 @@ public struct MediaTrack: Hashable, Identifiable, Sendable {
         self.id = id
         self.kind = kind
         self.displayTitle = displayTitle
+        self.sourceTitle = sourceTitle
         self.language = language
         self.codec = codec
+        self.profile = profile
         self.isDefault = isDefault
         self.isForced = isForced
         self.channels = channels
         self.isAtmos = isAtmos
+        self.isDTSX = isDTSX
         self.isHearingImpaired = isHearingImpaired
         self.isCommentary = isCommentary
+        self.isVisualImpaired = isVisualImpaired
         self.deliverySource = deliverySource
         self.isImageBasedSubtitle = isImageBasedSubtitle
         self.isExternal = isExternal
@@ -343,6 +358,14 @@ public struct PlaybackServerDecision: Codable, Hashable, Sendable {
 /// direct-play or transcode and hands back either a legacy resolved URL or a
 /// credential-free typed source.
 public struct PlaybackRequest: Hashable, Sendable {
+    /// Host-selected policy for this playback, not provider metadata. Preview/live callers stay conservative.
+    public var dolbyVisionFELConversion: Bool = false
+    /// Host preference; nil leaves the choice to the engine's playback context.
+    public var videoUpscaling: VideoUpscaling?
+    public var discPlayback: DiscPlaybackBehavior = .playVideo
+    public var discRegionOverride: UInt32? = nil
+    public var discPlaylistOverride: Int? = nil
+    public var usesUnidentifiedDiscTimeline: Bool { discPlayback == .openMenu || discPlaylistOverride != nil }
     /// Bounded server negotiation facts, retained for optional diagnostic exports.
     public var serverDecision: PlaybackServerDecision?
     /// Library channels own a separate interval-based reporting path; accidental
@@ -375,6 +398,11 @@ public struct PlaybackRequest: Hashable, Sendable {
     public var playSessionID: String?
     public var audioTracks: [MediaTrack]
     public var subtitleTracks: [MediaTrack]
+    /// Ephemeral, independently readable SRT URLs for an external-player handoff.
+    /// May contain server-issued grants; never persist or log them.
+    public var externalSubtitleURLs: [URL] = []
+    /// Exact SRT resources for an explicitly admitted app-owned streaming session.
+    public var externalSubtitleLocators: [NetworkFileLocator] = []
     /// Optional server-authored chapters. Empty sources expose no chapter controls.
     public var chapters: [MediaChapter] = []
     /// Provider stream index already encoded into this rendition's video pixels.
@@ -432,9 +460,6 @@ public struct PlaybackRequest: Hashable, Sendable {
     /// express no preference (engine uses the container default). Not part of the
     /// memberwise init so the many provider construction sites stay untouched.
     public var preferredAudioLanguages: [String] = []
-    /// Profile preference, not inferred from provider metadata; unsupported paths ignore it.
-    public var trueHDAtmosEnabled: Bool = PlaybackSettings.default.trueHDAtmosEnabled
-    public var dolbyVisionFELEnabled: Bool = PlaybackSettings.default.dolbyVisionFELEnabled
     /// Explicit provider/container stream index used only when a resolved
     /// language cannot match because every audio track is untagged. Language
     /// matching remains authoritative whenever tags exist; this deterministic
@@ -536,7 +561,7 @@ public struct PlaybackRequest: Hashable, Sendable {
             return playbackSource
         case .networkFile:
             return playbackSource
-        case .publicURL, .dlnaResource, .authenticatedHTTP, .none:
+        case .publicURL, .dlnaResource, .authenticatedHTTP, .networkDisc, .none:
             return nil
         }
     }

@@ -7,6 +7,181 @@ import os
 
 @MainActor
 final class PlaybackDiagnosticsSamplerTests: XCTestCase {
+    func testAudioDeliveryRefreshesAcrossLiveRoutesSeekingMissingTelemetryAndRestart() {
+        let sampler = PlaybackDiagnosticsSampler()
+        defer { sampler.stop() }
+        var route = LiveChannelEngineRoute.localHLS
+        var telemetry: EngineLiveTelemetry? = .init(audioDelivery: .streamCopy)
+        sampler.start(
+            player: nil, mode: .plozzigen, engineTelemetry: { telemetry },
+            liveRoute: { route }, liveStream: { .init() }, includesSystemMetrics: false
+        )
+        for (nextRoute, delivery): (LiveChannelEngineRoute, EngineAudioDelivery) in [
+            (.localHLS, .streamCopy), (.localHLS, .bridged), (.software, .decoded),
+            (.nativeHLS, .playerManaged), (.localHLS, .droppedNoPipeline),
+            (.localHLS, .noAudioInSource)
+        ] {
+            route = nextRoute
+            telemetry = .init(audioDelivery: delivery)
+            sampler.sampleTick()
+            XCTAssertEqual(sampler.latest?.audioDelivery, delivery)
+            telemetry = .init()
+            sampler.sampleTick()
+            XCTAssertNil(sampler.latest?.audioDelivery, "An unavailable seek/reroute sample must clear the old outcome")
+        }
+        telemetry = nil
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.audioDelivery)
+        telemetry = .init(audioDelivery: .bridged)
+        sampler.sampleTick()
+        sampler.stop()
+        XCTAssertNil(sampler.latest?.audioDelivery)
+        sampler.start(player: nil, mode: .directPlay, includesSystemMetrics: false)
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.audioDelivery)
+    }
+
+    func testRealtimeStatisticsRefreshAndClearAcrossMissingSamplesRouteChangesAndStop() {
+        let sampler = PlaybackDiagnosticsSampler()
+        defer { sampler.stop() }
+        var stats: EnginePlaybackStatistics? = .init(
+            recentBitrate: 40_000_000, averageBitrate: 30_000_000,
+            delivery: .local, deliveryBitrate: 600_000_000, sourceBytes: 9_000_000
+        )
+        var route = LiveChannelEngineRoute.localHLS
+        sampler.start(
+            player: nil, mode: .plozzigen, engineTelemetry: { .init(statistics: stats) },
+            liveRoute: { route }, includesSystemMetrics: false
+        )
+        sampler.sampleTick()
+        XCTAssertEqual(sampler.latest?.engineStatistics, stats)
+        XCTAssertNil(sampler.latest?.observedBitrate, "Local transfers are not the source's network rate")
+        stats = .init(recentBitrate: 12_000_000, sourceBytes: 10_000_000)
+        sampler.sampleTick()
+        XCTAssertEqual(sampler.latest?.engineStatistics, stats)
+        XCTAssertNil(sampler.latest?.engineStatistics?.deliveryBitrate)
+        stats = nil
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.engineStatistics)
+        stats = .init(recentBitrate: 15_000_000)
+        route = .nativeHLS
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.engineStatistics)
+        route = .software
+        sampler.sampleTick()
+        XCTAssertEqual(sampler.latest?.engineStatistics, stats)
+        sampler.stop()
+        XCTAssertNil(sampler.latest?.engineStatistics)
+        sampler.start(player: nil, mode: .plozzigen, includesSystemMetrics: false)
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.engineStatistics)
+    }
+
+    func testEngineSessionDropsTakePrecedenceOverInternalItemTotals() async throws {
+        let sampler = PlaybackDiagnosticsSampler(logReader: { _ in .init(droppedFrames: 2, stalls: 0) })
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: AVMutableComposition()))
+        defer { sampler.stop() }
+        sampler.start(
+            player: player, mode: .plozzigen,
+            engineTelemetry: { .init(droppedFrameCount: 14) }, includesSystemMetrics: false
+        )
+        try await wait { sampler.sampleTick(); return sampler.latest?.stallCount == 0 }
+        XCTAssertEqual(sampler.latest?.droppedVideoFrames, 14)
+    }
+
+    func testNativeTransferredBytesFollowCurrentItemAndNeverLabelLocalTransfersAsNetwork() async throws {
+        for mode: PlaybackDiagnostics.PlaybackMode in [.directPlay, .remux, .transcode, .plozzigen] {
+            let sampler = PlaybackDiagnosticsSampler(logReader: { _ in
+                .init(transferredBytes: 123_456, stalls: 0)
+            })
+            let player = AVPlayer(playerItem: AVPlayerItem(asset: AVMutableComposition()))
+            defer { sampler.stop() }
+            sampler.start(player: player, mode: mode, includesSystemMetrics: false)
+            try await wait { sampler.sampleTick(); return sampler.latest?.stallCount == 0 }
+            XCTAssertEqual(sampler.latest?.transferredBytes, mode == .plozzigen ? nil : 123_456)
+            player.replaceCurrentItem(with: nil)
+            sampler.sampleTick()
+            XCTAssertNil(sampler.latest?.transferredBytes)
+        }
+    }
+
+    func testAccessLogCountersSumAllEntriesWithoutTreatingUnknownAsZeroOrOverflowing() {
+        XCTAssertEqual(PlaybackLogSnapshot.total([2, 0, 7]), 9)
+        XCTAssertEqual(PlaybackLogSnapshot.total([Int64(10_000), 20_000]), 30_000)
+        XCTAssertEqual(PlaybackLogSnapshot.total([0, 0]), 0)
+        XCTAssertNil(PlaybackLogSnapshot.total([Int]()))
+        XCTAssertNil(PlaybackLogSnapshot.total([2, -1]))
+        XCTAssertNil(PlaybackLogSnapshot.total([Int.max, 1]))
+    }
+
+    func testConfirmedAudioTrackReplacesProviderSnapshotAndClearsMissingProperties() {
+        let sampler = PlaybackDiagnosticsSampler()
+        defer { sampler.stop() }
+        let original = MediaSourceMetadata.AudioStream(
+            codec: "truehd", profile: "Dolby Atmos", channels: 8,
+            channelLayout: "7.1", sampleRate: 96_000, bitrate: 4_000_000
+        )
+        var audio: MediaSourceMetadata.AudioStream? = original
+        var pipeline = "TRUEHD → FLAC bridge"
+        sampler.start(
+            player: nil, mode: .plozzigen, metadata: .init(audio: original),
+            engineTelemetry: { .init(audioPipelineDescription: pipeline) },
+            probedFacts: { .init(activeAudioTrack: audio) }, includesSystemMetrics: false
+        )
+        for next in [
+            MediaSourceMetadata.AudioStream(codec: "ac3", channels: 2),
+            original,
+            .init(codec: "pcm_s16le", channels: 2, sampleRate: 48_000),
+            .init(codec: "dca", channels: 2, bitrate: 768_000),
+            .init(codec: "dca", profile: "MA + DTS:X IMAX", channels: 8, channelLayout: "7.1"),
+            .init()
+        ] {
+            audio = next
+            sampler.sampleTick()
+            let expected = PlaybackDiagnostics.base(from: .init(audio: next), mode: .plozzigen)
+            XCTAssertEqual(sampler.latest?.audioCodec, expected.audioCodec)
+            XCTAssertEqual(sampler.latest?.audioProfile, expected.audioProfile)
+            XCTAssertEqual(sampler.latest?.audioChannels, expected.audioChannels)
+            XCTAssertEqual(sampler.latest?.audioChannelLayout, expected.audioChannelLayout)
+            XCTAssertEqual(sampler.latest?.audioSampleRate, expected.audioSampleRate)
+            XCTAssertEqual(sampler.latest?.audioBitrate, expected.audioBitrate)
+            XCTAssertEqual(sampler.latest?.audioPipelineDescription, pipeline)
+        }
+        pipeline = "DTS → EAC3 bridge"
+        audio = .init(codec: "dca", channels: 2)
+        sampler.sampleTick()
+        XCTAssertEqual(sampler.latest?.audioEncodingDescription, "Lossy encoding")
+        XCTAssertEqual(sampler.latest?.audioCodec, "DTS")
+        sampler.start(player: nil, mode: .plozzigen, includesSystemMetrics: false)
+        sampler.sampleTick()
+        XCTAssertNil(sampler.latest?.audioCodec)
+        XCTAssertNil(sampler.latest?.audioProfile)
+    }
+
+    func testConfirmedSourceAudioDoesNotReplaceServerRenditionOrLiveTrackFacts() {
+        for live in [false, true] {
+            let sampler = PlaybackDiagnosticsSampler()
+            defer { sampler.stop() }
+            let liveStream: (@MainActor () -> PlaybackDiagnostics.LiveStreamFacts?)?
+            if live {
+                liveStream = { PlaybackDiagnostics.LiveStreamFacts() }
+            } else {
+                liveStream = nil
+            }
+            sampler.start(
+                player: nil, mode: live ? .plozzigen : .transcode,
+                metadata: .init(audio: .init(codec: "aac", channels: 2)),
+                probedFacts: { .init(activeAudioTrack: .init(codec: "truehd", profile: "Atmos", channels: 8)) },
+                liveStream: liveStream,
+                includesSystemMetrics: false
+            )
+            sampler.sampleTick()
+            XCTAssertEqual(sampler.latest?.audioCodec, live ? "AAC" : nil)
+            XCTAssertEqual(sampler.latest?.audioChannels, live ? 2 : nil)
+            if !live { XCTAssertEqual(sampler.latest?.originalSource?.audio?.codec, "aac") }
+        }
+    }
+
     func testCacheTelemetryClearsWhenMissingUnsupportedStoppedOrRestarted() {
         let sampler = PlaybackDiagnosticsSampler()
         defer { sampler.stop() }
