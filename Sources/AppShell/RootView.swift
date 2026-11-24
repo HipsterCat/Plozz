@@ -785,6 +785,13 @@ public struct RootView: View {
                             trakt: appState.traktService,
                             simkl: appState.simklService,
                             wetrakr: appState.wetrakrService,
+                            publicMetaDB: appState.publicMetaDBService,
+                            makePublicMetaDBHistoryImport: appState.makePublicMetaDBHistoryImport,
+                            makeTraktHistoryImport: appState.makeTraktHistoryImport,
+                            makeSimklHistoryImport: appState.makeSimklHistoryImport,
+                            makeWetrakrHistoryImport: appState.makeWetrakrHistoryImport,
+                            makeAniListHistoryImport: appState.makeAniListHistoryImport,
+                            makeMALHistoryImport: appState.makeMALHistoryImport,
                             seer: appState.seerService,
                             anilist: appState.anilistService,
                             mal: appState.malService,
@@ -1171,6 +1178,8 @@ public struct RootView: View {
                 onBackgroundWorkAllowed: { allowed in
                     appState.setWatchRetryActive(allowed)
                     appState.mediaShare.setBackgroundWorkAllowed(allowed)
+                    appState.accountsProviders.setTrackerHistorySyncForeground(allowed)
+                    if allowed { Task { await appState.synchronizeTrackerHistoryOnForeground() } }
                 },
                 onBecameActive: {
                     appState.retryUnconfirmedCredentials()

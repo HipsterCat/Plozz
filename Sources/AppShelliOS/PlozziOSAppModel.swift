@@ -29,6 +29,8 @@ import ProviderShare
 import SeerService
 import SimklService
 import WetrakrService
+import PublicMetaDBService
+import RatingsService
 import TraktService
 import UIKit
 
@@ -511,6 +513,8 @@ final class PlozziOSAppModel {
     let traktService: TraktService
     let simklService: SimklService
     let wetrakrService: WetrakrService
+    let publicMetaDBService: PublicMetaDBService
+    let ratingsProvider: any ExternalRatingsProviding
     let anilistService: AniListService
     let malService: MALService
     let crashReporting: CrashReportingSettingsModel
@@ -709,6 +713,7 @@ final class PlozziOSAppModel {
         onPublish: { [weak self] in
             self?.drainWatchOutbox()
             self?.universalWatchlistIdentityDidUpdate()
+            Task { await self?.synchronizeTrackerHistoryOnForeground() }
         },
         isWarmingAllowed: { [weak self] in
             self?.profiles.activeProfile.needsSetup == false
@@ -864,6 +869,8 @@ final class PlozziOSAppModel {
         self.traktService = traktService
         self.simklService = simklService
         self.wetrakrService = wetrakrService
+        self.publicMetaDBService = PublicMetaDBService(namespace: trackerNamespace)
+        self.ratingsProvider = RatingsServiceFactory.make()
         self.anilistService = anilistService
         self.malService = malService
         self.crashReporting = CrashReportingSettingsModel()
@@ -887,6 +894,7 @@ final class PlozziOSAppModel {
             mediaShareRuntime: mediaShareRuntime,
             accountsProviders: accountsProviders,
             settingsNamespace: profiles.activeNamespace,
+            appLanguage: self.appLanguage,
             authenticatedHTTPResolver: authenticatedHTTPResolver,
             statusPresenter: transientStatusPresenter
         )
@@ -1077,6 +1085,9 @@ final class PlozziOSAppModel {
 
         // Bring up CloudKit config auto-sync (no-op unless the Sync & Setup flag is
         // on) and start observing local config changes to publish them.
+        for tracker in historySyncReaders {
+            accountsProviders.bindTrackerHistorySync(tracker, store: durableLocalStateStore)
+        }
         self.traktService.onConnectionAvailable = { [weak self] in
             Task { await self?.resumeUniversalWatchlistAuthentication() }
         }
@@ -1085,6 +1096,20 @@ final class PlozziOSAppModel {
                 guard let self, let destination = self.wetrakrService.watchlistDestination else { return }
                 await self.trackerWatchlistConnectionChanged(destination: destination)
             }
+        }
+        self.publicMetaDBService.resolveEpisodeIdentity = { [weak self] content in
+            guard let self else { throw CancellationError() }
+            let scope = self.accountsProviders.liveTVAuthorizationID
+            let metadata = self.metadataProviderSettingsModel.settings
+            return try await PublicMetaDBCatalogResolver.episodeIdentity(
+                content, metadataSettings: metadata,
+                isCurrent: { [weak self] in
+                    guard let self else { return false }
+                    return !self.isOfflineMode && self.allowsHomeContentAccess && !self.profiles.activeProfile.isKids
+                        && self.accountsProviders.liveTVAuthorizationID == scope
+                        && self.metadataProviderSettingsModel.settings == metadata
+                }
+            )
         }
         prepareMediaAliasLedger()
         startCloudSyncIfEnabled()
@@ -1099,7 +1124,11 @@ final class PlozziOSAppModel {
         }
         guard enabled != isOfflineMode, !isChangingOfflineMode else { return }
         offlineMode.isChanging = true
-        defer { offlineMode.isChanging = false }
+        refreshTrackerHistoryAdmission()
+        defer {
+            offlineMode.isChanging = false
+            refreshTrackerHistoryAdmission()
+        }
         OfflineMode.shared.setEnabled(enabled)
         offlineMode.isEnabled = enabled
         offlineMode.generation &+= 1
@@ -1108,6 +1137,7 @@ final class PlozziOSAppModel {
         for account in accounts { guidePreparation.cancel(accountID: account.id) }
         identityIndex.reset()
         if enabled {
+            trackerProfileGeneration &+= 1
             accountsProviders.localProviders = [:]
             providerCredentialSync.cancel()
             cloudPublishTask?.cancel()
@@ -1130,6 +1160,7 @@ final class PlozziOSAppModel {
         if !enabled {
             accountsProviders.refreshServerNames()
             identityIndex.warmIdentityIndex()
+            await ensureTrackersScopedToActiveProfile()
             retryWatchOutboxIfAllowed()
             await prepareUniversalWatchlist()
         }
@@ -1239,7 +1270,9 @@ final class PlozziOSAppModel {
         )
         guard !Task.isCancelled else { return nil }
 
-        // Signed playback URLs can expire, so positive entries stay short-lived.
+        // A session grant belongs to one player; even a short TTL outlives a stop.
+        if let source, !source.isCacheable { return source }
+        // Other signed playback URLs can expire, so positive entries stay short-lived.
         // Negative entries use an even shorter TTL so a newly-added trailer appears
         // without requiring an app restart.
         let ttl: TimeInterval = source == nil ? 120 : 600
@@ -1303,6 +1336,7 @@ final class PlozziOSAppModel {
         sceneSessionIDs = sceneSessionIDs.filter { connected.contains($0.key) }
         if let transition = applicationLifecycle.replaceScenes(scenes) {
             applicationIsActive = transition.isActive
+            refreshTrackerHistoryAdmission()
             if !transition.isActive { portableCredentialPublisher.cancelPendingPublication() }
             if transition.isActive { retryWatchOutboxIfAllowed() }
         }
@@ -1508,20 +1542,32 @@ final class PlozziOSAppModel {
 
     /// Which screen puts the setup sequence on screen.
     ///
-    /// A cover can only be presented by a view that isn't itself covered, and the
-    /// sequence starts from two very different places: creating (or resuming) a
-    /// profile from Settings, which is a sheet — so a cover asked for from the
-    /// root would be silently dropped — and resuming an abandoned setup at
-    /// launch, when Settings isn't open and the Profiles page isn't on screen to
-    /// ask from. Both sites are wired up, and this says which one owns it, so
-    /// they can never both try.
+    /// Settings owns setup while its sheet is visible; otherwise the root does.
+    /// New-profile creation first dismisses Settings so activation can rebuild
+    /// the profile-scoped shell without discarding the setup presenter.
     enum ProfileOnboardingOrigin {
         case settings
         case launch
     }
 
-    /// Whether the Settings sheet is on screen. Set by the sheet itself.
-    private(set) var isSettingsPresented = false
+    /// Settings retains the creation request until its sheet finishes dismissing.
+    @MainActor
+    @Observable
+    fileprivate final class SettingsSheetState {
+        var isPresented = false
+        var pendingProfileCreation: (draft: ProfileDraft, isKids: Bool)?
+    }
+
+    private let settingsSheet = SettingsSheetState()
+
+    var isSettingsPresented: Bool { settingsSheet.isPresented }
+    var hasPendingProfileCreation: Bool { settingsSheet.pendingProfileCreation != nil }
+
+    func completePendingProfileCreation() {
+        guard !isSettingsPresented, let pending = settingsSheet.pendingProfileCreation else { return }
+        settingsSheet.pendingProfileCreation = nil
+        saveProfile(pending.draft, isKids: pending.isKids)
+    }
 
     /// The exact request owned by an on-screen Plex user chooser, not another modal.
     var inlinePlexPINRequest: PlexHomeUsersModel.PlexPINRequest? {
@@ -1536,7 +1582,7 @@ final class PlozziOSAppModel {
     }
 
     func noteSettingsPresented(_ presented: Bool) {
-        isSettingsPresented = presented
+        settingsSheet.isPresented = presented
     }
 
     /// DERIVED from what's actually on screen rather than recorded when the flow
@@ -1576,14 +1622,9 @@ final class PlozziOSAppModel {
     /// the leak the gate exists to prevent, and clearing it without asking is the
     /// same thing by another route.
     func resumeProfileOnboardingIfNeeded(manualICloudSetup: Bool = false) {
-        // `profileOnboardingID` — not just the step — because creation claims the
-        // id and origin synchronously and only raises the step a runloop turn
-        // later (so the editor sheet can close first). Switching into the new
-        // profile schedules a resume in that same window; guarding on the step
-        // alone let the resume win the race and relabel a `.settings` flow as
-        // `.launch`, so the cover was asked for from the root while Settings was
-        // still up — and silently never appeared. Exactly what the origin split
-        // exists to prevent.
+        // Creation claims the ID before switching, then yields for navigation.
+        // Its switch also schedules a resume; that must not take over the flow
+        // before creation publishes the first step.
         guard profileOnboardingStep == nil, profileOnboardingID == nil,
               pendingFirstRunStep == nil, plexHomeUsers.pendingPlexUserSelection == nil,
               pendingLibrarySelection == nil else { return }
@@ -2066,6 +2107,7 @@ final class PlozziOSAppModel {
                 mediaShareRuntime: self.mediaShareRuntime,
                 accountsProviders: self.accountsProviders,
                 settingsNamespace: self.profiles.activeNamespace,
+                appLanguage: self.appLanguage,
                 startsActive: self.applicationIsActive,
                 authenticatedHTTPResolver: self.authenticatedHTTPResolver,
                 statusPresenter: self.transientStatusPresenter
@@ -2097,23 +2139,35 @@ final class PlozziOSAppModel {
     }
 
     private func updateTrackersForActiveProfile() async {
-        guard !isOfflineMode else { return }
         let namespace = profiles.activeNamespace
+        guard !isOfflineMode else {
+            // Drop the previous profile's catalog, consent and ratings even when
+            // reconnecting the new profile's tracker has to wait for network.
+            if publicMetaDBService.profileNamespace != namespace {
+                trackerScopedNamespace = nil
+                publicMetaDBService.selectProfile(namespace: namespace)
+            }
+            return
+        }
         trackerProfileGeneration &+= 1
         let generation = trackerProfileGeneration
         trackerScopedNamespace = nil
         guard generation == trackerProfileGeneration else { return }
+        publicMetaDBService.selectProfile(namespace: namespace)
         await traktService.setActiveProfile(namespace: namespace)
         guard generation == trackerProfileGeneration else { return }
         await simklService.setActiveProfile(namespace: namespace)
         guard generation == trackerProfileGeneration else { return }
         await wetrakrService.setActiveProfile(namespace: namespace)
         guard generation == trackerProfileGeneration else { return }
+        await publicMetaDBService.refreshStatus()
+        guard generation == trackerProfileGeneration else { return }
         await anilistService.setActiveProfile(namespace: namespace)
         guard generation == trackerProfileGeneration else { return }
         await malService.setActiveProfile(namespace: namespace)
         guard generation == trackerProfileGeneration else { return }
         trackerScopedNamespace = .some(namespace)
+        Task { await self.synchronizeTrackerHistoryOnForeground() }
     }
 
     private func makeLibraryActionFeedback(
@@ -2144,6 +2198,74 @@ final class PlozziOSAppModel {
         }
     }
 
+    func makeWetrakrHistoryImport() -> TrackerHistoryImportSession {
+        makeTrackerHistoryImport(wetrakrService)
+    }
+
+    func makeSimklHistoryImport() -> TrackerHistoryImportSession {
+        makeTrackerHistoryImport(simklService)
+    }
+
+    func makeTraktHistoryImport() -> TrackerHistoryImportSession {
+        makeTrackerHistoryImport(traktService)
+    }
+
+    func makePublicMetaDBHistoryImport() -> TrackerHistoryImportSession {
+        makeTrackerHistoryImport(publicMetaDBService)
+    }
+
+    func makeAniListHistoryImport() -> TrackerHistoryImportSession {
+        makeTrackerHistoryImport(anilistService)
+    }
+
+    func makeMALHistoryImport() -> TrackerHistoryImportSession {
+        makeTrackerHistoryImport(malService)
+    }
+
+    private func makeTrackerHistoryImport(_ tracker: any TrackerHistoryReading) -> TrackerHistoryImportSession {
+        return accountsProviders.makeTrackerHistoryImportSession(
+            tracker: tracker, reconciler: watchReconciler, syncStore: durableLocalStateStore,
+            index: { [identityIndex] in identityIndex.identitySnapshotStore.current },
+            isPlexIdentityResolved: { [weak self] in self?.plexHomeUsers.hasResolvedWatchMutationIdentity(forAccountID: $0) ?? false },
+            isAuthorized: { [weak self] in
+                guard let self else { return false }
+                return !self.isOfflineMode && self.trackersAreScopedToActiveProfile && self.allowsHomeContentAccess
+            }
+        )
+    }
+
+    // History controllers are process-wide: one iPad window resigning active
+    // must not stop sync while another is still foregrounded.
+    private func refreshTrackerHistoryAdmission() {
+        let allowed = applicationIsActive && !isOfflineMode && !isChangingOfflineMode
+        guard allowed != accountsProviders.trackerHistorySyncIsForeground else { return }
+        accountsProviders.setTrackerHistorySyncForeground(allowed)
+        if allowed { Task { await synchronizeTrackerHistoryOnForeground() } }
+    }
+
+    func synchronizeTrackerHistoryOnForeground() async {
+        guard accountsProviders.trackerHistorySyncIsForeground,
+              trackersAreScopedToActiveProfile, allowsHomeContentAccess else { return }
+        let scope = accountsProviders.watchMutationServerScope
+        for tracker in historySyncReaders {
+            guard !Task.isCancelled, accountsProviders.trackerHistorySyncIsForeground,
+                  trackersAreScopedToActiveProfile, allowsHomeContentAccess,
+                  accountsProviders.watchMutationServerScope == scope else { return }
+            guard tracker.historySyncIdentity?.allowsForegroundChecks == true else { continue }
+            let session = makeTrackerHistoryImport(tracker)
+            defer { session.cancel() }
+            guard let grant = session.ongoingSync?.grant,
+                  Set(grant.scope.accounts.map(\.accountID)).isSubset(
+                    of: identityIndex.identitySnapshotStore.current.indexedAccountIDs
+                  ) else { continue }
+            await session.ongoingSync?.synchronize(manual: false)
+        }
+    }
+
+    private var historySyncReaders: [any TrackerHistorySyncReading] {
+        [publicMetaDBService, traktService, wetrakrService, simklService, anilistService, malService]
+    }
+
     /// Kept by the presentation across teardown/episode handoff, never rebuilt
     /// from whichever profile is visible when a delayed callback arrives.
     struct PlaybackSession: Sendable {
@@ -2156,6 +2278,7 @@ final class PlozziOSAppModel {
         let reconciler: WatchStateReconciler
         let downloads: PlozziOSDownloadsModel
         let scrobbler: PlozziOSTrackerScrobbler
+        let trackerConnectionID: String?
     }
 
     func makePlaybackSession() -> PlaybackSession {
@@ -2175,7 +2298,9 @@ final class PlozziOSAppModel {
                 wetrakr: wetrakrService.playbackScrobbler(),
                 anilist: AniListServiceFactory.make(namespace: namespace).scrobbler,
                 mal: MALServiceFactory.make(namespace: namespace).scrobbler
-            )
+            ),
+            trackerConnectionID: publicMetaDBService.profileNamespace == namespace
+                ? publicMetaDBService.playbackConnectionID : nil
         )
     }
 
@@ -2213,6 +2338,16 @@ final class PlozziOSAppModel {
         profiles.activeProfileID == session.profileID
             && accountsProviders.liveTVAuthorizationID == session.serverAuthorization
             && accountsProviders.watchMutationServerScope == session.serverScope
+    }
+
+    func reportTrackerPlayback(_ sample: TrackerPlaybackSample, session: PlaybackSession) {
+        guard let connectionID = session.trackerConnectionID else { return }
+        Task {
+            if await session.reconciler.enqueueTrackerPlayback(TrackerPlaybackDelivery(
+                sample: sample, trackerID: "publicmetadb",
+                connectionID: connectionID, serverScope: session.serverScope
+            )) { await session.reconciler.drain() }
+        }
     }
 
     private func playbackSources(for item: MediaItem, session: PlaybackSession) -> [MediaSourceRef] {
@@ -2469,12 +2604,18 @@ final class PlozziOSAppModel {
                     event: .stop
                 )
             },
+            trackerPlaybackAdmissions: {
+                TrackerPlaybackAdmissions.capture(trakt: trakt, simkl: simkl, wetrakr: wetrakr, anilist: anilist, mal: mal)
+            },
             wetrakrAccountIdentity: { wetrakr.accountIdentity },
             applyWetrakr: { intent, capturedAt, key, identity in
                 try await wetrakr.recordWatch(
                     item: intent.makeScrobbleItem(), capturedAt: capturedAt,
                     idempotencyKey: key, expectedAccountIdentity: identity
                 )
+            },
+            applyTrackerPlayback: { [publicMetaDBService] delivery in
+                try await publicMetaDBService.reportPlayback(delivery)
             },
             allAccountIDs: { [weak self] in
                 await MainActor.run {
@@ -2549,6 +2690,7 @@ final class PlozziOSAppModel {
         mediaShareRuntime: DefaultMediaShareRuntime,
         accountsProviders: AccountsProvidersModel,
         settingsNamespace: String?,
+        appLanguage: AppLanguageSettingsModel,
         startsActive: Bool = true,
         authenticatedHTTPResolver: ManagedAuthenticatedHTTPResolver,
         statusPresenter: TransientStatusPresenter
@@ -2595,7 +2737,9 @@ final class PlozziOSAppModel {
                         deviceLanguage: LanguageMatch.deviceLanguageCode
                     )
                 },
-                artworkSettings: { artworkStore.load() },
+                artworkPolicy: {
+                    PlozziOSDownloadArtwork.policy(settings: artworkStore.load(), appLanguage: appLanguage)
+                },
                 startsActive: startsActive,
                 resolveArtworkItem: { record in
                     guard let accountID = record.snapshot.sourceAccountID
@@ -2864,8 +3008,9 @@ final class PlozziOSAppModel {
     /// (name, avatar symbol/emoji/photo, colours) are written through; every
     /// non-cosmetic field (linked account, Plex Home bindings, Seerr identity,
     /// active-account subset) is preserved. A new profile is seeded with the
-    /// current household accounts, selected, and handed to the first-run theme
-    /// step — mirroring the previous `addProfile` behaviour.
+    /// current household accounts, selected, and handed to source setup.
+    /// Settings-origin creation waits for the entire Settings sheet to dismiss:
+    /// activating another profile rebuilds its presentation shell.
     /// - Parameter isKids: whether a NEWLY created profile is a Kids Profile.
     ///   Ignored when editing, where the flag is owned by the profile's own
     ///   settings page. Matches the tvOS picker, which has always been able to
@@ -2898,6 +3043,10 @@ final class PlozziOSAppModel {
             profile.plexHomeUserBindings = draft.plexHomeUserBindings
             profiles.update(profile)
         } else {
+            if isSettingsPresented {
+                settingsSheet.pendingProfileCreation = (draft, isKids)
+                return
+            }
             // Created AWAITING SETUP, exactly as on tvOS. A new profile inherits
             // every server, so importing a watchlist before the user has said
             // which servers it uses — and who it watches as on them — drops the
@@ -2914,10 +3063,9 @@ final class PlozziOSAppModel {
             // present it from the wrong place. See `resumeProfileOnboardingIfNeeded`.
             profileOnboardingID = created.id
             performSelectProfile(created.id)
-            // Yielded, not set inline: this runs from inside the Add Profile
-            // sheet, and SwiftUI drops a presentation requested while another is
-            // still dismissing. One runloop turn lets the editor close first —
-            // the same reason `scheduleFirstRunStep` yields.
+            // Let navigation react to the profile switch before requesting setup.
+            // Modal creation calls this only after Settings' onDismiss;
+            // a runloop yield alone cannot wait for that dismissal.
             Task { @MainActor in
                 await Task.yield()
                 profileOnboardingStep = .libraries
